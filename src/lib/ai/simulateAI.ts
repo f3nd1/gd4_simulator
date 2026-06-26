@@ -182,7 +182,8 @@ function guessTitle(link: string): string {
   } catch {
     // leave undecoded on malformed escape sequences
   }
-  const spaced = decoded.replace(/[-_]+/g, " ").trim();
+  const noDate = decoded.replace(/[-_.]?(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})$/, "");
+  const spaced = noDate.replace(/[-_]+/g, " ").trim();
   return spaced ? spaced.replace(/\b\w/g, (c) => c.toUpperCase()) : "Linked evidence";
 }
 
