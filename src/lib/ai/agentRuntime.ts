@@ -38,8 +38,8 @@ export async function runLiveItemReview(
   settings: AISettings,
   memory: AgentMemoryEntry[]
 ): Promise<Omit<SimulatedItemVerdict, "live"> & { live: true }> {
-  const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine and given to you below. Write a short, specific justification (2-3 sentences) referencing the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.`;
-  const user = `Item ${item.id}. Fixed evidence score: ${item.ais}/100, fixed band: ${item.aiBand}. Evidence: approach=${ev.approach}, processes=${ev.processes}, systemsOutcomes=${ev.systemsOutcomes}, review=${ev.review}, traceability=${ev.trace}%, evidence age=${ev.age} days.`;
+  const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine and given to you below; you must not contradict it or imply a different one. Your tone must match that fixed band exactly: never use positive, encouraging or reassuring language when the band is low, when any evidence limb below is "Missing", or when the Drive evidence link is absent — in every such case you must name the gap plainly instead of softening it. A missing Drive evidence link is itself a real gap to call out even if the four evidence limbs look strong, because it means the human auditor cannot actually verify the evidence. Write a short, specific justification (2-3 sentences) referencing only the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.`;
+  const user = `Item ${item.id}. Fixed evidence score: ${item.ais}/100, fixed band: ${item.aiBand}. Evidence: approach=${ev.approach}, processes=${ev.processes}, systemsOutcomes=${ev.systemsOutcomes}, review=${ev.review}, traceability=${ev.trace}%, evidence age=${ev.age} days, owner=${ev.owner || "(unassigned)"}, Drive evidence link=${ev.drive ? ev.drive : "MISSING — no link has been provided"}.`;
 
   const content = await chatComplete(
     [{ role: "system", content: system }, ...memoryToMessages(memory), { role: "user", content: user }],
@@ -99,14 +99,27 @@ export async function runLiveClosureReview(
   settings: AISettings,
   memory: AgentMemoryEntry[]
 ): Promise<Omit<SimulatedClosureVerdict, "live"> & { live: true }> {
-  const system = `You are the Closure Reviewer Agent for an EduTrust GD4 internal audit. Assess whether a corrective/preventive action closure is Acceptable, Partial, should Maintain Finding, or should Escalate, using only the narrative given — never assume evidence that wasn't described. Respond with JSON only: {"verdict": "Acceptable" | "Partial" | "Maintain Finding" | "Escalate", "reason": string, "evidenceNeeded": string}.`;
-  const user = `Root cause: ${closure.root || "(none provided)"}\nCorrective action: ${closure.corr || "(none provided)"}\nPreventive action: ${closure.prev || "(none provided)"}\nClosure evidence link: ${closure.evid || "(none provided)"}`;
+  const system = `You are the Closure Reviewer Agent for an EduTrust GD4 internal audit. Assess whether a corrective/preventive action closure is Acceptable, Partial, should Maintain Finding, or should Escalate, using only the narrative given — never assume evidence that wasn't described, and never let well-written narrative substitute for missing evidence. If no closure evidence link is provided, you must return "Maintain Finding" regardless of how complete or convincing the narrative sounds. Respond with JSON only: {"verdict": "Acceptable" | "Partial" | "Maintain Finding" | "Escalate", "reason": string, "evidenceNeeded": string}.`;
+  const user = `Root cause: ${closure.root || "(none provided)"}\nCorrective action: ${closure.corr || "(none provided)"}\nPreventive action: ${closure.prev || "(none provided)"}\nClosure evidence link: ${closure.evid || "(none provided — no evidence is linked)"}`;
 
   const content = await chatComplete(
     [{ role: "system", content: system }, ...memoryToMessages(memory), { role: "user", content: user }],
     settings
   );
   const parsed = parseJSONObject(content);
+
+  // Hard guardrail mirroring simulateClosure's rule in simulateAI.ts: a
+  // missing closure evidence link forces "Maintain Finding" regardless of
+  // what the model returned, the same way the score/band for item review is
+  // never left to the model alone.
+  if (!closure.evid) {
+    return {
+      verdict: "Maintain Finding",
+      reason: "No closure evidence linked, so the finding stands regardless of the narrative.",
+      evidenceNeeded: (parsed.evidenceNeeded as string) || "Link the evidence that supports this closure.",
+      live: true,
+    };
+  }
 
   return {
     verdict: (parsed.verdict as SimulatedClosureVerdict["verdict"]) || "Maintain Finding",

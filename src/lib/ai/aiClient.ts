@@ -25,6 +25,7 @@ export async function chatComplete(messages: AIChatMessage[], settings: AISettin
       model: settings.model || "gpt-4o-mini",
       messages,
       temperature: 0.2,
+      response_format: { type: "json_object" },
     }),
   });
 
