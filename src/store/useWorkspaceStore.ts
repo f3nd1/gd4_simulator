@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import type {
   AuditCycle,
   AuditorProfile,
+  Department,
   AgentDefinition,
   ChecklistStatus,
   EvidenceFolder,
@@ -66,7 +67,6 @@ const DEFAULT_CYCLE: AuditCycle = {
   periodEnd: "2027-06-30",
   evidenceCutOffDate: "2027-05-31",
   scope: "All EduTrust GD4 criteria across academic and corporate functions.",
-  departments: ["SQ", "SGL", "ALI / CM", "AD / AN", "SSO", "HR"],
   status: "Draft",
   owner: "SQ",
   version: "v0.1 Draft",
@@ -77,11 +77,23 @@ const DEFAULT_CYCLE: AuditCycle = {
 };
 
 const DEFAULT_AUDITORS: AuditorProfile[] = [
-  { id: "AUD-1", auditCycleId: "cycle-1", name: "SQ Lead Auditor", type: "Internal", department: "Quality Assurance", role: "Audit Lead", strictness: 70, focusArea: "Overall audit setup and finalisation", checklistTemplateId: "Audit Lead Checklist" },
-  { id: "AUD-2", auditCycleId: "cycle-1", name: "SGL Governance Reviewer", type: "Internal", department: "Leadership", role: "Department Reviewer", strictness: 60, focusArea: "Leadership and governance evidence", checklistTemplateId: "Management Review Checklist" },
-  { id: "AUD-3", auditCycleId: "cycle-1", name: "ALI / CM Academic Reviewer", type: "Internal", department: "Academic", role: "Department Reviewer", strictness: 75, focusArea: "Academic process evidence", checklistTemplateId: "Academic Process Checklist" },
-  { id: "AUD-4", auditCycleId: "cycle-1", name: "AD / AN Student Protection Reviewer", type: "Internal", department: "Student Administration", role: "Department Reviewer", strictness: 80, focusArea: "Student protection and contract evidence", checklistTemplateId: "Student Protection Checklist" },
-  { id: "AUD-5", auditCycleId: "cycle-1", name: "External EduTrust Consultant", type: "External", department: undefined, role: "External Reviewer", strictness: 85, focusArea: "Simulated SSG/EduTrust assessor view", checklistTemplateId: "GD4 Criterion Checklist" },
+  { id: "AUD-1", auditCycleId: "cycle-1", name: "SQ Lead Auditor", type: "Internal", departmentId: "SQ", role: "Audit Lead", strictness: 70, focusArea: "Overall audit setup and finalisation", checklistTemplateId: "Audit Lead Checklist" },
+  { id: "AUD-2", auditCycleId: "cycle-1", name: "SGL Governance Reviewer", type: "Internal", departmentId: "SGL", role: "Department Reviewer", strictness: 60, focusArea: "Leadership and governance evidence", checklistTemplateId: "Management Review Checklist" },
+  { id: "AUD-3", auditCycleId: "cycle-1", name: "ALI / CM Academic Reviewer", type: "Internal", departmentId: "ALI / CM", role: "Department Reviewer", strictness: 75, focusArea: "Academic process evidence", checklistTemplateId: "Academic Process Checklist" },
+  { id: "AUD-4", auditCycleId: "cycle-1", name: "AD / AN Student Protection Reviewer", type: "Internal", departmentId: "AD / AN", role: "Department Reviewer", strictness: 80, focusArea: "Student protection and contract evidence", checklistTemplateId: "Student Protection Checklist" },
+  { id: "AUD-5", auditCycleId: "cycle-1", name: "External EduTrust Consultant", type: "External", departmentId: undefined, role: "External Reviewer", strictness: 85, focusArea: "Simulated SSG/EduTrust assessor view", checklistTemplateId: "GD4 Criterion Checklist" },
+];
+
+// Workspace-wide department directory, seeded from the acronyms and full
+// names already implied by the auditor and checklist-group data above.
+// Person-in-charge is left blank for the user to fill in via Audit Cycle.
+const DEFAULT_DEPARTMENTS: Department[] = [
+  { id: "SQ", acronym: "SQ", fullName: "Quality Assurance", personInCharge: "" },
+  { id: "SGL", acronym: "SGL", fullName: "Leadership", personInCharge: "" },
+  { id: "ALI / CM", acronym: "ALI / CM", fullName: "Academic", personInCharge: "" },
+  { id: "AD / AN", acronym: "AD / AN", fullName: "Student Administration", personInCharge: "" },
+  { id: "SSO", acronym: "SSO", fullName: "Student Support", personInCharge: "" },
+  { id: "HR", acronym: "HR", fullName: "Human Resources", personInCharge: "" },
 ];
 
 export type WorkspaceState = {
@@ -94,6 +106,7 @@ export type WorkspaceState = {
   checklist: Record<string, ChecklistCellState>;
   agents: AgentDefinition[];
   auditors: AuditorProfile[];
+  departments: Department[];
   versions: VersionEntry[];
   folders: EvidenceFolder[];
   itemReviews: Record<string, ItemAIVerdict>;
@@ -130,6 +143,10 @@ export type WorkspaceState = {
   addAuditor: (a: AuditorProfile) => void;
   updateAuditor: (id: string, patch: Partial<AuditorProfile>) => void;
   removeAuditor: (id: string) => void;
+
+  addDepartment: (d: Department) => void;
+  updateDepartment: (id: string, patch: Partial<Department>) => void;
+  removeDepartment: (id: string) => void;
 
   setFolderField: <K extends keyof EvidenceFolder>(id: string, field: K, value: EvidenceFolder[K]) => void;
 
@@ -194,6 +211,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       checklist: {},
       agents: AGENTS,
       auditors: DEFAULT_AUDITORS,
+      departments: DEFAULT_DEPARTMENTS,
       versions: [],
       folders: seedFolders(),
       itemReviews: {},
@@ -444,6 +462,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       addAuditor: (a) => set((s) => ({ auditors: [...s.auditors, a] })),
       updateAuditor: (id, patch) => set((s) => ({ auditors: s.auditors.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
       removeAuditor: (id) => set((s) => ({ auditors: s.auditors.filter((a) => a.id !== id) })),
+
+      addDepartment: (d) => set((s) => ({ departments: [...s.departments, d] })),
+      updateDepartment: (id, patch) => set((s) => ({ departments: s.departments.map((d) => (d.id === id ? { ...d, ...patch } : d)) })),
+      removeDepartment: (id) => set((s) => ({ departments: s.departments.filter((d) => d.id !== id) })),
 
       setFolderField: (id, field, value) => set((s) => ({ folders: s.folders.map((f) => (f.id === id ? { ...f, [field]: value } : f)) })),
 

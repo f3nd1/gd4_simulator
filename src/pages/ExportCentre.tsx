@@ -9,13 +9,17 @@ export function ExportCentre() {
   const closures = useWorkspaceStore((s) => s.closures);
   const exportLog = useWorkspaceStore((s) => s.exportLog);
   const addExportLogEntry = useWorkspaceStore((s) => s.addExportLogEntry);
+  const departments = useWorkspaceStore((s) => s.departments);
   const scored = useScored();
 
   function exportPack() {
     let md = `# Management Review Pack — ${cycle.name}\n\n${cycle.periodStart} to ${cycle.periodEnd} · ${cycle.version} · ${cycle.status}\n\n`;
     md += `## Readiness\nProjected ${scored.total}/1000 — ${scored.award}\nScore gate (4.2, 4.6, C5): ${scored.gatePass ? "met" : "NOT met (" + scored.gateFail.map((g) => g.id).join(", ") + ")"}\nChecklist gate: ${scored.checklistPass ? "passed" : "not passed"}\n\n`;
     md += `## Criterion scores\n` + scored.crits.map((c) => `- C${c.id} ${c.title}: Band ${c.band}, ${c.scored}/${c.points}`).join("\n") + "\n\n";
-    md += `## Department checklist gates\n` + scored.deptGates.map((d) => `- ${d.dept} (${d.role}): ${d.gate}`).join("\n") + "\n\n";
+    md +=
+      `## Department checklist gates\n` +
+      scored.deptGates.map((d) => `- ${d.dept} (${departments.find((dep) => dep.id === d.departmentId)?.acronym || d.departmentId}): ${d.gate}`).join("\n") +
+      "\n\n";
     md +=
       `## Open findings (${scored.openAFIs})\n` +
       FINDINGS.filter((a) => (closures[a.id]?.human || "") !== "Accepted")

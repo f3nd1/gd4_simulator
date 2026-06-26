@@ -19,7 +19,6 @@ export type AuditCycle = {
   periodEnd: string;
   evidenceCutOffDate: string;
   scope: string;
-  departments: string[];
   status: CycleStatus;
   owner: string;
   version: string;
@@ -29,6 +28,16 @@ export type AuditCycle = {
   driveRoot?: string;
 };
 
+// Workspace-wide department directory. Referenced by id from AuditorProfile,
+// DepartmentDefinition (checklist groups) and anywhere else a department
+// needs to be selected rather than typed as free text.
+export type Department = {
+  id: string;
+  acronym: string;
+  fullName: string;
+  personInCharge: string;
+};
+
 export type AuditorType = "Internal" | "External" | "AI Agent";
 
 export type AuditorProfile = {
@@ -36,7 +45,7 @@ export type AuditorProfile = {
   auditCycleId: string;
   name: string;
   type: AuditorType;
-  department?: string;
+  departmentId?: string;
   role: string;
   strictness: number;
   focusArea: string;
@@ -297,8 +306,7 @@ export type AgentMemoryEntry = {
 
 export type DepartmentDefinition = {
   dept: string;
-  role: string;
-  strict: number;
+  departmentId: string;
 };
 
 export type ChecklistLibraryItem = {

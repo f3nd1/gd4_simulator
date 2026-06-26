@@ -8,7 +8,7 @@ import type { AuditorProfile, AuditorType } from "../types";
 const TYPES: AuditorType[] = ["Internal", "External", "AI Agent"];
 const TEMPLATES = ["Audit Lead Checklist", "GD4 Criterion Checklist", "Evidence Controller Checklist", "Student Protection Checklist", "Academic Process Checklist", "QA Closure Checklist", "Management Review Checklist"];
 
-const EMPTY_FORM = { name: "", type: "Internal" as AuditorType, department: "", role: "", strictness: 70, focusArea: "", checklistTemplateId: TEMPLATES[0] };
+const EMPTY_FORM = { name: "", type: "Internal" as AuditorType, departmentId: "", role: "", strictness: 70, focusArea: "", checklistTemplateId: TEMPLATES[0] };
 
 export function AuditorCreation() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -16,6 +16,7 @@ export function AuditorCreation() {
   const addAuditor = useWorkspaceStore((s) => s.addAuditor);
   const updateAuditor = useWorkspaceStore((s) => s.updateAuditor);
   const removeAuditor = useWorkspaceStore((s) => s.removeAuditor);
+  const departments = useWorkspaceStore((s) => s.departments);
   const agents = useWorkspaceStore((s) => s.agents);
   const setAgentStrictness = useWorkspaceStore((s) => s.setAgentStrictness);
 
@@ -36,7 +37,7 @@ export function AuditorCreation() {
 
   function startEdit(a: AuditorProfile) {
     setEditingId(a.id);
-    setForm({ name: a.name, type: a.type, department: a.department || "", role: a.role, strictness: a.strictness, focusArea: a.focusArea, checklistTemplateId: a.checklistTemplateId });
+    setForm({ name: a.name, type: a.type, departmentId: a.departmentId || "", role: a.role, strictness: a.strictness, focusArea: a.focusArea, checklistTemplateId: a.checklistTemplateId });
   }
 
   function cancelEdit() {
@@ -53,7 +54,10 @@ export function AuditorCreation() {
           <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as AuditorType })} style={inputStyle}>
             {TYPES.map((t) => <option key={t}>{t}</option>)}
           </select>
-          <input placeholder="Department" value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} style={inputStyle} />
+          <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })} style={inputStyle}>
+            <option value="">No department</option>
+            {departments.map((d) => <option key={d.id} value={d.id}>{d.acronym} — {d.fullName || d.acronym}</option>)}
+          </select>
           <input placeholder="Role (e.g. Department Reviewer)" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} style={inputStyle} />
           <input placeholder="Focus area" value={form.focusArea} onChange={(e) => setForm({ ...form, focusArea: e.target.value })} style={inputStyle} />
           <select value={form.checklistTemplateId} onChange={(e) => setForm({ ...form, checklistTemplateId: e.target.value })} style={inputStyle}>
@@ -88,7 +92,7 @@ export function AuditorCreation() {
               <tr key={a.id} className="rowh">
                 <td><b>{a.name}</b></td>
                 <td>{a.type}</td>
-                <td>{a.department || "—"}</td>
+                <td>{departments.find((d) => d.id === a.departmentId)?.acronym || "—"}</td>
                 <td>{a.role}</td>
                 <td style={{ color: "#6b7280" }}>{a.focusArea}</td>
                 <td style={{ color: "#6b7280" }}>{a.checklistTemplateId}</td>

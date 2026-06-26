@@ -7,15 +7,15 @@ export const AGENTS: AgentDefinition[] = [
   { id: "rubric", name: "Rubric Scoring", focus: "Score and band against rubric", strictness: 65 },
 ];
 
-// Reusable checklist library, split by department/role, linked to GD4 items.
+// Reusable checklist library, split by checklist group, each owned by a department.
 export const DEPTS: DepartmentDefinition[] = [
-  { dept: "Audit Lead", role: "SQ", strict: 70 },
-  { dept: "Evidence Controller", role: "SQ", strict: 78 },
-  { dept: "Governance", role: "SGL", strict: 60 },
-  { dept: "Student Protection", role: "AD / AN", strict: 80 },
-  { dept: "Academic Process", role: "ALI / CM", strict: 75 },
-  { dept: "Student Support", role: "SSO", strict: 60 },
-  { dept: "QA Closure", role: "SQ", strict: 82 },
+  { dept: "Audit Lead", departmentId: "SQ" },
+  { dept: "Evidence Controller", departmentId: "SQ" },
+  { dept: "Governance", departmentId: "SGL" },
+  { dept: "Student Protection", departmentId: "AD / AN" },
+  { dept: "Academic Process", departmentId: "ALI / CM" },
+  { dept: "Student Support", departmentId: "SSO" },
+  { dept: "QA Closure", departmentId: "SQ" },
 ];
 
 export const CHECKLIST_LIB: ChecklistLibraryItem[] = [

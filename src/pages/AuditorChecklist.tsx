@@ -18,6 +18,7 @@ export function AuditorChecklist() {
   const setChecklistField = useWorkspaceStore((s) => s.setChecklistField);
   const runChecklistAI = useWorkspaceStore((s) => s.runChecklistAI);
   const busy = useWorkspaceStore((s) => s.busy);
+  const departments = useWorkspaceStore((s) => s.departments);
   const scored = useScored();
 
   return (
@@ -28,11 +29,12 @@ export function AuditorChecklist() {
       {DEPTS.map((d) => {
         const items = CHECKLIST_LIB.filter((c) => c.dept === d.dept);
         const g = scored.deptGates.find((x) => x.dept === d.dept)!;
+        const dept = departments.find((dep) => dep.id === d.departmentId);
         return (
           <Card key={d.dept} style={{ marginBottom: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
               <h3 style={{ margin: 0, fontSize: 14 }}>{d.dept}</h3>
-              <span style={{ fontSize: 11.5, color: "#6b7280" }}>{d.role}</span>
+              <span style={{ fontSize: 11.5, color: "#6b7280" }}>{dept ? `${dept.acronym} — ${dept.fullName}` : d.departmentId}</span>
               <Pill s={gateTone(g.gate)}>gate {g.gate}</Pill>
               <button
                 onClick={() => runChecklistAI(d.dept)}
