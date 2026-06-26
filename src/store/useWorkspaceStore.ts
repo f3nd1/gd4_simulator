@@ -122,6 +122,7 @@ export type WorkspaceState = {
   lockCycle: () => void;
   unlockCycle: () => void;
   duplicateCycle: () => void;
+  createNewCycle: () => void;
 
   setEvidenceField: <K extends keyof ItemEvidence>(itemId: string, field: K, value: ItemEvidence[K]) => void;
   setReviewerScore: (itemId: string, value: number) => void;
@@ -349,6 +350,36 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set((s) => ({
           cycle: { ...s.cycle, id: `cycle-${Date.now()}`, name: `${s.cycle.name} (Copy)`, status: "Draft", version: "v0.1 Draft", lastSavedAt: "Not saved", createdAt: new Date().toISOString() },
         })),
+
+      // Unlike duplicateCycle (which keeps every bit of evidence, findings,
+      // checklist data etc. as-is — a true copy), this wipes the workspace
+      // back to the exact same blank slate as a fresh install: only the
+      // structural/reference data (rubric, department directory, agents,
+      // folder skeleton) survives. Demo data only returns if "Use demo
+      // data" is clicked again afterward.
+      createNewCycle: () => {
+        useChecklistModuleStore.getState().replaceAllEntries({});
+        set(() => ({
+          cycle: { ...DEFAULT_CYCLE, id: `cycle-${Date.now()}`, name: "New Audit Cycle", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+          evidence: blankEvidence(),
+          reviewer: {},
+          confirmed: {},
+          justify: {},
+          closures: {},
+          auditors: [],
+          departments: DEFAULT_DEPARTMENTS,
+          versions: [],
+          folders: seedFolders(),
+          itemReviews: {},
+          aiReviewLog: [],
+          samples: [],
+          interviewQuestions: [],
+          managementReviewItems: [],
+          exportLog: [],
+          customFindings: [],
+          seedFindingsLoaded: false,
+        }));
+      },
 
       setEvidenceField: (itemId, field, value) =>
         set((s) => ({ evidence: { ...s.evidence, [itemId]: { ...s.evidence[itemId], [field]: value } } })),

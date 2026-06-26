@@ -12,6 +12,7 @@ export function DraftWorkspace() {
   const restoreVersion = useWorkspaceStore((s) => s.restoreVersion);
   const unlockCycle = useWorkspaceStore((s) => s.unlockCycle);
   const duplicateCycle = useWorkspaceStore((s) => s.duplicateCycle);
+  const createNewCycle = useWorkspaceStore((s) => s.createNewCycle);
   const locked = cycle.status === "Locked";
 
   const [name, setName] = useState("");
@@ -21,6 +22,12 @@ export function DraftWorkspace() {
     saveAsNewVersion(name, note);
     setName("");
     setNote("");
+  }
+
+  function createNew() {
+    if (window.confirm("Start a new blank cycle? This clears all evidence, findings, checklist entries and other current workspace data (saved versions are not affected). This cannot be undone.")) {
+      createNewCycle();
+    }
   }
 
   return (
@@ -50,6 +57,10 @@ export function DraftWorkspace() {
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="What changed in this version?" style={{ ...inputStyle, marginTop: 3 }} disabled={locked} />
         </label>
 
+        <p style={{ fontSize: 11, color: "#94a3b8", marginTop: -2, marginBottom: 8 }}>
+          "Duplicate cycle" copies the current workspace's data as-is (real or demo). "Create new (blank) cycle" wipes
+          current evidence, findings and checklist data back to a truly blank workspace.
+        </p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
             onClick={saveAs}
@@ -60,6 +71,9 @@ export function DraftWorkspace() {
           </button>
           <button onClick={duplicateCycle} style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>
             Duplicate cycle
+          </button>
+          <button onClick={createNew} style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: "#b23121" }}>
+            Create new (blank) cycle
           </button>
           {locked ? (
             <button onClick={unlockCycle} style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>

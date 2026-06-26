@@ -12,6 +12,7 @@ export function AuditCycle() {
   const cycle = useWorkspaceStore((s) => s.cycle);
   const updateCycle = useWorkspaceStore((s) => s.updateCycle);
   const duplicateCycle = useWorkspaceStore((s) => s.duplicateCycle);
+  const createNewCycle = useWorkspaceStore((s) => s.createNewCycle);
   const departments = useWorkspaceStore((s) => s.departments);
   const addDepartment = useWorkspaceStore((s) => s.addDepartment);
   const updateDepartment = useWorkspaceStore((s) => s.updateDepartment);
@@ -41,6 +42,12 @@ export function AuditCycle() {
   function cancelEditDept() {
     setEditingDeptId(null);
     setDeptForm(EMPTY_DEPT_FORM);
+  }
+
+  function createNew() {
+    if (window.confirm("Start a new blank cycle? This clears all evidence, findings, checklist entries and other current workspace data (saved versions are not affected). This cannot be undone.")) {
+      createNewCycle();
+    }
   }
 
   return (
@@ -117,9 +124,18 @@ export function AuditCycle() {
         <p style={{ fontSize: 12, color: "#6b7280" }}>
           Created {new Date(cycle.createdAt).toLocaleDateString()} · updated {new Date(cycle.updatedAt).toLocaleDateString()}
         </p>
-        <button onClick={duplicateCycle} style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>
-          Duplicate this cycle
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={duplicateCycle} style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>
+            Duplicate this cycle
+          </button>
+          <button onClick={createNew} style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: "#b23121" }}>
+            Create new (blank) cycle
+          </button>
+        </div>
+        <p style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>
+          Duplicate copies all current data as-is (real or demo). Create new wipes evidence, findings and checklist
+          data back to a blank workspace.
+        </p>
         <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 14 }}>
           Use Draft Workspace to save progress and review version history. Locked cycles cannot be edited except by unlocking from the Finalisation Checklist screen.
         </div>
