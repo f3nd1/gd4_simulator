@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useScored } from "../hooks/useScored";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -88,19 +88,46 @@ export function RubricBanding() {
             </tbody>
           </table>
         ) : (
-          <table>
-            <thead><tr><th>Item</th><th>Effective score</th><th>Band</th><th>Why this band</th></tr></thead>
-            <tbody>
-              {scored.items.map((it) => (
-                <tr key={it.id} className="rowh">
-                  <td><b>{it.id}</b> {it.title}</td>
-                  <td>{it.eff}</td>
-                  <td><Pill s={bandTone(it.band)}>Band {it.band}</Pill></td>
-                  <td style={{ fontSize: 12, color: "#6b7280" }}>{BAND_MEANING[it.band]}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
+              Items are grouped by criterion. Scored points per item are an equal split of the criterion's points across
+              its items, for illustration only — the criterion total row below each group is the authoritative figure
+              used in the dashboard and export.
+            </p>
+            <table>
+              <thead><tr><th>Item</th><th>Effective score</th><th>Scored points</th><th>Band</th><th>Why this band</th></tr></thead>
+              <tbody>
+                {scored.crits.map((c) => {
+                  const pointsShare = c.items.length ? c.points / c.items.length : 0;
+                  return (
+                    <Fragment key={c.id}>
+                      <tr>
+                        <td colSpan={5} style={{ background: "#f4f6f9", fontWeight: 700, fontSize: 12.5, padding: "8px 10px" }}>
+                          Criterion {c.id} · {c.title}
+                        </td>
+                      </tr>
+                      {c.items.map((it) => (
+                        <tr key={it.id} className="rowh">
+                          <td style={{ paddingLeft: 22 }}><b>{it.id}</b> {it.title}</td>
+                          <td>{it.eff}</td>
+                          <td>{Math.round((it.band / 5) * pointsShare)} / {Math.round(pointsShare)}</td>
+                          <td><Pill s={bandTone(it.band)}>Band {it.band}</Pill></td>
+                          <td style={{ fontSize: 12, color: "#6b7280" }}>{BAND_MEANING[it.band]}</td>
+                        </tr>
+                      ))}
+                      <tr style={{ background: "#fbf6ea" }}>
+                        <td style={{ fontWeight: 700 }}>C{c.id} total</td>
+                        <td style={{ fontWeight: 700 }}>{Math.round(c.avg)}</td>
+                        <td style={{ fontWeight: 700 }}>{c.scored} / {c.points}</td>
+                        <td><Pill s={bandTone(c.band)}>Band {c.band}</Pill></td>
+                        <td style={{ fontSize: 12, color: "#6b7280" }}>{BAND_MEANING[c.band]}</td>
+                      </tr>
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </>
         )}
       </Card>
     </div>
