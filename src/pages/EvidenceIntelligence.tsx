@@ -52,6 +52,14 @@ export function EvidenceIntelligence() {
           ))}
         </div>
       </div>
+      {review && (
+        <div style={{ marginBottom: 12, background: TONE.progress.bg, borderRadius: 8, padding: "9px 11px", fontSize: 12.5 }}>
+          <b>
+            {review.by} · score {review.score} Band {review.band} ({review.confidence}) — simulated:
+          </b>{" "}
+          {review.justification} <i>Higher band: {review.higherBand}</i>
+        </div>
+      )}
       <table>
         <tbody>
           {checks.map(([l, v, d]) => (
@@ -63,14 +71,6 @@ export function EvidenceIntelligence() {
           ))}
         </tbody>
       </table>
-      {review && (
-        <div style={{ marginTop: 10, background: TONE.progress.bg, borderRadius: 8, padding: "9px 11px", fontSize: 12.5 }}>
-          <b>
-            {review.by} · score {review.score} Band {review.band} ({review.confidence}) — simulated:
-          </b>{" "}
-          {review.justification} <i>Higher band: {review.higherBand}</i>
-        </div>
-      )}
     </Card>
   );
 }

@@ -44,37 +44,37 @@ export function Findings() {
         <span style={{ fontSize: 12, color: "#6b7280" }}>
           {scored.openAFIs} of {allFindings.length} still open
         </span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <select
-            value={critFilter}
-            onChange={(e) => {
-              setCritFilter(e.target.value);
-              setSubCritFilter("All");
-            }}
-            style={{ ...inputStyle, width: "auto" }}
-          >
-            <option value="All">All criteria</option>
-            {GD4_CRITERIA.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.id} — {c.title}
-              </option>
-            ))}
-          </select>
-          <select value={subCritFilter} onChange={(e) => setSubCritFilter(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
-            <option value="All">All sub-criteria</option>
-            {subCritOptions.map((sc) => (
-              <option key={sc.id} value={sc.id}>
-                {sc.id} — {sc.title}
-              </option>
-            ))}
-          </select>
-          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as FindingType | "All")} style={{ ...inputStyle, width: "auto" }}>
-            {TYPES.map((t) => <option key={t}>{t}</option>)}
-          </select>
-          <select value={sevFilter} onChange={(e) => setSevFilter(e.target.value as Severity | "All")} style={{ ...inputStyle, width: "auto" }}>
-            {SEVERITIES.map((s) => <option key={s}>{s}</option>)}
-          </select>
-        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "nowrap", overflowX: "auto" }}>
+        <select
+          value={critFilter}
+          onChange={(e) => {
+            setCritFilter(e.target.value);
+            setSubCritFilter("All");
+          }}
+          style={{ ...inputStyle, width: "auto", flex: "1 1 0" }}
+        >
+          <option value="All">All criteria</option>
+          {GD4_CRITERIA.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.id} — {c.title}
+            </option>
+          ))}
+        </select>
+        <select value={subCritFilter} onChange={(e) => setSubCritFilter(e.target.value)} style={{ ...inputStyle, width: "auto", flex: "1 1 0" }}>
+          <option value="All">All sub-criteria</option>
+          {subCritOptions.map((sc) => (
+            <option key={sc.id} value={sc.id}>
+              {sc.id} — {sc.title}
+            </option>
+          ))}
+        </select>
+        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as FindingType | "All")} style={{ ...inputStyle, width: "auto", flex: "1 1 0" }}>
+          {TYPES.map((t) => <option key={t}>{t}</option>)}
+        </select>
+        <select value={sevFilter} onChange={(e) => setSevFilter(e.target.value as Severity | "All")} style={{ ...inputStyle, width: "auto", flex: "1 1 0" }}>
+          {SEVERITIES.map((s) => <option key={s}>{s}</option>)}
+        </select>
       </div>
       <table>
         <thead>

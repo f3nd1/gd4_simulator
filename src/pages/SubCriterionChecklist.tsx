@@ -1,4 +1,5 @@
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildGenericLines } from "../data/checklistSeed";
@@ -77,7 +78,8 @@ export function SubCriterionChecklist() {
   const setSampling = useChecklistModuleStore((s) => s.setSampling);
   const confirmDraftFinding = useChecklistModuleStore((s) => s.confirmDraftFinding);
 
-  const [selectedId, setSelectedId] = useState<string>("4.2.1");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedId, setSelectedId] = useState<string>(() => searchParams.get("item") || "4.2.1");
   const [newLineText, setNewLineText] = useState("");
   const [pendingAddText, setPendingAddText] = useState("");
   const [expandedLine, setExpandedLine] = useState<string | null>(null);
@@ -115,6 +117,21 @@ export function SubCriterionChecklist() {
     setExpandedLine(null);
     ensureEntry(id);
   }
+
+  useEffect(() => {
+    const param = searchParams.get("item");
+    if (param && param !== selectedId) {
+      selectItem(param);
+    }
+    if (param) {
+      setSearchParams((p) => {
+        const next = new URLSearchParams(p);
+        next.delete("item");
+        return next;
+      }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   function toggleEvidence(lineId: string) {
     if (expandedLine === lineId) {
