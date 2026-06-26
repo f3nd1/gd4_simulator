@@ -101,10 +101,15 @@ export function buildScored(state: ScoringInput) {
     const ci = items.filter((i) => i.crit === c.id);
     const avg = ci.reduce((a, i) => a + i.eff, 0) / ci.length;
     const band = getBand(avg);
-    return { ...c, items: ci, avg, band, scored: Math.round((band / 5) * c.points) };
+    // getBand has no floor below Band 1, so a criterion with literally zero
+    // evidence on every item would otherwise still be credited 1/5 of its
+    // points (Band 1's share) on a brand-new workspace. Only this exact
+    // all-zero case is special-cased to truly award nothing.
+    const scored = avg === 0 ? 0 : Math.round((band / 5) * c.points);
+    return { ...c, items: ci, avg, band, scored };
   });
 
-  const total = Math.round(crits.reduce((a, c) => a + (c.band / 5) * c.points, 0));
+  const total = Math.round(crits.reduce((a, c) => a + c.scored, 0));
 
   // Official gate rule (GD4 section 20): an average minimum of Band 3 of 5 is
   // required in sub-criterion 4.2, sub-criterion 4.6, and Criterion 5 as a
