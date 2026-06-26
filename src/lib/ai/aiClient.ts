@@ -39,3 +39,47 @@ export async function chatComplete(messages: AIChatMessage[], settings: AISettin
   if (typeof content !== "string") throw new AIClientError("OpenAI response did not contain a message.");
   return content;
 }
+
+// Separate from chatComplete because image evidence (scanned forms, photos
+// of signed documents, etc.) needs a vision-capable multimodal request and a
+// free-text reply, not the JSON-verdict shape every other caller here wants.
+export async function describeImage(imageDataUrl: string, settings: AISettings): Promise<string> {
+  if (!settings.enabled) throw new AIClientError("AI integration is disabled in Settings.");
+  if (!settings.apiKey) throw new AIClientError("No OpenAI API key configured in Settings.");
+
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${settings.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: settings.model || "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "This image is evidence in a compliance audit. Transcribe all visible text verbatim, then briefly describe any non-text content (stamps, signatures, charts, diagrams).",
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Read this evidence image." },
+            { type: "image_url", image_url: { url: imageDataUrl } },
+          ],
+        },
+      ],
+      temperature: 0.1,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new AIClientError(`OpenAI request failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== "string") throw new AIClientError("OpenAI response did not contain a message.");
+  return content;
+}

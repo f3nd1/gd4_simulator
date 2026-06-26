@@ -32,7 +32,8 @@ import { useAISettingsStore } from "./useAISettingsStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
-import { parseFolderId, listFolderFiles, exportFileText, DriveApiError } from "../lib/drive/driveClient";
+import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError } from "../lib/drive/driveClient";
+import { describeImage } from "../lib/ai/aiClient";
 
 export type ClosureState = {
   root?: string;
@@ -574,9 +575,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           note = "Not connected to Google Drive. Connect your Google account in Settings, then try again.";
         } else {
           try {
-            const files = await listFolderFiles(folderId, token);
+            const files = await listFolderFilesRecursive(folderId, token);
             status = "Connected";
-            note = files.length ? `Connected — found ${files.length} file${files.length === 1 ? "" : "s"} in this folder.` : "Connected, but this folder appears to be empty.";
+            note = files.length
+              ? `Connected — found ${files.length} file${files.length === 1 ? "" : "s"} in this folder (including subfolders).`
+              : "Connected, but this folder (and its subfolders) appears to be empty.";
           } catch (err) {
             status = "Error";
             if (err instanceof DriveApiError && err.status === 404) note = "Drive could not find this folder. Check the link and that it points to a folder, not a file.";
@@ -659,12 +662,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         let files;
         try {
-          files = await listFolderFiles(folderId, token);
+          files = await listFolderFilesRecursive(folderId, token);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           finish(`Could not list this folder's files: ${msg}`, false, msg);
           return;
         }
+
+        const aiSettings = useAISettingsStore.getState();
+        const canDescribeImages = aiSettings.enabled && !!aiSettings.apiKey;
+        // Each image costs one extra OpenAI vision call — capped separately
+        // from the (unbounded) text-file count so a folder full of scanned
+        // photos can't turn one "Run audit" click into dozens of API calls.
+        const MAX_IMAGES = 10;
+        let imagesDescribed = 0;
 
         const scanned: string[] = [];
         const skipped: string[] = [];
@@ -672,19 +683,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         for (const file of files) {
           try {
             const text = await exportFileText(file, token);
-            if (text === null) {
-              skipped.push(file.name);
-            } else {
-              scanned.push(file.name);
-              textParts.push(`--- ${file.name} ---\n${text}`);
+            if (text !== null) {
+              scanned.push(file.path);
+              textParts.push(`--- ${file.path} ---\n${text}`);
+              continue;
             }
+            if (IMAGE_MIME_TYPES.has(file.mimeType) && canDescribeImages && imagesDescribed < MAX_IMAGES) {
+              imagesDescribed++;
+              const dataUrl = await exportFileImageDataUrl(file, token);
+              const description = await describeImage(dataUrl, aiSettings);
+              scanned.push(file.path);
+              textParts.push(`--- ${file.path} (image) ---\n${description}`);
+              continue;
+            }
+            skipped.push(file.path);
           } catch {
-            skipped.push(file.name);
+            skipped.push(file.path);
           }
         }
         const docText = textParts.join("\n\n");
-
-        const aiSettings = useAISettingsStore.getState();
         let verdicts;
         let live = false;
         let liveError: string | undefined;

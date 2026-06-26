@@ -8,6 +8,7 @@
 // no backend proxy.
 
 import * as pdfjsLib from "pdfjs-dist";
+import mammoth from "mammoth";
 
 // Vite needs an explicit URL to the worker asset (pdfjs can't locate it via
 // its own default heuristics inside a bundled build) — this resolves to a
@@ -141,6 +142,35 @@ export async function listFolderFiles(folderId: string, accessToken: string): Pr
   return (data.files || []) as DriveFile[];
 }
 
+const FOLDER_MIME = "application/vnd.google-apps.folder";
+
+export type DriveFileWithPath = DriveFile & { path: string };
+
+// Evidence owners commonly organize a sub-criterion's folder into nested
+// subfolders (e.g. "2024/Q1", "Signed copies") — without recursing, anything
+// not directly inside the top-level folder silently looked empty to the
+// audit. Depth-capped rather than unbounded, since a Shared Drive can
+// contain folder shortcuts that would otherwise let this recurse forever.
+const MAX_FOLDER_DEPTH = 6;
+
+export async function listFolderFilesRecursive(
+  folderId: string,
+  accessToken: string,
+  path = "",
+  depth = 0
+): Promise<DriveFileWithPath[]> {
+  if (depth > MAX_FOLDER_DEPTH) return [];
+  const entries = await listFolderFiles(folderId, accessToken);
+  const nested = await Promise.all(
+    entries.map((entry) => {
+      const entryPath = path ? `${path}/${entry.name}` : entry.name;
+      if (entry.mimeType === FOLDER_MIME) return listFolderFilesRecursive(entry.id, accessToken, entryPath, depth + 1);
+      return Promise.resolve<DriveFileWithPath[]>([{ ...entry, path: entryPath }]);
+    })
+  );
+  return nested.flat();
+}
+
 // Exported MIME types we know how to turn into plain text via Drive's
 // /export endpoint. PDF is handled separately below (no /export conversion
 // exists for it). Anything else (images, video, etc.) is reported as
@@ -166,6 +196,10 @@ async function extractPdfText(bytes: ArrayBuffer): Promise<string> {
   return pages.join("\n\n");
 }
 
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+export const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/tiff"]);
+
 export async function exportFileText(file: DriveFile, accessToken: string): Promise<string | null> {
   if (file.mimeType in GOOGLE_EXPORT_MIME) {
     const mime = encodeURIComponent(GOOGLE_EXPORT_MIME[file.mimeType]);
@@ -180,5 +214,30 @@ export async function exportFileText(file: DriveFile, accessToken: string): Prom
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
     return extractPdfText(await res.arrayBuffer());
   }
+  if (file.mimeType === DOCX_MIME) {
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
+    const { value } = await mammoth.extractRawText({ arrayBuffer: await res.arrayBuffer() });
+    return value;
+  }
   return null;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000; // String.fromCharCode has an argument-count limit per call
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+// Images have no extractable text of their own — the caller (see
+// auditFolderContents in useWorkspaceStore.ts) hands this data: URL to an AI
+// vision call instead. Returned as base64 here, where the raw bytes already
+// are, rather than making every caller re-fetch and re-encode them.
+export async function exportFileImageDataUrl(file: DriveFile, accessToken: string): Promise<string> {
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
+  const base64 = arrayBufferToBase64(await res.arrayBuffer());
+  return `data:${file.mimeType};base64,${base64}`;
 }
