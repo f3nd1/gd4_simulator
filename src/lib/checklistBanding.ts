@@ -7,12 +7,16 @@
 //   rubric lens marked "Met" sets the ceiling band.
 // Step 3: a coverage cap from the Step 1 percentage.
 // Step 4: finalBand = min(maturity ceiling, coverage cap).
-// Step 5: gate weakest-link rule — for gate-sensitive GD4 items (reusing
-//   the existing GD4Requirement.gateSensitive flag, which already covers
-//   sub-criteria 4.2 and 4.6 and all of Criterion 5), any non-NA line whose
-//   evidence sufficiency is "Missing" forces the band down to 2, regardless
-//   of the Step 4 result. This cannot be overridden except by fixing the
-//   evidence, because the band is always recomputed from current state.
+// Step 5: evidence weakest-link rule, applied to every GD4 item (not just
+//   gate-sensitive ones) — a "Met"/"Partial" status with no real evidence
+//   attached is not evidence, so it cannot carry a high band on its own:
+//     - if every non-NA line has zero evidence items attached anywhere,
+//       the band is floored at Band 1 (status text alone, no evidence at all).
+//     - otherwise, if any non-NA line's evidence sufficiency is "Missing",
+//       the band is capped at Band 2 (gate-sensitive items keep the same
+//       cap, just with sharper wording since recurrence risk there is higher).
+//   This cannot be overridden except by fixing the evidence, because the
+//   band is always recomputed from current state.
 import type { Band, GD4Requirement, GenericChecklistLine, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry } from "../types";
 
 export function lineSufficiency(line: SpecificChecklistLine): EvidenceSufficiency {
@@ -55,8 +59,8 @@ export type BandResult = {
   // has no floor below Band 2, so an untouched item would otherwise still
   // compute a real-looking Band 1/2 result on a brand-new workspace.
   started: boolean;
-  gateOverride: boolean;
-  gateWarning?: string;
+  evidenceCapped: boolean;
+  evidenceCapWarning?: string;
 };
 
 export function computeBand(generic: GenericChecklistLine[], specific: SpecificChecklistLine[], gateSensitive: boolean): BandResult {
@@ -65,15 +69,27 @@ export function computeBand(generic: GenericChecklistLine[], specific: SpecificC
   const cap = coverageCap(coveragePct);
   const started = specific.length > 0;
   let finalBand = Math.min(ceiling, cap) as Band;
-  const hasMissingGateLine = gateSensitive && specific.some((l) => l.status !== "Not Applicable" && lineSufficiency(l) === "Missing");
-  let gateOverride = false;
-  let gateWarning: string | undefined;
-  if (hasMissingGateLine && finalBand > 2) {
+
+  const gradedLines = specific.filter((l) => l.status !== "Not Applicable");
+  const hasMissingEvidenceLine = gradedLines.some((l) => lineSufficiency(l) === "Missing");
+  const hasNoEvidenceAnywhere = gradedLines.length > 0 && gradedLines.every((l) => l.evidence.length === 0);
+
+  let evidenceCapped = false;
+  let evidenceCapWarning: string | undefined;
+
+  if (hasNoEvidenceAnywhere && finalBand > 1) {
+    finalBand = 1;
+    evidenceCapped = true;
+    evidenceCapWarning = "No evidence is attached to any checklist line, so a Met/Partial status alone cannot score above Band 1 — attach evidence to substantiate it.";
+  } else if (hasMissingEvidenceLine && finalBand > 2) {
     finalBand = 2;
-    gateOverride = true;
-    gateWarning = "Gate-sensitive item: at least one checklist line has evidence marked Missing, so the band is capped at Band 2 until that evidence is fixed.";
+    evidenceCapped = true;
+    evidenceCapWarning = gateSensitive
+      ? "Gate-sensitive item: at least one checklist line has evidence marked Missing, so the band is capped at Band 2 until that evidence is fixed."
+      : "At least one checklist line has evidence marked Missing, so the band is capped at Band 2 until that evidence is fixed.";
   }
-  return { coveragePct, maturityCeiling: ceiling, coverageCap: cap, finalBand, started, gateOverride, gateWarning };
+
+  return { coveragePct, maturityCeiling: ceiling, coverageCap: cap, finalBand, started, evidenceCapped, evidenceCapWarning };
 }
 
 // Representative effective score for a band, chosen so it falls back into

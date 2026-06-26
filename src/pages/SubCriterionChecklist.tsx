@@ -566,9 +566,9 @@ export function SubCriterionChecklist() {
                 <Metric label="Coverage cap" value={<Pill s={bandTone(bandResult.coverageCap)}>Band {bandResult.coverageCap}</Pill>} />
                 <Metric label="Final band" value={<Pill s={bandTone(bandResult.finalBand)}>Band {bandResult.finalBand}</Pill>} />
               </div>
-              {bandResult.gateWarning && (
+              {bandResult.evidenceCapWarning && (
                 <div style={{ marginTop: 10, background: "#fbe7e3", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#b23121" }}>
-                  <b>Gate override:</b> {bandResult.gateWarning}
+                  <b>Evidence cap:</b> {bandResult.evidenceCapWarning}
                 </div>
               )}
             </>

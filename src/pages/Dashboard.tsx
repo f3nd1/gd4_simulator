@@ -1,10 +1,13 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK, TONE } from "../lib/theme";
+import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
 
 export function Dashboard() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -12,6 +15,8 @@ export function Dashboard() {
   const loadDemoDataset = useWorkspaceStore((s) => s.loadDemoDataset);
   const scored = useScored();
   const findings = useAllFindings();
+  const checklistEntries = useChecklistModuleStore((s) => s.entries);
+  const [auditReport, setAuditReport] = useState<EvidenceAuditFlag[] | null>(null);
 
   const belowBand3 = scored.items.filter((i) => i.band < 3).length;
   const closures = useWorkspaceStore((s) => s.closures);
@@ -31,15 +36,67 @@ export function Dashboard() {
           {scored.gatePass ? "Score gate met (4.2, 4.6, C5 at Band 3+)" : `Score gate NOT met: ${scored.gateFail.map((g) => g.id).join(", ")}`}
         </div>
         <div style={{ fontSize: 11, color: "#7e8da0", marginTop: 8 }}>Not an official SSG or EduTrust result. Placeholder scoring table pending UCC's official GD4 rubric.</div>
-        <button
-          onClick={() => {
-            if (confirm("Use demo data? This fills in evidence ratings, reviewer scores, closures, samples, interview prep and the management review pack with sample data, overwriting any existing entries in those fields.")) loadDemoDataset();
-          }}
-          style={{ marginTop: 10, cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
-        >
-          Use demo data
-        </button>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button
+            onClick={() => {
+              if (confirm("Use demo data? This fills in evidence ratings, reviewer scores, closures, samples, interview prep and the management review pack with sample data, overwriting any existing entries in those fields.")) loadDemoDataset();
+            }}
+            style={{ cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
+          >
+            Use demo data
+          </button>
+          <button
+            onClick={() => setAuditReport(auditEvidence(scored.items, checklistEntries))}
+            style={{ cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: "#9fe0bd", fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
+          >
+            Recheck all evidence
+          </button>
+        </div>
       </Card>
+
+      {auditReport && (
+        <Card style={{ gridColumn: "1 / -1" }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+            <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence recheck report</h3>
+            <button onClick={() => setAuditReport(null)} style={{ cursor: "pointer", border: "none", background: "transparent", color: "#6b7280", fontSize: 12 }}>
+              Close
+            </button>
+          </div>
+          <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
+            Report only — re-derives the same evidence gaps the scoring engine already caps bands for. Nothing on the workspace is changed by running this.
+          </div>
+          {auditReport.length === 0 ? (
+            <p style={{ fontSize: 13, color: TONE.good.fg }}>No unverified-evidence items found — every band-carrying item has at least some evidence attached.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Source</th>
+                  <th>Band</th>
+                  <th>Gap</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditReport.map((f) => (
+                  <tr key={f.id}>
+                    <td>
+                      <b>{f.id}</b> {f.title}
+                    </td>
+                    <td>
+                      <Pill s="progress">{f.source}</Pill>
+                    </td>
+                    <td>
+                      <Pill s={f.band <= 1 ? "critical" : "medium"}>Band {f.band}</Pill>
+                    </td>
+                    <td style={{ fontSize: 12.5 }}>{f.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      )}
 
       <Card>
         <div style={{ fontSize: 12, color: "#6b7280" }}>Draft status</div>

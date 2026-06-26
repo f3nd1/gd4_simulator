@@ -41,11 +41,15 @@ export function EvidenceMatrix() {
                     {it.gate && <span style={{ marginLeft: 4, fontSize: 10, color: TONE.medium.fg }}>gate</span>}
                     {it.checklistOverride && <span style={{ marginLeft: 4, fontSize: 10, color: TONE.progress.fg }}>via Checklist</span>}
                   </td>
-                  {(["approach", "processes", "systemsOutcomes", "review"] as const).map((l) => (
-                    <td key={l}>
-                      <span style={{ width: 9, height: 9, borderRadius: 99, display: "inline-block", background: TONE[toneFor(it.ev[l])].fg }} />
-                    </td>
-                  ))}
+                  {(["approach", "processes", "systemsOutcomes", "review"] as const).map((l) => {
+                    const unverifiable = !it.checklistOverride && !it.ev.drive;
+                    const fg = unverifiable ? TONE.critical.fg : TONE[toneFor(it.ev[l])].fg;
+                    return (
+                      <td key={l}>
+                        <span title={unverifiable ? "No Drive evidence link — shown as failing regardless of the limb rating" : undefined} style={{ width: 9, height: 9, borderRadius: 99, display: "inline-block", background: fg }} />
+                      </td>
+                    );
+                  })}
                   <td><b>{it.ais}</b></td>
                 </tr>
               ))}
