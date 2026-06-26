@@ -580,7 +580,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           } catch (err) {
             status = "Error";
             if (err instanceof DriveApiError && err.status === 404) note = "Drive could not find this folder. Check the link and that it points to a folder, not a file.";
-            else if (err instanceof DriveApiError && err.status === 403) note = "Drive denied access to this folder. Confirm the connected Google account has at least viewer access.";
+            else if (err instanceof DriveApiError && err.status === 403)
+              note = `Drive denied access to this folder (${err.reason || "no further detail from Google"}). Confirm the connected Google account has at least viewer access — if this folder lives in a Shared Drive, also confirm the account is a member of that Shared Drive, not just shared the folder link.`;
             else note = err instanceof Error ? err.message : String(err);
           }
         }

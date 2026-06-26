@@ -91,6 +91,7 @@ export function parseFolderId(link?: string): string | null {
 
 export class DriveApiError extends Error {
   status?: number;
+  reason?: string;
 }
 
 export type DriveFile = { id: string; name: string; mimeType: string; modifiedTime?: string };
@@ -99,16 +100,34 @@ async function driveFetch(url: string, accessToken: string): Promise<Response> {
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    const err = new DriveApiError(`Drive API request failed (${res.status}): ${text.slice(0, 200)}`);
+    // Google returns structured JSON ({ error: { message, errors: [...] } })
+    // — surface its actual reason (e.g. "insufficientFilePermissions" vs.
+    // "Drive API has not been used in project ... before or it is disabled")
+    // instead of just the HTTP status, since both currently collapse to the
+    // same generic "denied access" message at the call site otherwise.
+    let reason = text.slice(0, 200);
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.error?.message) reason = parsed.error.message;
+    } catch {
+      // not JSON — keep the raw text snippet
+    }
+    const err = new DriveApiError(`Drive API request failed (${res.status}): ${reason}`);
     err.status = res.status;
+    err.reason = reason;
     throw err;
   }
   return res;
 }
 
+// supportsAllDrives + includeItemsFromAllDrives: without these, the v3 API's
+// default corpus is "My Drive + shared directly with me" and SILENTLY
+// excludes Shared/Team Drive items — a folder living in a Shared Drive then
+// looks "denied" (403) or simply not found, even though the connected
+// account genuinely has viewer access to it.
 export async function listFolderFiles(folderId: string, accessToken: string): Promise<DriveFile[]> {
   const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
-  const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,modifiedTime)&pageSize=100`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,modifiedTime)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
   const res = await driveFetch(url, accessToken);
   const data = await res.json();
   return (data.files || []) as DriveFile[];
@@ -127,11 +146,11 @@ const GOOGLE_EXPORT_MIME: Record<string, string> = {
 export async function exportFileText(file: DriveFile, accessToken: string): Promise<string | null> {
   if (file.mimeType in GOOGLE_EXPORT_MIME) {
     const mime = encodeURIComponent(GOOGLE_EXPORT_MIME[file.mimeType]);
-    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${mime}`, accessToken);
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${mime}&supportsAllDrives=true`, accessToken);
     return res.text();
   }
   if (file.mimeType === "text/plain" || file.mimeType === "text/csv") {
-    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, accessToken);
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
     return res.text();
   }
   return null;
