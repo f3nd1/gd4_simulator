@@ -11,7 +11,6 @@ export function Header({ onMenuClick }: Props) {
         <button
           onClick={onMenuClick}
           aria-label="Toggle navigation menu"
-          className="md:hidden"
           style={{ cursor: "pointer", background: "transparent", border: "1px solid #3a4660", color: "#fff", fontSize: 16, lineHeight: 1, padding: "5px 9px", borderRadius: 6 }}
         >
           ☰

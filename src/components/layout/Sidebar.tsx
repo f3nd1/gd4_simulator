@@ -7,7 +7,8 @@ type Props = { open: boolean; onClose: () => void };
 
 export function Sidebar({ open, onClose }: Props) {
   useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
+    const isMobile = window.matchMedia("(max-width: 767px)").matches;
+    document.body.style.overflow = open && isMobile ? "hidden" : "";
     return () => {
       document.body.style.overflow = "";
     };
@@ -23,18 +24,17 @@ export function Sidebar({ open, onClose }: Props) {
         />
       )}
       <nav
-        className={`fixed md:static top-0 left-0 h-screen md:h-auto z-50 md:z-auto transition-transform duration-200 md:translate-x-0 ${
-          open ? "translate-x-0" : "-translate-x-full"
+        className={`fixed md:static top-0 left-0 h-screen md:h-auto z-50 md:z-auto overflow-hidden transition-all duration-200 ${
+          open ? "translate-x-0 w-[220px]" : "-translate-x-full w-[220px] md:translate-x-0 md:w-0"
         }`}
         style={{
-          width: 220,
           flexShrink: 0,
           background: "#16202e",
           color: "#aeb8c7",
-          padding: "14px 10px",
-          overflowY: "auto",
+          overflowY: open ? "auto" : "hidden",
         }}
       >
+        <div style={{ width: 220, padding: "14px 10px" }}>
         {NAV.map((g) => (
           <div key={g.group} style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.5, color: "#5d6b80", padding: "4px 10px" }}>{g.group}</div>
@@ -60,6 +60,7 @@ export function Sidebar({ open, onClose }: Props) {
             ))}
           </div>
         ))}
+        </div>
       </nav>
     </>
   );
