@@ -4,9 +4,14 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { BLUE, TONE, gateTone } from "../lib/theme";
 import { DEPTS, CHECKLIST_LIB } from "../data/agents";
+import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import type { ChecklistStatus } from "../types";
 
 const STATUSES: ChecklistStatus[] = ["Not Started", "Pass", "Partial", "Fail", "Not Applicable"];
+
+function linkedRequirement(link: string | null) {
+  return link ? GD4_REQUIREMENTS.find((r) => r.id === link) : undefined;
+}
 
 export function AuditorChecklist() {
   const checklist = useWorkspaceStore((s) => s.checklist);
@@ -39,12 +44,19 @@ export function AuditorChecklist() {
             </div>
             {items.map((c) => {
               const cs = checklist[c.id] || {};
+              const req = linkedRequirement(c.link);
               return (
                 <div key={c.id} style={{ borderTop: "1px solid #eef1f5", padding: "9px 0" }}>
                   <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
                     <span style={{ flex: "1 1 240px", fontSize: 12.5 }}>
                       {c.text}
-                      {c.link && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#9ca3af" }}> · GD4 {c.link}</span>}
+                      {req ? (
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#9ca3af" }}>
+                          {" "}· GD4 C{req.criterion} · {req.area} ({c.link})
+                        </span>
+                      ) : c.link ? (
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#9ca3af" }}> · GD4 {c.link}</span>
+                      ) : null}
                     </span>
                     {cs.ai && <Pill s={cs.ai === "Pass" ? "good" : cs.ai === "Partial" ? "medium" : "critical"}>AI: {cs.ai}{cs.live ? "" : " (simulated)"}</Pill>}
                     <select value={cs.status || "Not Started"} onChange={(e) => setChecklistField(c.id, "status", e.target.value as ChecklistStatus)} style={{ ...inputStyle, width: 130 }}>

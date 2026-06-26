@@ -128,6 +128,7 @@ export type WorkspaceState = {
   setClosureHuman: (afiId: string, value: "" | "Accepted") => void;
 
   addAuditor: (a: AuditorProfile) => void;
+  updateAuditor: (id: string, patch: Partial<AuditorProfile>) => void;
   removeAuditor: (id: string) => void;
 
   setFolderField: <K extends keyof EvidenceFolder>(id: string, field: K, value: EvidenceFolder[K]) => void;
@@ -441,6 +442,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setClosureHuman: (afiId, value) => set((s) => ({ closures: { ...s.closures, [afiId]: { ...(s.closures[afiId] || {}), human: value } } })),
 
       addAuditor: (a) => set((s) => ({ auditors: [...s.auditors, a] })),
+      updateAuditor: (id, patch) => set((s) => ({ auditors: s.auditors.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
       removeAuditor: (id) => set((s) => ({ auditors: s.auditors.filter((a) => a.id !== id) })),
 
       setFolderField: (id, field, value) => set((s) => ({ folders: s.folders.map((f) => (f.id === id ? { ...f, [field]: value } : f)) })),

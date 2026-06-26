@@ -8,27 +8,46 @@ import type { AuditorProfile, AuditorType } from "../types";
 const TYPES: AuditorType[] = ["Internal", "External", "AI Agent"];
 const TEMPLATES = ["Audit Lead Checklist", "GD4 Criterion Checklist", "Evidence Controller Checklist", "Student Protection Checklist", "Academic Process Checklist", "QA Closure Checklist", "Management Review Checklist"];
 
+const EMPTY_FORM = { name: "", type: "Internal" as AuditorType, department: "", role: "", strictness: 70, focusArea: "", checklistTemplateId: TEMPLATES[0] };
+
 export function AuditorCreation() {
   const cycle = useWorkspaceStore((s) => s.cycle);
   const auditors = useWorkspaceStore((s) => s.auditors);
   const addAuditor = useWorkspaceStore((s) => s.addAuditor);
+  const updateAuditor = useWorkspaceStore((s) => s.updateAuditor);
   const removeAuditor = useWorkspaceStore((s) => s.removeAuditor);
   const agents = useWorkspaceStore((s) => s.agents);
   const setAgentStrictness = useWorkspaceStore((s) => s.setAgentStrictness);
 
-  const [form, setForm] = useState({ name: "", type: "Internal" as AuditorType, department: "", role: "", strictness: 70, focusArea: "", checklistTemplateId: TEMPLATES[0] });
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   function submit() {
     if (!form.name.trim() || !form.role.trim()) return;
-    const a: AuditorProfile = { id: `AUD-${Date.now()}`, auditCycleId: cycle.id, ...form };
-    addAuditor(a);
-    setForm({ name: "", type: "Internal", department: "", role: "", strictness: 70, focusArea: "", checklistTemplateId: TEMPLATES[0] });
+    if (editingId) {
+      updateAuditor(editingId, form);
+      setEditingId(null);
+    } else {
+      const a: AuditorProfile = { id: `AUD-${Date.now()}`, auditCycleId: cycle.id, ...form };
+      addAuditor(a);
+    }
+    setForm(EMPTY_FORM);
+  }
+
+  function startEdit(a: AuditorProfile) {
+    setEditingId(a.id);
+    setForm({ name: a.name, type: a.type, department: a.department || "", role: a.role, strictness: a.strictness, focusArea: a.focusArea, checklistTemplateId: a.checklistTemplateId });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
   }
 
   return (
     <div className="flex flex-col gap-3">
       <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Create auditor</h3>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>{editingId ? "Edit auditor" : "Create auditor"}</h3>
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
           <input placeholder="Auditor name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
           <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as AuditorType })} style={inputStyle}>
@@ -46,9 +65,16 @@ export function AuditorCreation() {
           <input type="range" min={20} max={95} value={form.strictness} onChange={(e) => setForm({ ...form, strictness: Number(e.target.value) })} style={{ flex: 1 }} />
           <b style={{ fontSize: 12 }}>{form.strictness}</b>
         </div>
-        <button onClick={submit} style={{ marginTop: 10, cursor: "pointer", border: "none", background: GOLD, color: "#16202e", fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}>
-          Create auditor
-        </button>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button onClick={submit} style={{ cursor: "pointer", border: "none", background: GOLD, color: "#16202e", fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}>
+            {editingId ? "Save changes" : "Create auditor"}
+          </button>
+          {editingId && (
+            <button onClick={cancelEdit} style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", color: "#475569", fontWeight: 600, padding: "8px 14px", borderRadius: 8 }}>
+              Cancel
+            </button>
+          )}
+        </div>
       </Card>
 
       <Card>
@@ -66,8 +92,21 @@ export function AuditorCreation() {
                 <td>{a.role}</td>
                 <td style={{ color: "#6b7280" }}>{a.focusArea}</td>
                 <td style={{ color: "#6b7280" }}>{a.checklistTemplateId}</td>
-                <td>{a.strictness}</td>
-                <td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <input
+                    type="range"
+                    min={20}
+                    max={95}
+                    value={a.strictness}
+                    onChange={(e) => updateAuditor(a.id, { strictness: Number(e.target.value) })}
+                    style={{ width: 70, verticalAlign: "middle" }}
+                  />
+                  <span style={{ marginLeft: 6 }}>{a.strictness}</span>
+                </td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button onClick={() => startEdit(a)} style={{ cursor: "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", marginRight: 6 }}>
+                    Edit
+                  </button>
                   <button onClick={() => removeAuditor(a.id)} style={{ cursor: "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}>
                     Remove
                   </button>
