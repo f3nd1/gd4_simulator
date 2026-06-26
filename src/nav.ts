@@ -11,6 +11,7 @@ export const NAV: NavGroup[] = [
       { path: "/audit-cycle", label: "Audit Cycle" },
       { path: "/auditors", label: "Auditor Creation" },
       { path: "/checklist", label: "Auditor Checklist" },
+      { path: "/sub-checklist", label: "Sub-Criterion Checklist" },
     ],
   },
   {
@@ -23,7 +24,6 @@ export const NAV: NavGroup[] = [
       { path: "/evidence-intelligence", label: "Evidence Intelligence" },
       { path: "/scorecard", label: "Criterion Scorecard" },
       { path: "/rubric-banding", label: "Rubric Banding" },
-      { path: "/sub-checklist", label: "Sub-Criterion Checklist" },
     ],
   },
   {
