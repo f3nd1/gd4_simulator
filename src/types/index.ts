@@ -177,6 +177,9 @@ export type SubChecklistEvidenceItem = {
   // Set when this evidence item was copied here via "Reuse in another
   // sub-criterion" from a different line, so the UI can show its origin.
   sharedFrom?: string;
+  // Free-text auditor note on this evidence item: justify the sufficiency
+  // verdict, record strengths/weaknesses/gaps, or suggest how to close a gap.
+  auditorNote?: string;
 };
 
 export type SamplingInfo = {

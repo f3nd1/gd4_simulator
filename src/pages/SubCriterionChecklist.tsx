@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildGenericLines } from "../data/checklistSeed";
@@ -52,6 +52,7 @@ const emptyEvidenceDraft = (): Omit<SubChecklistEvidenceItem, "id"> => ({
   approved: false,
   reviewed: false,
   sufficiency: "Present",
+  auditorNote: "",
 });
 
 export function SubCriterionChecklist() {
@@ -363,38 +364,51 @@ export function SubCriterionChecklist() {
                         </thead>
                         <tbody>
                           {l.evidence.map((ev) => (
-                            <tr key={ev.id} className="rowh">
-                              <td>
-                                {ev.title} {ev.drive && <a href={ev.drive} target="_blank" rel="noreferrer" style={{ fontSize: 10.5 }}>(open)</a>}
-                                {ev.sharedFrom && <div style={{ fontSize: 10, color: "#94a3b8" }}>Shared from {ev.sharedFrom}</div>}
-                              </td>
-                              <td style={{ fontSize: 11.5 }}>{ev.type}</td>
-                              <td style={{ fontSize: 11.5 }}>{ev.owner}</td>
-                              <td style={{ fontSize: 11.5 }}>{ev.date}</td>
-                              <td>
-                                <input type="checkbox" checked={ev.approved} onChange={(e) => updateEvidence(selectedId, l.id, ev.id, { approved: e.target.checked })} />
-                              </td>
-                              <td>
-                                <input type="checkbox" checked={ev.reviewed} onChange={(e) => updateEvidence(selectedId, l.id, ev.id, { reviewed: e.target.checked })} />
-                              </td>
-                              <td>
-                                <select
-                                  value={ev.sufficiency}
-                                  onChange={(e) => updateEvidence(selectedId, l.id, ev.id, { sufficiency: e.target.value as EvidenceSufficiency })}
-                                  style={{ ...inputStyle, width: "auto", padding: "3px 5px" }}
-                                >
-                                  {SUFFICIENCY_OPTIONS.map((o) => <option key={o}>{o}</option>)}
-                                </select>
-                              </td>
-                              <td style={{ whiteSpace: "nowrap" }}>
-                                <button onClick={() => setReuseFrom({ lineId: l.id, evidenceId: ev.id })} style={{ cursor: "pointer", fontSize: 10.5, border: "none", background: "transparent", color: "#4a5a8a" }}>
-                                  Reuse →
-                                </button>
-                                <button onClick={() => removeEvidence(selectedId, l.id, ev.id)} style={{ cursor: "pointer", fontSize: 10.5, border: "none", background: "transparent", color: "#b23121" }}>
-                                  Remove
-                                </button>
-                              </td>
-                            </tr>
+                            <Fragment key={ev.id}>
+                              <tr className="rowh">
+                                <td>
+                                  {ev.title} {ev.drive && <a href={ev.drive} target="_blank" rel="noreferrer" style={{ fontSize: 10.5 }}>(open)</a>}
+                                  {ev.sharedFrom && <div style={{ fontSize: 10, color: "#94a3b8" }}>Shared from {ev.sharedFrom}</div>}
+                                </td>
+                                <td style={{ fontSize: 11.5 }}>{ev.type}</td>
+                                <td style={{ fontSize: 11.5 }}>{ev.owner}</td>
+                                <td style={{ fontSize: 11.5 }}>{ev.date}</td>
+                                <td>
+                                  <input type="checkbox" checked={ev.approved} onChange={(e) => updateEvidence(selectedId, l.id, ev.id, { approved: e.target.checked })} />
+                                </td>
+                                <td>
+                                  <input type="checkbox" checked={ev.reviewed} onChange={(e) => updateEvidence(selectedId, l.id, ev.id, { reviewed: e.target.checked })} />
+                                </td>
+                                <td>
+                                  <select
+                                    value={ev.sufficiency}
+                                    onChange={(e) => updateEvidence(selectedId, l.id, ev.id, { sufficiency: e.target.value as EvidenceSufficiency })}
+                                    style={{ ...inputStyle, width: "auto", padding: "3px 5px" }}
+                                  >
+                                    {SUFFICIENCY_OPTIONS.map((o) => <option key={o}>{o}</option>)}
+                                  </select>
+                                </td>
+                                <td style={{ whiteSpace: "nowrap" }}>
+                                  <button onClick={() => setReuseFrom({ lineId: l.id, evidenceId: ev.id })} style={{ cursor: "pointer", fontSize: 10.5, border: "none", background: "transparent", color: "#4a5a8a" }}>
+                                    Reuse →
+                                  </button>
+                                  <button onClick={() => removeEvidence(selectedId, l.id, ev.id)} style={{ cursor: "pointer", fontSize: 10.5, border: "none", background: "transparent", color: "#b23121" }}>
+                                    Remove
+                                  </button>
+                                </td>
+                              </tr>
+                              <tr>
+                                <td colSpan={8} style={{ paddingTop: 0, paddingBottom: 8 }}>
+                                  <textarea
+                                    rows={2}
+                                    placeholder="Auditor note — justify the sufficiency verdict, note strengths/weaknesses/gaps, suggest how to close…"
+                                    value={ev.auditorNote || ""}
+                                    onChange={(e) => updateEvidence(selectedId, l.id, ev.id, { auditorNote: e.target.value })}
+                                    style={{ ...inputStyle, width: "100%", resize: "vertical", fontSize: 11.5 }}
+                                  />
+                                </td>
+                              </tr>
+                            </Fragment>
                           ))}
                         </tbody>
                       </table>
@@ -446,6 +460,13 @@ export function SubCriterionChecklist() {
                       <label style={{ fontSize: 11 }}>
                         <input type="checkbox" checked={evidenceDraft.reviewed} onChange={(e) => setEvidenceDraft({ ...evidenceDraft, reviewed: e.target.checked })} /> Reviewed
                       </label>
+                      <textarea
+                        rows={2}
+                        placeholder="Auditor note — justify the sufficiency verdict, note strengths/weaknesses/gaps, suggest how to close…"
+                        value={evidenceDraft.auditorNote || ""}
+                        onChange={(e) => setEvidenceDraft({ ...evidenceDraft, auditorNote: e.target.value })}
+                        style={{ ...inputStyle, width: "100%", resize: "vertical", fontSize: 11.5 }}
+                      />
                       <button
                         onClick={() => {
                           if (!evidenceDraft.title.trim()) return;
