@@ -5,8 +5,8 @@ import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 import type { InterviewQuestion } from "../types";
 
-function generateQuestions(items: { id: string; title: string; ev: { ppd: string; impl: string; review: string; outcome: string } }[]): InterviewQuestion[] {
-  const weak = items.filter((i) => i.ev.review !== "good" || i.ev.outcome !== "good" || i.ev.impl !== "good");
+function generateQuestions(items: { id: string; title: string; ev: { approach: string; processes: string; review: string; systemsOutcomes: string } }[]): InterviewQuestion[] {
+  const weak = items.filter((i) => i.ev.review !== "good" || i.ev.systemsOutcomes !== "good" || i.ev.processes !== "good");
   return weak.map((it) => ({
     id: `IQ-${it.id}`,
     gd4ItemId: it.id,

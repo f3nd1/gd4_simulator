@@ -7,10 +7,10 @@ import { TONE, toneFor } from "../lib/theme";
 import type { EvidenceLevel, ItemEvidence } from "../types";
 
 const LIMBS: [keyof ItemEvidence, string][] = [
-  ["ppd", "PPD / Approach"],
-  ["impl", "Implementation"],
-  ["review", "Review limb"],
-  ["outcome", "Outcome / KPI"],
+  ["approach", "Approach"],
+  ["processes", "Processes"],
+  ["systemsOutcomes", "Systems & Outcomes"],
+  ["review", "Review"],
 ];
 
 export function EvidenceMatrix() {
@@ -25,7 +25,7 @@ export function EvidenceMatrix() {
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence matrix</h3>
         <div style={{ maxHeight: 540, overflowY: "auto" }}>
           <table>
-            <thead><tr><th>Item</th><th>PPD</th><th>Impl</th><th>Review</th><th>Outcome</th><th>AI</th></tr></thead>
+            <thead><tr><th>Item</th><th>Approach</th><th>Processes</th><th>Sys/Outcomes</th><th>Review</th><th>AI</th></tr></thead>
             <tbody>
               {scored.items.map((it) => (
                 <tr key={it.id} className="rowh" onClick={() => setSelItem(it.id)} style={{ cursor: "pointer", background: selItem === it.id ? "#f4f6f9" : "transparent" }}>
@@ -33,7 +33,7 @@ export function EvidenceMatrix() {
                     <b>{it.id}</b>
                     {it.gate && <span style={{ marginLeft: 4, fontSize: 10, color: TONE.medium.fg }}>gate</span>}
                   </td>
-                  {(["ppd", "impl", "review", "outcome"] as const).map((l) => (
+                  {(["approach", "processes", "systemsOutcomes", "review"] as const).map((l) => (
                     <td key={l}>
                       <span style={{ width: 9, height: 9, borderRadius: 99, display: "inline-block", background: TONE[toneFor(it.ev[l])].fg }} />
                     </td>

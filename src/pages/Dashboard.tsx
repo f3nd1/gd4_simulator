@@ -9,7 +9,8 @@ import { CHECKLIST_LIB } from "../data/agents";
 
 export function Dashboard() {
   const cycle = useWorkspaceStore((s) => s.cycle);
-  const saveDraft = useWorkspaceStore((s) => s.saveDraft);
+  const saveAsNewVersion = useWorkspaceStore((s) => s.saveAsNewVersion);
+  const loadDemoDataset = useWorkspaceStore((s) => s.loadDemoDataset);
   const scored = useScored();
 
   const belowBand3 = scored.items.filter((i) => i.band < 3).length;
@@ -33,6 +34,14 @@ export function Dashboard() {
           {scored.checklistPass ? "Checklist gate passed" : `Checklist gate not passed (${scored.checklistDone}/${CHECKLIST_LIB.length} items done)`}
         </div>
         <div style={{ fontSize: 11, color: "#7e8da0", marginTop: 8 }}>Not an official SSG or EduTrust result. Placeholder scoring table pending UCC's official GD4 rubric.</div>
+        <button
+          onClick={() => {
+            if (confirm("Load the demo dataset? This fills in reviewer scores, closures, checklist results, samples, interview prep and the management review pack with sample data, overwriting any existing entries in those fields.")) loadDemoDataset();
+          }}
+          style={{ marginTop: 10, cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
+        >
+          Load demo dataset
+        </button>
       </Card>
 
       <Card>
@@ -45,7 +54,10 @@ export function Dashboard() {
           <br />
           Saved: {cycle.lastSavedAt}
         </div>
-        <button onClick={saveDraft} style={{ marginTop: 8, cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "7px 12px", borderRadius: 8 }}>
+        <button
+          onClick={() => saveAsNewVersion("", "Quick save from dashboard")}
+          style={{ marginTop: 8, cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "7px 12px", borderRadius: 8 }}
+        >
           Save draft
         </button>
       </Card>

@@ -64,14 +64,23 @@ export type AuditorChecklistItem = {
   aiLive?: boolean;
 };
 
+export type GD4SubCriterion = {
+  id: string;
+  criterionId: string;
+  title: string;
+  description: string;
+};
+
 export type GD4Requirement = {
   id: string;
   criterion: string;
   area: string;
-  subCriterion?: string;
+  subCriterionId: string;
   itemNumber: string;
   requirement: string;
   intent: string;
+  describeShow: string[];
+  notes: string[];
   maxPoints: number;
   weightage: number;
   gateSensitive: boolean;
@@ -187,6 +196,7 @@ export type EvidenceFolder = {
   id: string;
   auditCycleId: string;
   criterionId: string;
+  subCriterionId: string;
   folderName: string;
   sourceSystem: SourceSystem;
   folderLink?: string;
@@ -233,6 +243,32 @@ export type VersionHistoryEntry = {
   note: string;
 };
 
+// Snapshot+restore versioning: each saved version carries a full copy of the
+// working state so it can be restored later, not just a status label.
+export type WorkspaceSnapshot = {
+  cycle: AuditCycle;
+  evidence: Record<string, ItemEvidence>;
+  reviewer: Record<string, number>;
+  confirmed: Record<string, number | null>;
+  justify: Record<string, string>;
+  closures: Record<string, unknown>;
+  checklist: Record<string, unknown>;
+  folders: EvidenceFolder[];
+  samples: SampleRecord[];
+  interviewQuestions: InterviewQuestion[];
+  managementReviewItems: ManagementReviewItem[];
+};
+
+export type VersionEntry = {
+  id: string;
+  name: string;
+  version: string;
+  date: string;
+  status: CycleStatus;
+  note: string;
+  snapshot: WorkspaceSnapshot;
+};
+
 export type ExportFormat = "PDF" | "Excel" | "CSV" | "Markdown";
 
 export type ExportLogEntry = {
@@ -249,6 +285,14 @@ export type AgentDefinition = {
   name: string;
   focus: string;
   strictness: number;
+};
+
+// Per-agent conversation memory, kept so a live LLM call can be given context
+// from its own prior turns in this workspace.
+export type AgentMemoryEntry = {
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
 };
 
 export type DepartmentDefinition = {
@@ -283,11 +327,13 @@ export type SampleRecord = {
 // evidence limbs (policy, implementation, review, outcome).
 export type EvidenceLevel = "good" | "Partial" | "Missing";
 
+// Field names follow the four dimensions of the official EduTrust scoring
+// rubric (GD4 section 23): Approach, Processes, Systems & Outcomes, Review.
 export type ItemEvidence = {
-  ppd: EvidenceLevel;
-  impl: EvidenceLevel;
+  approach: EvidenceLevel;
+  processes: EvidenceLevel;
+  systemsOutcomes: EvidenceLevel;
   review: EvidenceLevel;
-  outcome: EvidenceLevel;
   owner: string;
   age: number;
   trace: number;
@@ -301,4 +347,14 @@ export type InterviewQuestion = {
   expectedAnswer: string;
   readiness?: "Strong" | "Adequate" | "Weak";
   notes?: string;
+};
+
+// Non-production AI settings, kept in their own persisted store (not the
+// main workspace blob) so the key can be cleared independently. The key is
+// never hardcoded and is only ever sent directly from the browser to OpenAI.
+export type AISettings = {
+  provider: "openai";
+  apiKey: string;
+  model: string;
+  enabled: boolean;
 };

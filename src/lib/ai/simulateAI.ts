@@ -35,13 +35,13 @@ export function simulateItemReview(agent: AgentDefinition, item: { id: string; a
   let score = item.ais;
   let band = getBand(score);
   if (ev.review === "Missing" && band > 3) band = 3;
-  if (ev.impl === "Missing" && band > 2) band = 2;
+  if (ev.processes === "Missing" && band > 2) band = 2;
 
   const gaps: string[] = [];
-  if (ev.ppd !== "good") gaps.push("policy/approach evidence");
-  if (ev.impl !== "good") gaps.push("implementation evidence");
+  if (ev.approach !== "good") gaps.push("approach evidence");
+  if (ev.processes !== "good") gaps.push("processes evidence");
+  if (ev.systemsOutcomes !== "good") gaps.push("systems & outcomes evidence");
   if (ev.review !== "good") gaps.push("review evidence");
-  if (ev.outcome !== "good") gaps.push("outcome evidence");
 
   const confidence = ev.trace >= 75 && gaps.length === 0 ? "High" : gaps.length <= 1 ? "Medium" : "Low";
   const justification =

@@ -5,7 +5,8 @@ import { toneFor } from "../lib/theme";
 
 export function VersionHistory() {
   const cycle = useWorkspaceStore((s) => s.cycle);
-  const history = useWorkspaceStore((s) => s.history);
+  const versions = useWorkspaceStore((s) => s.versions);
+  const restoreVersion = useWorkspaceStore((s) => s.restoreVersion);
 
   return (
     <Card>
@@ -15,18 +16,28 @@ export function VersionHistory() {
         <b style={{ fontSize: 13 }}>{cycle.version}</b>
       </div>
       <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
-        Draft and final versions are kept separate. Locked final versions should not be edited directly — unlock from Draft Workspace first.
+        Each row is a full snapshot of the workspace at the time it was saved. Restoring a version replaces the current working
+        state with that snapshot — locked final versions should be unlocked from Draft Workspace before further edits.
       </p>
-      {history.length === 0 && <p style={{ fontSize: 12.5, color: "#6b7280" }}>No saved versions yet.</p>}
+      {versions.length === 0 && <p style={{ fontSize: 12.5, color: "#6b7280" }}>No saved versions yet.</p>}
       <table>
-        <thead><tr><th>Version</th><th>Date</th><th>Status</th><th>Note</th></tr></thead>
+        <thead><tr><th>Name</th><th>Version</th><th>Date</th><th>Status</th><th>Note</th><th></th></tr></thead>
         <tbody>
-          {history.map((h, i) => (
-            <tr key={i} className="rowh">
-              <td><b>{h.version}</b></td>
-              <td>{h.date}</td>
-              <td><Pill s={toneFor(h.status)}>{h.status}</Pill></td>
-              <td style={{ color: "#6b7280" }}>{h.note}</td>
+          {versions.map((v) => (
+            <tr key={v.id} className="rowh">
+              <td><b>{v.name}</b></td>
+              <td>{v.version}</td>
+              <td>{v.date}</td>
+              <td><Pill s={toneFor(v.status)}>{v.status}</Pill></td>
+              <td style={{ color: "#6b7280" }}>{v.note}</td>
+              <td>
+                <button
+                  onClick={() => restoreVersion(v.id)}
+                  style={{ cursor: "pointer", fontSize: 11.5, padding: "4px 8px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}
+                >
+                  Restore
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>

@@ -1,38 +1,19 @@
 import type { EvidenceFolder } from "../types";
-import { GD4_CRITERIA } from "./gd4Requirements";
+import { GD4_SUB_CRITERIA } from "./gd4Requirements";
 
-// Recommended folder structure from the requirements guide, section 7.4.
-export const FOLDER_STRUCTURE = [
-  "00 Audit Planning",
-  "01 Leadership and Governance",
-  "02 Corporate Administration",
-  "03 Student Protection",
-  "04 Academic Processes",
-  "05 Academic Staff",
-  "06 Student Support and Outcomes",
-  "07 Quality Assurance",
-  "08 Management Review",
-  "09 AFI Closure Evidence",
-  "10 Exported Reports",
-  "11 Archived Drafts",
-];
-
-const FOLDER_BY_CRITERION: Record<string, string> = {
-  "1": "01 Leadership and Governance",
-  "2": "02 Corporate Administration",
-  "3": "02 Corporate Administration",
-  "4": "03 Student Protection",
-  "5": "04 Academic Processes",
-  "6": "07 Quality Assurance",
-  "7": "06 Student Support and Outcomes",
-};
+// One evidence folder per GD4 sub-criterion (24 total), named after the
+// official criterion/sub-criterion numbering and title so the folder
+// structure maps 1:1 onto the official GD4 criteria, not an invented
+// department-based grouping.
+export const FOLDER_STRUCTURE = GD4_SUB_CRITERIA.map((s) => `${s.id} ${s.title}`);
 
 export function seedFolders(): EvidenceFolder[] {
-  return GD4_CRITERIA.map((c) => ({
-    id: `FOLD-${c.id}`,
+  return GD4_SUB_CRITERIA.map((s) => ({
+    id: `FOLD-${s.id}`,
     auditCycleId: "cycle-1",
-    criterionId: c.id,
-    folderName: FOLDER_BY_CRITERION[c.id] || "00 Audit Planning",
+    criterionId: s.criterionId,
+    subCriterionId: s.id,
+    folderName: `${s.id} ${s.title}`,
     sourceSystem: "Google Drive",
     folderLink: "",
     owner: "SQ",

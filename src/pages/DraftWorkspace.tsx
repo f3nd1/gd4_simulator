@@ -1,23 +1,35 @@
+import { useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
-import { Card } from "../components/ui/Card";
+import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 
 export function DraftWorkspace() {
   const cycle = useWorkspaceStore((s) => s.cycle);
-  const history = useWorkspaceStore((s) => s.history);
-  const saveDraft = useWorkspaceStore((s) => s.saveDraft);
+  const versions = useWorkspaceStore((s) => s.versions);
+  const saveAsNewVersion = useWorkspaceStore((s) => s.saveAsNewVersion);
+  const restoreVersion = useWorkspaceStore((s) => s.restoreVersion);
   const lockCycle = useWorkspaceStore((s) => s.lockCycle);
   const unlockCycle = useWorkspaceStore((s) => s.unlockCycle);
   const duplicateCycle = useWorkspaceStore((s) => s.duplicateCycle);
   const locked = cycle.status === "Locked";
+
+  const [name, setName] = useState("");
+  const [note, setNote] = useState("");
+
+  function saveAs() {
+    saveAsNewVersion(name, note);
+    setName("");
+    setNote("");
+  }
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr" }}>
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Draft workspace</h3>
         <p style={{ fontSize: 12.5, color: "#6b7280" }}>
-          This is a long-running workspace, not a one-time checklist. Save progress, duplicate prior cycles, and lock a version once finalised.
+          This is a long-running workspace, not a one-time checklist. Each "Save as new version" captures a full snapshot of the
+          workspace that can be restored later — it is not just a label change.
         </p>
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
           <Pill s={locked ? "critical" : "progress"}>{cycle.status}</Pill>
@@ -28,13 +40,23 @@ export function DraftWorkspace() {
           <br />
           Created {new Date(cycle.createdAt).toLocaleDateString()} · updated {new Date(cycle.updatedAt).toLocaleDateString()}
         </div>
+
+        <label style={{ display: "block", marginBottom: 8 }}>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Version name</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Pre-management-review draft" style={{ ...inputStyle, marginTop: 3 }} disabled={locked} />
+        </label>
+        <label style={{ display: "block", marginBottom: 8 }}>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Note</span>
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="What changed in this version?" style={{ ...inputStyle, marginTop: 3 }} disabled={locked} />
+        </label>
+
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
-            onClick={saveDraft}
+            onClick={saveAs}
             disabled={locked}
-            style={{ cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
+            style={{ cursor: locked ? "not-allowed" : "pointer", border: "none", background: locked ? "#e2e8f0" : GOLD, color: locked ? "#94a3b8" : INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
           >
-            Save draft
+            Save as new version
           </button>
           <button onClick={duplicateCycle} style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>
             Duplicate cycle
@@ -52,13 +74,25 @@ export function DraftWorkspace() {
       </Card>
 
       <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Version history</h3>
-        {history.length === 0 && <p style={{ fontSize: 12.5, color: "#6b7280" }}>No saved versions yet. Use Save draft.</p>}
-        {history.map((h, i) => (
-          <div key={i} style={{ fontSize: 12.5, padding: "7px 0", borderBottom: "1px solid #eef1f5" }}>
-            <b>{h.version}</b> · {h.date}
-            <br />
-            <span style={{ color: "#6b7280" }}>{h.status} — {h.note}</span>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Saved versions ({versions.length})</h3>
+        {versions.length === 0 && <p style={{ fontSize: 12.5, color: "#6b7280" }}>No saved versions yet. Use "Save as new version".</p>}
+        {versions.map((v) => (
+          <div key={v.id} style={{ fontSize: 12.5, padding: "7px 0", borderBottom: "1px solid #eef1f5" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <b>{v.name}</b>
+              <span style={{ color: "#6b7280" }}>{v.version}</span>
+            </div>
+            <span style={{ color: "#6b7280" }}>
+              {v.date} · {v.status} — {v.note}
+            </span>
+            <div style={{ marginTop: 4 }}>
+              <button
+                onClick={() => restoreVersion(v.id)}
+                style={{ cursor: "pointer", fontSize: 11.5, padding: "4px 8px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}
+              >
+                Restore this version
+              </button>
+            </div>
           </div>
         ))}
       </Card>

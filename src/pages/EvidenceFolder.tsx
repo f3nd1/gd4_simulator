@@ -14,17 +14,17 @@ export function EvidenceFolder() {
     <Card>
       <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence folder index</h3>
       <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
-        One evidence folder per GD4 criterion, linked to its source system and owning department.
+        One evidence folder per GD4 sub-criterion, linked to its source system and owning department.
       </p>
       <table>
         <thead>
-          <tr><th>Folder</th><th>Criterion</th><th>Source</th><th>Owner</th><th>Status</th><th>Missing</th><th>Link</th><th>Last checked</th></tr>
+          <tr><th>Folder</th><th>Sub-criterion</th><th>Source</th><th>Owner</th><th>Status</th><th>Missing</th><th>Link</th><th>Last checked</th></tr>
         </thead>
         <tbody>
           {folders.map((f) => (
             <tr key={f.id} className="rowh">
               <td><b>{f.folderName}</b></td>
-              <td>C{f.criterionId}</td>
+              <td>{f.subCriterionId}</td>
               <td>{f.sourceSystem}</td>
               <td>
                 <input value={f.owner} onChange={(e) => setFolderField(f.id, "owner", e.target.value)} style={{ ...inputStyle, width: 90, padding: "4px 6px" }} />

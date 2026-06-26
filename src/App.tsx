@@ -23,6 +23,7 @@ import { VersionHistory } from "./pages/VersionHistory";
 import { ManagementReview } from "./pages/ManagementReview";
 import { Finalisation } from "./pages/Finalisation";
 import { ExportCentre } from "./pages/ExportCentre";
+import { Settings } from "./pages/Settings";
 
 export default function App() {
   return (
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/management-review" element={<ManagementReview />} />
           <Route path="/finalisation" element={<Finalisation />} />
           <Route path="/export" element={<ExportCentre />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
       </Routes>
     </HashRouter>

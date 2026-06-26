@@ -19,9 +19,9 @@ export function EvidenceIntelligence() {
   const checks: [string, "Pass" | "Partial" | "Fail", string][] = [
     ["Evidence age", item.ev.age <= 180 ? "Pass" : "Fail", `${item.ev.age} days`],
     ["Evidence strength", item.ais >= 55 ? "Pass" : "Partial", `${item.ais}/100`],
-    ["Implementation consistency", item.ev.impl === "good" ? "Pass" : item.ev.impl === "Partial" ? "Partial" : "Fail", item.ev.impl],
+    ["Processes consistency", item.ev.processes === "good" ? "Pass" : item.ev.processes === "Partial" ? "Partial" : "Fail", item.ev.processes],
     ["Review limb present", item.ev.review !== "Missing" ? "Pass" : "Fail", item.ev.review],
-    ["Outcome evidence", item.ev.outcome !== "Missing" ? "Pass" : "Fail", item.ev.outcome],
+    ["Systems & outcomes evidence", item.ev.systemsOutcomes !== "Missing" ? "Pass" : "Fail", item.ev.systemsOutcomes],
     ["Cross-criterion linkage", "Pass", "Owner SQ links this evidence to related criteria where applicable"],
     ["Traceability", item.ev.trace >= 75 ? "Pass" : "Partial", `${item.ev.trace}%`],
     ["Missing owner warning", item.ev.owner ? "Pass" : "Fail", item.ev.owner || "No owner set"],

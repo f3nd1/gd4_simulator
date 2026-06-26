@@ -51,4 +51,8 @@ export const NAV: NavGroup[] = [
       { path: "/export", label: "Export Centre" },
     ],
   },
+  {
+    group: "Configuration",
+    items: [{ path: "/settings", label: "Settings (AI)" }],
+  },
 ];

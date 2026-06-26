@@ -7,7 +7,8 @@ import type {
   ChecklistStatus,
   EvidenceFolder,
   ItemEvidence,
-  VersionHistoryEntry,
+  VersionEntry,
+  WorkspaceSnapshot,
   SampleRecord,
   InterviewQuestion,
   ManagementReviewItem,
@@ -19,8 +20,12 @@ import type {
 import { seedEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
 import { AGENTS } from "../data/agents";
+import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore } from "../lib/scoring";
 import { simulateItemReview, simulateChecklist, simulateClosure } from "../lib/ai/simulateAI";
+import { runLiveItemReview, runLiveClosureReview } from "../lib/ai/agentRuntime";
+import { useAISettingsStore } from "./useAISettingsStore";
+import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { CHECKLIST_LIB } from "../data/agents";
 
 export type ChecklistCellState = {
@@ -89,7 +94,7 @@ export type WorkspaceState = {
   checklist: Record<string, ChecklistCellState>;
   agents: AgentDefinition[];
   auditors: AuditorProfile[];
-  history: VersionHistoryEntry[];
+  versions: VersionEntry[];
   folders: EvidenceFolder[];
   itemReviews: Record<string, ItemAIVerdict>;
   aiReviewLog: AIReviewLogEntry[];
@@ -100,7 +105,9 @@ export type WorkspaceState = {
   busy: string | null;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
-  saveDraft: () => void;
+  loadDemoDataset: () => void;
+  saveAsNewVersion: (name: string, note?: string) => void;
+  restoreVersion: (versionId: string) => void;
   lockCycle: () => void;
   unlockCycle: () => void;
   duplicateCycle: () => void;
@@ -114,10 +121,10 @@ export type WorkspaceState = {
   runChecklistAI: (dept: string) => void;
 
   setAgentStrictness: (agentId: string, value: number) => void;
-  runItemAI: (agentId: string, itemId: string) => void;
+  runItemAI: (agentId: string, itemId: string) => Promise<void>;
 
   setClosureField: (afiId: string, field: keyof ClosureState, value: string) => void;
-  runClosureAI: (afiId: string) => void;
+  runClosureAI: (afiId: string) => Promise<void>;
   setClosureHuman: (afiId: string, value: "" | "Accepted") => void;
 
   addAuditor: (a: AuditorProfile) => void;
@@ -186,7 +193,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       checklist: {},
       agents: AGENTS,
       auditors: DEFAULT_AUDITORS,
-      history: [],
+      versions: [],
       folders: seedFolders(),
       itemReviews: {},
       aiReviewLog: [],
@@ -198,21 +205,93 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
-      saveDraft: () =>
+      // Populates the workflow-progress fields that start empty (reviewer
+      // drafts, sign-offs, closures, checklist results, samples, interview
+      // prep, management review pack, export log) with realistic values
+      // derived from the existing real GD4 items, findings and checklist
+      // library, so the workspace can be demoed fully populated.
+      loadDemoDataset: () => set((s) => buildDemoDataset(s.evidence)),
+
+      // Snapshot+restore versioning: every save captures a full copy of the
+      // working state, so a version in the list can be restored exactly, not
+      // just relabelled.
+      saveAsNewVersion: (name, note) =>
         set((s) => {
           const m = s.cycle.version.match(/v0\.(\d+)/);
-          const nv = m ? `v0.${Number(m[1]) + 1} Draft` : "v0.2 Draft";
-          const entry: VersionHistoryEntry = { version: nv, date: new Date().toLocaleString(), status: s.cycle.status, note: "Draft saved" };
-          return {
+          const nv = m ? `v0.${Number(m[1]) + 1}` : "v0.2";
+          const snapshot: WorkspaceSnapshot = {
             cycle: { ...s.cycle, version: nv, lastSavedAt: new Date().toLocaleString() },
-            history: [entry, ...s.history].slice(0, 50),
+            evidence: s.evidence,
+            reviewer: s.reviewer,
+            confirmed: s.confirmed,
+            justify: s.justify,
+            closures: s.closures,
+            checklist: s.checklist,
+            folders: s.folders,
+            samples: s.samples,
+            interviewQuestions: s.interviewQuestions,
+            managementReviewItems: s.managementReviewItems,
+          };
+          const entry: VersionEntry = {
+            id: `VER-${Date.now()}`,
+            name: name.trim() || `${nv} Draft`,
+            version: nv,
+            date: new Date().toLocaleString(),
+            status: s.cycle.status,
+            note: note?.trim() || "Saved",
+            snapshot,
+          };
+          return {
+            cycle: snapshot.cycle,
+            versions: [entry, ...s.versions].slice(0, 50),
+          };
+        }),
+
+      restoreVersion: (versionId) =>
+        set((s) => {
+          const entry = s.versions.find((v) => v.id === versionId);
+          if (!entry) return {};
+          const snap = entry.snapshot;
+          return {
+            cycle: { ...snap.cycle, updatedAt: new Date().toISOString() },
+            evidence: snap.evidence,
+            reviewer: snap.reviewer,
+            confirmed: snap.confirmed,
+            justify: snap.justify,
+            closures: snap.closures as WorkspaceState["closures"],
+            checklist: snap.checklist as WorkspaceState["checklist"],
+            folders: snap.folders,
+            samples: snap.samples,
+            interviewQuestions: snap.interviewQuestions,
+            managementReviewItems: snap.managementReviewItems,
           };
         }),
 
       lockCycle: () =>
         set((s) => {
-          const entry: VersionHistoryEntry = { version: s.cycle.version, date: new Date().toLocaleString(), status: "Locked", note: "Final version locked" };
-          return { cycle: { ...s.cycle, status: "Locked" }, history: [entry, ...s.history].slice(0, 50) };
+          const snapshot: WorkspaceSnapshot = {
+            cycle: { ...s.cycle, status: "Locked" },
+            evidence: s.evidence,
+            reviewer: s.reviewer,
+            confirmed: s.confirmed,
+            justify: s.justify,
+            closures: s.closures,
+            checklist: s.checklist,
+            folders: s.folders,
+            samples: s.samples,
+            interviewQuestions: s.interviewQuestions,
+            managementReviewItems: s.managementReviewItems,
+          };
+          const entry: VersionEntry = {
+            id: `VER-${Date.now()}`,
+            name: `${s.cycle.version} Locked`,
+            version: s.cycle.version,
+            date: new Date().toLocaleString(),
+            status: "Locked",
+            note: "Final version locked",
+            snapshot,
+          };
+          return { cycle: snapshot.cycle, versions: [entry, ...s.versions].slice(0, 50) };
         }),
 
       unlockCycle: () => set((s) => ({ cycle: { ...s.cycle, status: "Under Review" } })),
@@ -270,14 +349,34 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setAgentStrictness: (agentId, value) => set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, strictness: value } : a)) })),
 
-      runItemAI: (agentId, itemId) => {
+      // Tries a live OpenAI call (Settings page) when configured and enabled;
+      // falls back to the deterministic offline simulation otherwise or on
+      // any request failure. Either path only ever produces advisory
+      // justification text — the score/band passed in is always the one
+      // already computed by scoring.ts, never decided by the AI call.
+      runItemAI: async (agentId, itemId) => {
         const s = get();
         set({ busy: itemId + agentId });
         const agent = s.agents.find((a) => a.id === agentId)!;
         const ev = s.evidence[itemId];
         const scored = buildScored(s);
         const item = scored.items.find((i) => i.id === itemId)!;
-        const verdict = simulateItemReview(agent, item, ev);
+
+        const aiSettings = useAISettingsStore.getState();
+        let verdict;
+        if (aiSettings.enabled && aiSettings.apiKey) {
+          try {
+            const memory = useAgentMemoryStore.getState().memory[agentId] || [];
+            verdict = await runLiveItemReview(agent, item, ev, aiSettings, memory);
+            useAgentMemoryStore.getState().addMemory(agentId, { role: "user", content: `Reviewed item ${itemId}.`, createdAt: new Date().toISOString() });
+            useAgentMemoryStore.getState().addMemory(agentId, { role: "assistant", content: verdict.justification, createdAt: new Date().toISOString() });
+          } catch {
+            verdict = simulateItemReview(agent, item, ev);
+          }
+        } else {
+          verdict = simulateItemReview(agent, item, ev);
+        }
+
         const log: AIReviewLogEntry = {
           id: `LOG-${Date.now()}-${++logCounter}`,
           auditCycleId: s.cycle.id,
@@ -290,7 +389,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           recommendedAction: verdict.higherBand,
           suggestedScore: verdict.score,
           suggestedBand: verdict.band as 1 | 2 | 3 | 4 | 5,
-          live: false,
+          live: verdict.live,
           createdAt: new Date().toISOString(),
         };
         set({ itemReviews: { ...s.itemReviews, [itemId]: verdict }, aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200), busy: null });
@@ -298,11 +397,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setClosureField: (afiId, field, value) => set((s) => ({ closures: { ...s.closures, [afiId]: { ...(s.closures[afiId] || {}), [field]: value } } })),
 
-      runClosureAI: (afiId) => {
+      runClosureAI: async (afiId) => {
         const s = get();
         set({ busy: "clx" + afiId });
         const c = s.closures[afiId] || {};
-        const verdict = simulateClosure(c);
+
+        const aiSettings = useAISettingsStore.getState();
+        let verdict;
+        if (aiSettings.enabled && aiSettings.apiKey) {
+          try {
+            const memory = useAgentMemoryStore.getState().memory["closure-reviewer"] || [];
+            verdict = await runLiveClosureReview(c, aiSettings, memory);
+            useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "user", content: `Reviewed closure for ${afiId}.`, createdAt: new Date().toISOString() });
+            useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "assistant", content: verdict.reason, createdAt: new Date().toISOString() });
+          } catch {
+            verdict = simulateClosure(c);
+          }
+        } else {
+          verdict = simulateClosure(c);
+        }
+
         const log: AIReviewLogEntry = {
           id: `LOG-${Date.now()}-${++logCounter}`,
           auditCycleId: s.cycle.id,
@@ -314,11 +428,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           keyConcerns: [verdict.reason],
           recommendedAction: verdict.evidenceNeeded,
           evidenceNeeded: verdict.evidenceNeeded,
-          live: false,
+          live: verdict.live,
           createdAt: new Date().toISOString(),
         };
         set({
-          closures: { ...s.closures, [afiId]: { ...c, ai: verdict.verdict, aiReason: verdict.reason, aiNeed: verdict.evidenceNeeded, live: false } },
+          closures: { ...s.closures, [afiId]: { ...c, ai: verdict.verdict, aiReason: verdict.reason, aiNeed: verdict.evidenceNeeded, live: verdict.live } },
           aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200),
           busy: null,
         });
