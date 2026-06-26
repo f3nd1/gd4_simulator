@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { BLUE, TONE } from "../lib/theme";
+import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 
 export function AFIClosure() {
   const closures = useWorkspaceStore((s) => s.closures);
@@ -15,13 +16,54 @@ export function AFIClosure() {
   const scored = useScored();
   const allFindings = useAllFindings();
   const [selFinding, setSelFinding] = useState<string | null>(null);
+  const [critFilter, setCritFilter] = useState<string>("All");
+  const [subCritFilter, setSubCritFilter] = useState<string>("All");
+
+  const subCritOptions = useMemo(
+    () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter)),
+    [critFilter]
+  );
+
+  const findings = allFindings.filter((f) => {
+    const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
+    if (critFilter !== "All" && req?.criterion !== critFilter) return false;
+    if (subCritFilter !== "All" && req?.subCriterionId !== subCritFilter) return false;
+    return true;
+  });
 
   return (
     <div>
-      <div style={{ fontSize: 12.5, color: "#6b7280", marginBottom: 10 }}>
-        Real findings from the April 2026 assessment. {scored.openAFIs} of {allFindings.length} still open.
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12.5, color: "#6b7280" }}>
+          Real findings from the April 2026 assessment. {scored.openAFIs} of {allFindings.length} still open.
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select
+            value={critFilter}
+            onChange={(e) => {
+              setCritFilter(e.target.value);
+              setSubCritFilter("All");
+            }}
+            style={{ ...inputStyle, width: "auto" }}
+          >
+            <option value="All">All criteria</option>
+            {GD4_CRITERIA.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.id} — {c.title}
+              </option>
+            ))}
+          </select>
+          <select value={subCritFilter} onChange={(e) => setSubCritFilter(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
+            <option value="All">All sub-criteria</option>
+            {subCritOptions.map((sc) => (
+              <option key={sc.id} value={sc.id}>
+                {sc.id} — {sc.title}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
-      {allFindings.map((f) => {
+      {findings.map((f) => {
         const c = closures[f.id] || {};
         const open = selFinding === f.id;
         return (

@@ -283,6 +283,8 @@ export type AIReviewLogEntry = {
   suggestedScore?: number;
   suggestedBand?: Band;
   live: boolean;
+  liveError?: string;
+  generatedContent?: string;
   createdAt: string;
 };
 

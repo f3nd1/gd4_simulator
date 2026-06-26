@@ -189,6 +189,8 @@ export type WorkspaceState = {
     suggestedScore?: number;
     suggestedBand?: number;
     live: boolean;
+    liveError?: string;
+    generatedContent?: string;
   }) => void;
 
   setBusy: (id: string | null) => void;
@@ -449,13 +451,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const aiSettings = useAISettingsStore.getState();
         let verdict;
+        let liveError: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             const memory = useAgentMemoryStore.getState().memory[agentId] || [];
             verdict = await runLiveItemReview(agent, item, ev, aiSettings, memory);
             useAgentMemoryStore.getState().addMemory(agentId, { role: "user", content: `Reviewed item ${itemId}.`, createdAt: new Date().toISOString() });
             useAgentMemoryStore.getState().addMemory(agentId, { role: "assistant", content: verdict.justification, createdAt: new Date().toISOString() });
-          } catch {
+          } catch (err) {
+            liveError = err instanceof Error ? err.message : String(err);
             verdict = simulateItemReview(agent, item, ev);
           }
         } else {
@@ -475,6 +479,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           suggestedScore: verdict.score,
           suggestedBand: verdict.band as 1 | 2 | 3 | 4 | 5,
           live: verdict.live,
+          liveError,
+          generatedContent: verdict.justification,
           createdAt: new Date().toISOString(),
         };
         set({ itemReviews: { ...s.itemReviews, [itemId]: verdict }, aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200), busy: null });
@@ -489,13 +495,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const aiSettings = useAISettingsStore.getState();
         let verdict;
+        let liveError: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             const memory = useAgentMemoryStore.getState().memory["closure-reviewer"] || [];
             verdict = await runLiveClosureReview(c, aiSettings, memory);
             useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "user", content: `Reviewed closure for ${afiId}.`, createdAt: new Date().toISOString() });
             useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "assistant", content: verdict.reason, createdAt: new Date().toISOString() });
-          } catch {
+          } catch (err) {
+            liveError = err instanceof Error ? err.message : String(err);
             verdict = simulateClosure(c);
           }
         } else {
@@ -514,6 +522,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           recommendedAction: verdict.evidenceNeeded,
           evidenceNeeded: verdict.evidenceNeeded,
           live: verdict.live,
+          liveError,
+          generatedContent: verdict.reason,
           createdAt: new Date().toISOString(),
         };
         set({
@@ -569,6 +579,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             suggestedScore: entry.suggestedScore,
             suggestedBand: entry.suggestedBand as 1 | 2 | 3 | 4 | 5 | undefined,
             live: entry.live,
+            liveError: entry.liveError,
+            generatedContent: entry.generatedContent,
             createdAt: new Date().toISOString(),
           };
           return { aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200) };

@@ -118,12 +118,14 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         const aiSettings = useAISettingsStore.getState();
         let raw: { text: string; clause: string }[];
         let live = false;
+        let liveError: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             raw = await runLiveChecklistGeneration(req, aiSettings);
             if (!raw.length) raw = simulateChecklistGeneration(req);
             else live = true;
-          } catch {
+          } catch (err) {
+            liveError = err instanceof Error ? err.message : String(err);
             raw = simulateChecklistGeneration(req);
           }
         } else {
@@ -149,6 +151,8 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           keyConcerns: [`Proposed ${lines.length} specific testable line(s) for ${itemId}; pending reviewer confirmation.`],
           recommendedAction: "Review, edit and confirm the generated lines before they count toward the band.",
           live,
+          liveError,
+          generatedContent: lines.map((l) => `[${l.clause || "—"}] ${l.text}`).join("\n"),
         });
         set((s) => ({
           ...mapEntry(s, itemId, (e) => ({ ...e, pendingGenerated: lines, generatedLive: live, generatedAt: new Date().toLocaleString() })),
@@ -199,10 +203,12 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         const lineText = get().entries[itemId]?.specific.find((l) => l.id === lineId)?.text || "";
         const aiSettings = useAISettingsStore.getState();
         let draft: EvidenceFillDraft;
+        let liveError: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             draft = await runLiveEvidenceFill(link, lineText, aiSettings);
-          } catch {
+          } catch (err) {
+            liveError = err instanceof Error ? err.message : String(err);
             draft = simulateEvidenceFill(link, lineText);
           }
         } else {
@@ -217,6 +223,8 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           keyConcerns: [draft.auditorNote],
           recommendedAction: "Review every drafted field before clicking Add evidence — the linked document itself was not read.",
           live: draft.live,
+          liveError,
+          generatedContent: `Title: ${draft.title}\nType: ${draft.type}\nDate: ${draft.date}\nSufficiency: ${draft.sufficiency}\nAuditor note: ${draft.auditorNote}`,
         });
         set({ busy: null });
         return draft;

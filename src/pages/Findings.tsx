@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
+import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import type { FindingType, Severity } from "../types";
 
 const TYPES: (FindingType | "All")[] = ["All", "AFI", "Improvement Action", "Observation", "Quality Action", "Critical Readiness Risk"];
@@ -19,8 +20,22 @@ export function Findings() {
   const allFindings = useAllFindings();
   const [typeFilter, setTypeFilter] = useState<FindingType | "All">("All");
   const [sevFilter, setSevFilter] = useState<Severity | "All">("All");
+  const [critFilter, setCritFilter] = useState<string>("All");
+  const [subCritFilter, setSubCritFilter] = useState<string>("All");
 
-  const rows = allFindings.filter((f) => (typeFilter === "All" || f.type === typeFilter) && (sevFilter === "All" || f.severity === sevFilter));
+  const subCritOptions = useMemo(
+    () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter)),
+    [critFilter]
+  );
+
+  const rows = allFindings.filter((f) => {
+    if (typeFilter !== "All" && f.type !== typeFilter) return false;
+    if (sevFilter !== "All" && f.severity !== sevFilter) return false;
+    const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
+    if (critFilter !== "All" && req?.criterion !== critFilter) return false;
+    if (subCritFilter !== "All" && req?.subCriterionId !== subCritFilter) return false;
+    return true;
+  });
 
   return (
     <Card>
@@ -29,7 +44,30 @@ export function Findings() {
         <span style={{ fontSize: 12, color: "#6b7280" }}>
           {scored.openAFIs} of {allFindings.length} still open
         </span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select
+            value={critFilter}
+            onChange={(e) => {
+              setCritFilter(e.target.value);
+              setSubCritFilter("All");
+            }}
+            style={{ ...inputStyle, width: "auto" }}
+          >
+            <option value="All">All criteria</option>
+            {GD4_CRITERIA.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.id} — {c.title}
+              </option>
+            ))}
+          </select>
+          <select value={subCritFilter} onChange={(e) => setSubCritFilter(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
+            <option value="All">All sub-criteria</option>
+            {subCritOptions.map((sc) => (
+              <option key={sc.id} value={sc.id}>
+                {sc.id} — {sc.title}
+              </option>
+            ))}
+          </select>
           <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as FindingType | "All")} style={{ ...inputStyle, width: "auto" }}>
             {TYPES.map((t) => <option key={t}>{t}</option>)}
           </select>
