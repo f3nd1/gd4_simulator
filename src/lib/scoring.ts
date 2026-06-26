@@ -13,6 +13,9 @@ export type ScoringInput = {
   // the "feed into overall score" decision.
   checklistBandOverrides?: Record<string, ChecklistOverride>;
   customFindings?: Finding[];
+  // Gates the hard-coded sample findings register so openAFIs/gate counts
+  // on a brand-new workspace don't count findings the user hasn't loaded.
+  seedFindingsLoaded?: boolean;
 };
 
 // Internal simulation weighting across the four official rubric dimensions
@@ -73,6 +76,14 @@ function buildScoredItem(
   const conf = confirmed[req.id] ?? undefined;
   const override = checklistBandOverrides?.[req.id];
   const eff = override ? override.eff : conf != null ? conf : rev;
+  // Mirrors the criterion-level avg===0 special case below: getBand() has no
+  // floor below Band 1, so an item with zero effective score would otherwise
+  // still render "Band 1" — a real-looking result — on a brand-new
+  // workspace. Consumers that render a band/points to the user should check
+  // this before doing so; consumers that use band as a risk signal (e.g.
+  // "items below Band 3") are unaffected since an un-started item is
+  // legitimately at-risk either way.
+  const started = override ? true : eff > 0;
   return {
     id: req.id,
     crit: req.criterion,
@@ -85,6 +96,7 @@ function buildScoredItem(
     rev,
     conf,
     eff,
+    started,
     band: override ? override.band : capBandForEvidence(getBand(eff), ev),
     aiBand: capBandForEvidence(getBand(ais), ev),
     checklistOverride: !!override,
@@ -92,8 +104,8 @@ function buildScoredItem(
 }
 
 export function buildScored(state: ScoringInput) {
-  const { evidence, reviewer, confirmed, closures, checklistBandOverrides, customFindings } = state;
-  const allFindings: Finding[] = [...FINDINGS, ...(customFindings || [])];
+  const { evidence, reviewer, confirmed, closures, checklistBandOverrides, customFindings, seedFindingsLoaded } = state;
+  const allFindings: Finding[] = [...(seedFindingsLoaded ? FINDINGS : []), ...(customFindings || [])];
 
   const items = GD4_REQUIREMENTS.map((req) => buildScoredItem(req, evidence, reviewer, confirmed, checklistBandOverrides));
 
@@ -106,7 +118,7 @@ export function buildScored(state: ScoringInput) {
     // points (Band 1's share) on a brand-new workspace. Only this exact
     // all-zero case is special-cased to truly award nothing.
     const scored = avg === 0 ? 0 : Math.round((band / 5) * c.points);
-    return { ...c, items: ci, avg, band, scored };
+    return { ...c, items: ci, avg, band, scored, started: avg > 0 };
   });
 
   const total = Math.round(crits.reduce((a, c) => a + c.scored, 0));

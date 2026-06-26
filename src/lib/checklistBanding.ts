@@ -51,6 +51,10 @@ export type BandResult = {
   maturityCeiling: Band;
   coverageCap: Band;
   finalBand: Band;
+  // False when this item has no Layer 2 (specific) lines at all — coverageCap
+  // has no floor below Band 2, so an untouched item would otherwise still
+  // compute a real-looking Band 1/2 result on a brand-new workspace.
+  started: boolean;
   gateOverride: boolean;
   gateWarning?: string;
 };
@@ -59,6 +63,7 @@ export function computeBand(generic: GenericChecklistLine[], specific: SpecificC
   const coveragePct = coveragePercent(specific);
   const ceiling = maturityCeiling(generic);
   const cap = coverageCap(coveragePct);
+  const started = specific.length > 0;
   let finalBand = Math.min(ceiling, cap) as Band;
   const hasMissingGateLine = gateSensitive && specific.some((l) => l.status !== "Not Applicable" && lineSufficiency(l) === "Missing");
   let gateOverride = false;
@@ -68,7 +73,7 @@ export function computeBand(generic: GenericChecklistLine[], specific: SpecificC
     gateOverride = true;
     gateWarning = "Gate-sensitive item: at least one checklist line has evidence marked Missing, so the band is capped at Band 2 until that evidence is fixed.";
   }
-  return { coveragePct, maturityCeiling: ceiling, coverageCap: cap, finalBand, gateOverride, gateWarning };
+  return { coveragePct, maturityCeiling: ceiling, coverageCap: cap, finalBand, started, gateOverride, gateWarning };
 }
 
 // Representative effective score for a band, chosen so it falls back into

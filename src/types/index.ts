@@ -323,6 +323,7 @@ export type WorkspaceSnapshot = {
   // before this field existed.
   checklistEntries?: Record<string, SubCriterionChecklistEntry>;
   customFindings?: Finding[];
+  seedFindingsLoaded?: boolean;
 };
 
 export type VersionEntry = {

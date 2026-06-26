@@ -52,7 +52,7 @@ export function ReAudit() {
             {belowBand3.map((it) => (
               <tr key={it.id} className="rowh">
                 <td><b>{it.id}</b> {it.title}{it.gate && <Pill s="medium">gate</Pill>}</td>
-                <td><Pill s={bandTone(it.band)}>Band {it.band}</Pill></td>
+                <td>{it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
                 <td>{it.eff}</td>
               </tr>
             ))}

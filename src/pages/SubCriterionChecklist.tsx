@@ -532,16 +532,22 @@ export function SubCriterionChecklist() {
 
         <Card>
           <h3 style={{ marginTop: 0, fontSize: 14 }}>Band result</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 }}>
-            <Metric label="Coverage %" value={`${Math.round(bandResult.coveragePct)}%`} />
-            <Metric label="Maturity ceiling" value={<Pill s={bandTone(bandResult.maturityCeiling)}>Band {bandResult.maturityCeiling}</Pill>} />
-            <Metric label="Coverage cap" value={<Pill s={bandTone(bandResult.coverageCap)}>Band {bandResult.coverageCap}</Pill>} />
-            <Metric label="Final band" value={<Pill s={bandTone(bandResult.finalBand)}>Band {bandResult.finalBand}</Pill>} />
-          </div>
-          {bandResult.gateWarning && (
-            <div style={{ marginTop: 10, background: "#fbe7e3", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#b23121" }}>
-              <b>Gate override:</b> {bandResult.gateWarning}
-            </div>
+          {bandResult.started ? (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 }}>
+                <Metric label="Coverage %" value={`${Math.round(bandResult.coveragePct)}%`} />
+                <Metric label="Maturity ceiling" value={<Pill s={bandTone(bandResult.maturityCeiling)}>Band {bandResult.maturityCeiling}</Pill>} />
+                <Metric label="Coverage cap" value={<Pill s={bandTone(bandResult.coverageCap)}>Band {bandResult.coverageCap}</Pill>} />
+                <Metric label="Final band" value={<Pill s={bandTone(bandResult.finalBand)}>Band {bandResult.finalBand}</Pill>} />
+              </div>
+              {bandResult.gateWarning && (
+                <div style={{ marginTop: 10, background: "#fbe7e3", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#b23121" }}>
+                  <b>Gate override:</b> {bandResult.gateWarning}
+                </div>
+              )}
+            </>
+          ) : (
+            <p style={{ fontSize: 12, color: "#94a3b8" }}>No band yet — add at least one specific (Layer 2) line for this item to compute one.</p>
           )}
           <p style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 10, marginBottom: 0 }}>
             This module feeds its band back into the workspace's overall scoring engine once it has at least one specific line for this item. Internal

@@ -51,7 +51,7 @@ export function CriterionScorecard() {
                   </td>
                   <td>{it.conf != null ? <b>{it.conf}</b> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
                   <td>
-                    <Pill s={bandTone(it.band)}>Band {it.band}</Pill>
+                    {it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}
                     {it.checklistOverride && <Pill s="progress">via Checklist</Pill>}
                   </td>
                   <td>
@@ -91,7 +91,7 @@ export function CriterionScorecard() {
         {scored.crits.map((c) => (
           <div key={c.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10 }}>
             <div style={{ fontSize: 11, color: "#6b7280" }}>C{c.id} · {c.points} pts</div>
-            <Pill s={bandTone(c.band)}>Band {c.band}</Pill>
+            {c.started ? <Pill s={bandTone(c.band)}>Band {c.band}</Pill> : <span style={{ fontSize: 11, color: "#9ca3af" }}>Not started</span>}
             <div style={{ fontSize: 13, fontWeight: 700 }}>{c.scored}/{c.points}</div>
           </div>
         ))}

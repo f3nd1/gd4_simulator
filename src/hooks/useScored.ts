@@ -11,12 +11,13 @@ export function useScored() {
   const confirmed = useWorkspaceStore((s) => s.confirmed);
   const closures = useWorkspaceStore((s) => s.closures);
   const customFindings = useWorkspaceStore((s) => s.customFindings);
+  const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
 
   const checklistBandOverrides = useMemo(() => computeChecklistOverrides(checklistEntries, GD4_REQUIREMENTS), [checklistEntries]);
 
   return useMemo(
-    () => buildScored({ evidence, reviewer, confirmed, closures, checklistBandOverrides, customFindings }),
-    [evidence, reviewer, confirmed, closures, checklistBandOverrides, customFindings]
+    () => buildScored({ evidence, reviewer, confirmed, closures, checklistBandOverrides, customFindings, seedFindingsLoaded }),
+    [evidence, reviewer, confirmed, closures, checklistBandOverrides, customFindings, seedFindingsLoaded]
   );
 }

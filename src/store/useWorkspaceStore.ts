@@ -109,6 +109,10 @@ export type WorkspaceState = {
   managementReviewItems: ManagementReviewItem[];
   exportLog: ExportLogEntry[];
   customFindings: Finding[];
+  // Gates the hard-coded sample findings register (data/findings.ts) so a
+  // brand-new workspace's Findings/AFI Closure modules start truly empty —
+  // those 22 sample findings only appear once "Use demo data" is clicked.
+  seedFindingsLoaded: boolean;
   busy: string | null;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
@@ -229,6 +233,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       managementReviewItems: [],
       exportLog: [],
       customFindings: [],
+      seedFindingsLoaded: false,
       busy: null,
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
@@ -243,7 +248,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         useChecklistModuleStore.getState().loadDemoChecklistData();
         set(() => {
           const evidence = seedEvidence();
-          return { evidence, auditors: DEFAULT_AUDITORS, ...buildDemoDataset(evidence) };
+          return { evidence, auditors: DEFAULT_AUDITORS, seedFindingsLoaded: true, ...buildDemoDataset(evidence) };
         });
       },
 
@@ -267,6 +272,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             managementReviewItems: s.managementReviewItems,
             checklistEntries: useChecklistModuleStore.getState().entries,
             customFindings: s.customFindings,
+            seedFindingsLoaded: s.seedFindingsLoaded,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -304,6 +310,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             interviewQuestions: snap.interviewQuestions,
             managementReviewItems: snap.managementReviewItems,
             customFindings: snap.customFindings ?? s.customFindings,
+            seedFindingsLoaded: snap.seedFindingsLoaded ?? s.seedFindingsLoaded,
           };
         }),
 
@@ -322,6 +329,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             managementReviewItems: s.managementReviewItems,
             checklistEntries: useChecklistModuleStore.getState().entries,
             customFindings: s.customFindings,
+            seedFindingsLoaded: s.seedFindingsLoaded,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,

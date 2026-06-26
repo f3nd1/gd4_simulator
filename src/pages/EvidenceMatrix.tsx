@@ -86,7 +86,7 @@ export function EvidenceMatrix() {
         </div>
         <Bar v={item.ev.trace} c={item.ev.trace >= 75 ? TONE.good.fg : TONE.medium.fg} />
         <div style={{ marginTop: 6, fontSize: 13 }}>
-          AI suggested score: <b>{item.ais}</b> (Band {item.aiBand})
+          AI suggested score: <b>{item.ais}</b>{item.ais > 0 && <> (Band {item.aiBand})</>}
         </div>
         {item.checklistOverride && (
           <div style={{ marginTop: 6, fontSize: 12, color: TONE.progress.fg, background: "#eaeef6", borderRadius: 8, padding: "7px 10px" }}>

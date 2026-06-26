@@ -80,9 +80,9 @@ export function RubricBanding() {
                 <tr key={c.id} className="rowh">
                   <td><b>C{c.id}</b> {c.title}</td>
                   <td>{Math.round(c.avg)}</td>
-                  <td><Pill s={bandTone(c.band)}>Band {c.band}</Pill></td>
+                  <td>{c.started ? <Pill s={bandTone(c.band)}>Band {c.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
                   <td>{c.scored} / {c.points}</td>
-                  <td style={{ fontSize: 12, color: "#6b7280" }}>{BAND_MEANING[c.band]}</td>
+                  <td style={{ fontSize: 12, color: "#6b7280" }}>{c.started ? BAND_MEANING[c.band] : "No evidence entered yet."}</td>
                 </tr>
               ))}
             </tbody>
@@ -110,17 +110,17 @@ export function RubricBanding() {
                         <tr key={it.id} className="rowh">
                           <td style={{ paddingLeft: 22 }}><b>{it.id}</b> {it.title}</td>
                           <td>{it.eff}</td>
-                          <td>{Math.round((it.band / 5) * pointsShare)} / {Math.round(pointsShare)}</td>
-                          <td><Pill s={bandTone(it.band)}>Band {it.band}</Pill></td>
-                          <td style={{ fontSize: 12, color: "#6b7280" }}>{BAND_MEANING[it.band]}</td>
+                          <td>{it.started ? Math.round((it.band / 5) * pointsShare) : 0} / {Math.round(pointsShare)}</td>
+                          <td>{it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
+                          <td style={{ fontSize: 12, color: "#6b7280" }}>{it.started ? BAND_MEANING[it.band] : "No evidence entered yet."}</td>
                         </tr>
                       ))}
                       <tr style={{ background: "#fbf6ea" }}>
                         <td style={{ fontWeight: 700 }}>C{c.id} total</td>
                         <td style={{ fontWeight: 700 }}>{Math.round(c.avg)}</td>
                         <td style={{ fontWeight: 700 }}>{c.scored} / {c.points}</td>
-                        <td><Pill s={bandTone(c.band)}>Band {c.band}</Pill></td>
-                        <td style={{ fontSize: 12, color: "#6b7280" }}>{BAND_MEANING[c.band]}</td>
+                        <td>{c.started ? <Pill s={bandTone(c.band)}>Band {c.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
+                        <td style={{ fontSize: 12, color: "#6b7280" }}>{c.started ? BAND_MEANING[c.band] : "No evidence entered yet."}</td>
                       </tr>
                     </Fragment>
                   );
