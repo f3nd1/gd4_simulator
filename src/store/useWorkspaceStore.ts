@@ -218,7 +218,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       justify: {},
       closures: {},
       agents: AGENTS,
-      auditors: DEFAULT_AUDITORS,
+      auditors: [],
       departments: DEFAULT_DEPARTMENTS,
       versions: [],
       folders: seedFolders(),
@@ -236,13 +236,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // Fills the workspace with realistic sample evidence ratings plus the
       // workflow-progress fields derived from them (reviewer drafts,
       // sign-offs, closures, samples, interview prep, management review
-      // pack, export log). A brand-new workspace starts fully blank
-      // (blankEvidence() above) — this is the only path that populates it.
+      // pack, export log, sample auditor roster). A brand-new workspace
+      // starts fully blank (blankEvidence()/auditors:[] above) — this is the
+      // only path that populates it.
       loadDemoDataset: () => {
         useChecklistModuleStore.getState().loadDemoChecklistData();
         set(() => {
           const evidence = seedEvidence();
-          return { evidence, ...buildDemoDataset(evidence) };
+          return { evidence, auditors: DEFAULT_AUDITORS, ...buildDemoDataset(evidence) };
         });
       },
 
@@ -518,6 +519,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     // Bumped to v2 so existing sessions pick up the new blank-by-default
     // evidence baseline (previously seeded with sample ratings) instead of
     // silently keeping the old pre-filled state cached under v1.
-    { name: "ucc-gd4-workspace:v2", storage: workspaceStorage }
+    { name: "ucc-gd4-workspace:v3", storage: workspaceStorage }
   )
 );
