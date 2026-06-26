@@ -253,6 +253,13 @@ export type CorrectiveAction = {
 
 export type FolderStatus = "Good" | "In Progress" | "Partial" | "Missing";
 
+// "Check access" is a real Drive API call (no AI involved) confirming
+// whether the connected Google account can actually list the folder's
+// files — "Connected" means it could, "Error" means Drive said no
+// (permission/not-found/etc, see accessCheckNote), "Not Connected" means no
+// Google Drive OAuth session exists yet (see Settings).
+export type DriveAccessStatus = "Connected" | "Error" | "Not Connected";
+
 export type EvidenceFolder = {
   id: string;
   auditCycleId: string;
@@ -264,9 +271,14 @@ export type EvidenceFolder = {
   owner: string;
   status: FolderStatus;
   lastCheckedDate?: string;
-  aiCheckNote?: string;
-  aiCheckConfidence?: Confidence;
-  aiCheckAt?: string;
+  accessCheckStatus?: DriveAccessStatus;
+  accessCheckNote?: string;
+  accessCheckAt?: string;
+  // "Run audit" results: real Drive file text was read and scored against
+  // this sub-criterion's Sub-Criterion Checklist lines, which were updated
+  // directly (Met/Partial/Not met) — see useWorkspaceStore.auditFolderContents.
+  lastAuditAt?: string;
+  lastAuditSummary?: string;
 };
 
 export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation";

@@ -5,13 +5,14 @@ import { Pill } from "../components/ui/Pill";
 import type { FolderStatus } from "../types";
 
 const STATUSES: FolderStatus[] = ["Good", "In Progress", "Partial", "Missing"];
-const CONFIDENCE_TONE = { Low: "critical", Medium: "medium", High: "good" } as const;
+const ACCESS_TONE = { Connected: "good", Error: "critical", "Not Connected": "medium" } as const;
 
 export function EvidenceFolder() {
   const folders = useWorkspaceStore((s) => s.folders);
   const departments = useWorkspaceStore((s) => s.departments);
   const setFolderField = useWorkspaceStore((s) => s.setFolderField);
-  const checkFolderContent = useWorkspaceStore((s) => s.checkFolderContent);
+  const checkFolderAccess = useWorkspaceStore((s) => s.checkFolderAccess);
+  const auditFolderContents = useWorkspaceStore((s) => s.auditFolderContents);
   const busy = useWorkspaceStore((s) => s.busy);
 
   return (
@@ -19,6 +20,8 @@ export function EvidenceFolder() {
       <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence folder index</h3>
       <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
         One evidence folder per GD4 sub-criterion. All folders live in Google Drive — the owning department is set up on the Audit Cycle page.
+        "Check access" confirms this app can see the folder's files; "Run audit" reads them and auto-sets the matching Sub-Criterion Checklist lines.
+        Both require connecting Google Drive in Settings first.
       </p>
       <table>
         <thead>
@@ -66,20 +69,37 @@ export function EvidenceFolder() {
                   />
                 </td>
                 <td>
-                  <button
-                    disabled={busy === "folderchk" + f.id}
-                    onClick={() => checkFolderContent(f.id)}
-                    style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", whiteSpace: "nowrap" }}
-                  >
-                    {busy === "folderchk" + f.id ? "Checking…" : "Check with AI"}
-                  </button>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button
+                      disabled={busy === "folderaccess" + f.id}
+                      onClick={() => checkFolderAccess(f.id)}
+                      style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", whiteSpace: "nowrap" }}
+                    >
+                      {busy === "folderaccess" + f.id ? "Checking…" : "Check access"}
+                    </button>
+                    <button
+                      disabled={busy === "folderaudit" + f.id}
+                      onClick={() => auditFolderContents(f.id)}
+                      style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", whiteSpace: "nowrap" }}
+                    >
+                      {busy === "folderaudit" + f.id ? "Auditing…" : "Run audit"}
+                    </button>
+                  </div>
                 </td>
               </tr>
-              {f.aiCheckNote && (
+              {f.accessCheckNote && (
                 <tr>
                   <td colSpan={6} style={{ background: "#f8fafc", fontSize: 12, padding: "6px 10px" }}>
-                    <Pill s={CONFIDENCE_TONE[f.aiCheckConfidence || "Low"]}>{f.aiCheckConfidence || "Low"} confidence</Pill>{" "}
-                    {f.aiCheckNote} <span style={{ color: "#94a3b8" }}>— checked {f.aiCheckAt}</span>
+                    <Pill s={ACCESS_TONE[f.accessCheckStatus || "Not Connected"]}>{f.accessCheckStatus || "Not Connected"}</Pill>{" "}
+                    {f.accessCheckNote} <span style={{ color: "#94a3b8" }}>— checked {f.accessCheckAt && new Date(f.accessCheckAt).toLocaleString()}</span>
+                  </td>
+                </tr>
+              )}
+              {f.lastAuditSummary && (
+                <tr>
+                  <td colSpan={6} style={{ background: "#f0fdf4", fontSize: 12, padding: "6px 10px" }}>
+                    <Pill s="good">Audit</Pill> {f.lastAuditSummary}{" "}
+                    <span style={{ color: "#94a3b8" }}>— audited {f.lastAuditAt && new Date(f.lastAuditAt).toLocaleString()}</span>
                   </td>
                 </tr>
               )}

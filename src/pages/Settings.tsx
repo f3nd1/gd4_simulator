@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useAgentMemoryStore } from "../store/useAgentMemoryStore";
+import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
@@ -12,6 +13,10 @@ export function Settings() {
   const memory = useAgentMemoryStore((s) => s.memory);
   const clearMemory = useAgentMemoryStore((s) => s.clearMemory);
   const [draftKey, setDraftKey] = useState(apiKey);
+
+  const { clientId, accessToken, connecting, lastError, setClientId, connect, disconnect } = useGoogleDriveStore();
+  const [draftClientId, setDraftClientId] = useState(clientId);
+  const driveConnected = !!accessToken;
 
   const memoryAgentCount = Object.keys(memory).filter((k) => (memory[k] || []).length > 0).length;
 
@@ -75,6 +80,57 @@ export function Settings() {
           </button>
           <Pill s={enabled && apiKey ? "good" : "neutral"}>{enabled && apiKey ? "Live AI active" : "Offline simulation"}</Pill>
         </div>
+      </Card>
+
+      <Card>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Google Drive integration</h3>
+        <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
+          Connecting your Google account lets the Evidence Folder page's "Check access" and "Run audit" buttons actually
+          read files inside the Drive folder pasted into each folder's link field — no separate folder ID field needed.
+          This is a prototype, client-side-only OAuth connection: there is no backend, the access token lives only in this
+          browser tab's memory (never saved to local storage), and it expires after about an hour.
+        </p>
+        <p style={{ fontSize: 12.5, color: "#6b7280" }}>
+          One-time setup in Google Cloud Console: create an OAuth Client ID (Application type "Web application"), add
+          this app's URL to "Authorized JavaScript origins", and enable the Google Drive API for the project. No client
+          secret is needed for this flow — paste only the Client ID below.
+        </p>
+
+        <label style={{ display: "block", marginBottom: 10 }}>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Google OAuth Client ID</span>
+          <input
+            value={draftClientId}
+            onChange={(e) => setDraftClientId(e.target.value)}
+            placeholder="xxxxxxxxxxxx.apps.googleusercontent.com"
+            style={{ ...inputStyle, marginTop: 3 }}
+            autoComplete="off"
+          />
+        </label>
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button
+            onClick={() => setClientId(draftClientId)}
+            style={{ cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
+          >
+            Save Client ID
+          </button>
+          <button
+            disabled={connecting || !clientId}
+            onClick={() => connect()}
+            style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}
+          >
+            {connecting ? "Connecting…" : "Connect Google Drive"}
+          </button>
+          <button
+            disabled={!driveConnected}
+            onClick={() => disconnect()}
+            style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}
+          >
+            Disconnect
+          </button>
+          <Pill s={driveConnected ? "good" : "neutral"}>{driveConnected ? "Connected" : "Not connected"}</Pill>
+        </div>
+        {lastError && <p style={{ fontSize: 12, color: "#b91c1c", marginBottom: 0 }}>{lastError}</p>}
       </Card>
 
       <Card>

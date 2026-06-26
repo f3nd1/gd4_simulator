@@ -7,7 +7,7 @@
 
 import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement } from "../../types";
 import { chatComplete, AIClientError } from "./aiClient";
-import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderCheckResult } from "./simulateAI";
+import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 
 export { AIClientError };
 
@@ -155,35 +155,35 @@ export async function runLiveEvidenceFill(
   };
 }
 
-// Drafts a check of an evidence folder for the Evidence Folder page's
-// "Check with AI" action. The model is given only the folder link/name and
-// its current status fields — never the folder's actual contents, which
-// this app has no Google Drive API access to fetch — so the prompt forbids
-// inventing what is inside and requires the note to say a human still needs
-// to open the folder themselves.
-export async function runLiveFolderCheck(
-  folderName: string,
-  folderLink: string,
-  status: string,
+// Drives the Evidence Folder page's "Run audit" action once real Drive text
+// has been extracted (see lib/drive/driveClient.ts and
+// useWorkspaceStore.auditFolderContents). Unlike every other live function
+// in this file, the model genuinely is given real document content here —
+// the honesty constraint becomes the opposite one: it must judge each line
+// ONLY against the text actually provided, not invent or assume anything
+// about parts of the folder that weren't readable/exported.
+export async function runLiveFolderAudit(
+  lines: { id: string; text: string }[],
+  docText: string,
   settings: AISettings
-): Promise<Omit<FolderCheckResult, "live"> & { live: true }> {
-  const system = `You are an evidence intake assistant for an EduTrust GD4 internal audit. You are given only a Google Drive folder link/name and its status — you cannot open or read the folder's contents, so never assume or invent what files are inside it. Write a short (1 sentence) note naming the specific gap risk implied by the status given, nothing else — a fixed disclaimer about the folder not being read will be appended separately, so do not write your own version of that disclaimer. Respond with JSON only: {"summary": string, "confidence": "Low" | "Medium" | "High"}.`;
-  const user = `Folder: ${folderName}\nLink: ${folderLink}\nCurrent status: ${status}`;
+): Promise<FolderAuditLineVerdict[]> {
+  const system = `You are a GD4 internal audit evidence reviewer. You are given the actual text extracted from documents in an evidence folder, and a list of checklist statements that folder is meant to support. For each statement, judge it Met, Partial, or "Not met" using ONLY the document text given — never assume content that isn't there, and if the text doesn't mention something relevant, mark it "Not met" rather than guessing. Give a one-sentence reason per line citing what was or wasn't found. Respond with JSON only: {"lines": [{"lineId": string, "status": "Met" | "Partial" | "Not met", "reason": string}]}.`;
+  const user = `Document text extracted from the folder (may be truncated):\n"""\n${docText.slice(0, 12000)}\n"""\n\nChecklist statements to assess:\n${lines
+    .map((l) => `[${l.id}] ${l.text}`)
+    .join("\n")}`;
 
   const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
-  const parsed = parseJSONObject(content);
+  const arr = parseJSONArray(content);
 
-  const modelSummary = (parsed.summary as string) || `"${folderName}" is marked "${status}".`;
-  // The disclaimer below is appended in code, not left to the model's
-  // phrasing, because an LLM-written note can drift into sounding like it
-  // actually inspected the folder (e.g. "indicating a potential gap...").
-  // This app has no Drive API integration anywhere, live or offline, so the
-  // limitation must be stated in fixed words every time, not reworded per call.
-  const summary = `${modelSummary} This note is generated from the folder name/link/status only — the AI has no Google Drive access and did not read the folder's actual contents. Open it yourself to confirm.`;
+  const byId = new Map(
+    arr
+      .filter((x): x is { lineId: string; status: string; reason?: string } => !!x && typeof x === "object" && typeof (x as { lineId?: unknown }).lineId === "string")
+      .map((x) => [x.lineId, x])
+  );
 
-  return {
-    summary,
-    confidence: (parsed.confidence as FolderCheckResult["confidence"]) || "Low",
-    live: true,
-  };
+  return lines.map((l) => {
+    const v = byId.get(l.id);
+    const status = v?.status === "Met" || v?.status === "Partial" || v?.status === "Not met" ? v.status : "Not met";
+    return { lineId: l.id, status, reason: v?.reason || "The model did not return a verdict for this line; treated as unmet pending re-run." };
+  });
 }

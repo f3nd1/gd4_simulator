@@ -1,0 +1,128 @@
+// Thin wrapper around Google's browser-only OAuth (Google Identity Services
+// "token client") and the Drive v3 REST API. This is the ONLY place that
+// knows how to reach Google Drive — every other module gets a folder's
+// files/text through the functions below, never by talking to Google
+// directly. Mirrors the same "one client module, prototype-only" pattern
+// used for OpenAI in aiClient.ts: the access token lives in memory only
+// (never persisted), is requested directly from the browser, and there is
+// no backend proxy.
+
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+const GSI_SRC = "https://accounts.google.com/gsi/client";
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        oauth2: {
+          initTokenClient: (config: {
+            client_id: string;
+            scope: string;
+            callback: (resp: { access_token?: string; expires_in?: number; error?: string }) => void;
+          }) => { requestAccessToken: (opts?: { prompt?: string }) => void };
+        };
+      };
+    };
+  }
+}
+
+let gsiLoadPromise: Promise<void> | null = null;
+
+function loadGsiScript(): Promise<void> {
+  if (window.google?.accounts?.oauth2) return Promise.resolve();
+  if (gsiLoadPromise) return gsiLoadPromise;
+  gsiLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = GSI_SRC;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Google Identity Services script."));
+    document.head.appendChild(script);
+  });
+  return gsiLoadPromise;
+}
+
+export class DriveAuthError extends Error {}
+
+// Opens Google's consent popup and resolves with an access token scoped to
+// drive.readonly. Requires the caller to have a valid OAuth Client ID
+// (Web application type, with this app's origin in "Authorized JavaScript
+// origins") created in Google Cloud Console — that one-time setup happens
+// outside this app, in the user's own Google account.
+export async function requestDriveAccessToken(clientId: string): Promise<{ accessToken: string; expiresInSeconds: number }> {
+  if (!clientId) throw new DriveAuthError("No Google OAuth Client ID configured in Settings.");
+  await loadGsiScript();
+  if (!window.google?.accounts?.oauth2) throw new DriveAuthError("Google Identity Services failed to load.");
+
+  return new Promise((resolve, reject) => {
+    const client = window.google!.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: DRIVE_SCOPE,
+      callback: (resp) => {
+        if (resp.error || !resp.access_token) {
+          reject(new DriveAuthError(resp.error || "Google did not return an access token."));
+          return;
+        }
+        resolve({ accessToken: resp.access_token, expiresInSeconds: resp.expires_in || 3600 });
+      },
+    });
+    client.requestAccessToken();
+  });
+}
+
+// Folder links look like https://drive.google.com/drive/folders/<ID>?... —
+// extracts just the ID so the Owner-set folder link field doubles as the
+// Drive API target with no separate input needed.
+export function parseFolderId(link?: string): string | null {
+  if (!link) return null;
+  const match = link.match(/\/folders\/([a-zA-Z0-9_-]+)/) || link.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+}
+
+export class DriveApiError extends Error {
+  status?: number;
+}
+
+export type DriveFile = { id: string; name: string; mimeType: string; modifiedTime?: string };
+
+async function driveFetch(url: string, accessToken: string): Promise<Response> {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const err = new DriveApiError(`Drive API request failed (${res.status}): ${text.slice(0, 200)}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res;
+}
+
+export async function listFolderFiles(folderId: string, accessToken: string): Promise<DriveFile[]> {
+  const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
+  const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,modifiedTime)&pageSize=100`;
+  const res = await driveFetch(url, accessToken);
+  const data = await res.json();
+  return (data.files || []) as DriveFile[];
+}
+
+// Exported MIME types we know how to turn into plain text. Anything else
+// (PDFs, images, video, etc.) is reported as unsupported rather than
+// silently skipped, so the audit can disclose exactly what it did and did
+// not read.
+const GOOGLE_EXPORT_MIME: Record<string, string> = {
+  "application/vnd.google-apps.document": "text/plain",
+  "application/vnd.google-apps.spreadsheet": "text/csv",
+  "application/vnd.google-apps.presentation": "text/plain",
+};
+
+export async function exportFileText(file: DriveFile, accessToken: string): Promise<string | null> {
+  if (file.mimeType in GOOGLE_EXPORT_MIME) {
+    const mime = encodeURIComponent(GOOGLE_EXPORT_MIME[file.mimeType]);
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${mime}`, accessToken);
+    return res.text();
+  }
+  if (file.mimeType === "text/plain" || file.mimeType === "text/csv") {
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, accessToken);
+    return res.text();
+  }
+  return null;
+}

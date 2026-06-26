@@ -200,32 +200,34 @@ function guessDate(filename: string): string {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : new Date().toISOString().slice(0, 10);
 }
 
-// Drafts a plain-language check of an evidence folder for the Evidence
-// Folder page's "Check with AI" action. There is no Google Drive API
-// integration here, so this can never actually list or read what is inside
-// the folder — it can only reason from the folder/sub-criterion name, the
-// link itself, and the status fields already on the record, and the note
-// says so explicitly so the auditor knows the folder still needs opening by
-// a human.
-export type FolderCheckResult = {
-  summary: string;
-  confidence: "Low" | "Medium" | "High";
-  live: boolean;
-};
+// Drives the Evidence Folder page's "Run audit" action: given the text
+// actually extracted from a Drive folder's readable files (see
+// lib/drive/driveClient.ts) and the checklist lines it should support, marks
+// each line Met/Partial/Not met by simple keyword overlap. Offline fallback
+// only — mirrors every other simulate* function's role as the no-network
+// stand-in for the live OpenAI call in agentRuntime.ts.
+export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial" | "Not met"; reason: string };
 
-export function simulateFolderCheck(folderName: string, folderLink: string | undefined, status: string): FolderCheckResult {
-  if (!folderLink) {
-    return {
-      summary: `No Drive folder link is attached to "${folderName}" — there is nothing to check yet. Add the folder link first.`,
-      confidence: "Low",
-      live: false,
-    };
+const STOPWORDS = new Set(["which", "where", "their", "there", "every", "shall", "should", "these", "those", "about", "within"]);
+
+function keywordsOf(text: string): string[] {
+  return Array.from(new Set((text.toLowerCase().match(/[a-z]{5,}/g) || []).filter((k) => !STOPWORDS.has(k))));
+}
+
+export function simulateFolderAudit(lines: { id: string; text: string }[], docText: string): FolderAuditLineVerdict[] {
+  if (!docText.trim()) {
+    return lines.map((l) => ({ lineId: l.id, status: "Not met" as const, reason: "No readable text was extracted from the folder's files." }));
   }
-  return {
-    summary: `Cannot read the contents of this Drive folder — this app has no Google Drive API access. Based only on the folder name and its current status ("${status}"), open the folder yourself and confirm it actually contains evidence for every item under "${folderName}", not just that the link resolves.`,
-    confidence: "Low",
-    live: false,
-  };
+  const hay = docText.toLowerCase();
+  return lines.map((l) => {
+    const kws = keywordsOf(l.text);
+    if (kws.length === 0) return { lineId: l.id, status: "Not met" as const, reason: "Checklist line has no specific keywords to match against." };
+    const hits = kws.filter((k) => hay.includes(k));
+    const ratio = hits.length / kws.length;
+    if (ratio >= 0.6) return { lineId: l.id, status: "Met" as const, reason: `Matched terms in the scanned documents: ${hits.slice(0, 4).join(", ")}.` };
+    if (ratio > 0) return { lineId: l.id, status: "Partial" as const, reason: `Only partial overlap found in the scanned documents: ${hits.slice(0, 4).join(", ")}.` };
+    return { lineId: l.id, status: "Not met" as const, reason: "No matching terms found in the scanned documents." };
+  });
 }
 
 export function simulateEvidenceFill(link: string, lineText: string): EvidenceFillDraft {

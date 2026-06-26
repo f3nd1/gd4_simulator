@@ -18,6 +18,7 @@ import type {
   AIReviewType,
   Confidence,
   Finding,
+  DriveAccessStatus,
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
@@ -25,11 +26,13 @@ import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { simulateItemReview, simulateClosure, simulateFolderCheck } from "../lib/ai/simulateAI";
-import { runLiveItemReview, runLiveClosureReview, runLiveFolderCheck } from "../lib/ai/agentRuntime";
+import { simulateItemReview, simulateClosure, simulateFolderAudit } from "../lib/ai/simulateAI";
+import { runLiveItemReview, runLiveClosureReview, runLiveFolderAudit } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
+import { useGoogleDriveStore } from "./useGoogleDriveStore";
+import { parseFolderId, listFolderFiles, exportFileText, DriveApiError } from "../lib/drive/driveClient";
 
 export type ClosureState = {
   root?: string;
@@ -160,7 +163,8 @@ export type WorkspaceState = {
   removeDepartment: (id: string) => void;
 
   setFolderField: <K extends keyof EvidenceFolder>(id: string, field: K, value: EvidenceFolder[K]) => void;
-  checkFolderContent: (id: string) => Promise<void>;
+  checkFolderAccess: (id: string) => Promise<void>;
+  auditFolderContents: (id: string) => Promise<void>;
 
   setSamples: (samples: SampleRecord[]) => void;
   toggleSample: (id: string) => void;
@@ -546,54 +550,181 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setFolderField: (id, field, value) => set((s) => ({ folders: s.folders.map((f) => (f.id === id ? { ...f, [field]: value } : f)) })),
 
-      // "Check with AI" action on the Evidence Folder page. This app has no
-      // Google Drive API access, so it can never actually read what is
-      // inside the folder — both the live and offline paths are explicit
-      // about that and only reason from the folder name/link/status fields,
-      // same honesty constraint as fillEvidenceFromLink elsewhere.
-      checkFolderContent: async (id) => {
+      // "Check access" action on the Evidence Folder page: a real Drive API
+      // call (files.list) confirming whether the connected Google account can
+      // actually see this folder's files. No AI involved — this only answers
+      // "can we read it", not "what's in it".
+      checkFolderAccess: async (id) => {
         const s = get();
         const folder = s.folders.find((f) => f.id === id);
         if (!folder) return;
-        set({ busy: "folderchk" + id });
+        set({ busy: "folderaccess" + id });
 
-        const aiSettings = useAISettingsStore.getState();
-        let result;
-        let liveError: string | undefined;
-        if (!folder.folderLink) {
-          result = simulateFolderCheck(folder.folderName, folder.folderLink, folder.status);
-        } else if (aiSettings.enabled && aiSettings.apiKey) {
-          try {
-            result = await runLiveFolderCheck(folder.folderName, folder.folderLink, folder.status, aiSettings);
-          } catch (err) {
-            liveError = err instanceof Error ? err.message : String(err);
-            result = simulateFolderCheck(folder.folderName, folder.folderLink, folder.status);
-          }
+        const folderId = parseFolderId(folder.folderLink);
+        const token = useGoogleDriveStore.getState().getValidToken();
+        const checkedAt = new Date().toISOString();
+
+        let status: DriveAccessStatus;
+        let note: string;
+        if (!folderId) {
+          status = "Error";
+          note = "Could not find a Drive folder ID in the folder link. Paste a Google Drive folder link (e.g. https://drive.google.com/drive/folders/<id>).";
+        } else if (!token) {
+          status = "Not Connected";
+          note = "Not connected to Google Drive. Connect your Google account in Settings, then try again.";
         } else {
-          result = simulateFolderCheck(folder.folderName, folder.folderLink, folder.status);
+          try {
+            const files = await listFolderFiles(folderId, token);
+            status = "Connected";
+            note = files.length ? `Connected — found ${files.length} file${files.length === 1 ? "" : "s"} in this folder.` : "Connected, but this folder appears to be empty.";
+          } catch (err) {
+            status = "Error";
+            if (err instanceof DriveApiError && err.status === 404) note = "Drive could not find this folder. Check the link and that it points to a folder, not a file.";
+            else if (err instanceof DriveApiError && err.status === 403) note = "Drive denied access to this folder. Confirm the connected Google account has at least viewer access.";
+            else note = err instanceof Error ? err.message : String(err);
+          }
         }
 
-        const checkedAt = new Date().toLocaleString();
-        const log: AIReviewLogEntry = {
-          id: `LOG-${Date.now()}-${++logCounter}`,
-          auditCycleId: s.cycle.id,
-          agent: "Evidence Intake Assistant",
-          reviewType: "Evidence",
-          subjectId: folder.subCriterionId,
-          verdict: result.summary,
-          confidence: result.confidence,
-          keyConcerns: [result.summary],
-          recommendedAction: "Open the Drive folder yourself and confirm its actual contents — this check did not read them.",
-          live: result.live,
-          liveError,
-          generatedContent: result.summary,
-          createdAt: new Date().toISOString(),
-        };
         set((st) => ({
-          folders: st.folders.map((f) => (f.id === id ? { ...f, aiCheckNote: result.summary, aiCheckConfidence: result.confidence, aiCheckAt: checkedAt } : f)),
-          aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
+          folders: st.folders.map((f) => (f.id === id ? { ...f, accessCheckStatus: status, accessCheckNote: note, accessCheckAt: checkedAt } : f)),
           busy: null,
         }));
+      },
+
+      // "Run audit" action on the Evidence Folder page. Reads every
+      // supported document in the folder via the real Drive API, judges the
+      // checklist lines belonging to this sub-criterion against that real
+      // text (live OpenAI call when configured, offline keyword heuristic
+      // otherwise), and — per the user's explicit choice for this one
+      // feature — writes the verdicts straight into the Sub-Criterion
+      // Checklist rather than just advising. This is the only AI feature in
+      // the app permitted to do that.
+      auditFolderContents: async (id) => {
+        const s = get();
+        const folder = s.folders.find((f) => f.id === id);
+        if (!folder) return;
+        set({ busy: "folderaudit" + id });
+
+        const finish = (summary: string, live: boolean, liveError?: string) => {
+          const log: AIReviewLogEntry = {
+            id: `LOG-${Date.now()}-${++logCounter}`,
+            auditCycleId: s.cycle.id,
+            agent: "Evidence Intake Assistant",
+            reviewType: "Evidence",
+            subjectId: folder.subCriterionId,
+            verdict: summary,
+            confidence: "Medium",
+            keyConcerns: [summary],
+            recommendedAction: "Spot-check the auto-set checklist lines against the source documents.",
+            live,
+            liveError,
+            generatedContent: summary,
+            createdAt: new Date().toISOString(),
+          };
+          set((st) => ({
+            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary } : f)),
+            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
+            busy: null,
+          }));
+        };
+
+        const folderId = parseFolderId(folder.folderLink);
+        const token = useGoogleDriveStore.getState().getValidToken();
+        if (!folderId) {
+          finish("Could not find a Drive folder ID in the folder link. Paste a Google Drive folder link first.", false);
+          return;
+        }
+        if (!token) {
+          finish("Not connected to Google Drive. Connect your Google account in Settings, then run the audit again.", false);
+          return;
+        }
+
+        const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === folder.subCriterionId);
+        const checklistEntries = useChecklistModuleStore.getState().entries;
+        const lineOwners = new Map<string, string>(); // lineId -> itemId
+        const lines: { id: string; text: string }[] = [];
+        for (const item of items) {
+          const entry = checklistEntries[item.id];
+          if (!entry) continue;
+          for (const line of entry.specific) {
+            lines.push({ id: line.id, text: line.text });
+            lineOwners.set(line.id, item.id);
+          }
+        }
+        if (lines.length === 0) {
+          finish("No Sub-Criterion Checklist lines exist yet for this sub-criterion — generate the checklist first, then run this audit.", false);
+          return;
+        }
+
+        let files;
+        try {
+          files = await listFolderFiles(folderId, token);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          finish(`Could not list this folder's files: ${msg}`, false, msg);
+          return;
+        }
+
+        const scanned: string[] = [];
+        const skipped: string[] = [];
+        const textParts: string[] = [];
+        for (const file of files) {
+          try {
+            const text = await exportFileText(file, token);
+            if (text === null) {
+              skipped.push(file.name);
+            } else {
+              scanned.push(file.name);
+              textParts.push(`--- ${file.name} ---\n${text}`);
+            }
+          } catch {
+            skipped.push(file.name);
+          }
+        }
+        const docText = textParts.join("\n\n");
+
+        const aiSettings = useAISettingsStore.getState();
+        let verdicts;
+        let live = false;
+        let liveError: string | undefined;
+        if (aiSettings.enabled && aiSettings.apiKey) {
+          try {
+            verdicts = await runLiveFolderAudit(lines, docText, aiSettings);
+            live = true;
+          } catch (err) {
+            liveError = err instanceof Error ? err.message : String(err);
+            verdicts = simulateFolderAudit(lines, docText);
+          }
+        } else {
+          verdicts = simulateFolderAudit(lines, docText);
+        }
+
+        const checklist = useChecklistModuleStore.getState();
+        for (const v of verdicts) {
+          const itemId = lineOwners.get(v.lineId);
+          if (!itemId) continue;
+          checklist.setSpecificStatus(itemId, v.lineId, v.status);
+          checklist.addEvidence(itemId, v.lineId, {
+            title: `Drive audit: ${folder.folderName}`,
+            type: "Other",
+            drive: folder.folderLink,
+            owner: folder.owner,
+            date: new Date().toISOString().slice(0, 10),
+            approved: false,
+            reviewed: false,
+            sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
+            auditorNote: v.reason,
+          });
+        }
+
+        const counts = { Met: 0, Partial: 0, "Not met": 0 } as Record<string, number>;
+        for (const v of verdicts) counts[v.status]++;
+        const fileSummary = scanned.length
+          ? `Scanned ${scanned.length} file${scanned.length === 1 ? "" : "s"} (${scanned.join(", ")}).`
+          : "No readable files were found in this folder.";
+        const skipSummary = skipped.length ? ` Skipped ${skipped.length} unsupported file${skipped.length === 1 ? "" : "s"} (${skipped.join(", ")}).` : "";
+        const summary = `${fileSummary}${skipSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.`;
+        finish(summary, live, liveError);
       },
 
       setSamples: (samples) => set({ samples }),
