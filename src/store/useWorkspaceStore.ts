@@ -23,7 +23,8 @@ import { seedEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
 import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
-import { buildScored, aiScore } from "../lib/scoring";
+import { buildScored, aiScore, needsJustification } from "../lib/scoring";
+import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure } from "../lib/ai/simulateAI";
 import { runLiveItemReview, runLiveClosureReview } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
@@ -337,17 +338,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setEvidenceField: (itemId, field, value) =>
         set((s) => ({ evidence: { ...s.evidence, [itemId]: { ...s.evidence[itemId], [field]: value } } })),
 
-      setReviewerScore: (itemId, value) => set((s) => ({ reviewer: { ...s.reviewer, [itemId]: value } })),
+      // Editing the reviewer score after a confirm invalidates that
+      // confirmation, so a stale "Confirmed" badge can never sit next to a
+      // Reviewer input showing a different number — the reviewer must
+      // explicitly re-confirm (and re-justify if still required) the new value.
+      setReviewerScore: (itemId, value) =>
+        set((s) => ({
+          reviewer: { ...s.reviewer, [itemId]: value },
+          confirmed: s.confirmed[itemId] != null ? { ...s.confirmed, [itemId]: null } : s.confirmed,
+        })),
 
       setJustify: (itemId, value) => set((s) => ({ justify: { ...s.justify, [itemId]: value } })),
 
+      // Enforces the justification requirement here, not just in the
+      // Criterion Scorecard's button handler, so it can't be bypassed by any
+      // other caller (e.g. Re-audit's reopen button reuses this action).
       confirmScore: (itemId) =>
         set((s) => {
+          const already = s.confirmed[itemId] != null;
+          if (already) return { confirmed: { ...s.confirmed, [itemId]: null } };
           const ev = s.evidence[itemId];
           const ais = aiScore(ev);
           const rev = s.reviewer[itemId] != null ? s.reviewer[itemId] : ais;
-          const already = s.confirmed[itemId] != null;
-          return { confirmed: { ...s.confirmed, [itemId]: already ? null : rev } };
+          const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
+          if (needsJustification(ais, rev, !!req?.gateSensitive) && !(s.justify[itemId] || "").trim()) return {};
+          return { confirmed: { ...s.confirmed, [itemId]: rev } };
         }),
 
       setAgentStrictness: (agentId, value) => set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, strictness: value } : a)) })),

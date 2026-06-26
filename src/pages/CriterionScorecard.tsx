@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
+import { needsJustification } from "../lib/scoring";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { bandTone, BLUE } from "../lib/theme";
@@ -31,8 +32,7 @@ export function CriterionScorecard() {
           <tbody>
             {scored.items.map((it) => {
               const revVal = reviewer[it.id] != null ? reviewer[it.id] : it.ais;
-              const diff = Math.abs(revVal - it.ais);
-              const needJ = diff >= 5 || (it.gate && revVal > it.ais);
+              const needJ = needsJustification(it.ais, revVal, it.gate);
               const justifyVal = justify[it.id] || "";
               return (
                 <tr key={it.id}>

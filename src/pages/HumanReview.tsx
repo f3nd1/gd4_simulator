@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
+import { needsJustification } from "../lib/scoring";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { TONE } from "../lib/theme";
@@ -20,8 +21,7 @@ export function HumanReview() {
 
   const overrides = scored.items.filter((it) => {
     const revVal = reviewer[it.id] != null ? reviewer[it.id] : it.ais;
-    const diff = Math.abs(revVal - it.ais);
-    return diff >= 5 || (it.gate && revVal > it.ais);
+    return needsJustification(it.ais, revVal, it.gate);
   });
 
   return (

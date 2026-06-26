@@ -38,6 +38,15 @@ export function getBand(score: number): Band {
   return score >= 85 ? 5 : score >= 70 ? 4 : score >= 55 ? 3 : score >= 40 ? 2 : 1;
 }
 
+// Single source of truth for "does this reviewer override need a written
+// justification" — previously duplicated independently in CriterionScorecard
+// and HumanReview, and not enforced at all in the store's confirmScore
+// action, which let a score be confirmed with no justification text.
+export function needsJustification(ais: number, reviewerValue: number, gate: boolean): boolean {
+  const diff = Math.abs(reviewerValue - ais);
+  return diff >= 5 || (gate && reviewerValue > ais);
+}
+
 // A weak review limb or weak processes limb caps the achievable band even if
 // the weighted score would otherwise clear a higher threshold, mirroring the
 // rubric's emphasis on Review (regular review/action plans) and Processes
