@@ -42,7 +42,9 @@ export function Sidebar({ open, onClose }: Props) {
               <NavLink
                 key={item.path}
                 to={item.path}
-                onClick={onClose}
+                onClick={() => {
+                  if (window.matchMedia("(max-width: 767px)").matches) onClose();
+                }}
                 style={({ isActive }) => ({
                   display: "block",
                   textDecoration: "none",
