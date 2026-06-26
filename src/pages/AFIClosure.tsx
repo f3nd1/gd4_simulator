@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { Card, inputStyle } from "../components/ui/Card";
+import { Card, inputStyle, filterSelectStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { BLUE, TONE } from "../lib/theme";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
@@ -32,42 +32,46 @@ export function AFIClosure() {
   });
 
   return (
-    <div>
+    <Card>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 12.5, color: "#6b7280" }}>
-          Real findings from the April 2026 assessment. {scored.openAFIs} of {allFindings.length} still open.
-        </div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <select
-            value={critFilter}
-            onChange={(e) => {
-              setCritFilter(e.target.value);
-              setSubCritFilter("All");
-            }}
-            style={{ ...inputStyle, width: "auto" }}
-          >
-            <option value="All">All criteria</option>
-            {GD4_CRITERIA.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.id} — {c.title}
-              </option>
-            ))}
-          </select>
-          <select value={subCritFilter} onChange={(e) => setSubCritFilter(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
-            <option value="All">All sub-criteria</option>
-            {subCritOptions.map((sc) => (
-              <option key={sc.id} value={sc.id}>
-                {sc.id} — {sc.title}
-              </option>
-            ))}
-          </select>
-        </div>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Quality Action / AFI closure</h3>
+        <span style={{ fontSize: 12, color: "#6b7280" }}>
+          {scored.openAFIs} of {allFindings.length} still open
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        <select
+          value={critFilter}
+          onChange={(e) => {
+            setCritFilter(e.target.value);
+            setSubCritFilter("All");
+          }}
+          style={filterSelectStyle}
+        >
+          <option value="All">All criteria</option>
+          {GD4_CRITERIA.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.id} — {c.title}
+            </option>
+          ))}
+        </select>
+        <select value={subCritFilter} onChange={(e) => setSubCritFilter(e.target.value)} style={filterSelectStyle}>
+          <option value="All">All sub-criteria</option>
+          {subCritOptions.map((sc) => (
+            <option key={sc.id} value={sc.id}>
+              {sc.id} — {sc.title}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 10 }}>
+        Carried over from the April 2026 internal mock audit.
       </div>
       {findings.map((f) => {
         const c = closures[f.id] || {};
         const open = selFinding === f.id;
         return (
-          <Card key={f.id} style={{ marginBottom: 9, padding: 0, overflow: "hidden" }}>
+          <Card key={f.id} style={{ marginBottom: 9, padding: 0, overflow: "hidden", boxShadow: "none", border: "1px solid #e2e8f0" }}>
             <button
               className="rowh"
               onClick={() => setSelFinding(open ? null : f.id)}
@@ -143,6 +147,6 @@ export function AFIClosure() {
           </Card>
         );
       })}
-    </div>
+    </Card>
   );
 }

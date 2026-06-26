@@ -26,3 +26,14 @@ export const inputStyle: CSSProperties = {
   fontFamily: "inherit",
   boxSizing: "border-box",
 };
+
+export const filterSelectStyle: CSSProperties = {
+  ...inputStyle,
+  width: "auto",
+  flex: "1 1 150px",
+  minWidth: 0,
+  maxWidth: 220,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};

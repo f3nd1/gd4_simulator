@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { Card, inputStyle } from "../components/ui/Card";
+import { Card, filterSelectStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import type { FindingType, Severity } from "../types";
@@ -45,14 +45,14 @@ export function Findings() {
           {scored.openAFIs} of {allFindings.length} still open
         </span>
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "nowrap", overflowX: "auto" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
         <select
           value={critFilter}
           onChange={(e) => {
             setCritFilter(e.target.value);
             setSubCritFilter("All");
           }}
-          style={{ ...inputStyle, width: "auto", flex: "1 1 0" }}
+          style={filterSelectStyle}
         >
           <option value="All">All criteria</option>
           {GD4_CRITERIA.map((c) => (
@@ -61,7 +61,7 @@ export function Findings() {
             </option>
           ))}
         </select>
-        <select value={subCritFilter} onChange={(e) => setSubCritFilter(e.target.value)} style={{ ...inputStyle, width: "auto", flex: "1 1 0" }}>
+        <select value={subCritFilter} onChange={(e) => setSubCritFilter(e.target.value)} style={filterSelectStyle}>
           <option value="All">All sub-criteria</option>
           {subCritOptions.map((sc) => (
             <option key={sc.id} value={sc.id}>
@@ -69,10 +69,10 @@ export function Findings() {
             </option>
           ))}
         </select>
-        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as FindingType | "All")} style={{ ...inputStyle, width: "auto", flex: "1 1 0" }}>
+        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as FindingType | "All")} style={filterSelectStyle}>
           {TYPES.map((t) => <option key={t}>{t}</option>)}
         </select>
-        <select value={sevFilter} onChange={(e) => setSevFilter(e.target.value as Severity | "All")} style={{ ...inputStyle, width: "auto", flex: "1 1 0" }}>
+        <select value={sevFilter} onChange={(e) => setSevFilter(e.target.value as Severity | "All")} style={filterSelectStyle}>
           {SEVERITIES.map((s) => <option key={s}>{s}</option>)}
         </select>
       </div>
