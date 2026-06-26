@@ -33,11 +33,11 @@ export function Dashboard() {
         <div style={{ fontSize: 11, color: "#7e8da0", marginTop: 8 }}>Not an official SSG or EduTrust result. Placeholder scoring table pending UCC's official GD4 rubric.</div>
         <button
           onClick={() => {
-            if (confirm("Load the demo dataset? This fills in reviewer scores, closures, samples, interview prep and the management review pack with sample data, overwriting any existing entries in those fields.")) loadDemoDataset();
+            if (confirm("Use demo data? This fills in evidence ratings, reviewer scores, closures, samples, interview prep and the management review pack with sample data, overwriting any existing entries in those fields.")) loadDemoDataset();
           }}
           style={{ marginTop: 10, cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
         >
-          Load demo dataset
+          Use demo data
         </button>
       </Card>
 

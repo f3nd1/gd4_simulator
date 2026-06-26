@@ -19,7 +19,7 @@ import type {
   Confidence,
   Finding,
 } from "../types";
-import { seedEvidence } from "../data/seedEvidence";
+import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
 import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
@@ -212,7 +212,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set, get) => ({
       cycle: DEFAULT_CYCLE,
-      evidence: seedEvidence(),
+      evidence: blankEvidence(),
       reviewer: {},
       confirmed: {},
       justify: {},
@@ -233,12 +233,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
-      // Populates the workflow-progress fields that start empty (reviewer
-      // drafts, sign-offs, closures, samples, interview prep, management
-      // review pack, export log) with realistic values derived from the
-      // existing real GD4 items and findings, so the workspace can be
-      // demoed fully populated.
-      loadDemoDataset: () => set((s) => buildDemoDataset(s.evidence)),
+      // Fills the workspace with realistic sample evidence ratings plus the
+      // workflow-progress fields derived from them (reviewer drafts,
+      // sign-offs, closures, samples, interview prep, management review
+      // pack, export log). A brand-new workspace starts fully blank
+      // (blankEvidence() above) — this is the only path that populates it.
+      loadDemoDataset: () =>
+        set(() => {
+          const evidence = seedEvidence();
+          return { evidence, ...buildDemoDataset(evidence) };
+        }),
 
       // Snapshot+restore versioning: every save captures a full copy of the
       // working state, so a version in the list can be restored exactly, not
@@ -509,6 +513,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setBusy: (id) => set({ busy: id }),
     }),
-    { name: "ucc-gd4-workspace:v1", storage: workspaceStorage }
+    // Bumped to v2 so existing sessions pick up the new blank-by-default
+    // evidence baseline (previously seeded with sample ratings) instead of
+    // silently keeping the old pre-filled state cached under v1.
+    { name: "ucc-gd4-workspace:v2", storage: workspaceStorage }
   )
 );

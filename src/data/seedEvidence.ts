@@ -26,6 +26,18 @@ export const WEAK: Record<string, [EvidenceLevel, EvidenceLevel, EvidenceLevel, 
   "2.4.1": ["good", "good", "good", "Partial"],
 };
 
+// True blank default for a new workspace: every GD4 item exists in the
+// evidence map (so consumers never have to guard against a missing key) but
+// carries no rated evidence yet. The realistic sample ratings below only
+// load when the user explicitly clicks "Use demo data".
+export function blankEvidence(): Record<string, ItemEvidence> {
+  const e: Record<string, ItemEvidence> = {};
+  GD4_REQUIREMENTS.forEach((it) => {
+    e[it.id] = { approach: "Missing", processes: "Missing", systemsOutcomes: "Missing", review: "Missing", owner: "", age: 0, trace: 0, drive: "" };
+  });
+  return e;
+}
+
 export function seedEvidence(): Record<string, ItemEvidence> {
   const e: Record<string, ItemEvidence> = {};
   GD4_REQUIREMENTS.forEach((it) => {
