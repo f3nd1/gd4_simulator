@@ -167,14 +167,22 @@ export async function runLiveFolderCheck(
   status: string,
   settings: AISettings
 ): Promise<Omit<FolderCheckResult, "live"> & { live: true }> {
-  const system = `You are an evidence intake assistant for an EduTrust GD4 internal audit. You are given only a Google Drive folder link/name and its status — you cannot open or read the folder's contents, so never assume or invent what files are inside it. Write a short (1-3 sentence) note that names the specific gap risk implied by the status given, and explicitly tells the human auditor that they must open the folder themselves to confirm its actual contents. Respond with JSON only: {"summary": string, "confidence": "Low" | "Medium" | "High"}.`;
+  const system = `You are an evidence intake assistant for an EduTrust GD4 internal audit. You are given only a Google Drive folder link/name and its status — you cannot open or read the folder's contents, so never assume or invent what files are inside it. Write a short (1 sentence) note naming the specific gap risk implied by the status given, nothing else — a fixed disclaimer about the folder not being read will be appended separately, so do not write your own version of that disclaimer. Respond with JSON only: {"summary": string, "confidence": "Low" | "Medium" | "High"}.`;
   const user = `Folder: ${folderName}\nLink: ${folderLink}\nCurrent status: ${status}`;
 
   const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
   const parsed = parseJSONObject(content);
 
+  const modelSummary = (parsed.summary as string) || `"${folderName}" is marked "${status}".`;
+  // The disclaimer below is appended in code, not left to the model's
+  // phrasing, because an LLM-written note can drift into sounding like it
+  // actually inspected the folder (e.g. "indicating a potential gap...").
+  // This app has no Drive API integration anywhere, live or offline, so the
+  // limitation must be stated in fixed words every time, not reworded per call.
+  const summary = `${modelSummary} This note is generated from the folder name/link/status only — the AI has no Google Drive access and did not read the folder's actual contents. Open it yourself to confirm.`;
+
   return {
-    summary: (parsed.summary as string) || `Open "${folderName}" yourself and confirm it contains evidence for every item — the contents were not read.`,
+    summary,
     confidence: (parsed.confidence as FolderCheckResult["confidence"]) || "Low",
     live: true,
   };
