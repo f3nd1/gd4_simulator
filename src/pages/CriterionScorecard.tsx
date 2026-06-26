@@ -1,8 +1,9 @@
+import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { bandTone } from "../lib/theme";
+import { bandTone, BLUE } from "../lib/theme";
 
 export function CriterionScorecard() {
   const scored = useScored();
@@ -18,6 +19,10 @@ export function CriterionScorecard() {
       <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
         AI suggests, you may set a reviewer score, then confirm. Confirming a score that differs from AI by 5 or more, or upgrading a gate item, requires a justification.
       </p>
+      <div style={{ fontSize: 12, color: BLUE, background: "#eaeef6", borderRadius: 8, padding: "8px 11px", marginBottom: 12 }}>
+        Items marked <Pill s="progress">via Checklist</Pill> take their band from the <Link to="/sub-checklist">Sub-Criterion Checklist</Link>,
+        which is the source of truth for scoring. For those items the AI/reviewer/confirmed columns are kept for the record but do not change the band.
+      </div>
       <div style={{ overflowX: "auto" }}>
         <table>
           <thead>
@@ -45,7 +50,10 @@ export function CriterionScorecard() {
                     />
                   </td>
                   <td>{it.conf != null ? <b>{it.conf}</b> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
-                  <td><Pill s={bandTone(it.band)}>Band {it.band}</Pill></td>
+                  <td>
+                    <Pill s={bandTone(it.band)}>Band {it.band}</Pill>
+                    {it.checklistOverride && <Pill s="progress">via Checklist</Pill>}
+                  </td>
                   <td>
                     {needJ && it.conf == null && (
                       <input

@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Bar } from "../components/ui/Bar";
-import { TONE, toneFor } from "../lib/theme";
+import { Pill } from "../components/ui/Pill";
+import { TONE, toneFor, BLUE } from "../lib/theme";
 import type { EvidenceLevel, ItemEvidence } from "../types";
 
 const LIMBS: [keyof ItemEvidence, string][] = [
@@ -23,6 +25,11 @@ export function EvidenceMatrix() {
     <div className="grid gap-3" style={{ gridTemplateColumns: "1.3fr 1fr" }}>
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence matrix</h3>
+        <div style={{ fontSize: 12, color: BLUE, background: "#eaeef6", borderRadius: 8, padding: "8px 11px", marginBottom: 10 }}>
+          This is a quick four-limb rating used as a fast first draft. The <Link to="/sub-checklist">Sub-Criterion Checklist</Link> is
+          the source of truth for scoring — once an item has checklist lines, its band comes from there and this rating no longer
+          drives the score (those items are tagged <Pill s="progress">via Checklist</Pill> below).
+        </div>
         <div style={{ maxHeight: 540, overflowY: "auto" }}>
           <table>
             <thead><tr><th>Item</th><th>Approach</th><th>Processes</th><th>Sys/Outcomes</th><th>Review</th><th>AI</th></tr></thead>
@@ -32,6 +39,7 @@ export function EvidenceMatrix() {
                   <td>
                     <b>{it.id}</b>
                     {it.gate && <span style={{ marginLeft: 4, fontSize: 10, color: TONE.medium.fg }}>gate</span>}
+                    {it.checklistOverride && <span style={{ marginLeft: 4, fontSize: 10, color: TONE.progress.fg }}>via Checklist</span>}
                   </td>
                   {(["approach", "processes", "systemsOutcomes", "review"] as const).map((l) => (
                     <td key={l}>
@@ -80,6 +88,11 @@ export function EvidenceMatrix() {
         <div style={{ marginTop: 6, fontSize: 13 }}>
           AI suggested score: <b>{item.ais}</b> (Band {item.aiBand})
         </div>
+        {item.checklistOverride && (
+          <div style={{ marginTop: 6, fontSize: 12, color: TONE.progress.fg, background: "#eaeef6", borderRadius: 8, padding: "7px 10px" }}>
+            This item's scored band (Band {item.band}) comes from the <Link to="/sub-checklist">Sub-Criterion Checklist</Link>, not this matrix rating.
+          </div>
+        )}
       </Card>
     </div>
   );

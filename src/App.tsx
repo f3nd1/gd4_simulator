@@ -1,4 +1,4 @@
-import { HashRouter, Routes, Route } from "react-router-dom";
+import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Layout } from "./components/layout/Layout";
 import { Dashboard } from "./pages/Dashboard";
 import { DraftWorkspace } from "./pages/DraftWorkspace";
@@ -19,7 +19,6 @@ import { AFIClosure } from "./pages/AFIClosure";
 import { AIReview } from "./pages/AIReview";
 import { HumanReview } from "./pages/HumanReview";
 import { ReAudit } from "./pages/ReAudit";
-import { VersionHistory } from "./pages/VersionHistory";
 import { ManagementReview } from "./pages/ManagementReview";
 import { Finalisation } from "./pages/Finalisation";
 import { ExportCentre } from "./pages/ExportCentre";
@@ -49,7 +48,8 @@ export default function App() {
           <Route path="/ai-review" element={<AIReview />} />
           <Route path="/human-review" element={<HumanReview />} />
           <Route path="/re-audit" element={<ReAudit />} />
-          <Route path="/version-history" element={<VersionHistory />} />
+          {/* Version History merged into Draft Workspace; keep the old path working. */}
+          <Route path="/version-history" element={<Navigate to="/draft-workspace" replace />} />
           <Route path="/management-review" element={<ManagementReview />} />
           <Route path="/finalisation" element={<Finalisation />} />
           <Route path="/export" element={<ExportCentre />} />

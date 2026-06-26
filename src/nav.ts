@@ -45,7 +45,6 @@ export const NAV: NavGroup[] = [
   {
     group: "Closeout",
     items: [
-      { path: "/version-history", label: "Version History" },
       { path: "/management-review", label: "Management Review" },
       { path: "/finalisation", label: "Finalisation Checklist" },
       { path: "/export", label: "Export Centre" },

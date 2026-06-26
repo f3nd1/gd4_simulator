@@ -9,8 +9,15 @@ body {
   background: #eef1f5;
   color: #1f2733;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
+h1, h2, h3, h4 {
+  letter-spacing: -0.01em;
+}
+
+/* ---- Tables: more breathing room + zebra striping for scannability ---- */
 table {
   width: 100%;
   border-collapse: collapse;
@@ -21,20 +28,69 @@ th {
   background: #f4f6f9;
   color: #475569;
   font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
-  padding: 9px 10px;
+  letter-spacing: 0.04em;
+  padding: 10px 12px;
   border-bottom: 1px solid #e2e8f0;
   white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 td {
-  padding: 9px 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid #eef1f5;
-  vertical-align: top;
+  vertical-align: middle;
+  line-height: 1.45;
+}
+/* Zebra striping. Inline row backgrounds (e.g. selected rows) still win,
+   so selection highlights keep working over the stripes. */
+tbody tr:nth-child(even) {
+  background: #fafbfd;
+}
+.rowh {
+  transition: background 0.12s ease;
 }
 .rowh:hover {
-  background: #f7f9fc;
+  background: #f1f5fb;
 }
+
 a {
-  color: #4a5a8a;
+  color: #3f5286;
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* ---- Sidebar nav link hover (inline styles handle the active state) ---- */
+.navlink:hover {
+  background: #20304a !important;
+  color: #ffffff !important;
+}
+
+/* ---- Inputs: consistent focus ring so fields are easy to locate ---- */
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #ce9e5d !important;
+  box-shadow: 0 0 0 3px rgba(206, 158, 93, 0.18);
+}
+
+/* Slimmer, calmer scrollbars inside scrolling panels */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cdd5e0;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #b3bdcc;
+  background-clip: padding-box;
 }

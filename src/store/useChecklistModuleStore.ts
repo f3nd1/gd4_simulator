@@ -40,6 +40,9 @@ export type ChecklistModuleState = {
   busy: string | null;
 
   ensureEntry: (itemId: string) => void;
+  // Replaces the whole entries map — used when restoring a saved version so
+  // the checklist module is rolled back together with the workspace store.
+  replaceAllEntries: (entries: Record<string, SubCriterionChecklistEntry>) => void;
   setGenericStatus: (itemId: string, lineId: GenericChecklistLine["id"], status: GenericChecklistLine["status"]) => void;
 
   generateSpecific: (itemId: string) => Promise<void>;
@@ -85,6 +88,8 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
 
       ensureEntry: (itemId) => set((s) => (s.entries[itemId] ? {} : mapEntry(s, itemId, (e) => e))),
 
+      replaceAllEntries: (entries) => set({ entries }),
+
       setGenericStatus: (itemId, lineId, status) =>
         set((s) => mapEntry(s, itemId, (e) => ({ ...e, generic: e.generic.map((g) => (g.id === lineId ? { ...g, status } : g)) }))),
 
@@ -119,6 +124,18 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           generatedBy: "ai" as const,
         }));
         lines = applyAfiOverlay(itemId, lines);
+        // Log into the shared AI review log so the AI Agent Review screen truly
+        // reflects every AI run, including checklist line generation.
+        useWorkspaceStore.getState().pushAIReviewLog({
+          agent: "Checklist Generator",
+          reviewType: "Checklist",
+          subjectId: itemId,
+          verdict: `${lines.length} line${lines.length === 1 ? "" : "s"} drafted`,
+          confidence: "Medium",
+          keyConcerns: [`Proposed ${lines.length} specific testable line(s) for ${itemId}; pending reviewer confirmation.`],
+          recommendedAction: "Review, edit and confirm the generated lines before they count toward the band.",
+          live,
+        });
         set((s) => ({
           ...mapEntry(s, itemId, (e) => ({ ...e, pendingGenerated: lines, generatedLive: live, generatedAt: new Date().toLocaleString() })),
           busy: null,

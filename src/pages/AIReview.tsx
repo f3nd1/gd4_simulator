@@ -13,8 +13,9 @@ export function AIReview() {
     <Card>
       <h3 style={{ marginTop: 0, fontSize: 14 }}>AI agent review log</h3>
       <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
-        Every AI agent run from Evidence Intelligence, Auditor Checklist and AFI Closure is logged here. Agents assist, challenge and recommend; they never
-        finalise a result. All verdicts in this build are offline simulations.
+        Every AI agent run is logged here — Evidence Intelligence scoring, Sub-Criterion Checklist line generation, and AFI
+        closure reviews. Agents assist, challenge and recommend; they never finalise a result. Runs are tagged
+        <i> simulated</i> when produced by the offline rule-based engine and <i>live</i> when produced by a configured AI call.
       </p>
       {log.length === 0 && <p style={{ fontSize: 12.5, color: "#6b7280" }}>No AI reviews run yet.</p>}
       <table>

@@ -314,6 +314,12 @@ export type WorkspaceSnapshot = {
   samples: SampleRecord[];
   interviewQuestions: InterviewQuestion[];
   managementReviewItems: ManagementReviewItem[];
+  // Added so a version captures the full scoring picture: the Sub-Criterion
+  // Checklist now drives item bands, and findings raised from it live in
+  // customFindings. Optional for backward-compatibility with snapshots saved
+  // before this field existed.
+  checklistEntries?: Record<string, SubCriterionChecklistEntry>;
+  customFindings?: Finding[];
 };
 
 export type VersionEntry = {

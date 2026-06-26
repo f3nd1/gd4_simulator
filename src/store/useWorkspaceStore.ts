@@ -28,6 +28,7 @@ import { simulateItemReview, simulateClosure } from "../lib/ai/simulateAI";
 import { runLiveItemReview, runLiveClosureReview } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
+import { useChecklistModuleStore } from "./useChecklistModuleStore";
 
 export type ClosureState = {
   root?: string;
@@ -153,6 +154,22 @@ export type WorkspaceState = {
 
   addCustomFinding: (f: Finding) => void;
 
+  // Lets other stores (e.g. the checklist module) record an AI run in the
+  // shared review log without duplicating the id/timestamp boilerplate.
+  pushAIReviewLog: (entry: {
+    agent: string;
+    reviewType: AIReviewType;
+    subjectId: string;
+    verdict: string;
+    confidence: Confidence;
+    keyConcerns: string[];
+    recommendedAction: string;
+    evidenceNeeded?: string;
+    suggestedScore?: number;
+    suggestedBand?: number;
+    live: boolean;
+  }) => void;
+
   setBusy: (id: string | null) => void;
 };
 
@@ -240,6 +257,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             samples: s.samples,
             interviewQuestions: s.interviewQuestions,
             managementReviewItems: s.managementReviewItems,
+            checklistEntries: useChecklistModuleStore.getState().entries,
+            customFindings: s.customFindings,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -261,6 +280,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const entry = s.versions.find((v) => v.id === versionId);
           if (!entry) return {};
           const snap = entry.snapshot;
+          // Roll the checklist module back together with the workspace so the
+          // restored bands match. Older snapshots may not carry it, in which
+          // case the current checklist is left untouched.
+          if (snap.checklistEntries) useChecklistModuleStore.getState().replaceAllEntries(snap.checklistEntries);
           return {
             cycle: { ...snap.cycle, updatedAt: new Date().toISOString() },
             evidence: snap.evidence,
@@ -272,6 +295,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             samples: snap.samples,
             interviewQuestions: snap.interviewQuestions,
             managementReviewItems: snap.managementReviewItems,
+            customFindings: snap.customFindings ?? s.customFindings,
           };
         }),
 
@@ -288,6 +312,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             samples: s.samples,
             interviewQuestions: s.interviewQuestions,
             managementReviewItems: s.managementReviewItems,
+            checklistEntries: useChecklistModuleStore.getState().entries,
+            customFindings: s.customFindings,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -444,6 +470,27 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       addExportLogEntry: (e) => set((s) => ({ exportLog: [e, ...s.exportLog].slice(0, 100) })),
 
       addCustomFinding: (f) => set((s) => ({ customFindings: [...s.customFindings, f] })),
+
+      pushAIReviewLog: (entry) =>
+        set((s) => {
+          const log: AIReviewLogEntry = {
+            id: `LOG-${Date.now()}-${++logCounter}`,
+            auditCycleId: s.cycle.id,
+            agent: entry.agent,
+            reviewType: entry.reviewType,
+            subjectId: entry.subjectId,
+            verdict: entry.verdict,
+            confidence: entry.confidence,
+            keyConcerns: entry.keyConcerns,
+            recommendedAction: entry.recommendedAction,
+            evidenceNeeded: entry.evidenceNeeded,
+            suggestedScore: entry.suggestedScore,
+            suggestedBand: entry.suggestedBand as 1 | 2 | 3 | 4 | 5 | undefined,
+            live: entry.live,
+            createdAt: new Date().toISOString(),
+          };
+          return { aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200) };
+        }),
 
       setBusy: (id) => set({ busy: id }),
     }),

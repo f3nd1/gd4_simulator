@@ -2,7 +2,16 @@ import type { CSSProperties, ReactNode } from "react";
 
 export function Card({ children, style }: { children: ReactNode; style?: CSSProperties }) {
   return (
-    <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, padding: 16, ...style }}>
+    <div
+      style={{
+        background: "#fff",
+        border: "1px solid #e8edf3",
+        borderRadius: 14,
+        padding: 18,
+        boxShadow: "0 1px 2px rgba(16,32,46,0.04), 0 2px 6px rgba(16,32,46,0.05)",
+        ...style,
+      }}
+    >
       {children}
     </div>
   );
