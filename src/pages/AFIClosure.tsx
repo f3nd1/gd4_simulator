@@ -12,15 +12,18 @@ export function AFIClosure() {
   const runClosureAI = useWorkspaceStore((s) => s.runClosureAI);
   const setClosureHuman = useWorkspaceStore((s) => s.setClosureHuman);
   const busy = useWorkspaceStore((s) => s.busy);
+  const customFindings = useWorkspaceStore((s) => s.customFindings);
   const scored = useScored();
   const [selFinding, setSelFinding] = useState<string | null>(null);
+
+  const allFindings = [...FINDINGS, ...customFindings];
 
   return (
     <div>
       <div style={{ fontSize: 12.5, color: "#6b7280", marginBottom: 10 }}>
-        Real findings from the April 2026 assessment. {scored.openAFIs} of {FINDINGS.length} still open.
+        Real findings from the April 2026 assessment. {scored.openAFIs} of {allFindings.length} still open.
       </div>
-      {FINDINGS.map((f) => {
+      {allFindings.map((f) => {
         const c = closures[f.id] || {};
         const open = selFinding === f.id;
         return (

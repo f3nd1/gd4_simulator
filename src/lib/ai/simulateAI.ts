@@ -12,7 +12,7 @@
 // LLM-backed agent would be asked to do; they are reproduced as comments so
 // a future swap-in to a real model call has the exact wording to use.
 
-import type { AgentDefinition, ChecklistLibraryItem, ChecklistStatus, ItemEvidence } from "../../types";
+import type { AgentDefinition, ChecklistLibraryItem, ChecklistStatus, GD4Requirement, ItemEvidence, SpecificChecklistLine } from "../../types";
 import type { ScoredItem } from "../scoring";
 import { aiScore, getBand } from "../scoring";
 import { FINDINGS } from "../../data/findings";
@@ -125,6 +125,50 @@ export function simulateClosure(closure: { root?: string; corr?: string; prev?: 
     evidenceNeeded: "Root cause and corrective action narrative, plus the updated document.",
     live: false,
   };
+}
+
+// Deterministic offline fallback for the Sub-Criterion Checklist module's
+// "AI first pass" button: decomposes an item's real Describe/Show bullets
+// (and Notes) into atomic, citable checklist statements. Semicolon-joined
+// sub-clauses within a single bullet are split into separate lines so each
+// line is independently testable, mirroring how the seeded items in
+// data/checklistSeed.ts were hand-decomposed from the same source text.
+function splitAtomic(text: string): string[] {
+  return text
+    .split(/;\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function simulateChecklistGeneration(req: GD4Requirement): { text: string; clause: string }[] {
+  const lines: { text: string; clause: string }[] = [];
+  req.describeShow.forEach((bullet, i) => {
+    const parts = splitAtomic(bullet);
+    parts.forEach((part, j) => {
+      const text = part.charAt(0).toUpperCase() + part.slice(1);
+      const clause = `GD4 ${req.id} · Describe/Show ${i + 1}${parts.length > 1 ? "." + (j + 1) : ""}`;
+      lines.push({ text: text.endsWith(".") ? text : `${text}.`, clause });
+    });
+  });
+  req.notes.forEach((note, i) => {
+    lines.push({ text: note, clause: `GD4 ${req.id} · Notes ${i + 1}` });
+  });
+  return lines;
+}
+
+// Tags generated/seeded lines with the real prior AFI for this item (from
+// data/findings.ts), when the line's wording overlaps with that finding's
+// issue text. Rule-based and auditable, like every other offline simulation
+// in this file — no AFI content is invented, only real findings are used.
+export function applyAfiOverlay(itemId: string, lines: SpecificChecklistLine[]): SpecificChecklistLine[] {
+  const finding = FINDINGS.find((f) => f.type === "AFI" && f.gd4ItemId === itemId);
+  if (!finding) return lines;
+  const keywords = (finding.issue.toLowerCase().match(/[a-z]{5,}/g) || []).filter((k) => !["which", "where", "their", "there", "every", "shall"].includes(k));
+  return lines.map((l) => {
+    if (l.afiTag) return l;
+    const hit = keywords.some((k) => l.text.toLowerCase().includes(k));
+    return hit ? { ...l, afiTag: finding.id } : l;
+  });
 }
 
 export { aiScore };

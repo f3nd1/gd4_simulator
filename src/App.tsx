@@ -12,6 +12,7 @@ import { EvidenceMatrix } from "./pages/EvidenceMatrix";
 import { EvidenceIntelligence } from "./pages/EvidenceIntelligence";
 import { CriterionScorecard } from "./pages/CriterionScorecard";
 import { RubricBanding } from "./pages/RubricBanding";
+import { SubCriterionChecklist } from "./pages/SubCriterionChecklist";
 import { Sampling } from "./pages/Sampling";
 import { Interview } from "./pages/Interview";
 import { Findings } from "./pages/Findings";
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="/evidence-intelligence" element={<EvidenceIntelligence />} />
           <Route path="/scorecard" element={<CriterionScorecard />} />
           <Route path="/rubric-banding" element={<RubricBanding />} />
+          <Route path="/sub-checklist" element={<SubCriterionChecklist />} />
           <Route path="/sampling" element={<Sampling />} />
           <Route path="/interview" element={<Interview />} />
           <Route path="/findings" element={<Findings />} />

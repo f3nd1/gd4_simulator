@@ -1,7 +1,8 @@
-import type { Band, ChecklistStatus, EvidenceLevel, ItemEvidence } from "../types";
+import type { Band, ChecklistStatus, EvidenceLevel, Finding, ItemEvidence } from "../types";
 import { GD4_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { FINDINGS } from "../data/findings";
 import { DEPTS, CHECKLIST_LIB } from "../data/agents";
+import type { ChecklistOverride } from "./checklistBanding";
 
 export type ScoringInput = {
   evidence: Record<string, ItemEvidence>;
@@ -9,6 +10,11 @@ export type ScoringInput = {
   confirmed: Record<string, number | null>;
   closures: Record<string, { human?: string }>;
   checklist: Record<string, { status?: ChecklistStatus }>;
+  // Band override from the Sub-Criterion Checklist module: when present for
+  // a GD4 item, it replaces the evidence-derived band/eff score below, per
+  // the "feed into overall score" decision.
+  checklistBandOverrides?: Record<string, ChecklistOverride>;
+  customFindings?: Finding[];
 };
 
 // Internal simulation weighting across the four official rubric dimensions
@@ -51,13 +57,15 @@ function buildScoredItem(
   req: (typeof GD4_REQUIREMENTS)[number],
   evidence: Record<string, ItemEvidence>,
   reviewer: Record<string, number>,
-  confirmed: Record<string, number | null>
+  confirmed: Record<string, number | null>,
+  checklistBandOverrides: Record<string, ChecklistOverride> | undefined
 ) {
   const ev = evidence[req.id];
   const ais = aiScore(ev);
   const rev = reviewer[req.id] != null ? reviewer[req.id] : ais;
   const conf = confirmed[req.id] ?? undefined;
-  const eff = conf != null ? conf : rev;
+  const override = checklistBandOverrides?.[req.id];
+  const eff = override ? override.eff : conf != null ? conf : rev;
   return {
     id: req.id,
     crit: req.criterion,
@@ -70,15 +78,17 @@ function buildScoredItem(
     rev,
     conf,
     eff,
-    band: capBandForEvidence(getBand(eff), ev),
+    band: override ? override.band : capBandForEvidence(getBand(eff), ev),
     aiBand: capBandForEvidence(getBand(ais), ev),
+    checklistOverride: !!override,
   };
 }
 
 export function buildScored(state: ScoringInput) {
-  const { evidence, reviewer, confirmed, closures, checklist } = state;
+  const { evidence, reviewer, confirmed, closures, checklist, checklistBandOverrides, customFindings } = state;
+  const allFindings: Finding[] = [...FINDINGS, ...(customFindings || [])];
 
-  const items = GD4_REQUIREMENTS.map((req) => buildScoredItem(req, evidence, reviewer, confirmed));
+  const items = GD4_REQUIREMENTS.map((req) => buildScoredItem(req, evidence, reviewer, confirmed, checklistBandOverrides));
 
   const crits = GD4_CRITERIA.map((c) => {
     const ci = items.filter((i) => i.crit === c.id);
@@ -106,7 +116,7 @@ export function buildScored(state: ScoringInput) {
   let award = total >= 750 ? "EduTrust Star" : total >= 600 ? "EduTrust (4-Year)" : total >= 500 ? "EduTrust Provisional (1-Year)" : "Not certified";
   if (!gatePass && total >= 600) award = "Capped: critical gate not met";
 
-  const openAFIs = FINDINGS.filter((a) => (closures[a.id]?.human || "") !== "Accepted").length;
+  const openAFIs = allFindings.filter((a) => (closures[a.id]?.human || "") !== "Accepted").length;
 
   const deptGates = DEPTS.map((d) => {
     const di = CHECKLIST_LIB.filter((c) => c.dept === d.dept);

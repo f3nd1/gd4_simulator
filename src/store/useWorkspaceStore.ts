@@ -17,6 +17,7 @@ import type {
   AIReviewLogEntry,
   AIReviewType,
   Confidence,
+  Finding,
 } from "../types";
 import { seedEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
@@ -115,6 +116,7 @@ export type WorkspaceState = {
   interviewQuestions: InterviewQuestion[];
   managementReviewItems: ManagementReviewItem[];
   exportLog: ExportLogEntry[];
+  customFindings: Finding[];
   busy: string | null;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
@@ -161,6 +163,8 @@ export type WorkspaceState = {
   setManagementDecision: (id: string, decision: string, decidedBy: string) => void;
 
   addExportLogEntry: (e: ExportLogEntry) => void;
+
+  addCustomFinding: (f: Finding) => void;
 
   setBusy: (id: string | null) => void;
 };
@@ -220,6 +224,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       interviewQuestions: [],
       managementReviewItems: [],
       exportLog: [],
+      customFindings: [],
       busy: null,
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
@@ -484,6 +489,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         })),
 
       addExportLogEntry: (e) => set((s) => ({ exportLog: [e, ...s.exportLog].slice(0, 100) })),
+
+      addCustomFinding: (f) => set((s) => ({ customFindings: [...s.customFindings, f] })),
 
       setBusy: (id) => set({ busy: id }),
     }),

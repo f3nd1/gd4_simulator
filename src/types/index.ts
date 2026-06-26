@@ -176,6 +176,76 @@ export type Finding = {
   status: FindingStatus;
 };
 
+// Two-layer sub-criterion checklist module: a generic 4-line maturity check
+// (Layer 1, fixed per the four rubric lenses) plus AI-generated/seeded atomic
+// testable statements (Layer 2) per GD4 item, used to compute a band that
+// feeds back into the official scoring engine (see lib/checklistBanding.ts).
+export type ChecklistLineStatus = "Met" | "Partial" | "Not met";
+export type GenericLineStatus = ChecklistLineStatus | "Not Started";
+export type SpecificLineStatus = ChecklistLineStatus | "Not Applicable" | "Not Started";
+export type EvidenceSufficiency = "Present" | "Weak" | "Missing";
+
+export type SubChecklistEvidenceItem = {
+  id: string;
+  title: string;
+  type: string;
+  drive?: string;
+  owner: string;
+  date: string;
+  approved: boolean;
+  reviewed: boolean;
+  sufficiency: EvidenceSufficiency;
+  // Set when this evidence item was copied here via "Reuse in another
+  // sub-criterion" from a different line, so the UI can show its origin.
+  sharedFrom?: string;
+};
+
+export type SamplingInfo = {
+  population?: number;
+  sampleSize?: number;
+  sampleIds?: string;
+};
+
+export type DraftFindingInfo = {
+  gd4ItemId: string;
+  clause?: string;
+  issue: string;
+  severity: Severity;
+  suggestedAction: string;
+  savedFindingId?: string;
+};
+
+export type GenericChecklistLine = {
+  id: "G1" | "G2" | "G3" | "G4";
+  lens: "Approach" | "Processes" | "Systems & Outcomes" | "Review";
+  text: string;
+  status: GenericLineStatus;
+};
+
+export type SpecificChecklistLine = {
+  id: string;
+  text: string;
+  clause?: string;
+  status: SpecificLineStatus;
+  afiTag?: string;
+  evidence: SubChecklistEvidenceItem[];
+  sampling?: SamplingInfo;
+  draftFinding?: DraftFindingInfo;
+  generatedBy: "seed" | "ai" | "manual";
+};
+
+// Keyed by GD4 item id (the 35 testable requirements) rather than the 24
+// sub-criteria, so every checklist line can cite a single, unambiguous
+// clause. The sub-criterion/criterion grouping is reconstructed in the UI.
+export type SubCriterionChecklistEntry = {
+  gd4ItemId: string;
+  generic: GenericChecklistLine[];
+  specific: SpecificChecklistLine[];
+  pendingGenerated?: SpecificChecklistLine[];
+  generatedAt?: string;
+  generatedLive?: boolean;
+};
+
 export type ClosureVerdict = "Acceptable" | "Partial" | "Maintain Finding" | "Escalate";
 export type HumanVerdict = "Accepted" | "Returned" | "Escalated";
 

@@ -15,18 +15,20 @@ function severityTone(sev: Severity) {
 
 export function Findings() {
   const closures = useWorkspaceStore((s) => s.closures);
+  const customFindings = useWorkspaceStore((s) => s.customFindings);
   const scored = useScored();
   const [typeFilter, setTypeFilter] = useState<FindingType | "All">("All");
   const [sevFilter, setSevFilter] = useState<Severity | "All">("All");
 
-  const rows = FINDINGS.filter((f) => (typeFilter === "All" || f.type === typeFilter) && (sevFilter === "All" || f.severity === sevFilter));
+  const allFindings = [...FINDINGS, ...customFindings];
+  const rows = allFindings.filter((f) => (typeFilter === "All" || f.type === typeFilter) && (sevFilter === "All" || f.severity === sevFilter));
 
   return (
     <Card>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Findings register</h3>
         <span style={{ fontSize: 12, color: "#6b7280" }}>
-          {scored.openAFIs} of {FINDINGS.length} still open
+          {scored.openAFIs} of {allFindings.length} still open
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as FindingType | "All")} style={{ ...inputStyle, width: "auto" }}>

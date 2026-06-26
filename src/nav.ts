@@ -23,6 +23,7 @@ export const NAV: NavGroup[] = [
       { path: "/evidence-intelligence", label: "Evidence Intelligence" },
       { path: "/scorecard", label: "Criterion Scorecard" },
       { path: "/rubric-banding", label: "Rubric Banding" },
+      { path: "/sub-checklist", label: "Sub-Criterion Checklist" },
     ],
   },
   {
