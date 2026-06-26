@@ -1,8 +1,8 @@
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
+import { useAllFindings } from "../hooks/useAllFindings";
 import { Card } from "../components/ui/Card";
 import { GOLD, INK } from "../lib/theme";
-import { FINDINGS } from "../data/findings";
 
 export function ExportCentre() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -10,6 +10,7 @@ export function ExportCentre() {
   const exportLog = useWorkspaceStore((s) => s.exportLog);
   const addExportLogEntry = useWorkspaceStore((s) => s.addExportLogEntry);
   const scored = useScored();
+  const findings = useAllFindings();
 
   function exportPack() {
     let md = `# Management Review Pack — ${cycle.name}\n\n${cycle.periodStart} to ${cycle.periodEnd} · ${cycle.version} · ${cycle.status}\n\n`;
@@ -17,7 +18,7 @@ export function ExportCentre() {
     md += `## Criterion scores\n` + scored.crits.map((c) => `- C${c.id} ${c.title}: Band ${c.band}, ${c.scored}/${c.points}`).join("\n") + "\n\n";
     md +=
       `## Open findings (${scored.openAFIs})\n` +
-      FINDINGS.filter((a) => (closures[a.id]?.human || "") !== "Accepted")
+      findings.filter((a) => (closures[a.id]?.human || "") !== "Accepted")
         .map((a) => `- ${a.id} (${a.gd4ItemId}) ${a.type}/${a.severity}: ${a.issue}`)
         .join("\n") +
       "\n\n";

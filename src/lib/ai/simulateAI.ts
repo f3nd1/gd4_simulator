@@ -12,7 +12,7 @@
 // LLM-backed agent would be asked to do; they are reproduced as comments so
 // a future swap-in to a real model call has the exact wording to use.
 
-import type { AgentDefinition, GD4Requirement, ItemEvidence, SpecificChecklistLine } from "../../types";
+import type { AgentDefinition, Finding, GD4Requirement, ItemEvidence, SpecificChecklistLine } from "../../types";
 import { aiScore, getBand } from "../scoring";
 import { FINDINGS } from "../../data/findings";
 
@@ -125,11 +125,12 @@ export function simulateChecklistGeneration(req: GD4Requirement): { text: string
 }
 
 // Tags generated/seeded lines with the real prior AFI for this item (from
-// data/findings.ts), when the line's wording overlaps with that finding's
-// issue text. Rule-based and auditable, like every other offline simulation
-// in this file — no AFI content is invented, only real findings are used.
-export function applyAfiOverlay(itemId: string, lines: SpecificChecklistLine[]): SpecificChecklistLine[] {
-  const finding = FINDINGS.find((f) => f.type === "AFI" && f.gd4ItemId === itemId);
+// data/findings.ts plus any findings raised at runtime), when the line's
+// wording overlaps with that finding's issue text. Rule-based and auditable,
+// like every other offline simulation in this file — no AFI content is
+// invented, only real findings are used.
+export function applyAfiOverlay(itemId: string, lines: SpecificChecklistLine[], customFindings: Finding[] = []): SpecificChecklistLine[] {
+  const finding = [...FINDINGS, ...customFindings].find((f) => f.type === "AFI" && f.gd4ItemId === itemId);
   if (!finding) return lines;
   const keywords = (finding.issue.toLowerCase().match(/[a-z]{5,}/g) || []).filter((k) => !["which", "where", "their", "there", "every", "shall"].includes(k));
   return lines.map((l) => {

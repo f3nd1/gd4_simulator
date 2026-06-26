@@ -1,20 +1,21 @@
 import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
+import { useAllFindings } from "../hooks/useAllFindings";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK, TONE } from "../lib/theme";
-import { FINDINGS } from "../data/findings";
 
 export function Dashboard() {
   const cycle = useWorkspaceStore((s) => s.cycle);
   const saveAsNewVersion = useWorkspaceStore((s) => s.saveAsNewVersion);
   const loadDemoDataset = useWorkspaceStore((s) => s.loadDemoDataset);
   const scored = useScored();
+  const findings = useAllFindings();
 
   const belowBand3 = scored.items.filter((i) => i.band < 3).length;
   const closures = useWorkspaceStore((s) => s.closures);
-  const openCritical = FINDINGS.filter((a) => a.severity === "Critical" && (closures[a.id]?.human || "") !== "Accepted").length;
+  const openCritical = findings.filter((a) => a.severity === "Critical" && (closures[a.id]?.human || "") !== "Accepted").length;
   const finalisationReady = scored.gatePass && scored.openAFIs === 0;
 
   return (
@@ -84,7 +85,7 @@ export function Dashboard() {
       <Card>
         <div style={{ fontSize: 12, color: "#6b7280" }}>Management decisions</div>
         <div style={{ fontSize: 13, marginTop: 6 }}>
-          Findings needing a leadership decision: <b>{FINDINGS.filter((f) => f.managementDecisionNeeded).length}</b>
+          Findings needing a leadership decision: <b>{findings.filter((f) => f.managementDecisionNeeded).length}</b>
         </div>
         <Link to="/management-review" style={{ fontSize: 12, display: "inline-block", marginTop: 8 }}>
           Open management review →

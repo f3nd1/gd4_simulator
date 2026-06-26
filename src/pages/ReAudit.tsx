@@ -1,16 +1,17 @@
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
+import { useAllFindings } from "../hooks/useAllFindings";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { bandTone } from "../lib/theme";
-import { FINDINGS } from "../data/findings";
 
 export function ReAudit() {
   const closures = useWorkspaceStore((s) => s.closures);
   const confirmScore = useWorkspaceStore((s) => s.confirmScore);
   const scored = useScored();
+  const findings = useAllFindings();
 
-  const closedFindings = FINDINGS.filter((f) => closures[f.id]?.human === "Accepted");
+  const closedFindings = findings.filter((f) => closures[f.id]?.human === "Accepted");
   const belowBand3 = scored.items.filter((it) => it.band < 3);
 
   return (

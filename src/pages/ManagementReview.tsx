@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
+import { useAllFindings } from "../hooks/useAllFindings";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK, TONE } from "../lib/theme";
-import { FINDINGS } from "../data/findings";
 
 export function ManagementReview() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -13,13 +13,14 @@ export function ManagementReview() {
   const addManagementReviewItem = useWorkspaceStore((s) => s.addManagementReviewItem);
   const setManagementDecision = useWorkspaceStore((s) => s.setManagementDecision);
   const scored = useScored();
+  const findings = useAllFindings();
 
   const [section, setSection] = useState("");
   const [content, setContent] = useState("");
   const [decisionNeeded, setDecisionNeeded] = useState(false);
   const [decisionDraft, setDecisionDraft] = useState<Record<string, string>>({});
 
-  const openFindings = FINDINGS.filter((f) => (closures[f.id]?.human || "") !== "Accepted");
+  const openFindings = findings.filter((f) => (closures[f.id]?.human || "") !== "Accepted");
   const criticalOrHigh = openFindings.filter((f) => f.severity === "Critical" || f.severity === "High");
 
   function submitItem() {

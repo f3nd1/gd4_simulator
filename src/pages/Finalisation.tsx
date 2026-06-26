@@ -1,9 +1,9 @@
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
+import { useAllFindings } from "../hooks/useAllFindings";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
-import { FINDINGS } from "../data/findings";
 
 export function Finalisation() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -12,8 +12,9 @@ export function Finalisation() {
   const managementReviewItems = useWorkspaceStore((s) => s.managementReviewItems);
   const lockCycle = useWorkspaceStore((s) => s.lockCycle);
   const scored = useScored();
+  const findings = useAllFindings();
 
-  const criticalOpen = FINDINGS.filter((f) => f.severity === "Critical" && (closures[f.id]?.human || "") !== "Accepted");
+  const criticalOpen = findings.filter((f) => f.severity === "Critical" && (closures[f.id]?.human || "") !== "Accepted");
   const decisionsOutstanding = managementReviewItems.filter((m) => m.decisionNeeded && !m.decision);
   const checks: [string, boolean, string][] = [
     ["Audit cycle scope confirmed", !!cycle.scope?.trim(), "Define audit scope in Audit Cycle Setup."],

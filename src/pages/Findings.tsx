@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
+import { useAllFindings } from "../hooks/useAllFindings";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { FINDINGS } from "../data/findings";
 import type { FindingType, Severity } from "../types";
 
 const TYPES: (FindingType | "All")[] = ["All", "AFI", "Improvement Action", "Observation", "Quality Action", "Critical Readiness Risk"];
@@ -15,12 +15,11 @@ function severityTone(sev: Severity) {
 
 export function Findings() {
   const closures = useWorkspaceStore((s) => s.closures);
-  const customFindings = useWorkspaceStore((s) => s.customFindings);
   const scored = useScored();
+  const allFindings = useAllFindings();
   const [typeFilter, setTypeFilter] = useState<FindingType | "All">("All");
   const [sevFilter, setSevFilter] = useState<Severity | "All">("All");
 
-  const allFindings = [...FINDINGS, ...customFindings];
   const rows = allFindings.filter((f) => (typeFilter === "All" || f.type === typeFilter) && (sevFilter === "All" || f.severity === sevFilter));
 
   return (

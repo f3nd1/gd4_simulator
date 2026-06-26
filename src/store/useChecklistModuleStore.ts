@@ -123,7 +123,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           evidence: [],
           generatedBy: "ai" as const,
         }));
-        lines = applyAfiOverlay(itemId, lines);
+        lines = applyAfiOverlay(itemId, lines, useWorkspaceStore.getState().customFindings);
         // Log into the shared AI review log so the AI Agent Review screen truly
         // reflects every AI run, including checklist line generation.
         useWorkspaceStore.getState().pushAIReviewLog({

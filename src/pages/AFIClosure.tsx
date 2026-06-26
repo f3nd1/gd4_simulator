@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
+import { useAllFindings } from "../hooks/useAllFindings";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { BLUE, TONE } from "../lib/theme";
-import { FINDINGS } from "../data/findings";
 
 export function AFIClosure() {
   const closures = useWorkspaceStore((s) => s.closures);
@@ -12,11 +12,9 @@ export function AFIClosure() {
   const runClosureAI = useWorkspaceStore((s) => s.runClosureAI);
   const setClosureHuman = useWorkspaceStore((s) => s.setClosureHuman);
   const busy = useWorkspaceStore((s) => s.busy);
-  const customFindings = useWorkspaceStore((s) => s.customFindings);
   const scored = useScored();
+  const allFindings = useAllFindings();
   const [selFinding, setSelFinding] = useState<string | null>(null);
-
-  const allFindings = [...FINDINGS, ...customFindings];
 
   return (
     <div>

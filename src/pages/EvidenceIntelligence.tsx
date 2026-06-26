@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
+import { useAllFindings } from "../hooks/useAllFindings";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { TONE, BLUE } from "../lib/theme";
-import { FINDINGS } from "../data/findings";
 
 export function EvidenceIntelligence() {
   const scored = useScored();
+  const findings = useAllFindings();
   const agents = useWorkspaceStore((s) => s.agents);
   const itemReviews = useWorkspaceStore((s) => s.itemReviews);
   const runItemAI = useWorkspaceStore((s) => s.runItemAI);
@@ -26,7 +27,7 @@ export function EvidenceIntelligence() {
     ["Traceability", item.ev.trace >= 75 ? "Pass" : "Partial", `${item.ev.trace}%`],
     ["Missing owner warning", item.ev.owner ? "Pass" : "Fail", item.ev.owner || "No owner set"],
     ["Drive folder linked / cut-off control", item.ev.drive ? "Pass" : "Fail", item.ev.drive ? "Linked" : "Missing"],
-    ["Repeat finding detector", FINDINGS.some((a) => a.gd4ItemId === item.id) ? "Fail" : "Pass", FINDINGS.some((a) => a.gd4ItemId === item.id) ? "Prior finding on this item" : "None"],
+    ["Repeat finding detector", findings.some((a) => a.gd4ItemId === item.id) ? "Fail" : "Pass", findings.some((a) => a.gd4ItemId === item.id) ? "Prior finding on this item" : "None"],
     ["Due date monitoring", "Pass", "No overdue actions linked to this item"],
     ["Gate item", item.gate ? (item.band >= 3 ? "Pass" : "Fail") : "Pass", item.gate ? "Critical area" : "Not gated"],
   ];
