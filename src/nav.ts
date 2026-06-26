@@ -78,6 +78,6 @@ export const NAV: NavGroup[] = [
   },
   {
     group: "Settings",
-    items: [{ path: "/settings", label: "Settings (AI)", hint: "Configure the OpenAI API key used by AI features" }],
+    items: [{ path: "/settings", label: "Settings", hint: "Configure Supabase, OpenAI and Google Drive integrations" }],
   },
 ];

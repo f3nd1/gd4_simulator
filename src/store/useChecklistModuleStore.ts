@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { workspaceStorage } from "./supabaseStorage";
 import type {
   SubCriterionChecklistEntry,
   GenericChecklistLine,
@@ -292,6 +293,6 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         set((st) => mapEntry(st, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, draftFinding: { ...draft, savedFindingId: finding.id } }))));
       },
     }),
-    { name: "ucc-gd4-checklist:v2" }
+    { name: "ucc-gd4-checklist:v2", storage: workspaceStorage }
   )
 );

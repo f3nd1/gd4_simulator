@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { workspaceStorage } from "./supabaseStorage";
 import type { AISettings } from "../types";
 
 // Kept in its own localStorage key, separate from the main workspace blob,
@@ -25,6 +26,6 @@ export const useAISettingsStore = create<AISettingsState>()(
       setEnabled: (enabled) => set({ enabled }),
       clearApiKey: () => set({ apiKey: "", enabled: false }),
     }),
-    { name: "ucc-gd4-ai-settings:v1" }
+    { name: "ucc-gd4-ai-settings:v1", storage: workspaceStorage }
   )
 );

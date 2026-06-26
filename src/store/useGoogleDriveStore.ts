@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { workspaceStorage } from "./supabaseStorage";
 import { requestDriveAccessToken, DriveAuthError } from "../lib/drive/driveClient";
 
 // Only the Client ID is persisted (it's not a secret — Google's browser
@@ -53,6 +54,7 @@ export const useGoogleDriveStore = create<GoogleDriveState>()(
     }),
     {
       name: "ucc-gd4-google-drive:v1",
+      storage: workspaceStorage,
       partialize: (s) => ({ clientId: s.clientId }),
     }
   )

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { workspaceStorage } from "./supabaseStorage";
 import type { AgentMemoryEntry } from "../types";
 
 // Minimal per-agent conversation memory so a live LLM call can be given
@@ -28,6 +29,6 @@ export const useAgentMemoryStore = create<AgentMemoryState>()(
       clearMemory: (agentId) =>
         set((s) => (agentId ? { memory: { ...s.memory, [agentId]: [] } } : { memory: {} })),
     }),
-    { name: "ucc-gd4-ai-memory:v1" }
+    { name: "ucc-gd4-ai-memory:v1", storage: workspaceStorage }
   )
 );

@@ -1,6 +1,6 @@
 import { createJSONStorage } from "zustand/middleware";
 import type { StateStorage } from "zustand/middleware";
-import { supabase } from "../lib/supabaseClient";
+import { getSupabaseClient } from "../lib/supabaseClient";
 
 // Single shared row per persisted store key — mirrors the one-blob shape the
 // localStorage version already used, so no store/action code has to change.
@@ -13,6 +13,7 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 // working exactly as before if the database is unreachable.
 const dbStorage: StateStorage = {
   getItem: async (name) => {
+    const supabase = getSupabaseClient();
     if (!supabase) return localStorage.getItem(name);
     // An unreachable host can take many seconds to actually reject (proxy/tunnel
     // timeouts), during which the UI would otherwise sit on blank default state.
@@ -52,12 +53,13 @@ const dbStorage: StateStorage = {
 
   setItem: (name, value) => {
     localStorage.setItem(name, value);
+    const supabase = getSupabaseClient();
     if (!supabase) return Promise.resolve();
     return new Promise<void>((resolve) => {
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(async () => {
         try {
-          const { error } = await supabase!.from(TABLE).upsert({ id: name, data: JSON.parse(value), updated_at: new Date().toISOString() });
+          const { error } = await supabase.from(TABLE).upsert({ id: name, data: JSON.parse(value), updated_at: new Date().toISOString() });
           if (error) console.error("Supabase save failed:", error.message);
         } catch (err) {
           console.error("Supabase save failed:", err instanceof Error ? err.message : String(err));
@@ -69,6 +71,7 @@ const dbStorage: StateStorage = {
 
   removeItem: async (name) => {
     localStorage.removeItem(name);
+    const supabase = getSupabaseClient();
     if (!supabase) return;
     try {
       await supabase.from(TABLE).delete().eq("id", name);
