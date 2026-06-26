@@ -18,7 +18,6 @@ export function seedFolders(): EvidenceFolder[] {
     folderLink: "",
     owner: "SQ",
     status: "In Progress",
-    missingEvidenceCount: 0,
     lastCheckedDate: "",
   }));
 }

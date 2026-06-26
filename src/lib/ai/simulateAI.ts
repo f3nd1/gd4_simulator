@@ -200,6 +200,34 @@ function guessDate(filename: string): string {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : new Date().toISOString().slice(0, 10);
 }
 
+// Drafts a plain-language check of an evidence folder for the Evidence
+// Folder page's "Check with AI" action. There is no Google Drive API
+// integration here, so this can never actually list or read what is inside
+// the folder — it can only reason from the folder/sub-criterion name, the
+// link itself, and the status fields already on the record, and the note
+// says so explicitly so the auditor knows the folder still needs opening by
+// a human.
+export type FolderCheckResult = {
+  summary: string;
+  confidence: "Low" | "Medium" | "High";
+  live: boolean;
+};
+
+export function simulateFolderCheck(folderName: string, folderLink: string | undefined, status: string): FolderCheckResult {
+  if (!folderLink) {
+    return {
+      summary: `No Drive folder link is attached to "${folderName}" — there is nothing to check yet. Add the folder link first.`,
+      confidence: "Low",
+      live: false,
+    };
+  }
+  return {
+    summary: `Cannot read the contents of this Drive folder — this app has no Google Drive API access. Based only on the folder name and its current status ("${status}"), open the folder yourself and confirm it actually contains evidence for every item under "${folderName}", not just that the link resolves.`,
+    confidence: "Low",
+    live: false,
+  };
+}
+
 export function simulateEvidenceFill(link: string, lineText: string): EvidenceFillDraft {
   const filename = filenameFromLink(link);
   const weakHints = ["draft", "template", "tbc", "wip", "blank"];

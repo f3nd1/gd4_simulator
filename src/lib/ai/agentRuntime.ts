@@ -7,7 +7,7 @@
 
 import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement } from "../../types";
 import { chatComplete, AIClientError } from "./aiClient";
-import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft } from "./simulateAI";
+import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderCheckResult } from "./simulateAI";
 
 export { AIClientError };
 
@@ -151,6 +151,31 @@ export async function runLiveEvidenceFill(
     date: (parsed.date as string) || new Date().toISOString().slice(0, 10),
     sufficiency: (parsed.sufficiency as EvidenceFillDraft["sufficiency"]) || "Present",
     auditorNote: (parsed.auditorNote as string) || `Verify this evidence actually demonstrates: "${lineText}".`,
+    live: true,
+  };
+}
+
+// Drafts a check of an evidence folder for the Evidence Folder page's
+// "Check with AI" action. The model is given only the folder link/name and
+// its current status fields — never the folder's actual contents, which
+// this app has no Google Drive API access to fetch — so the prompt forbids
+// inventing what is inside and requires the note to say a human still needs
+// to open the folder themselves.
+export async function runLiveFolderCheck(
+  folderName: string,
+  folderLink: string,
+  status: string,
+  settings: AISettings
+): Promise<Omit<FolderCheckResult, "live"> & { live: true }> {
+  const system = `You are an evidence intake assistant for an EduTrust GD4 internal audit. You are given only a Google Drive folder link/name and its status — you cannot open or read the folder's contents, so never assume or invent what files are inside it. Write a short (1-3 sentence) note that names the specific gap risk implied by the status given, and explicitly tells the human auditor that they must open the folder themselves to confirm its actual contents. Respond with JSON only: {"summary": string, "confidence": "Low" | "Medium" | "High"}.`;
+  const user = `Folder: ${folderName}\nLink: ${folderLink}\nCurrent status: ${status}`;
+
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
+  const parsed = parseJSONObject(content);
+
+  return {
+    summary: (parsed.summary as string) || `Open "${folderName}" yourself and confirm it contains evidence for every item — the contents were not read.`,
+    confidence: (parsed.confidence as FolderCheckResult["confidence"]) || "Low",
     live: true,
   };
 }

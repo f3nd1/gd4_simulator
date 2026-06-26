@@ -25,8 +25,8 @@ import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { simulateItemReview, simulateClosure } from "../lib/ai/simulateAI";
-import { runLiveItemReview, runLiveClosureReview } from "../lib/ai/agentRuntime";
+import { simulateItemReview, simulateClosure, simulateFolderCheck } from "../lib/ai/simulateAI";
+import { runLiveItemReview, runLiveClosureReview, runLiveFolderCheck } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
@@ -160,6 +160,7 @@ export type WorkspaceState = {
   removeDepartment: (id: string) => void;
 
   setFolderField: <K extends keyof EvidenceFolder>(id: string, field: K, value: EvidenceFolder[K]) => void;
+  checkFolderContent: (id: string) => Promise<void>;
 
   setSamples: (samples: SampleRecord[]) => void;
   toggleSample: (id: string) => void;
@@ -544,6 +545,56 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       removeDepartment: (id) => set((s) => ({ departments: s.departments.filter((d) => d.id !== id) })),
 
       setFolderField: (id, field, value) => set((s) => ({ folders: s.folders.map((f) => (f.id === id ? { ...f, [field]: value } : f)) })),
+
+      // "Check with AI" action on the Evidence Folder page. This app has no
+      // Google Drive API access, so it can never actually read what is
+      // inside the folder — both the live and offline paths are explicit
+      // about that and only reason from the folder name/link/status fields,
+      // same honesty constraint as fillEvidenceFromLink elsewhere.
+      checkFolderContent: async (id) => {
+        const s = get();
+        const folder = s.folders.find((f) => f.id === id);
+        if (!folder) return;
+        set({ busy: "folderchk" + id });
+
+        const aiSettings = useAISettingsStore.getState();
+        let result;
+        let liveError: string | undefined;
+        if (!folder.folderLink) {
+          result = simulateFolderCheck(folder.folderName, folder.folderLink, folder.status);
+        } else if (aiSettings.enabled && aiSettings.apiKey) {
+          try {
+            result = await runLiveFolderCheck(folder.folderName, folder.folderLink, folder.status, aiSettings);
+          } catch (err) {
+            liveError = err instanceof Error ? err.message : String(err);
+            result = simulateFolderCheck(folder.folderName, folder.folderLink, folder.status);
+          }
+        } else {
+          result = simulateFolderCheck(folder.folderName, folder.folderLink, folder.status);
+        }
+
+        const checkedAt = new Date().toLocaleString();
+        const log: AIReviewLogEntry = {
+          id: `LOG-${Date.now()}-${++logCounter}`,
+          auditCycleId: s.cycle.id,
+          agent: "Evidence Intake Assistant",
+          reviewType: "Evidence",
+          subjectId: folder.subCriterionId,
+          verdict: result.summary,
+          confidence: result.confidence,
+          keyConcerns: [result.summary],
+          recommendedAction: "Open the Drive folder yourself and confirm its actual contents — this check did not read them.",
+          live: result.live,
+          liveError,
+          generatedContent: result.summary,
+          createdAt: new Date().toISOString(),
+        };
+        set((st) => ({
+          folders: st.folders.map((f) => (f.id === id ? { ...f, aiCheckNote: result.summary, aiCheckConfidence: result.confidence, aiCheckAt: checkedAt } : f)),
+          aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
+          busy: null,
+        }));
+      },
 
       setSamples: (samples) => set({ samples }),
       toggleSample: (id) => set((s) => ({ samples: s.samples.map((r) => (r.id === id ? { ...r, selected: !r.selected } : r)) })),

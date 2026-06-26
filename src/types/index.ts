@@ -263,8 +263,10 @@ export type EvidenceFolder = {
   folderLink?: string;
   owner: string;
   status: FolderStatus;
-  missingEvidenceCount: number;
   lastCheckedDate?: string;
+  aiCheckNote?: string;
+  aiCheckConfidence?: Confidence;
+  aiCheckAt?: string;
 };
 
 export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation";
