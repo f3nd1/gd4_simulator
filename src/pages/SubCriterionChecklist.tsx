@@ -1,12 +1,14 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
+import { useScored } from "../hooks/useScored";
+import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildGenericLines } from "../data/checklistSeed";
 import { computeBand, lineSufficiency, buildDraftFinding } from "../lib/checklistBanding";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { GOLD, BLUE, INK, bandTone } from "../lib/theme";
+import { GOLD, BLUE, INK, TONE, bandTone } from "../lib/theme";
 import type {
   GenericChecklistLine,
   SpecificChecklistLine,
@@ -97,6 +99,12 @@ export function SubCriterionChecklist() {
   const pending = entry?.pendingGenerated || [];
 
   const bandResult = useMemo(() => computeBand(generic, specific, req.gateSensitive), [generic, specific, req.gateSensitive]);
+
+  const scored = useScored();
+  const itemAudit = useMemo(() => {
+    const item = scored.items.find((i) => i.id === selectedId);
+    return item ? auditEvidence([item], entries) : [];
+  }, [scored.items, selectedId, entries]);
 
   const sortedSpecific = useMemo(() => [...specific].sort((a, b) => (b.afiTag ? 1 : 0) - (a.afiTag ? 1 : 0)), [specific]);
 
@@ -575,6 +583,19 @@ export function SubCriterionChecklist() {
           ) : (
             <p style={{ fontSize: 12, color: "#94a3b8" }}>No band yet — add at least one specific (Layer 2) line for this item to compute one.</p>
           )}
+          <div style={{ marginTop: 10 }}>
+            {itemAudit.length === 0 ? (
+              <div style={{ background: TONE.good.bg, color: TONE.good.fg, borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>
+                Evidence check: no gaps found for this item — current band is not standing on unverified evidence.
+              </div>
+            ) : (
+              itemAudit.map((f) => (
+                <div key={f.source} style={{ background: "#fbe7e3", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#b23121" }}>
+                  <b>Evidence check ({f.source}):</b> {f.reason}
+                </div>
+              ))
+            )}
+          </div>
           <p style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 10, marginBottom: 0 }}>
             This module feeds its band back into the workspace's overall scoring engine once it has at least one specific line for this item. Internal
             simulation only — no claim of official SSG result anywhere in this tool.
