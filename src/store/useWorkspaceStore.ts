@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { workspaceStorage } from "./supabaseStorage";
 import type {
   AuditCycle,
   AuditorProfile,
@@ -446,6 +447,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setBusy: (id) => set({ busy: id }),
     }),
-    { name: "ucc-gd4-workspace:v1" }
+    { name: "ucc-gd4-workspace:v1", storage: workspaceStorage }
   )
 );
