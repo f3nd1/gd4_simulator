@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useScored } from "../hooks/useScored";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -28,10 +28,11 @@ function subCriterionGroup(items: ScoredItem[]) {
 export function RubricBanding() {
   const scored = useScored();
   const navigate = useNavigate();
-  const [view, setView] = useState<ViewMode>("criterion");
+  const [searchParams] = useSearchParams();
+  const [view, setView] = useState<ViewMode>(searchParams.get("view") === "item" ? "item" : "criterion");
 
   function goToItem(itemId: string) {
-    navigate(`/sub-checklist?item=${itemId}`);
+    navigate(`/sub-checklist?item=${itemId}&from=rubric-banding`);
   }
 
   return (

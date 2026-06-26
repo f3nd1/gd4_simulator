@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildGenericLines } from "../data/checklistSeed";
@@ -145,6 +145,7 @@ export function SubCriterionChecklist() {
 
   const reuseTargets = GD4_REQUIREMENTS.filter((r) => r.id !== selectedId && (entries[r.id]?.specific.length || 0) > 0);
   const reuseTargetLines = reuseTargetItem ? entries[reuseTargetItem]?.specific || [] : [];
+  const cameFromRubricBanding = searchParams.get("from") === "rubric-banding";
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "300px 1fr" }}>
@@ -214,6 +215,14 @@ export function SubCriterionChecklist() {
         </Card>
 
         <Card>
+          {cameFromRubricBanding && (
+            <Link
+              to="/rubric-banding?view=item"
+              style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 700, color: BLUE, textDecoration: "none", marginBottom: 8 }}
+            >
+              ← Back to Rubric Banding
+            </Link>
+          )}
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
             <h3 style={{ margin: 0, fontSize: 14 }}>{req.id} · {req.requirement}</h3>
             {req.gateSensitive && <Pill s="high">Gate-sensitive</Pill>}
