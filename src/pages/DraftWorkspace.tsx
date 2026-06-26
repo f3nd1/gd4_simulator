@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -9,7 +10,6 @@ export function DraftWorkspace() {
   const versions = useWorkspaceStore((s) => s.versions);
   const saveAsNewVersion = useWorkspaceStore((s) => s.saveAsNewVersion);
   const restoreVersion = useWorkspaceStore((s) => s.restoreVersion);
-  const lockCycle = useWorkspaceStore((s) => s.lockCycle);
   const unlockCycle = useWorkspaceStore((s) => s.unlockCycle);
   const duplicateCycle = useWorkspaceStore((s) => s.duplicateCycle);
   const locked = cycle.status === "Locked";
@@ -66,9 +66,12 @@ export function DraftWorkspace() {
               Unlock (admin)
             </button>
           ) : (
-            <button onClick={lockCycle} style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>
-              Lock final version
-            </button>
+            <Link
+              to="/finalisation"
+              style={{ display: "inline-block", cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: "#1f2733", textDecoration: "none" }}
+            >
+              Go to Finalisation to lock →
+            </Link>
           )}
         </div>
       </Card>
