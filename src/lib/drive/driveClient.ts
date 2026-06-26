@@ -7,6 +7,14 @@
 // (never persisted), is requested directly from the browser, and there is
 // no backend proxy.
 
+import * as pdfjsLib from "pdfjs-dist";
+
+// Vite needs an explicit URL to the worker asset (pdfjs can't locate it via
+// its own default heuristics inside a bundled build) — this resolves to a
+// fingerprinted file in dist/ at build time, same trick as any other
+// worker/wasm asset import.
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const GSI_SRC = "https://accounts.google.com/gsi/client";
 
@@ -133,15 +141,30 @@ export async function listFolderFiles(folderId: string, accessToken: string): Pr
   return (data.files || []) as DriveFile[];
 }
 
-// Exported MIME types we know how to turn into plain text. Anything else
-// (PDFs, images, video, etc.) is reported as unsupported rather than
-// silently skipped, so the audit can disclose exactly what it did and did
-// not read.
+// Exported MIME types we know how to turn into plain text via Drive's
+// /export endpoint. PDF is handled separately below (no /export conversion
+// exists for it). Anything else (images, video, etc.) is reported as
+// unsupported rather than silently skipped, so the audit can disclose
+// exactly what it did and did not read.
 const GOOGLE_EXPORT_MIME: Record<string, string> = {
   "application/vnd.google-apps.document": "text/plain",
   "application/vnd.google-apps.spreadsheet": "text/csv",
   "application/vnd.google-apps.presentation": "text/plain",
 };
+
+// PDF has no Drive /export conversion (that's only for Google-native
+// formats) — read the raw bytes via alt=media instead and extract text
+// client-side, consistent with this app having no backend to do it for us.
+async function extractPdfText(bytes: ArrayBuffer): Promise<string> {
+  const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const pages: string[] = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    pages.push(content.items.map((item) => ("str" in item ? item.str : "")).join(" "));
+  }
+  return pages.join("\n\n");
+}
 
 export async function exportFileText(file: DriveFile, accessToken: string): Promise<string | null> {
   if (file.mimeType in GOOGLE_EXPORT_MIME) {
@@ -152,6 +175,10 @@ export async function exportFileText(file: DriveFile, accessToken: string): Prom
   if (file.mimeType === "text/plain" || file.mimeType === "text/csv") {
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
     return res.text();
+  }
+  if (file.mimeType === "application/pdf") {
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
+    return extractPdfText(await res.arrayBuffer());
   }
   return null;
 }
