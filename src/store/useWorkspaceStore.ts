@@ -722,22 +722,30 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           verdicts = simulateFolderAudit(lines, docText);
         }
 
-        const checklist = useChecklistModuleStore.getState();
-        for (const v of verdicts) {
-          const itemId = lineOwners.get(v.lineId);
-          if (!itemId) continue;
-          checklist.setSpecificStatus(itemId, v.lineId, v.status);
-          checklist.addEvidence(itemId, v.lineId, {
-            title: `Drive audit: ${folder.folderName}`,
-            type: "Other",
-            drive: folder.folderLink,
-            owner: folder.owner,
-            date: new Date().toISOString().slice(0, 10),
-            approved: false,
-            reviewed: false,
-            sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
-            auditorNote: v.reason,
-          });
+        // Guarded so an unexpected throw while writing verdicts can't strand
+        // `busy` (which would leave this row's button stuck on "Auditing…"
+        // forever) — finish() below always runs and clears it.
+        try {
+          const checklist = useChecklistModuleStore.getState();
+          for (const v of verdicts) {
+            const itemId = lineOwners.get(v.lineId);
+            if (!itemId) continue;
+            checklist.setSpecificStatus(itemId, v.lineId, v.status);
+            checklist.addEvidence(itemId, v.lineId, {
+              title: `Drive audit: ${folder.folderName}`,
+              type: "Other",
+              drive: folder.folderLink,
+              owner: folder.owner,
+              date: new Date().toISOString().slice(0, 10),
+              approved: false,
+              reviewed: false,
+              sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
+              auditorNote: v.reason,
+            });
+          }
+        } catch (err) {
+          finish(`Audit read the folder but failed while writing checklist verdicts: ${err instanceof Error ? err.message : String(err)}`, live, liveError);
+          return;
         }
 
         const counts = { Met: 0, Partial: 0, "Not met": 0 } as Record<string, number>;

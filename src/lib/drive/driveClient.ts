@@ -7,14 +7,17 @@
 // (never persisted), is requested directly from the browser, and there is
 // no backend proxy.
 
-import * as pdfjsLib from "pdfjs-dist";
-// The ?url suffix makes Vite emit the worker as an asset and hand back its
-// served URL — works in both `vite dev` and a production build. The older
-// `new URL("...", import.meta.url)` form silently failed for this file under
-// dev (it lives inside node_modules), so pdfjs fell back to its in-thread
-// "fake worker", that throw was caught upstream, and every PDF looked
-// "unsupported". Importing the worker URL explicitly avoids all of that.
-import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+// The /legacy build is Babel-transpiled for older/Safari engines — the
+// default build uses modern JS (async ReadableStream iteration, etc.) that
+// WebKit chokes on with "undefined is not a function (near ...readableStream)".
+// Pair it with the matching legacy worker. The ?url suffix makes Vite emit
+// the worker as an asset and hand back its served URL (works in both
+// `vite dev` and a production build); the older `new URL(..., import.meta.url)`
+// form silently failed for this node_modules file under dev, so pdfjs fell
+// back to an in-thread fake worker — which both blocked the main thread and
+// threw, leaving every PDF "unsupported".
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import mammoth from "mammoth";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
