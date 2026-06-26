@@ -14,12 +14,21 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 const dbStorage: StateStorage = {
   getItem: async (name) => {
     if (!supabase) return localStorage.getItem(name);
-    const { data, error } = await supabase.from(TABLE).select("data").eq("id", name).maybeSingle();
-    if (error) {
-      console.error("Supabase load failed, using local cache:", error.message);
+    try {
+      const { data, error } = await supabase.from(TABLE).select("data").eq("id", name).maybeSingle();
+      if (error) {
+        console.error("Supabase load failed, using local cache:", error.message);
+        return localStorage.getItem(name);
+      }
+      return data ? JSON.stringify(data.data) : localStorage.getItem(name);
+    } catch (err) {
+      // A network-level failure (e.g. unreachable host) rejects the request
+      // promise itself rather than resolving with `{error}`, so it must be
+      // caught separately from the `error` branch above to still fall back
+      // to the local cache instead of silently losing the request entirely.
+      console.error("Supabase load failed, using local cache:", err instanceof Error ? err.message : String(err));
       return localStorage.getItem(name);
     }
-    return data ? JSON.stringify(data.data) : localStorage.getItem(name);
   },
 
   setItem: (name, value) => {
@@ -28,8 +37,12 @@ const dbStorage: StateStorage = {
     return new Promise<void>((resolve) => {
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(async () => {
-        const { error } = await supabase!.from(TABLE).upsert({ id: name, data: JSON.parse(value), updated_at: new Date().toISOString() });
-        if (error) console.error("Supabase save failed:", error.message);
+        try {
+          const { error } = await supabase!.from(TABLE).upsert({ id: name, data: JSON.parse(value), updated_at: new Date().toISOString() });
+          if (error) console.error("Supabase save failed:", error.message);
+        } catch (err) {
+          console.error("Supabase save failed:", err instanceof Error ? err.message : String(err));
+        }
         resolve();
       }, 600);
     });
@@ -37,7 +50,12 @@ const dbStorage: StateStorage = {
 
   removeItem: async (name) => {
     localStorage.removeItem(name);
-    if (supabase) await supabase.from(TABLE).delete().eq("id", name);
+    if (!supabase) return;
+    try {
+      await supabase.from(TABLE).delete().eq("id", name);
+    } catch (err) {
+      console.error("Supabase delete failed:", err instanceof Error ? err.message : String(err));
+    }
   },
 };
 

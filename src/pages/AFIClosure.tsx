@@ -13,6 +13,7 @@ export function AFIClosure() {
   const runClosureAI = useWorkspaceStore((s) => s.runClosureAI);
   const setClosureHuman = useWorkspaceStore((s) => s.setClosureHuman);
   const busy = useWorkspaceStore((s) => s.busy);
+  const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
   const scored = useScored();
   const allFindings = useAllFindings();
   const [selFinding, setSelFinding] = useState<string | null>(null);
@@ -64,9 +65,11 @@ export function AFIClosure() {
           ))}
         </select>
       </div>
-      <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 10 }}>
-        Carried over from the April 2026 internal mock audit.
-      </div>
+      {seedFindingsLoaded && (
+        <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 10 }}>
+          Includes findings carried over from the loaded demo dataset.
+        </div>
+      )}
       {findings.map((f) => {
         const c = closures[f.id] || {};
         const open = selFinding === f.id;

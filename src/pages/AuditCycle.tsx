@@ -23,12 +23,18 @@ export function AuditCycle() {
   const [editingDeptId, setEditingDeptId] = useState<string | null>(null);
 
   function submitDept() {
-    if (!deptForm.acronym.trim()) return;
+    const acronym = deptForm.acronym.trim();
+    if (!acronym) return;
+    const collision = departments.find((d) => d.acronym.toLowerCase() === acronym.toLowerCase() && d.id !== editingDeptId);
+    if (collision) {
+      window.alert(`A department with acronym "${collision.acronym}" already exists (${collision.fullName}). Use a different acronym.`);
+      return;
+    }
     if (editingDeptId) {
       updateDepartment(editingDeptId, deptForm);
       setEditingDeptId(null);
     } else {
-      const d: Department = { id: deptForm.acronym.trim(), ...deptForm };
+      const d: Department = { id: acronym, ...deptForm, acronym };
       addDepartment(d);
     }
     setDeptForm(EMPTY_DEPT_FORM);

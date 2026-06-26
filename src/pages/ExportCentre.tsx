@@ -40,6 +40,40 @@ export function ExportCentre() {
     });
   }
 
+  function csvCell(v: string) {
+    return `"${v.replace(/"/g, '""')}"`;
+  }
+
+  function exportFindingsCsv() {
+    const header = ["ID", "GD4 item", "Issue", "Type", "Severity", "Owner", "Due date", "Status"];
+    const rows = findings.map((f) => [
+      f.id,
+      f.gd4ItemId,
+      f.issue,
+      f.type,
+      f.severity,
+      f.owner,
+      f.dueDate,
+      (closures[f.id]?.human || "") === "Accepted" ? "Closed" : "Open",
+    ]);
+    const csv = [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "GD4_Findings.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+    addExportLogEntry({
+      id: `EXP-${Date.now()}`,
+      auditCycleId: cycle.id,
+      exportName: "GD4_Findings.csv",
+      format: "CSV",
+      exportedAt: new Date().toLocaleString(),
+      exportedBy: cycle.owner,
+    });
+  }
+
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr" }}>
       <Card>
@@ -50,12 +84,20 @@ export function ExportCentre() {
         <p style={{ fontSize: 12.5, color: "#6b7280" }}>
           Score gate {scored.gatePass ? "met" : "not met"} · Open findings {scored.openAFIs}
         </p>
-        <button
-          onClick={exportPack}
-          style={{ marginTop: 8, cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
-        >
-          Export management pack (Markdown)
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          <button
+            onClick={exportPack}
+            style={{ cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
+          >
+            Export management pack (Markdown)
+          </button>
+          <button
+            onClick={exportFindingsCsv}
+            style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
+          >
+            Export findings register (CSV)
+          </button>
+        </div>
         <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 12 }}>
           Internal simulation only. Not an official SSG or EduTrust result. AI agents assist and challenge but do not finalise.
         </div>
