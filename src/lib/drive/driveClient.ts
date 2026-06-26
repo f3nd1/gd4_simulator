@@ -8,13 +8,16 @@
 // no backend proxy.
 
 import * as pdfjsLib from "pdfjs-dist";
+// The ?url suffix makes Vite emit the worker as an asset and hand back its
+// served URL — works in both `vite dev` and a production build. The older
+// `new URL("...", import.meta.url)` form silently failed for this file under
+// dev (it lives inside node_modules), so pdfjs fell back to its in-thread
+// "fake worker", that throw was caught upstream, and every PDF looked
+// "unsupported". Importing the worker URL explicitly avoids all of that.
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import mammoth from "mammoth";
 
-// Vite needs an explicit URL to the worker asset (pdfjs can't locate it via
-// its own default heuristics inside a bundled build) — this resolves to a
-// fingerprinted file in dist/ at build time, same trick as any other
-// worker/wasm asset import.
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const GSI_SRC = "https://accounts.google.com/gsi/client";

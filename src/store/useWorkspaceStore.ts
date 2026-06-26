@@ -678,7 +678,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let imagesDescribed = 0;
 
         const scanned: string[] = [];
-        const skipped: string[] = [];
+        const skipped: string[] = []; // recognized type, but no text path for it (e.g. video)
+        const failed: { path: string; reason: string }[] = []; // tried to read, threw
         const textParts: string[] = [];
         for (const file of files) {
           try {
@@ -697,8 +698,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               continue;
             }
             skipped.push(file.path);
-          } catch {
-            skipped.push(file.path);
+          } catch (err) {
+            // Don't bury the cause — a PDF/.docx that throws here is a read
+            // failure (worker missing, corrupt file, permission), NOT an
+            // unsupported type, and the user needs to see which so they
+            // don't go hunting for the wrong fix.
+            failed.push({ path: file.path, reason: err instanceof Error ? err.message : String(err) });
           }
         }
         const docText = textParts.join("\n\n");
@@ -741,7 +746,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ? `Scanned ${scanned.length} file${scanned.length === 1 ? "" : "s"} (${scanned.join(", ")}).`
           : "No readable files were found in this folder.";
         const skipSummary = skipped.length ? ` Skipped ${skipped.length} unsupported file${skipped.length === 1 ? "" : "s"} (${skipped.join(", ")}).` : "";
-        const summary = `${fileSummary}${skipSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.`;
+        const failSummary = failed.length
+          ? ` Could not read ${failed.length} file${failed.length === 1 ? "" : "s"}: ${failed.map((f) => `${f.path} (${f.reason})`).join("; ")}.`
+          : "";
+        const summary = `${fileSummary}${skipSummary}${failSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.`;
         finish(summary, live, liveError);
       },
 
