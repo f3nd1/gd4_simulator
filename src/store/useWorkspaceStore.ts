@@ -53,21 +53,36 @@ export type ItemAIVerdict = {
   live: boolean;
 };
 
+// A brand-new workspace's cycle has no audit content at all — only the
+// workflow-structural fields (status/version/lastSavedAt/the real creation
+// timestamp) are pre-filled, since those describe the cycle's actual current
+// state rather than sample content. Name/type/period/scope/owner only get
+// filled in by the user, or by loadDemoDataset() below via DEMO_CYCLE_FIELDS.
 const DEFAULT_CYCLE: AuditCycle = {
   id: "cycle-1",
+  name: "",
+  type: "",
+  periodStart: "",
+  periodEnd: "",
+  evidenceCutOffDate: "",
+  scope: "",
+  status: "Draft",
+  owner: "",
+  version: "v0.1 Draft",
+  lastSavedAt: "Not saved",
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  driveRoot: "",
+};
+
+const DEMO_CYCLE_FIELDS: Partial<AuditCycle> = {
   name: "EduTrust 2027 Readiness Review",
   type: "Internal GD4 Mock Audit",
   periodStart: "2026-07-01",
   periodEnd: "2027-06-30",
   evidenceCutOffDate: "2027-05-31",
   scope: "All EduTrust GD4 criteria across academic and corporate functions.",
-  status: "Draft",
   owner: "SQ",
-  version: "v0.1 Draft",
-  lastSavedAt: "Not saved",
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-  driveRoot: "",
 };
 
 const DEFAULT_AUDITORS: AuditorProfile[] = [
@@ -247,9 +262,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // only path that populates it.
       loadDemoDataset: () => {
         useChecklistModuleStore.getState().loadDemoChecklistData();
-        set(() => {
+        set((s) => {
           const evidence = seedEvidence();
-          return { evidence, auditors: DEFAULT_AUDITORS, seedFindingsLoaded: true, ...buildDemoDataset(evidence) };
+          return {
+            evidence,
+            auditors: DEFAULT_AUDITORS,
+            seedFindingsLoaded: true,
+            cycle: { ...s.cycle, ...DEMO_CYCLE_FIELDS },
+            ...buildDemoDataset(evidence),
+          };
         });
       },
 
