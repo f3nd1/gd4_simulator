@@ -238,11 +238,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // sign-offs, closures, samples, interview prep, management review
       // pack, export log). A brand-new workspace starts fully blank
       // (blankEvidence() above) — this is the only path that populates it.
-      loadDemoDataset: () =>
+      loadDemoDataset: () => {
+        useChecklistModuleStore.getState().loadDemoChecklistData();
         set(() => {
           const evidence = seedEvidence();
           return { evidence, ...buildDemoDataset(evidence) };
-        }),
+        });
+      },
 
       // Snapshot+restore versioning: every save captures a full copy of the
       // working state, so a version in the list can be restored exactly, not

@@ -27,12 +27,12 @@ function emptyEntry(itemId: string): SubCriterionChecklistEntry {
   return { gd4ItemId: itemId, generic: buildGenericLines(), specific: [], pendingGenerated: [] };
 }
 
+// A brand-new workspace starts with no checklist entries at all — the three
+// hand-seeded items (4.2.1, 4.6.1, 5.1.2) only get their specific lines
+// populated via loadDemoChecklistData(), mirroring useWorkspaceStore's
+// blankEvidence()/seedEvidence() split for the "Use demo data" action.
 function defaultEntries(): Record<string, SubCriterionChecklistEntry> {
-  const map: Record<string, SubCriterionChecklistEntry> = {};
-  Object.keys(SEED_SPECIFIC_LINES).forEach((id) => {
-    map[id] = buildSeedEntry(id);
-  });
-  return map;
+  return {};
 }
 
 export type ChecklistModuleState = {
@@ -43,6 +43,10 @@ export type ChecklistModuleState = {
   // Replaces the whole entries map — used when restoring a saved version so
   // the checklist module is rolled back together with the workspace store.
   replaceAllEntries: (entries: Record<string, SubCriterionChecklistEntry>) => void;
+  // Populates the three hand-seeded items' specific lines with sample data.
+  // Only ever called from the Dashboard's "Use demo data" button, alongside
+  // useWorkspaceStore.loadDemoDataset.
+  loadDemoChecklistData: () => void;
   setGenericStatus: (itemId: string, lineId: GenericChecklistLine["id"], status: GenericChecklistLine["status"]) => void;
 
   generateSpecific: (itemId: string) => Promise<void>;
@@ -90,6 +94,15 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       ensureEntry: (itemId) => set((s) => (s.entries[itemId] ? {} : mapEntry(s, itemId, (e) => e))),
 
       replaceAllEntries: (entries) => set({ entries }),
+
+      loadDemoChecklistData: () =>
+        set((s) => {
+          const seeded: Record<string, SubCriterionChecklistEntry> = {};
+          Object.keys(SEED_SPECIFIC_LINES).forEach((id) => {
+            seeded[id] = buildSeedEntry(id);
+          });
+          return { entries: { ...s.entries, ...seeded } };
+        }),
 
       setGenericStatus: (itemId, lineId, status) =>
         set((s) => mapEntry(s, itemId, (e) => ({ ...e, generic: e.generic.map((g) => (g.id === lineId ? { ...g, status } : g)) }))),
@@ -271,6 +284,6 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         set((st) => mapEntry(st, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, draftFinding: { ...draft, savedFindingId: finding.id } }))));
       },
     }),
-    { name: "ucc-gd4-checklist:v1" }
+    { name: "ucc-gd4-checklist:v2" }
   )
 );
