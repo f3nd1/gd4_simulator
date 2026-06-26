@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useScored } from "../hooks/useScored";
 import { Card } from "../components/ui/Card";
@@ -28,12 +28,25 @@ function subCriterionGroup(items: ScoredItem[]) {
 export function RubricBanding() {
   const scored = useScored();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [view, setView] = useState<ViewMode>(searchParams.get("view") === "item" ? "item" : "criterion");
 
   function goToItem(itemId: string) {
     navigate(`/sub-checklist?item=${itemId}&from=rubric-banding`);
   }
+
+  useEffect(() => {
+    const scrollTo = searchParams.get("scrollTo");
+    if (view === "item" && scrollTo) {
+      document.getElementById(`rb-item-${scrollTo}`)?.scrollIntoView({ block: "center" });
+      setSearchParams((p) => {
+        const next = new URLSearchParams(p);
+        next.delete("scrollTo");
+        return next;
+      }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
@@ -143,7 +156,7 @@ export function RubricBanding() {
                               <td style={{ fontSize: 12, color: "#6b7280" }}>{group.started ? BAND_MEANING[group.band] : "No evidence entered yet."}</td>
                             </tr>
                             {items.map((it) => (
-                              <tr key={it.id} className="rowh" style={{ cursor: "pointer" }} onClick={() => goToItem(it.id)}>
+                              <tr key={it.id} id={`rb-item-${it.id}`} className="rowh" style={{ cursor: "pointer" }} onClick={() => goToItem(it.id)}>
                                 <td style={{ paddingLeft: 30 }}><b>{it.id}</b> {it.title}</td>
                                 <td>{it.eff}</td>
                                 <td>{it.started ? Math.round((it.band / 5) * pointsShare) : 0} / {Math.round(pointsShare)}</td>
