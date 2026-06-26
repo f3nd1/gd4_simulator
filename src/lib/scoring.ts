@@ -54,10 +54,22 @@ export function needsJustification(ais: number, reviewerValue: number, gate: boo
 // the weighted score would otherwise clear a higher threshold, mirroring the
 // rubric's emphasis on Review (regular review/action plans) and Processes
 // (deployed, well-managed processes) as gating dimensions for higher bands.
+//
+// This only runs on the Evidence Matrix's quick four-limb fallback path —
+// once an item has Sub-Criterion Checklist lines, computeChecklistOverrides
+// replaces eff/band outright and this function is never consulted for that
+// item. Without a hard floor here, the fallback path let an auditor select
+// "good" on all four limbs with no evidence document linked anywhere and no
+// checklist used at all, and still score a full Band 5 — i.e. a real
+// official score/award contribution with zero verifiable evidence behind
+// it. So: no Drive evidence link means nothing here can be verified, and the
+// item is capped to Band 1 regardless of what the limb dropdowns claim,
+// until either a link is added or the item is scored through the checklist.
 function capBandForEvidence(band: Band, ev: ItemEvidence): Band {
   let capped = band;
   if (ev.review === "Missing" && capped > 3) capped = 3;
   if (ev.processes === "Missing" && capped > 2) capped = 2;
+  if (!ev.drive && capped > 1) capped = 1;
   return capped;
 }
 

@@ -13,7 +13,7 @@
 // a future swap-in to a real model call has the exact wording to use.
 
 import type { AgentDefinition, Finding, GD4Requirement, ItemEvidence, SpecificChecklistLine } from "../../types";
-import { aiScore, getBand } from "../scoring";
+import { aiScore } from "../scoring";
 import { FINDINGS } from "../../data/findings";
 
 export type SimulatedItemVerdict = {
@@ -27,25 +27,27 @@ export type SimulatedItemVerdict = {
 };
 
 // Mirrors the "Rubric Scoring Agent" / "GD4 Specialist Agent" prompts
-// (requirements guide 10.1, 10.4): band 5 needs review + outcome evidence,
-// without review evidence cap at Band 3, without implementation evidence cap
-// at Band 2.
-export function simulateItemReview(agent: AgentDefinition, item: { id: string; ais: number; aiBand: number }, ev: ItemEvidence): SimulatedItemVerdict {
-  let score = item.ais;
-  let band = getBand(score);
-  if (ev.review === "Missing" && band > 3) band = 3;
-  if (ev.processes === "Missing" && band > 2) band = 2;
+// (requirements guide 10.1, 10.4). The score/band themselves are taken
+// as-is from scoring.ts — sourced from the Sub-Criterion Checklist outcome
+// when one exists, otherwise from the evidence-matrix fallback, which is
+// already capped there (review/processes/missing-Drive-link rules) — this
+// function only ever turns that fixed figure into narrative text, never
+// recomputes or second-guesses it.
+export function simulateItemReview(agent: AgentDefinition, item: { id: string; eff: number; band: number }, ev: ItemEvidence): SimulatedItemVerdict {
+  const score = item.eff;
+  const band = item.band;
 
   const gaps: string[] = [];
   if (ev.approach !== "good") gaps.push("approach evidence");
   if (ev.processes !== "good") gaps.push("processes evidence");
   if (ev.systemsOutcomes !== "good") gaps.push("systems & outcomes evidence");
   if (ev.review !== "good") gaps.push("review evidence");
+  if (!ev.drive) gaps.push("a linked evidence document (Drive folder)");
 
   const confidence = ev.trace >= 75 && gaps.length === 0 ? "High" : gaps.length <= 1 ? "Medium" : "Low";
   const justification =
     gaps.length === 0
-      ? `Evidence is complete across all four limbs; weighted score ${score} supports Band ${band}.`
+      ? `Evidence is complete across all four limbs and a Drive evidence link is on file; weighted score ${score} supports Band ${band}.`
       : `Evidence weighted to ${score}. Weak or missing: ${gaps.join(", ")}.`;
   const higherBand = gaps.length === 0 ? "Maintain consistency across the next sampling cycle." : `Add or strengthen ${gaps[0]} and re-run this review.`;
 

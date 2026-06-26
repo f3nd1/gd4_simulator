@@ -33,13 +33,13 @@ function parseJSONObject(text: string): Record<string, unknown> {
 
 export async function runLiveItemReview(
   agent: AgentDefinition,
-  item: { id: string; ais: number; aiBand: number },
+  item: { id: string; eff: number; band: number; checklistOverride: boolean },
   ev: ItemEvidence,
   settings: AISettings,
   memory: AgentMemoryEntry[]
 ): Promise<Omit<SimulatedItemVerdict, "live"> & { live: true }> {
-  const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine and given to you below; you must not contradict it or imply a different one. Your tone must match that fixed band exactly: never use positive, encouraging or reassuring language when the band is low, when any evidence limb below is "Missing", or when the Drive evidence link is absent — in every such case you must name the gap plainly instead of softening it. A missing Drive evidence link is itself a real gap to call out even if the four evidence limbs look strong, because it means the human auditor cannot actually verify the evidence. Write a short, specific justification (2-3 sentences) referencing only the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.`;
-  const user = `Item ${item.id}. Fixed evidence score: ${item.ais}/100, fixed band: ${item.aiBand}. Evidence: approach=${ev.approach}, processes=${ev.processes}, systemsOutcomes=${ev.systemsOutcomes}, review=${ev.review}, traceability=${ev.trace}%, evidence age=${ev.age} days, owner=${ev.owner || "(unassigned)"}, Drive evidence link=${ev.drive ? ev.drive : "MISSING — no link has been provided"}.`;
+  const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine (sourced from the Sub-Criterion Checklist outcome where one exists, otherwise from the evidence matrix below) and given to you here; you must not contradict it or imply a different one. Your tone must match that fixed band exactly: never use positive, encouraging or reassuring language when the band is low, when any evidence limb below is "Missing", or when the Drive evidence link is absent — in every such case you must name the gap plainly instead of softening it. A missing Drive evidence link is itself a real gap to call out even if the four evidence limbs look strong, because it means the human auditor cannot actually verify the evidence. Write a short, specific justification (2-3 sentences) referencing only the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.`;
+  const user = `Item ${item.id}. Fixed evidence score: ${item.eff}/100, fixed band: ${item.band} (source: ${item.checklistOverride ? "Sub-Criterion Checklist outcome" : "evidence matrix quick rating"}). Evidence: approach=${ev.approach}, processes=${ev.processes}, systemsOutcomes=${ev.systemsOutcomes}, review=${ev.review}, traceability=${ev.trace}%, evidence age=${ev.age} days, owner=${ev.owner || "(unassigned)"}, Drive evidence link=${ev.drive ? ev.drive : "MISSING — no link has been provided"}.`;
 
   const content = await chatComplete(
     [{ role: "system", content: system }, ...memoryToMessages(memory), { role: "user", content: user }],
@@ -48,8 +48,8 @@ export async function runLiveItemReview(
   const parsed = parseJSONObject(content);
 
   return {
-    score: item.ais,
-    band: item.aiBand,
+    score: item.eff,
+    band: item.band,
     confidence: (parsed.confidence as Confidence) || "Medium",
     justification: (parsed.justification as string) || content,
     higherBand: (parsed.higherBand as string) || "Add or strengthen the weakest evidence limb and re-run this review.",

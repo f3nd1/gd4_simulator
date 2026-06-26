@@ -93,6 +93,13 @@ export function EvidenceMatrix() {
             This item's scored band (Band {item.band}) comes from the <Link to="/sub-checklist">Sub-Criterion Checklist</Link>, not this matrix rating.
           </div>
         )}
+        {!item.checklistOverride && !item.ev.drive && (
+          <div style={{ marginTop: 6, fontSize: 12, color: TONE.critical.fg, background: "#fdecec", borderRadius: 8, padding: "7px 10px" }}>
+            No Drive evidence link is attached, so this item's official score is capped at Band 1 regardless of the
+            limb ratings above — limb selections alone are not evidence. Add a Drive link, or score this item
+            properly through the <Link to="/sub-checklist">Sub-Criterion Checklist</Link>.
+          </div>
+        )}
       </Card>
     </div>
   );
