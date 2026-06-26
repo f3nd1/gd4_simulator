@@ -49,7 +49,17 @@ export class DriveAuthError extends Error {}
 // (Web application type, with this app's origin in "Authorized JavaScript
 // origins") created in Google Cloud Console — that one-time setup happens
 // outside this app, in the user's own Google account.
-export async function requestDriveAccessToken(clientId: string): Promise<{ accessToken: string; expiresInSeconds: number }> {
+//
+// `silent: true` passes prompt: "none" instead — Google issues a fresh
+// token with no UI at all if this origin already has an active, consented
+// session, or fails immediately with no popup otherwise. Used to quietly
+// re-establish the connection on page load (the access token itself is
+// never persisted, so every reload otherwise starts "disconnected" even
+// though the user already granted access earlier in the same browser).
+export async function requestDriveAccessToken(
+  clientId: string,
+  opts: { silent?: boolean } = {}
+): Promise<{ accessToken: string; expiresInSeconds: number }> {
   if (!clientId) throw new DriveAuthError("No Google OAuth Client ID configured in Settings.");
   await loadGsiScript();
   if (!window.google?.accounts?.oauth2) throw new DriveAuthError("Google Identity Services failed to load.");
@@ -66,7 +76,7 @@ export async function requestDriveAccessToken(clientId: string): Promise<{ acces
         resolve({ accessToken: resp.access_token, expiresInSeconds: resp.expires_in || 3600 });
       },
     });
-    client.requestAccessToken();
+    client.requestAccessToken(opts.silent ? { prompt: "none" } : undefined);
   });
 }
 

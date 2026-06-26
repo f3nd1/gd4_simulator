@@ -17,6 +17,7 @@ export type GoogleDriveState = {
 
   setClientId: (clientId: string) => void;
   connect: () => Promise<void>;
+  connectSilently: () => Promise<void>;
   disconnect: () => void;
   getValidToken: () => string | null;
 };
@@ -41,6 +42,23 @@ export const useGoogleDriveStore = create<GoogleDriveState>()(
           const message = err instanceof DriveAuthError ? err.message : err instanceof Error ? err.message : String(err);
           set({ connecting: false, lastError: message });
           throw err;
+        }
+      },
+
+      // Best-effort, silent re-connect attempted on page load (see Layout.tsx)
+      // so a returning user doesn't have to click "Connect" every reload just
+      // because the access token itself is never persisted. Failures here are
+      // expected (no prior consent, session expired, third-party cookies
+      // blocked) and stay quiet — they fall back to the existing "Not
+      // connected" state rather than surfacing as an error.
+      connectSilently: async () => {
+        const { clientId, accessToken } = get();
+        if (!clientId || accessToken) return;
+        try {
+          const { accessToken: token, expiresInSeconds } = await requestDriveAccessToken(clientId, { silent: true });
+          set({ accessToken: token, tokenExpiresAt: Date.now() + expiresInSeconds * 1000 });
+        } catch {
+          // Stay disconnected; the user can still click "Connect Google Drive" manually.
         }
       },
 
