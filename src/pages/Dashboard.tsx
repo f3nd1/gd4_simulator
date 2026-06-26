@@ -6,13 +6,16 @@ import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
+import { Bar } from "../components/ui/Bar";
 import { GOLD, INK, TONE } from "../lib/theme";
 import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
+import { NAV } from "../nav";
 
 export function Dashboard() {
   const cycle = useWorkspaceStore((s) => s.cycle);
   const saveAsNewVersion = useWorkspaceStore((s) => s.saveAsNewVersion);
   const loadDemoDataset = useWorkspaceStore((s) => s.loadDemoDataset);
+  const auditorsCount = useWorkspaceStore((s) => s.auditors.length);
   const scored = useScored();
   const findings = useAllFindings();
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
@@ -22,6 +25,35 @@ export function Dashboard() {
   const closures = useWorkspaceStore((s) => s.closures);
   const openCritical = findings.filter((a) => a.severity === "Critical" && (closures[a.id]?.human || "") !== "Accepted").length;
   const finalisationReady = scored.gatePass && scored.openAFIs === 0;
+
+  // Mirrors the 6 numbered groups in nav.ts so the Dashboard guide and the
+  // sidebar always describe the same workflow stages — one source of truth.
+  const totalItems = scored.items.length;
+  const evidenceAttached = scored.items.filter((i) => i.ev.drive || i.checklistOverride).length;
+  const itemsScored = scored.items.filter((i) => i.started).length;
+  const samplesRecorded = Object.values(checklistEntries).reduce((sum, e) => sum + e.specific.filter((l) => l.sampling).length, 0);
+  const findingsClosed = findings.length - scored.openAFIs;
+
+  function stepProgress(step: number): { label: string; pct: number | null } {
+    switch (step) {
+      case 1:
+        return { label: auditorsCount > 0 ? `${auditorsCount} auditor(s) added` : "No auditors added yet", pct: auditorsCount > 0 ? 100 : 0 };
+      case 2:
+        return { label: `${evidenceAttached}/${totalItems} items have evidence attached`, pct: totalItems ? Math.round((evidenceAttached / totalItems) * 100) : 0 };
+      case 3:
+        return { label: `${itemsScored}/${totalItems} items scored`, pct: totalItems ? Math.round((itemsScored / totalItems) * 100) : 0 };
+      case 4:
+        return { label: samplesRecorded > 0 ? `${samplesRecorded} sample(s) recorded` : "Not started yet", pct: samplesRecorded > 0 ? 100 : 0 };
+      case 5:
+        return { label: findings.length ? `${findingsClosed}/${findings.length} findings closed` : "No findings raised yet", pct: findings.length ? Math.round((findingsClosed / findings.length) * 100) : null };
+      case 6:
+        return { label: finalisationReady ? "Ready to finalise" : "Blocked on gate / open AFIs", pct: finalisationReady ? 100 : 0 };
+      default:
+        return { label: "", pct: null };
+    }
+  }
+
+  const workflowSteps = NAV.filter((g) => g.step != null);
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
@@ -51,6 +83,49 @@ export function Dashboard() {
           >
             Recheck all evidence
           </button>
+        </div>
+      </Card>
+
+      <Card style={{ gridColumn: "1 / -1" }}>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Getting started — the audit workflow</h3>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 10 }}>
+          Work through these in order. Each step links to the matching section in the sidebar.
+        </div>
+        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
+          {workflowSteps.map((g) => {
+            const plainLabel = g.group.replace(/^\d+ · /, "");
+            const progress = stepProgress(g.step!);
+            return (
+              <div key={g.group} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 99,
+                      background: progress.pct === 100 ? TONE.good.bg : "#eef1f5",
+                      color: progress.pct === 100 ? TONE.good.fg : "#475569",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {g.step}
+                  </span>
+                  <b style={{ fontSize: 13 }}>{plainLabel}</b>
+                </div>
+                <div style={{ fontSize: 11.5, color: "#6b7280", margin: "6px 0" }}>{g.hint}</div>
+                {progress.pct != null && <Bar v={progress.pct} c={progress.pct === 100 ? TONE.good.fg : INK} />}
+                <div style={{ fontSize: 12, marginTop: 4 }}>{progress.label}</div>
+                <Link to={g.items[0].path} style={{ fontSize: 12, display: "inline-block", marginTop: 6 }}>
+                  Open {g.items[0].label} →
+                </Link>
+              </div>
+            );
+          })}
         </div>
       </Card>
 
