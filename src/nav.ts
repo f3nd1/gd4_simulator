@@ -10,7 +10,6 @@ export const NAV: NavGroup[] = [
       { path: "/draft-workspace", label: "Draft Workspace" },
       { path: "/audit-cycle", label: "Audit Cycle" },
       { path: "/auditors", label: "Auditor Creation" },
-      { path: "/checklist", label: "Auditor Checklist" },
       { path: "/sub-checklist", label: "Sub-Criterion Checklist" },
     ],
   },

@@ -124,7 +124,7 @@ export function AuditorCreation() {
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Simulated AI agent roles</h3>
         <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
-          These four roles power the offline-simulated checks on Evidence Intelligence, Auditor Checklist and AFI Closure. They challenge and recommend; they never finalise a score. See AI Agent Review for the full verdict log.
+          These four roles power the offline-simulated checks on Evidence Intelligence and AFI Closure. They challenge and recommend; they never finalise a score. See AI Agent Review for the full verdict log.
         </p>
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
           {agents.map((a) => (

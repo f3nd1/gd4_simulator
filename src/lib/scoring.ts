@@ -1,7 +1,6 @@
-import type { Band, ChecklistStatus, EvidenceLevel, Finding, ItemEvidence } from "../types";
+import type { Band, EvidenceLevel, Finding, ItemEvidence } from "../types";
 import { GD4_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { FINDINGS } from "../data/findings";
-import { DEPTS, CHECKLIST_LIB } from "../data/agents";
 import type { ChecklistOverride } from "./checklistBanding";
 
 export type ScoringInput = {
@@ -9,7 +8,6 @@ export type ScoringInput = {
   reviewer: Record<string, number>;
   confirmed: Record<string, number | null>;
   closures: Record<string, { human?: string }>;
-  checklist: Record<string, { status?: ChecklistStatus }>;
   // Band override from the Sub-Criterion Checklist module: when present for
   // a GD4 item, it replaces the evidence-derived band/eff score below, per
   // the "feed into overall score" decision.
@@ -85,7 +83,7 @@ function buildScoredItem(
 }
 
 export function buildScored(state: ScoringInput) {
-  const { evidence, reviewer, confirmed, closures, checklist, checklistBandOverrides, customFindings } = state;
+  const { evidence, reviewer, confirmed, closures, checklistBandOverrides, customFindings } = state;
   const allFindings: Finding[] = [...FINDINGS, ...(customFindings || [])];
 
   const items = GD4_REQUIREMENTS.map((req) => buildScoredItem(req, evidence, reviewer, confirmed, checklistBandOverrides));
@@ -118,20 +116,7 @@ export function buildScored(state: ScoringInput) {
 
   const openAFIs = allFindings.filter((a) => (closures[a.id]?.human || "") !== "Accepted").length;
 
-  const deptGates = DEPTS.map((d) => {
-    const di = CHECKLIST_LIB.filter((c) => c.dept === d.dept);
-    const states: ChecklistStatus[] = di.map((c) => checklist[c.id]?.status || "Not Started");
-    const fail = states.some((s) => s === "Fail");
-    const notStarted = states.some((s) => s === "Not Started");
-    const partial = states.some((s) => s === "Partial");
-    const gate = fail || notStarted ? "Fail" : partial ? "At risk" : "Pass";
-    return { ...d, total: di.length, gate };
-  });
-
-  const checklistPass = deptGates.every((d) => d.gate === "Pass");
-  const checklistDone = CHECKLIST_LIB.filter((c) => (checklist[c.id]?.status || "Not Started") !== "Not Started").length;
-
-  return { items, crits, total, gatePass, gateFail, award, openAFIs, deptGates, checklistPass, checklistDone };
+  return { items, crits, total, gatePass, gateFail, award, openAFIs };
 }
 
 export type Scored = ReturnType<typeof buildScored>;

@@ -12,8 +12,7 @@
 // LLM-backed agent would be asked to do; they are reproduced as comments so
 // a future swap-in to a real model call has the exact wording to use.
 
-import type { AgentDefinition, ChecklistLibraryItem, ChecklistStatus, GD4Requirement, ItemEvidence, SpecificChecklistLine } from "../../types";
-import type { ScoredItem } from "../scoring";
+import type { AgentDefinition, GD4Requirement, ItemEvidence, SpecificChecklistLine } from "../../types";
 import { aiScore, getBand } from "../scoring";
 import { FINDINGS } from "../../data/findings";
 
@@ -51,37 +50,6 @@ export function simulateItemReview(agent: AgentDefinition, item: { id: string; a
   const higherBand = gaps.length === 0 ? "Maintain consistency across the next sampling cycle." : `Add or strengthen ${gaps[0]} and re-run this review.`;
 
   return { score, band, confidence, justification, higherBand, by: agent.name, live: false };
-}
-
-// Mirrors the department-level checklist first pass (no equivalent numbered
-// prompt in section 10, but follows the same "no narrative without evidence"
-// rule as 10.3 Challenge Panel Agent).
-export function simulateChecklist(
-  items: ChecklistLibraryItem[],
-  lookupScoredItem: (gd4Id: string) => Pick<ScoredItem, "ais"> | undefined
-): { id: string; status: ChecklistStatus; reason: string }[] {
-  return items.map((c) => {
-    const linked = c.link ? lookupScoredItem(c.link) : undefined;
-    const hasPriorAFI = c.link ? FINDINGS.some((a) => a.gd4ItemId === c.link) : false;
-    let status: ChecklistStatus = "Partial";
-    let reason = "No linked evidence; needs human check.";
-    if (linked) {
-      if (hasPriorAFI) {
-        status = "Fail";
-        reason = `Linked evidence score ${linked.ais}, but a prior finding exists on this area.`;
-      } else if (linked.ais >= 70) {
-        status = "Pass";
-        reason = `Linked evidence score ${linked.ais}.`;
-      } else if (linked.ais >= 45) {
-        status = "Partial";
-        reason = `Linked evidence score ${linked.ais}.`;
-      } else {
-        status = "Fail";
-        reason = `Linked evidence score ${linked.ais}.`;
-      }
-    }
-    return { id: c.id, status, reason };
-  });
 }
 
 export type SimulatedClosureVerdict = {

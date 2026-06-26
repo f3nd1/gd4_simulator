@@ -20,7 +20,6 @@ export function Finalisation() {
     ["Evidence folders created for all departments", folders.length > 0, "Create evidence folders in Evidence Folder Tracker."],
     ["All GD4 criteria scored", scored.items.every((i) => i.conf != null), "Confirm a score for every item in the GD4 Criterion Scorecard."],
     ["Score gate at Band 3+ on gate-sensitive items", scored.gatePass, "Resolve gate-sensitive items below Band 3."],
-    ["Auditor checklist completed (department gate)", scored.checklistPass, `${scored.checklistDone} of checklist items have a status set.`],
     ["All Critical findings closed or escalated", criticalOpen.length === 0, "Accept closure on Critical findings or escalate via Management Review."],
     ["All AFIs / Improvement Actions accepted", scored.openAFIs === 0, "Accept closure on remaining findings in AFI Closure."],
     ["Human reviewer confirmed scores on overridden items", scored.items.every((i) => i.conf != null), "Confirm reviewer scores that differ from the AI suggestion."],

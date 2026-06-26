@@ -28,9 +28,9 @@ export type AuditCycle = {
   driveRoot?: string;
 };
 
-// Workspace-wide department directory. Referenced by id from AuditorProfile,
-// DepartmentDefinition (checklist groups) and anywhere else a department
-// needs to be selected rather than typed as free text.
+// Workspace-wide department directory. Referenced by id from AuditorProfile
+// and anywhere else a department needs to be selected rather than typed as
+// free text.
 export type Department = {
   id: string;
   acronym: string;
@@ -50,27 +50,6 @@ export type AuditorProfile = {
   strictness: number;
   focusArea: string;
   checklistTemplateId: string;
-};
-
-export type ChecklistStatus = "Not Started" | "Pass" | "Partial" | "Fail" | "Not Applicable";
-
-export type AuditorChecklistItem = {
-  id: string;
-  auditCycleId: string;
-  auditorId?: string;
-  checklistType: string;
-  gd4ItemId?: string;
-  item: string;
-  status: ChecklistStatus;
-  comment?: string;
-  evidenceId?: string;
-  evidenceLink?: string;
-  followUpRequired?: boolean;
-  owner?: string;
-  dueDate?: string;
-  aiStatus?: ChecklistStatus;
-  aiReason?: string;
-  aiLive?: boolean;
 };
 
 export type GD4SubCriterion = {
@@ -331,7 +310,6 @@ export type WorkspaceSnapshot = {
   confirmed: Record<string, number | null>;
   justify: Record<string, string>;
   closures: Record<string, unknown>;
-  checklist: Record<string, unknown>;
   folders: EvidenceFolder[];
   samples: SampleRecord[];
   interviewQuestions: InterviewQuestion[];
@@ -372,18 +350,6 @@ export type AgentMemoryEntry = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
-};
-
-export type DepartmentDefinition = {
-  dept: string;
-  departmentId: string;
-};
-
-export type ChecklistLibraryItem = {
-  id: string;
-  dept: string;
-  text: string;
-  link: string | null;
 };
 
 export type SampleRecordType = "Student" | "Staff" | "Academic" | "Financial" | "QA";

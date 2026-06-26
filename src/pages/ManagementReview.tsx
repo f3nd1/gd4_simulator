@@ -56,12 +56,6 @@ export function ManagementReview() {
             <div style={{ fontSize: 11, color: "#6b7280" }}>Items below Band 3</div>
             <div style={{ fontSize: 13, fontWeight: 700 }}>{scored.items.filter((i) => i.band < 3).length}</div>
           </div>
-          <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10 }}>
-            <div style={{ fontSize: 11, color: "#6b7280" }}>Checklist gate</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: scored.checklistPass ? TONE.good.fg : TONE.critical.fg }}>
-              {scored.checklistPass ? "Passed" : `${scored.checklistDone} done`}
-            </div>
-          </div>
         </div>
       </Card>
 

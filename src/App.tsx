@@ -4,7 +4,6 @@ import { Dashboard } from "./pages/Dashboard";
 import { DraftWorkspace } from "./pages/DraftWorkspace";
 import { AuditCycle } from "./pages/AuditCycle";
 import { AuditorCreation } from "./pages/AuditorCreation";
-import { AuditorChecklist } from "./pages/AuditorChecklist";
 import { EvidenceFolder } from "./pages/EvidenceFolder";
 import { GD4ScoringSetup } from "./pages/GD4ScoringSetup";
 import { GD4Library } from "./pages/GD4Library";
@@ -35,7 +34,6 @@ export default function App() {
           <Route path="/draft-workspace" element={<DraftWorkspace />} />
           <Route path="/audit-cycle" element={<AuditCycle />} />
           <Route path="/auditors" element={<AuditorCreation />} />
-          <Route path="/checklist" element={<AuditorChecklist />} />
           <Route path="/evidence-folder" element={<EvidenceFolder />} />
           <Route path="/gd4-scoring-setup" element={<GD4ScoringSetup />} />
           <Route path="/gd4-library" element={<GD4Library />} />

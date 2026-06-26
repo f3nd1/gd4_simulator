@@ -5,7 +5,6 @@ import type {
   AuditorProfile,
   Department,
   AgentDefinition,
-  ChecklistStatus,
   EvidenceFolder,
   ItemEvidence,
   VersionEntry,
@@ -24,19 +23,10 @@ import { seedFolders } from "../data/folders";
 import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore } from "../lib/scoring";
-import { simulateItemReview, simulateChecklist, simulateClosure } from "../lib/ai/simulateAI";
+import { simulateItemReview, simulateClosure } from "../lib/ai/simulateAI";
 import { runLiveItemReview, runLiveClosureReview } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
-import { CHECKLIST_LIB } from "../data/agents";
-
-export type ChecklistCellState = {
-  status?: ChecklistStatus;
-  drive?: string;
-  ai?: ChecklistStatus;
-  aiReason?: string;
-  live?: boolean;
-};
 
 export type ClosureState = {
   root?: string;
@@ -78,16 +68,16 @@ const DEFAULT_CYCLE: AuditCycle = {
 };
 
 const DEFAULT_AUDITORS: AuditorProfile[] = [
-  { id: "AUD-1", auditCycleId: "cycle-1", name: "SQ Lead Auditor", type: "Internal", departmentId: "SQ", role: "Audit Lead", strictness: 70, focusArea: "Overall audit setup and finalisation", checklistTemplateId: "Audit Lead Checklist" },
-  { id: "AUD-2", auditCycleId: "cycle-1", name: "SGL Governance Reviewer", type: "Internal", departmentId: "SGL", role: "Department Reviewer", strictness: 60, focusArea: "Leadership and governance evidence", checklistTemplateId: "Management Review Checklist" },
-  { id: "AUD-3", auditCycleId: "cycle-1", name: "ALI / CM Academic Reviewer", type: "Internal", departmentId: "ALI / CM", role: "Department Reviewer", strictness: 75, focusArea: "Academic process evidence", checklistTemplateId: "Academic Process Checklist" },
-  { id: "AUD-4", auditCycleId: "cycle-1", name: "AD / AN Student Protection Reviewer", type: "Internal", departmentId: "AD / AN", role: "Department Reviewer", strictness: 80, focusArea: "Student protection and contract evidence", checklistTemplateId: "Student Protection Checklist" },
-  { id: "AUD-5", auditCycleId: "cycle-1", name: "External EduTrust Consultant", type: "External", departmentId: undefined, role: "External Reviewer", strictness: 85, focusArea: "Simulated SSG/EduTrust assessor view", checklistTemplateId: "GD4 Criterion Checklist" },
+  { id: "AUD-1", auditCycleId: "cycle-1", name: "Rachel Tan", type: "Internal", departmentId: "SQ", role: "Audit Lead", strictness: 70, focusArea: "Overall audit setup and finalisation", checklistTemplateId: "Audit Lead Checklist" },
+  { id: "AUD-2", auditCycleId: "cycle-1", name: "Marcus Lim", type: "Internal", departmentId: "SGL", role: "Department Reviewer", strictness: 60, focusArea: "Leadership and governance evidence", checklistTemplateId: "Management Review Checklist" },
+  { id: "AUD-3", auditCycleId: "cycle-1", name: "Priya Nair", type: "Internal", departmentId: "ALI / CM", role: "Department Reviewer", strictness: 75, focusArea: "Academic process evidence", checklistTemplateId: "Academic Process Checklist" },
+  { id: "AUD-4", auditCycleId: "cycle-1", name: "Faizal Rahman", type: "Internal", departmentId: "AD / AN", role: "Department Reviewer", strictness: 80, focusArea: "Student protection and contract evidence", checklistTemplateId: "Student Protection Checklist" },
+  { id: "AUD-5", auditCycleId: "cycle-1", name: "Jennifer Wong", type: "External", departmentId: undefined, role: "External Reviewer", strictness: 85, focusArea: "Simulated SSG/EduTrust assessor view", checklistTemplateId: "GD4 Criterion Checklist" },
 ];
 
 // Workspace-wide department directory, seeded from the acronyms and full
-// names already implied by the auditor and checklist-group data above.
-// Person-in-charge is left blank for the user to fill in via Audit Cycle.
+// names already implied by the auditor data above. Person-in-charge is left
+// blank for the user to fill in via Audit Cycle.
 const DEFAULT_DEPARTMENTS: Department[] = [
   { id: "SQ", acronym: "SQ", fullName: "Quality Assurance", personInCharge: "" },
   { id: "SGL", acronym: "SGL", fullName: "Leadership", personInCharge: "" },
@@ -104,7 +94,6 @@ export type WorkspaceState = {
   confirmed: Record<string, number | null>;
   justify: Record<string, string>;
   closures: Record<string, ClosureState>;
-  checklist: Record<string, ChecklistCellState>;
   agents: AgentDefinition[];
   auditors: AuditorProfile[];
   departments: Department[];
@@ -131,9 +120,6 @@ export type WorkspaceState = {
   setReviewerScore: (itemId: string, value: number) => void;
   setJustify: (itemId: string, value: string) => void;
   confirmScore: (itemId: string) => void;
-
-  setChecklistField: <K extends keyof ChecklistCellState>(id: string, field: K, value: ChecklistCellState[K]) => void;
-  runChecklistAI: (dept: string) => void;
 
   setAgentStrictness: (agentId: string, value: number) => void;
   runItemAI: (agentId: string, itemId: string) => Promise<void>;
@@ -212,7 +198,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       confirmed: {},
       justify: {},
       closures: {},
-      checklist: {},
       agents: AGENTS,
       auditors: DEFAULT_AUDITORS,
       departments: DEFAULT_DEPARTMENTS,
@@ -230,10 +215,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
       // Populates the workflow-progress fields that start empty (reviewer
-      // drafts, sign-offs, closures, checklist results, samples, interview
-      // prep, management review pack, export log) with realistic values
-      // derived from the existing real GD4 items, findings and checklist
-      // library, so the workspace can be demoed fully populated.
+      // drafts, sign-offs, closures, samples, interview prep, management
+      // review pack, export log) with realistic values derived from the
+      // existing real GD4 items and findings, so the workspace can be
+      // demoed fully populated.
       loadDemoDataset: () => set((s) => buildDemoDataset(s.evidence)),
 
       // Snapshot+restore versioning: every save captures a full copy of the
@@ -250,7 +235,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             confirmed: s.confirmed,
             justify: s.justify,
             closures: s.closures,
-            checklist: s.checklist,
             folders: s.folders,
             samples: s.samples,
             interviewQuestions: s.interviewQuestions,
@@ -283,7 +267,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             confirmed: snap.confirmed,
             justify: snap.justify,
             closures: snap.closures as WorkspaceState["closures"],
-            checklist: snap.checklist as WorkspaceState["checklist"],
             folders: snap.folders,
             samples: snap.samples,
             interviewQuestions: snap.interviewQuestions,
@@ -300,7 +283,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             confirmed: s.confirmed,
             justify: s.justify,
             closures: s.closures,
-            checklist: s.checklist,
             folders: s.folders,
             samples: s.samples,
             interviewQuestions: s.interviewQuestions,
@@ -340,36 +322,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const already = s.confirmed[itemId] != null;
           return { confirmed: { ...s.confirmed, [itemId]: already ? null : rev } };
         }),
-
-      setChecklistField: (id, field, value) => set((s) => ({ checklist: { ...s.checklist, [id]: { ...(s.checklist[id] || {}), [field]: value } } })),
-
-      runChecklistAI: (dept) => {
-        const s = get();
-        set({ busy: "cl-" + dept });
-        const items = CHECKLIST_LIB.filter((c) => c.dept === dept);
-        const scored = buildScored(s);
-        const results = simulateChecklist(items, (gd4Id) => scored.items.find((i) => i.id === gd4Id));
-        const nextChecklist = { ...s.checklist };
-        const log: AIReviewLogEntry[] = [...s.aiReviewLog];
-        results.forEach((r) => {
-          nextChecklist[r.id] = { ...(nextChecklist[r.id] || {}), ai: r.status, aiReason: r.reason, live: false };
-          logCounter += 1;
-          log.unshift({
-            id: `LOG-${Date.now()}-${logCounter}`,
-            auditCycleId: s.cycle.id,
-            agent: `${dept} Agent`,
-            reviewType: "Checklist",
-            subjectId: r.id,
-            verdict: r.status,
-            confidence: "Medium",
-            keyConcerns: [r.reason],
-            recommendedAction: r.status === "Pass" ? "No action needed." : "Review and provide evidence.",
-            live: false,
-            createdAt: new Date().toISOString(),
-          });
-        });
-        set({ checklist: nextChecklist, aiReviewLog: log.slice(0, 200), busy: null });
-      },
 
       setAgentStrictness: (agentId, value) => set((s) => ({ agents: s.agents.map((a) => (a.id === agentId ? { ...a, strictness: value } : a)) })),
 

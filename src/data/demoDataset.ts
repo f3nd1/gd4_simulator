@@ -1,8 +1,8 @@
 // Fully-populated demo dataset for the workflow-progress fields that start
-// empty by default (reviewer drafts, sign-offs, closures, checklist results,
-// samples, interview prep, management review pack, export log). Derived
-// entirely from the existing real GD4 items, findings and checklist library —
-// it does not invent any new GD4 criteria, sub-criteria, items or rubric text.
+// empty by default (reviewer drafts, sign-offs, closures, samples, interview
+// prep, management review pack, export log). Derived entirely from the
+// existing real GD4 items and findings — it does not invent any new GD4
+// criteria, sub-criteria, items or rubric text.
 import type {
   ItemEvidence,
   ManagementReviewItem,
@@ -10,11 +10,9 @@ import type {
   SampleRecordType,
   InterviewQuestion,
   ExportLogEntry,
-  ChecklistStatus,
 } from "../types";
 import { GD4_REQUIREMENTS } from "./gd4Requirements";
 import { FINDINGS } from "./findings";
-import { CHECKLIST_LIB } from "./agents";
 import { aiScore, getBand } from "../lib/scoring";
 
 const TYPE_BY_CRITERION: Record<string, SampleRecordType> = {
@@ -66,20 +64,6 @@ export function buildDemoDataset(evidence: Record<string, ItemEvidence>) {
     };
   });
 
-  const checklist: Record<string, { status: ChecklistStatus; comment: string }> = {};
-  CHECKLIST_LIB.forEach((c, idx) => {
-    const status: ChecklistStatus = idx % 7 === 6 ? "Fail" : idx % 5 === 4 ? "Partial" : "Pass";
-    checklist[c.id] = {
-      status,
-      comment:
-        status === "Pass"
-          ? "Confirmed against current evidence set."
-          : status === "Partial"
-          ? "Partially evidenced; follow-up required before sign-off."
-          : "Not evidenced — see linked finding.",
-    };
-  });
-
   const weakItems = GD4_REQUIREMENTS.filter((req) => {
     const ev = evidence[req.id];
     return ev && (req.gateSensitive || getBand(aiScore(ev)) < 3);
@@ -120,7 +104,7 @@ export function buildDemoDataset(evidence: Record<string, ItemEvidence>) {
       content: "Sub-criteria 5.1 and 5.5 carry the most severe AFIs (B13, B18) and need closure before the next mock audit.",
       decisionNeeded: true,
       decision: "Approved follow-up plan; ALI/CM to own closure by next quarter.",
-      decidedBy: "SGL Governance Reviewer",
+      decidedBy: "Marcus Lim",
       decidedAt: new Date().toLocaleString(),
     },
     {
@@ -150,5 +134,5 @@ export function buildDemoDataset(evidence: Record<string, ItemEvidence>) {
     },
   ];
 
-  return { reviewer, confirmed, justify, closures, checklist, samples, interviewQuestions, managementReviewItems, exportLog };
+  return { reviewer, confirmed, justify, closures, samples, interviewQuestions, managementReviewItems, exportLog };
 }

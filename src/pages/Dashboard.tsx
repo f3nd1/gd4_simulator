@@ -3,9 +3,8 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { GOLD, INK, TONE, gateTone } from "../lib/theme";
+import { GOLD, INK, TONE } from "../lib/theme";
 import { FINDINGS } from "../data/findings";
-import { CHECKLIST_LIB } from "../data/agents";
 
 export function Dashboard() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -16,7 +15,7 @@ export function Dashboard() {
   const belowBand3 = scored.items.filter((i) => i.band < 3).length;
   const closures = useWorkspaceStore((s) => s.closures);
   const openCritical = FINDINGS.filter((a) => a.severity === "Critical" && (closures[a.id]?.human || "") !== "Accepted").length;
-  const finalisationReady = scored.gatePass && scored.checklistPass && scored.openAFIs === 0;
+  const finalisationReady = scored.gatePass && scored.openAFIs === 0;
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
@@ -30,13 +29,10 @@ export function Dashboard() {
         <div style={{ fontSize: 12, color: scored.gatePass ? "#9fe0bd" : "#f4b3aa", marginTop: 4 }}>
           {scored.gatePass ? "Score gate met (4.2, 4.6, C5 at Band 3+)" : `Score gate NOT met: ${scored.gateFail.map((g) => g.id).join(", ")}`}
         </div>
-        <div style={{ fontSize: 12, color: scored.checklistPass ? "#9fe0bd" : "#f4b3aa" }}>
-          {scored.checklistPass ? "Checklist gate passed" : `Checklist gate not passed (${scored.checklistDone}/${CHECKLIST_LIB.length} items done)`}
-        </div>
         <div style={{ fontSize: 11, color: "#7e8da0", marginTop: 8 }}>Not an official SSG or EduTrust result. Placeholder scoring table pending UCC's official GD4 rubric.</div>
         <button
           onClick={() => {
-            if (confirm("Load the demo dataset? This fills in reviewer scores, closures, checklist results, samples, interview prep and the management review pack with sample data, overwriting any existing entries in those fields.")) loadDemoDataset();
+            if (confirm("Load the demo dataset? This fills in reviewer scores, closures, samples, interview prep and the management review pack with sample data, overwriting any existing entries in those fields.")) loadDemoDataset();
           }}
           style={{ marginTop: 10, cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
         >
@@ -73,16 +69,6 @@ export function Dashboard() {
           <br />
           Score gate at risk: <b style={{ color: scored.gatePass ? TONE.good.fg : TONE.critical.fg }}>{scored.gateFail.length}</b>
         </div>
-      </Card>
-
-      <Card>
-        <div style={{ fontSize: 12, color: "#6b7280" }}>Checklist gates by department</div>
-        {scored.deptGates.map((d) => (
-          <div key={d.dept} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 5 }}>
-            <span>{d.dept}</span>
-            <Pill s={gateTone(d.gate)}>{d.gate}</Pill>
-          </div>
-        ))}
       </Card>
 
       <Card>
