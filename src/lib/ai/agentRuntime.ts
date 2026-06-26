@@ -7,7 +7,7 @@
 
 import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement } from "../../types";
 import { chatComplete, AIClientError } from "./aiClient";
-import type { SimulatedItemVerdict, SimulatedClosureVerdict } from "./simulateAI";
+import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft } from "./simulateAI";
 
 export { AIClientError };
 
@@ -112,6 +112,32 @@ export async function runLiveClosureReview(
     verdict: (parsed.verdict as SimulatedClosureVerdict["verdict"]) || "Maintain Finding",
     reason: (parsed.reason as string) || content,
     evidenceNeeded: (parsed.evidenceNeeded as string) || "Specify the evidence still needed.",
+    live: true,
+  };
+}
+
+// Drafts evidence metadata from a pasted link for the Sub-Criterion
+// Checklist's "AI fill from link" button. The model is given only the link
+// string and the checklist line text — never the document itself, which
+// this app has no way to fetch — so the prompt explicitly forbids inventing
+// document content and requires the drafted note to flag what is unverified.
+export async function runLiveEvidenceFill(
+  link: string,
+  lineText: string,
+  settings: AISettings
+): Promise<Omit<EvidenceFillDraft, "live"> & { live: true }> {
+  const system = `You are an evidence intake assistant for an EduTrust GD4 internal audit. You are given only a document link/filename and the checklist line it is meant to support — you cannot open or read the document, so never assume or invent its content. Suggest plausible metadata from the link/filename alone, and draft a short auditor note (1-2 sentences) that explicitly tells the human auditor what they still need to verify themselves. Respond with JSON only: {"title": string, "type": "Policy/Procedure" | "Record/Log" | "System screenshot" | "Minutes" | "Survey/Feedback" | "Other", "date": string (YYYY-MM-DD, guess if unknown), "sufficiency": "Present" | "Weak" | "Missing", "auditorNote": string}.`;
+  const user = `Evidence link: ${link}\nChecklist line this evidence is meant to support: ${lineText}`;
+
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
+  const parsed = parseJSONObject(content);
+
+  return {
+    title: (parsed.title as string) || link,
+    type: (parsed.type as string) || "Other",
+    date: (parsed.date as string) || new Date().toISOString().slice(0, 10),
+    sufficiency: (parsed.sufficiency as EvidenceFillDraft["sufficiency"]) || "Present",
+    auditorNote: (parsed.auditorNote as string) || `Verify this evidence actually demonstrates: "${lineText}".`,
     live: true,
   };
 }

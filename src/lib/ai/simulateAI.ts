@@ -140,4 +140,75 @@ export function applyAfiOverlay(itemId: string, lines: SpecificChecklistLine[], 
   });
 }
 
+// Drafts evidence-item metadata from a pasted link alone, for the Sub-
+// Criterion Checklist's "AI fill from link" button. The document itself is
+// never fetched or read — every field here is guessed from the link/filename
+// string and the checklist line's text, and the drafted note says so
+// explicitly, so the auditor knows what still needs human verification.
+export type EvidenceFillDraft = {
+  title: string;
+  type: string;
+  date: string;
+  sufficiency: "Present" | "Weak" | "Missing";
+  auditorNote: string;
+  live: boolean;
+};
+
+const EVIDENCE_TYPE_KEYWORDS: [string, string][] = [
+  ["polic", "Policy/Procedure"],
+  ["procedure", "Policy/Procedure"],
+  ["sop", "Policy/Procedure"],
+  ["minutes", "Minutes"],
+  ["meeting", "Minutes"],
+  ["log", "Record/Log"],
+  ["record", "Record/Log"],
+  ["register", "Record/Log"],
+  ["screenshot", "System screenshot"],
+  ["screen-shot", "System screenshot"],
+  ["survey", "Survey/Feedback"],
+  ["feedback", "Survey/Feedback"],
+];
+
+function filenameFromLink(link: string): string {
+  const path = link.split("?")[0].split("#")[0];
+  return path.split("/").filter(Boolean).pop() || link;
+}
+
+function guessTitle(link: string): string {
+  const noExt = filenameFromLink(link).replace(/\.[a-zA-Z0-9]{2,5}$/, "");
+  let decoded = noExt;
+  try {
+    decoded = decodeURIComponent(noExt);
+  } catch {
+    // leave undecoded on malformed escape sequences
+  }
+  const spaced = decoded.replace(/[-_]+/g, " ").trim();
+  return spaced ? spaced.replace(/\b\w/g, (c) => c.toUpperCase()) : "Linked evidence";
+}
+
+function guessType(filename: string, lineText: string): string {
+  const hay = `${filename} ${lineText}`.toLowerCase();
+  const hit = EVIDENCE_TYPE_KEYWORDS.find(([kw]) => hay.includes(kw));
+  return hit ? hit[1] : "Other";
+}
+
+function guessDate(filename: string): string {
+  const m = filename.match(/(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : new Date().toISOString().slice(0, 10);
+}
+
+export function simulateEvidenceFill(link: string, lineText: string): EvidenceFillDraft {
+  const filename = filenameFromLink(link);
+  const weakHints = ["draft", "template", "tbc", "wip", "blank"];
+  const sufficiency: EvidenceFillDraft["sufficiency"] = weakHints.some((w) => filename.toLowerCase().includes(w)) ? "Weak" : "Present";
+  return {
+    title: guessTitle(link),
+    type: guessType(filename, lineText),
+    date: guessDate(filename),
+    sufficiency,
+    auditorNote: `Auto-drafted from the link/filename only — the document content was not read. Confirm this evidence actually demonstrates: "${lineText}". Record strengths/weaknesses/gaps here and how to close any gap.`,
+    live: false,
+  };
+}
+
 export { aiScore };

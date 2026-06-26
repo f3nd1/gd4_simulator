@@ -12,8 +12,8 @@ import type {
 } from "../types";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
-import { simulateChecklistGeneration, applyAfiOverlay } from "../lib/ai/simulateAI";
-import { runLiveChecklistGeneration } from "../lib/ai/agentRuntime";
+import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
+import { runLiveChecklistGeneration, runLiveEvidenceFill } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useWorkspaceStore } from "./useWorkspaceStore";
 
@@ -58,6 +58,7 @@ export type ChecklistModuleState = {
   setSpecificStatus: (itemId: string, lineId: string, status: SpecificLineStatus) => void;
 
   addEvidence: (itemId: string, lineId: string, evidence: Omit<SubChecklistEvidenceItem, "id">) => void;
+  fillEvidenceFromLink: (itemId: string, lineId: string, link: string) => Promise<EvidenceFillDraft>;
   updateEvidence: (itemId: string, lineId: string, evidenceId: string, patch: Partial<SubChecklistEvidenceItem>) => void;
   removeEvidence: (itemId: string, lineId: string, evidenceId: string) => void;
   reuseEvidence: (fromItemId: string, fromLineId: string, evidenceId: string, toItemId: string, toLineId: string) => void;
@@ -174,6 +175,39 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       removeSpecificLine: (itemId, lineId) => set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: e.specific.filter((l) => l.id !== lineId) }))),
 
       setSpecificStatus: (itemId, lineId, status) => set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, status })))),
+
+      // Drafts evidence metadata (title/type/date/sufficiency/auditorNote)
+      // from a pasted link alone, so the human only has to supply the key
+      // evidence link — the result lands back in the caller's local draft
+      // state and is never written to the entry until "Add evidence" is
+      // clicked. Logged to the shared AI review log like every other AI run.
+      fillEvidenceFromLink: async (itemId, lineId, link) => {
+        set({ busy: `${itemId}:${lineId}:evfill` });
+        const lineText = get().entries[itemId]?.specific.find((l) => l.id === lineId)?.text || "";
+        const aiSettings = useAISettingsStore.getState();
+        let draft: EvidenceFillDraft;
+        if (aiSettings.enabled && aiSettings.apiKey) {
+          try {
+            draft = await runLiveEvidenceFill(link, lineText, aiSettings);
+          } catch {
+            draft = simulateEvidenceFill(link, lineText);
+          }
+        } else {
+          draft = simulateEvidenceFill(link, lineText);
+        }
+        useWorkspaceStore.getState().pushAIReviewLog({
+          agent: "Evidence Intake Assistant",
+          reviewType: "Evidence",
+          subjectId: itemId,
+          verdict: `Drafted fields for "${draft.title}"`,
+          confidence: "Low",
+          keyConcerns: [draft.auditorNote],
+          recommendedAction: "Review every drafted field before clicking Add evidence — the linked document itself was not read.",
+          live: draft.live,
+        });
+        set({ busy: null });
+        return draft;
+      },
 
       addEvidence: (itemId, lineId, evidence) =>
         set((s) =>

@@ -70,6 +70,7 @@ export function SubCriterionChecklist() {
   const removeSpecificLine = useChecklistModuleStore((s) => s.removeSpecificLine);
   const setSpecificStatus = useChecklistModuleStore((s) => s.setSpecificStatus);
   const addEvidence = useChecklistModuleStore((s) => s.addEvidence);
+  const fillEvidenceFromLink = useChecklistModuleStore((s) => s.fillEvidenceFromLink);
   const updateEvidence = useChecklistModuleStore((s) => s.updateEvidence);
   const removeEvidence = useChecklistModuleStore((s) => s.removeEvidence);
   const reuseEvidence = useChecklistModuleStore((s) => s.reuseEvidence);
@@ -449,6 +450,17 @@ export function SubCriterionChecklist() {
                         {EVIDENCE_TYPES.map((t) => <option key={t}>{t}</option>)}
                       </select>
                       <input placeholder="Drive link" value={evidenceDraft.drive} onChange={(e) => setEvidenceDraft({ ...evidenceDraft, drive: e.target.value })} style={{ ...inputStyle, width: 150, padding: "4px 6px" }} />
+                      <button
+                        disabled={!evidenceDraft.drive?.trim() || busy === `${selectedId}:${l.id}:evfill`}
+                        onClick={async () => {
+                          const draft = await fillEvidenceFromLink(selectedId, l.id, (evidenceDraft.drive || "").trim());
+                          setEvidenceDraft((d) => ({ ...d, title: draft.title, type: draft.type, date: draft.date, sufficiency: draft.sufficiency, auditorNote: draft.auditorNote }));
+                        }}
+                        title="Drafts title/type/date/sufficiency/note from the link alone — review every field before adding"
+                        style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "4px 9px", borderRadius: 6, border: `1px solid ${BLUE}`, background: "#eaeef6", color: "#4a5a8a" }}
+                      >
+                        {busy === `${selectedId}:${l.id}:evfill` ? "Filling…" : "AI fill from link"}
+                      </button>
                       <input placeholder="Owner" value={evidenceDraft.owner} onChange={(e) => setEvidenceDraft({ ...evidenceDraft, owner: e.target.value })} style={{ ...inputStyle, width: 90, padding: "4px 6px" }} />
                       <input type="date" value={evidenceDraft.date} onChange={(e) => setEvidenceDraft({ ...evidenceDraft, date: e.target.value })} style={{ ...inputStyle, width: 130, padding: "4px 6px" }} />
                       <select value={evidenceDraft.sufficiency} onChange={(e) => setEvidenceDraft({ ...evidenceDraft, sufficiency: e.target.value as EvidenceSufficiency })} style={{ ...inputStyle, width: "auto", padding: "4px 6px" }}>
