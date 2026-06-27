@@ -12,7 +12,7 @@
 // LLM-backed agent would be asked to do; they are reproduced as comments so
 // a future swap-in to a real model call has the exact wording to use.
 
-import type { AgentDefinition, Finding, GD4Requirement, ItemEvidence, SpecificChecklistLine, PdcaBreakdown } from "../../types";
+import type { AgentDefinition, Finding, GD4Requirement, ItemEvidence, SpecificChecklistLine, ApsrBreakdown } from "../../types";
 import { aiScore } from "../scoring";
 import { FINDINGS } from "../../data/findings";
 
@@ -206,25 +206,26 @@ function guessDate(filename: string): string {
 // each line Met/Partial/Not met by simple keyword overlap. Offline fallback
 // only — mirrors every other simulate* function's role as the no-network
 // stand-in for the live OpenAI call in agentRuntime.ts.
-export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial" | "Not met"; reason: string; sources?: string[]; pdca?: PdcaBreakdown };
+export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial" | "Not met"; reason: string; sources?: string[]; apsr?: ApsrBreakdown };
 
-// Derives the overall Met/Partial/Not met from a PDCA breakdown with Plan
-// hard-gating: a generic or missing policy/procedure caps the line at "Not met"
-// no matter how much implementation evidence exists — you cannot pass on
-// evidence alone when the plan itself is weak. Met requires the FULL cycle:
-// an adequate plan, implemented evidence, a control, and a review.
-export function derivePdcaStatus(p: PdcaBreakdown): "Met" | "Partial" | "Not met" {
-  if (p.plan.status !== "Adequate") return "Not met"; // Plan gates everything
-  if (p.do.status === "None") return "Not met"; // policy on paper, nothing deployed
-  if (p.do.status === "Implemented" && p.check.status === "Yes" && p.act.status === "Yes") return "Met";
-  return "Partial"; // implemented but missing a control and/or a review
+// Derives the overall Met/Partial/Not met from an APSR breakdown with Approach
+// hard-gating: a "Beginning" or "Not evident" Approach (the documented policy &
+// procedure) caps the line at "Not met" no matter how much else exists — you
+// cannot pass on implementation alone when the documented approach itself falls
+// short. Met requires the full rubric: a Meeting-level Approach, deployed
+// Processes, evident Systems & Outcomes, and an evident Review.
+export function deriveApsrStatus(p: ApsrBreakdown): "Met" | "Partial" | "Not met" {
+  if (p.approach.status !== "Meeting") return "Not met"; // Approach gates everything
+  if (p.processes.status === "Not evident") return "Not met"; // documented but not deployed
+  if (p.processes.status === "Deployed" && p.systemsOutcomes.status === "Evident" && p.review.status === "Evident") return "Met";
+  return "Partial"; // deployed but outcomes and/or review not yet evident
 }
 
-// Renders a PDCA breakdown as a one-line, human-readable critique for the
+// Renders an APSR breakdown as a one-line, human-readable critique for the
 // auditor note (the "comment on whether the procedure is sustainable / too
-// generic" the user asked for lives in plan.note).
-export function pdcaReason(p: PdcaBreakdown): string {
-  return `Plan (policy): ${p.plan.status} — ${p.plan.note} | Do (implementation): ${p.do.status} — ${p.do.note} | Check (control): ${p.check.status}${p.check.note ? ` — ${p.check.note}` : ""} | Act (review): ${p.act.status}${p.act.note ? ` — ${p.act.note}` : ""}`;
+// generic" lives in approach.note).
+export function apsrReason(p: ApsrBreakdown): string {
+  return `Approach (documented policy): ${p.approach.status} — ${p.approach.note} | Processes (implementation): ${p.processes.status} — ${p.processes.note} | Systems & Outcomes: ${p.systemsOutcomes.status}${p.systemsOutcomes.note ? ` — ${p.systemsOutcomes.note}` : ""} | Review: ${p.review.status}${p.review.note ? ` — ${p.review.note}` : ""}`;
 }
 
 const STOPWORDS = new Set(["which", "where", "their", "there", "every", "shall", "should", "these", "those", "about", "within"]);

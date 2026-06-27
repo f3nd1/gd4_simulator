@@ -17,7 +17,7 @@
 //       cap, just with sharper wording since recurrence risk there is higher).
 //   This cannot be overridden except by fixing the evidence, because the
 //   band is always recomputed from current state.
-import type { Band, GD4Requirement, GenericChecklistLine, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, PdcaBreakdown } from "../types";
+import type { Band, GD4Requirement, GenericChecklistLine, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown } from "../types";
 
 export function lineSufficiency(line: SpecificChecklistLine): EvidenceSufficiency {
   if (line.evidence.length === 0) return "Missing";
@@ -118,58 +118,60 @@ export function computeChecklistOverrides(
   return map;
 }
 
-// Pulls the most informative PDCA breakdown attached to a line's evidence
+// Pulls the most informative APSR breakdown attached to a line's evidence
 // (the folder audit records one per audited line). Returns undefined if the
-// line was never audited live (offline/manual lines have no PDCA).
-export function linePdca(line: SpecificChecklistLine): PdcaBreakdown | undefined {
-  for (const ev of line.evidence) if (ev.pdca) return ev.pdca;
+// line was never audited live (offline/manual lines have no APSR).
+export function lineApsr(line: SpecificChecklistLine): ApsrBreakdown | undefined {
+  for (const ev of line.evidence) if (ev.apsr) return ev.apsr;
   return undefined;
 }
 
 // In-depth, plain-language analysis of WHY a line failed and how to fix it,
-// derived from the PDCA stage that broke (or, with no PDCA, from the status /
-// evidence). This is what makes a raised finding read deeper than SSG's flat
-// "It was not evident that…": a root cause, a corrective action (fix it now)
-// and a preventive action (stop it recurring).
+// derived from the APSR dimension that fell short (or, with no APSR, from the
+// status / evidence). This is what makes a raised finding read deeper than
+// SSG's flat "It was not evident that…": a root cause, a corrective action
+// (fix it now) and a preventive action (stop it recurring). APSR = the official
+// EduTrust rubric dimensions: Approach, Processes, Systems & Outcomes, Review.
 export function buildFindingAnalysis(req: GD4Requirement, line: SpecificChecklistLine): { rootCause: string; corrective: string; preventive: string } {
-  const p = linePdca(line);
+  const p = lineApsr(line);
   const expected = req.expectedEvidence.length ? req.expectedEvidence.join("; ") : "the records that demonstrate this requirement";
 
   if (p) {
-    if (p.plan.status === "Missing") {
+    if (p.approach.status === "Not evident") {
       return {
-        rootCause: `Plan stage: the Policies & Procedures Document (PPD) does not document a procedure for this requirement${p.plan.note ? ` — ${p.plan.note}` : ""}. The activity may happen in practice, but with nothing written down it cannot be assessed or sustained.`,
-        corrective: `Write a specific procedure into the PPD covering "${req.requirement}": who is responsible, what they do, when/how often, and what record is kept.`,
+        rootCause: `Approach: the Policies & Procedures Document (PPD) does not document an approach (policy/procedure) for this requirement${p.approach.note ? ` — ${p.approach.note}` : ""}. The activity may happen in practice, but with nothing documented it cannot be assessed or sustained.`,
+        corrective: `Document a specific procedure in the PPD covering "${req.requirement}": who is responsible, what they do, when/how often, and what record is kept.`,
         preventive: `Add this requirement to the PPD review checklist and assign a document owner so it is not missed in the next PPD revision.`,
       };
     }
-    if (p.plan.status === "Generic") {
+    if (p.approach.status === "Beginning") {
       return {
-        rootCause: `Plan stage: a procedure exists but is too generic/boilerplate and not sustainable${p.plan.note ? ` — ${p.plan.note}` : ""}. It does not say specifically who does what, when and how, so it cannot be relied on or consistently followed.`,
+        rootCause: `Approach: a documented approach exists but is too generic/boilerplate and not sustainable${p.approach.note ? ` — ${p.approach.note}` : ""}. It does not state specifically who does what, when and how, so it cannot be relied on or consistently followed.`,
         corrective: `Rewrite the PPD procedure to be specific to this institution: name the responsible role, the frequency, the steps, and the record produced. Replace vague phrasing like "reviewed periodically" with a defined cycle.`,
         preventive: `Adopt a PPD template that forces every procedure to state owner, frequency and the record kept, and check new procedures against it before approval.`,
       };
     }
-    // Plan is adequate from here — the gap is in implementation / control / review.
-    if (p.do.status === "None") {
+    // Approach is at Meeting from here — the gap is in Processes / Systems &
+    // Outcomes / Review.
+    if (p.processes.status === "Not evident") {
       return {
-        rootCause: `Do stage: the procedure is documented but there is no evidence it has actually been carried out — a policy on paper only. The implementation records are missing.`,
-        corrective: `Carry out the procedure and keep the records that prove it, e.g. ${expected}. Attach them as evidence against this line.`,
+        rootCause: `Processes: the approach is documented but there is no evidence it has actually been implemented — a policy on paper only. The implementation records are missing.`,
+        corrective: `Implement the procedure and keep the records that prove it, e.g. ${expected}. Attach them as evidence against this line.`,
         preventive: `Schedule the activity (calendar/owner) and store its records in a fixed location so each cycle is captured automatically.`,
       };
     }
     const missing: string[] = [];
-    if (p.do.status === "Partial") missing.push("implementation is only partial / not consistently evidenced");
-    if (p.check.status === "No") missing.push("there is no control that monitors the procedure is actually followed");
-    if (p.act.status === "No") missing.push("there is no review/evaluation loop that improves it over time");
+    if (p.processes.status === "Weak") missing.push("implementation (Processes) is weak / not consistently evidenced");
+    if (p.systemsOutcomes.status !== "Evident") missing.push("the desired outcomes (Systems & Outcomes) are not yet evident");
+    if (p.review.status !== "Evident") missing.push("there is no Review evaluating effectiveness for continual improvement");
     return {
-      rootCause: `The procedure is documented and at least partly implemented, but ${missing.join("; ") || "it is not yet fully and consistently evidenced"}. This is what keeps it short of a higher band.`,
-      corrective: `${p.check.status === "No" ? "Put a monitoring control in place (checklist, sign-off or audit) and keep its records. " : ""}${p.act.status === "No" ? "Add a periodic review that evaluates effectiveness and feeds improvements back into the procedure. " : ""}Then attach the resulting records (${expected}) as evidence.`,
-      preventive: `Make the control and the review recurring with a named owner, so the cycle is sustained without prompting.`,
+      rootCause: `The approach is documented and at least partly implemented, but ${missing.join("; ") || "it is not yet fully and consistently evidenced"}. This is what keeps it short of a higher band.`,
+      corrective: `${p.systemsOutcomes.status !== "Evident" ? "Capture the outcome data that shows the desired results are produced. " : ""}${p.review.status !== "Evident" ? "Add a periodic review that evaluates effectiveness and feeds improvements back into the approach. " : ""}Then attach the resulting records (${expected}) as evidence.`,
+      preventive: `Make the outcome measurement and the review recurring with a named owner, so the cycle is sustained without prompting.`,
     };
   }
 
-  // No PDCA (offline keyword audit or a manually-set line): fall back to status.
+  // No APSR (offline keyword audit or a manually-set line): fall back to status.
   const sufficiency = lineSufficiency(line);
   if (line.status !== "Not met" && sufficiency === "Missing") {
     return {

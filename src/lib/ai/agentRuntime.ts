@@ -5,10 +5,10 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, PdcaBreakdown } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown } from "../../types";
 import { chatComplete, AIClientError } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
-import { derivePdcaStatus, pdcaReason } from "./simulateAI";
+import { deriveApsrStatus, apsrReason } from "./simulateAI";
 
 export { AIClientError };
 
@@ -138,10 +138,10 @@ export async function runLiveClosureReview(
 export async function runLiveClosureDraft(
   finding: { issue: string; gd4ItemId: string },
   settings: AISettings,
-  context?: { standard?: string; pdca?: string }
+  context?: { standard?: string; apsr?: string }
 ): Promise<{ root: string; corr: string; prev: string }> {
-  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the PDCA breakdown of which stage failed), propose: a ROOT CAUSE that names WHY the gap exists — distinguish a Plan gap (the procedure is missing or too generic in the PPD) from a Do gap (documented but not implemented) from a Check/Act gap (no control or no review) — then a CORRECTIVE action that fixes this specific gap now, and a PREVENTIVE action that stops it recurring. Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.`;
-  const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}${context?.standard ? `\n\nOfficial GD4 requirement:\n${context.standard}` : ""}${context?.pdca ? `\n\nPDCA assessment of this line:\n${context.pdca}` : ""}`;
+  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — distinguish an Approach gap (the documented policy/procedure is missing or too generic in the PPD) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — then a CORRECTIVE action that fixes this specific gap now, and a PREVENTIVE action that stops it recurring. Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.`;
+  const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}${context?.standard ? `\n\nOfficial GD4 requirement:\n${context.standard}` : ""}${context?.apsr ? `\n\nAPSR assessment of this line:\n${context.apsr}` : ""}`;
   const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
   const parsed = parseJSONObject(content);
   return {
@@ -185,10 +185,10 @@ export async function runLiveEvidenceFill(
 // ONLY against the text actually provided, not invent or assume anything
 // about parts of the folder that weren't readable/exported.
 const STRICTNESS_CLAUSE: Record<string, string> = {
-  Lenient: " Calibration: give reasonable benefit of the doubt on each PDCA leg — if the documents broadly address it, lean towards the more favourable rating.",
+  Lenient: " Calibration: give reasonable benefit of the doubt on each APSR dimension — if the documents broadly address it, lean towards the more favourable rating.",
   Standard: "",
   Strict:
-    " Calibration: be conservative and hard to satisfy on every PDCA leg. Rate plan.status \"Adequate\" ONLY when the procedure is genuinely specific, complete and sustainable; rate do.status \"Implemented\" ONLY when records explicitly show it happening; require an actual control for Check and an actual review for Act. When in doubt, choose the lower rating — a high band must be genuinely earned.",
+    " Calibration: be conservative and hard to satisfy on every APSR dimension. Rate approach.status \"Meeting\" ONLY when the documented policy/procedure is genuinely specific, complete and sustainable; rate processes.status \"Deployed\" ONLY when records explicitly show it implemented; rate systemsOutcomes.status \"Evident\" ONLY when the desired outcomes are actually produced; rate review.status \"Evident\" ONLY when there is a real review for continual improvement. When in doubt, choose the lower rating — a high band must be genuinely earned.",
 };
 
 export type FolderAuditOpts = {
@@ -209,22 +209,23 @@ export async function runLiveFolderAudit(
   opts: FolderAuditOpts = {}
 ): Promise<FolderAuditLineVerdict[]> {
   const strictness = opts.strictness || "Standard";
-  // PDCA-staged assessment: the model assesses Plan → Do → Check → Act in
-  // strict order. The overall Met/Partial/Not met is NOT decided by the model —
-  // it is derived in code by derivePdcaStatus (Plan hard-gates), the same way
+  // APSR assessment using the official EduTrust Scoring Rubric dimensions
+  // (GD4 §23): Approach → Processes → Systems & Outcomes → Review, assessed in
+  // that order. The overall Met/Partial/Not met is NOT decided by the model — it
+  // is derived in code by deriveApsrStatus (Approach hard-gates), the same way
   // the score/band are never left to the model alone.
-  const base = `You are a GD4 internal auditor applying the PDCA cycle (Plan-Do-Check-Act). You are given the official GD4 requirement, the institution's documents split into a "=== POLICY & PROCEDURE ===" section and an "=== ACTUAL EVIDENCE ===" section (each chunk headed by its file path and type), and checklist statements. Assess each statement in this STRICT ORDER, using ONLY the text given and never assuming content that isn't there:
-1. PLAN — Read the POLICY & PROCEDURE text against the requirement WORD BY WORD. Decide plan.status: "Adequate" only if the procedure is specific, complete against the requirement, AND sustainable (it actually states who does what, when and how, and could be repeated year on year); "Generic" if it is vague, boilerplate, copy-paste, not specific to this institution, or not sustainable; "Missing" if no procedure addresses it. Be critical and ungenerous — comment in plan.note on exactly why it is or isn't sustainable / too generic.
-2. DO — Using ONLY the ACTUAL EVIDENCE text, decide do.status: "Implemented" if records show the procedure is actually carried out, "Partial" if only partly, "None" if there is no implementation evidence (a policy on paper is NOT implementation).
-3. CHECK — Is there a control that monitors the procedure is followed (checklist, audit, sign-off, monitoring record)? check.status "Yes"/"No".
-4. ACT — Is there a review that improves the procedure (management review, lessons learned, revision history)? act.status "Yes"/"No".
+  const base = `You are a GD4 internal auditor applying the official EduTrust Scoring Rubric, which assesses four dimensions — Approach, Processes, Systems & Outcomes, Review (APSR). You are given the official GD4 requirement, the institution's documents split into a "=== POLICY & PROCEDURE ===" section and an "=== ACTUAL EVIDENCE ===" section (each chunk headed by its file path and type), and checklist statements. Assess each statement on the four rubric dimensions IN ORDER, using ONLY the text given and never assuming content that isn't there:
+1. APPROACH (documented policies and procedures — the methods, tools and techniques used to meet the requirement). Read the POLICY & PROCEDURE text against the requirement WORD BY WORD. approach.status: "Meeting" only if the documented approach is specific, complete against the requirement AND sustainable (states who does what, when and how, repeatable year on year); "Beginning" if it is vague, boilerplate, copy-paste, not specific to this institution, or not sustainable; "Not evident" if no documented approach addresses it. Be critical — comment in approach.note on why it is or isn't sustainable / too generic.
+2. PROCESSES (actual implementation of those policies and procedures). Using ONLY the ACTUAL EVIDENCE text, processes.status: "Deployed" if records show it implemented and managed, "Weak" if deployment is weak/partial, "Not evident" if there is no implementation evidence (a documented approach on paper is NOT implementation).
+3. SYSTEMS & OUTCOMES (the desired outcomes derived from that implementation). systemsOutcomes.status: "Evident" if the desired outcomes/results are actually produced, "Limited" if outcomes are limited, "Not evident" if none.
+4. REVIEW (evaluation of the appropriateness, relevance and effectiveness of the approach and process for continual improvement). review.status: "Evident" if there is a real review with improvement action, "Not evident" otherwise.
 For every non-empty claim cite the specific source file(s) (by their "--- path ---" heading) in "sources".${STRICTNESS_CLAUSE[strictness] || ""}`;
   const challengeRule = opts.challenge
-    ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote plan.status from "Adequate" to "Generic" unless the procedure is genuinely specific and sustainable, and demote do.status unless implementation is explicitly evidenced.`
+    ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote approach.status from "Meeting" to "Beginning" unless the documented approach is genuinely specific and sustainable, and demote processes.status unless implementation is explicitly evidenced.`
     : "";
-  const system = `${base}${challengeRule} Respond with JSON only: {"lines": [{"lineId": string, "plan": {"status": "Adequate"|"Generic"|"Missing", "note": string}, "do": {"status": "Implemented"|"Partial"|"None", "note": string}, "check": {"status": "Yes"|"No", "note": string}, "act": {"status": "Yes"|"No", "note": string}, "sources": string[]}]}.`;
+  const system = `${base}${challengeRule} Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string}, "review": {"status": "Evident"|"Not evident", "note": string}, "sources": string[]}]}.`;
 
-  const standardBlock = opts.standard ? `The official GD4 requirement this folder must satisfy (judge the POLICY against THIS standard, word by word):\n"""\n${opts.standard.slice(0, 4000)}\n"""\n\n` : "";
+  const standardBlock = opts.standard ? `The official GD4 requirement this folder must satisfy (judge the APPROACH against THIS standard, word by word):\n"""\n${opts.standard.slice(0, 4000)}\n"""\n\n` : "";
   const priorBlock = opts.challenge ? `Earlier (first-pass) overall verdicts to re-examine and toughen:\n${opts.challenge.map((c) => `[${c.lineId}] ${c.status}`).join("\n")}\n\n` : "";
   const user = `${standardBlock}${priorBlock}Document text extracted from the folder (split into POLICY & PROCEDURE and ACTUAL EVIDENCE; each chunk headed by file path + type; may be truncated):\n"""\n${docText.slice(0, 12000)}\n"""\n\nChecklist statements to assess:\n${lines
     .map((l) => `[${l.id}] ${l.text}`)
@@ -234,15 +235,15 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
   const arr = parseJSONArray(content);
 
   type RawLeg = { status?: unknown; note?: unknown };
-  type RawLine = { lineId: string; plan?: RawLeg; do?: RawLeg; check?: RawLeg; act?: RawLeg; sources?: unknown };
+  type RawLine = { lineId: string; approach?: RawLeg; processes?: RawLeg; systemsOutcomes?: RawLeg; review?: RawLeg; sources?: unknown };
   const byId = new Map(
     arr
       .filter((x): x is RawLine => !!x && typeof x === "object" && typeof (x as { lineId?: unknown }).lineId === "string")
       .map((x) => [x.lineId, x])
   );
 
-  // Coerce each leg into the typed PDCA shape, defaulting to the WORST value so
-  // a missing/garbled leg never accidentally credits the line.
+  // Coerce each dimension into the typed APSR shape, defaulting to the WORST
+  // value so a missing/garbled dimension never accidentally credits the line.
   const leg = <T extends string>(raw: RawLeg | undefined, allowed: readonly T[], fallback: T): { status: T; note: string } => {
     const s = raw?.status;
     return { status: (allowed as readonly string[]).includes(s as string) ? (s as T) : fallback, note: typeof raw?.note === "string" ? raw.note : "" };
@@ -250,15 +251,15 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
 
   return lines.map((l) => {
     const v = byId.get(l.id);
-    const pdca: PdcaBreakdown = {
-      plan: leg(v?.plan, ["Adequate", "Generic", "Missing"] as const, "Missing"),
-      do: leg(v?.do, ["Implemented", "Partial", "None"] as const, "None"),
-      check: leg(v?.check, ["Yes", "No"] as const, "No"),
-      act: leg(v?.act, ["Yes", "No"] as const, "No"),
+    const apsr: ApsrBreakdown = {
+      approach: leg(v?.approach, ["Meeting", "Beginning", "Not evident"] as const, "Not evident"),
+      processes: leg(v?.processes, ["Deployed", "Weak", "Not evident"] as const, "Not evident"),
+      systemsOutcomes: leg(v?.systemsOutcomes, ["Evident", "Limited", "Not evident"] as const, "Not evident"),
+      review: leg(v?.review, ["Evident", "Not evident"] as const, "Not evident"),
     };
-    const status = derivePdcaStatus(pdca);
+    const status = deriveApsrStatus(apsr);
     const sources = Array.isArray(v?.sources) ? (v!.sources as unknown[]).filter((s): s is string => typeof s === "string") : undefined;
-    const reason = v ? pdcaReason(pdca) : "The model did not return a verdict for this line; treated as unmet pending re-run.";
-    return { lineId: l.id, status, reason, sources, pdca };
+    const reason = v ? apsrReason(apsr) : "The model did not return a verdict for this line; treated as unmet pending re-run.";
+    return { lineId: l.id, status, reason, sources, apsr };
   });
 }

@@ -164,14 +164,21 @@ export type GenericLineStatus = ChecklistLineStatus | "Not Started";
 export type SpecificLineStatus = ChecklistLineStatus | "Not Applicable" | "Not Started";
 export type EvidenceSufficiency = "Present" | "Weak" | "Missing";
 
-// PDCA (Plan-Do-Check-Act) breakdown for one checklist line, produced by the
-// folder audit. Persisted on the evidence item so findings raised later can
-// explain the ROOT CAUSE (which stage failed) rather than just "not met".
-export type PdcaBreakdown = {
-  plan: { status: "Adequate" | "Generic" | "Missing"; note: string };
-  do: { status: "Implemented" | "Partial" | "None"; note: string };
-  check: { status: "Yes" | "No"; note: string };
-  act: { status: "Yes" | "No"; note: string };
+// APSR breakdown for one checklist line, produced by the folder audit, using
+// the official EduTrust Scoring Rubric dimensions (GD4 section 23):
+//   - Approach: documented policies and procedures (methods, tools, techniques)
+//   - Processes: actual implementation of those policies and procedures
+//   - Systems & Outcomes: desired outcomes derived from that implementation
+//   - Review: evaluation of appropriateness, relevance and effectiveness for
+//     continual improvement
+// Persisted on the evidence item so a finding raised later can explain the
+// ROOT CAUSE (which APSR dimension fell short) rather than just "not met".
+// Status words echo the rubric band descriptors (Not evident → Excellent).
+export type ApsrBreakdown = {
+  approach: { status: "Meeting" | "Beginning" | "Not evident"; note: string };
+  processes: { status: "Deployed" | "Weak" | "Not evident"; note: string };
+  systemsOutcomes: { status: "Evident" | "Limited" | "Not evident"; note: string };
+  review: { status: "Evident" | "Not evident"; note: string };
 };
 
 export type SubChecklistEvidenceItem = {
@@ -190,9 +197,10 @@ export type SubChecklistEvidenceItem = {
   // Free-text auditor note on this evidence item: justify the sufficiency
   // verdict, record strengths/weaknesses/gaps, or suggest how to close a gap.
   auditorNote?: string;
-  // Structured Plan-Do-Check-Act assessment from the folder audit (when live),
-  // kept so a finding raised from this line can name which stage failed.
-  pdca?: PdcaBreakdown;
+  // Structured APSR assessment (Approach, Processes, Systems & Outcomes,
+  // Review) from the folder audit (when live), kept so a finding raised from
+  // this line can name which rubric dimension fell short.
+  apsr?: ApsrBreakdown;
 };
 
 export type SamplingInfo = {
@@ -208,7 +216,7 @@ export type DraftFindingInfo = {
   severity: Severity;
   suggestedAction: string;
   savedFindingId?: string;
-  // In-depth analysis derived from the PDCA stage that failed, so a raised
+  // In-depth analysis derived from the APSR dimension that fell short, so a raised
   // finding reads deeper than a plain "not evident" line: why it happened
   // (rootCause), how to fix it now (corrective) and how to stop it recurring
   // (preventive). These pre-fill the AFI Closure form and the Final Report.

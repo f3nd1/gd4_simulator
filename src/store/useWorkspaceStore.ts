@@ -35,8 +35,8 @@ import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError } from "../lib/drive/driveClient";
 import { describeImage, summariseText, effectiveSettings } from "../lib/ai/aiClient";
-import { computeBand, linePdca } from "../lib/checklistBanding";
-import { pdcaReason } from "../lib/ai/simulateAI";
+import { computeBand, lineApsr } from "../lib/checklistBanding";
+import { apsrReason } from "../lib/ai/simulateAI";
 
 // Best-effort evidence-type classification for audit-attached evidence, from
 // the checklist line being satisfied (the folder audit reads many files into
@@ -678,14 +678,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         try {
           const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
           // Give the AI the real GD4 requirement and (if the line was audited)
-          // the PDCA breakdown, so the draft is grounded in the standard and
-          // names the stage that failed — not a generic guess from the issue text.
+          // the APSR breakdown, so the draft is grounded in the standard and
+          // names the rubric dimension that fell short — not a generic guess.
           const req = GD4_REQUIREMENTS.find((r) => r.id === gd4ItemId);
           const standard = req ? `${req.requirement}\nIntent: ${req.intent}\nExpected evidence: ${req.expectedEvidence.join("; ")}` : undefined;
           const entry = useChecklistModuleStore.getState().entries[gd4ItemId];
           const auditedLine = entry?.specific.find((l) => l.draftFinding?.savedFindingId === afiId);
-          const pdca = auditedLine ? linePdca(auditedLine) : undefined;
-          const draft = await runLiveClosureDraft({ issue, gd4ItemId }, settings, { standard, pdca: pdca ? pdcaReason(pdca) : undefined });
+          const apsr = auditedLine ? lineApsr(auditedLine) : undefined;
+          const draft = await runLiveClosureDraft({ issue, gd4ItemId }, settings, { standard, apsr: apsr ? apsrReason(apsr) : undefined });
           set((s) => {
             const c = s.closures[afiId] || {};
             return {
@@ -1051,9 +1051,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
               // Keep the AI's cited source files so the verdict is traceable.
               auditorNote: v.sources && v.sources.length ? `${v.reason} (source: ${v.sources.join("; ")})` : v.reason,
-              // Persist the structured PDCA so a finding raised from this line
-              // can explain which stage (Plan/Do/Check/Act) failed.
-              pdca: v.pdca,
+              // Persist the structured APSR so a finding raised from this line
+              // can explain which rubric dimension (Approach/Processes/Systems &
+              // Outcomes/Review) fell short.
+              apsr: v.apsr,
             });
           }
         } catch (err) {
@@ -1097,7 +1098,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const bandSummary = bandParts.length ? ` Resulting band: ${bandParts.join(", ")}.` : "";
 
         const methodNote = live
-          ? ` Judged PDCA-style against the GD4 standard — policy/procedure assessed first (Plan gates the result), then implementation evidence (Do), control (Check) and review (Act)${condensed ? `; ${condensed} long document${condensed === 1 ? "" : "s"} condensed to read the whole folder` : ""}${challenged ? "; with a strict second-pass challenge" : ""}.`
+          ? ` Judged on the EduTrust APSR rubric against the GD4 standard — Approach (documented policy/procedure) assessed first and gating the result, then Processes (implementation), Systems & Outcomes, and Review${condensed ? `; ${condensed} long document${condensed === 1 ? "" : "s"} condensed to read the whole folder` : ""}${challenged ? "; with a strict second-pass challenge" : ""}.`
           : " (offline keyword estimate — AI not used).";
         const summary = `${fileSummary}${skipSummary}${failSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.${bandSummary}${methodNote}`;
         finish(summary, live, liveError);
