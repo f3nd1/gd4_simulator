@@ -166,6 +166,11 @@ export type Finding = {
   source?: "Audit" | "Checklist" | "Manual" | "Seed";
   dimension?: FindingDimension;
   clause?: string;
+  // Structured finding body — populated automatically on audit-raised findings
+  // and via AI draft / manual entry on the Findings form.
+  observation?: string;  // what was found: WHO, WHAT, WHEN, HOW MANY
+  criteria?: string;     // what the GD4 standard requires (cited to clause)
+  effect?: string;       // regulatory / certification consequence
   rootCause?: string;
   corrective?: string;
   preventive?: string;
@@ -233,15 +238,15 @@ export type DraftFindingInfo = {
   severity: Severity;
   suggestedAction: string;
   savedFindingId?: string;
-  // In-depth analysis derived from the APSR dimension that fell short, so a raised
-  // finding reads deeper than a plain "not evident" line: why it happened
-  // (rootCause), how to fix it now (corrective) and how to stop it recurring
-  // (preventive). These pre-fill the AFI Closure form and the Final Report.
+  // Structured finding body — same fields as on Finding, auto-populated from
+  // the APSR breakdown and the GD4 requirement when a draft is built.
+  observation?: string;
+  criteria?: string;
+  effect?: string;
+  // In-depth analysis derived from the APSR dimension that fell short.
   rootCause?: string;
   corrective?: string;
   preventive?: string;
-  // Which APSR dimension the gap is in (Procedure vs Evidence vs …), surfaced
-  // on the raised finding so the register can split procedure from evidence.
   dimension?: FindingDimension;
 };
 

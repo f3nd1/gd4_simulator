@@ -17,6 +17,7 @@ import sgPeiContextSkill from "../../data/skills/sg-pei-context.md?raw";
 import externalAuditorSkill from "../../data/skills/external-auditor.md?raw";
 import consultantInsightsSkill from "../../data/skills/consultant-insights.md?raw";
 import riskRemediationSkill from "../../data/skills/risk-and-remediation.md?raw";
+import findingSpecificitySkill from "../../data/skills/finding-specificity.md?raw";
 
 // Injects one or more skill documents into the system prompt, capped so a
 // large skill file can't dominate the token budget. Skills are domain-expert
@@ -189,7 +190,7 @@ export async function runLiveClosureDraft(
   settings: AISettings,
   context?: { standard?: string; apsr?: string }
 ): Promise<{ root: string; corr: string; prev: string }> {
-  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — distinguish an Approach gap (the documented policy/procedure is missing or too generic in the PPD) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — then a CORRECTIVE action that fixes this specific gap now, and a PREVENTIVE action that stops it recurring. Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.${skills(findingWritingSkill, sgPeiContextSkill, riskRemediationSkill)}`;
+  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — distinguish an Approach gap (the documented policy/procedure is missing or too generic in the PPD) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — then a CORRECTIVE action that fixes this specific gap now, and a PREVENTIVE action that stops it recurring. Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.${skills(findingWritingSkill, sgPeiContextSkill, riskRemediationSkill, findingSpecificitySkill)}`;
   const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}${context?.standard ? `\n\nOfficial GD4 requirement:\n${context.standard}` : ""}${context?.apsr ? `\n\nAPSR assessment of this line:\n${context.apsr}` : ""}`;
   // Higher temperature for drafting (natural, varied narrative) vs deterministic verdicts.
   const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.7 });
@@ -344,4 +345,54 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
   });
 
   return { verdicts, parseWarnings, truncationNote };
+}
+
+// Drafts the three structured body sections of a finding — Observation,
+// Criteria, Effect — using the finding-specificity skill so the AI writes
+// with the required specificity: WHO, WHAT, WHEN, HOW MANY, GD4 clause, and
+// a concrete regulatory/certification consequence. Where exact counts or names
+// are unknown, the AI uses explicit [placeholder] markers so the auditor knows
+// what to fill in. These are drafts — the auditor edits before finalising.
+export async function runLiveFindingObservation(
+  req: { id: string; requirement: string; describeShow: string[]; expectedEvidence: string[] },
+  line: { text: string; status: string },
+  dimension: string,
+  apsr: ApsrBreakdown | undefined,
+  settings: AISettings
+): Promise<{ observation: string; criteria: string; effect: string }> {
+  const apsrSummary = apsr
+    ? [
+        `Approach: ${apsr.approach.status}${apsr.approach.note ? ` — ${apsr.approach.note}` : ""}`,
+        `Processes: ${apsr.processes.status}${apsr.processes.note ? ` — ${apsr.processes.note}` : ""}`,
+        `Systems & Outcomes: ${apsr.systemsOutcomes.status}${apsr.systemsOutcomes.note ? ` — ${apsr.systemsOutcomes.note}` : ""}`,
+        `Review: ${apsr.review.status}${apsr.review.note ? ` — ${apsr.review.note}` : ""}`,
+      ].join("; ")
+    : "No APSR breakdown available (offline/manual finding).";
+
+  const system = `You are an EduTrust GD4 audit finding writer. Given a checklist line that failed, its GD4 requirement, its APSR assessment, and the rubric dimension that fell short, write three sections of a formal audit finding:
+
+1. OBSERVATION — what was found. Must follow the WHO/WHAT/WHEN/HOW MANY rule: name the responsible role (use [Role Name] if unknown), the specific document or record type, the period reviewed, and the count of gaps (use [N of M reviewed] if the exact count is unavailable). Use the APSR notes to be specific about what was absent or insufficient. This must be a factual observation of the gap, not a statement of the requirement.
+
+2. CRITERIA — what the standard requires. Cite GD4 ${req.id} precisely. Include the specific describeShow expectation that was not met and the expected evidence.
+
+3. EFFECT — the regulatory, certification, or operational consequence of this gap. Name the specific EduTrust band ceiling or SSG compliance risk. Be direct, not generic.
+
+Use [bracketed placeholders] wherever you need specific data (names, dates, counts) that the auditor must fill in. Do not soften or hedge the observation.
+Respond with JSON only: {"observation": string, "criteria": string, "effect": string}.${skills(findingSpecificitySkill, sgPeiContextSkill, findingWritingSkill)}`;
+
+  const user = `GD4 ${req.id}: ${req.requirement}
+Describe/Show: ${req.describeShow.slice(0, 3).join("; ")}
+Expected evidence: ${req.expectedEvidence.length ? req.expectedEvidence.join("; ") : "(not specified)"}
+
+Checklist line: "${line.text}" — status: ${line.status}
+APSR assessment: ${apsrSummary}
+Dimension (APSR leg that fell short): ${dimension}`;
+
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.5 });
+  const parsed = parseJSONObject(content, ["observation", "criteria", "effect"]);
+  return {
+    observation: (parsed.observation as string) || `${line.text} — status: ${line.status}. [Auditor: add WHO, WHAT, WHEN, and HOW MANY specifics here.]`,
+    criteria: (parsed.criteria as string) || `GD4 ${req.id} requires: ${req.requirement}`,
+    effect: (parsed.effect as string) || `This gap must be resolved before the EduTrust assessment. See the dimension (${dimension}) for the applicable band ceiling.`,
+  };
 }

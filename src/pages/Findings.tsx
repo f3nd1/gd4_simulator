@@ -3,11 +3,14 @@ import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
+import { useAISettingsStore } from "../store/useAISettingsStore";
 import { Card, filterSelectStyle, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { GOLD, INK } from "../lib/theme";
 import type { Finding, FindingType, Severity, FindingDimension } from "../types";
+import { runLiveFindingObservation, AIClientError } from "../lib/ai/agentRuntime";
+import { effectiveSettings } from "../lib/ai/aiClient";
 
 const TYPES: (FindingType | "All")[] = ["All", "AFI", "Improvement Action", "Observation", "Quality Action", "Critical Readiness Risk"];
 const SEVERITIES: (Severity | "All")[] = ["All", "Critical", "High", "Medium", "Low"];
@@ -31,6 +34,9 @@ function dimensionLabel(d: FindingDimension): string {
 const EMPTY_FORM = {
   gd4ItemId: GD4_REQUIREMENTS[0]?.id || "",
   issue: "",
+  observation: "",
+  criteria: "",
+  effect: "",
   type: "AFI" as FindingType,
   severity: "Medium" as Severity,
   owner: "",
@@ -55,6 +61,10 @@ export function Findings() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [genNote, setGenNote] = useState<string | null>(null);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const aiSettings = useAISettingsStore((s) => s);
+  const aiEnabled = aiSettings.enabled && !!aiSettings.apiKey;
 
   // Counts by dimension across the whole register, so the procedure-vs-evidence
   // split is visible at a glance above the table.
@@ -69,6 +79,33 @@ export function Findings() {
     [critFilter]
   );
 
+  async function draftObservation() {
+    const req = GD4_REQUIREMENTS.find((r) => r.id === form.gd4ItemId);
+    if (!req || !aiEnabled) return;
+    setDraftError(null);
+    setDraftBusy(true);
+    try {
+      const result = await runLiveFindingObservation(
+        req,
+        { text: req.requirement, status: "Not met" },
+        "Procedure",
+        undefined,
+        effectiveSettings(aiSettings, { purpose: "analysis" })
+      );
+      setForm((f) => ({
+        ...f,
+        observation: result.observation,
+        criteria: result.criteria,
+        effect: result.effect,
+        issue: f.issue || req.requirement.slice(0, 100),
+      }));
+    } catch (e) {
+      setDraftError(e instanceof AIClientError ? e.message : "AI draft failed — check your API key in Settings.");
+    } finally {
+      setDraftBusy(false);
+    }
+  }
+
   function submitFinding() {
     if (!form.issue.trim() || !form.gd4ItemId) return;
     const finding: Finding = {
@@ -76,6 +113,9 @@ export function Findings() {
       auditCycleId: cycle.id,
       gd4ItemId: form.gd4ItemId,
       issue: form.issue.trim(),
+      observation: form.observation.trim() || undefined,
+      criteria: form.criteria.trim() || undefined,
+      effect: form.effect.trim() || undefined,
       type: form.type,
       severity: form.severity,
       owner: form.owner.trim(),
@@ -89,6 +129,7 @@ export function Findings() {
     addCustomFinding(finding);
     setForm(EMPTY_FORM);
     setShowForm(false);
+    setDraftError(null);
   }
 
   const rows = allFindings.filter((f) => {
@@ -184,23 +225,65 @@ export function Findings() {
               <span style={{ fontSize: 12.5 }}>Repeat finding</span>
             </label>
             <label style={{ display: "block", gridColumn: "1 / -1" }}>
-              <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Issue</span>
-              <textarea
+              <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Issue (title — shown in the register)</span>
+              <input
                 value={form.issue}
                 onChange={(e) => setForm({ ...form, issue: e.target.value })}
-                placeholder="Describe the issue found"
+                placeholder="Short summary, e.g. GD4 4.2.1 — Pre-Course Counselling Records Missing"
+                style={{ ...inputStyle, marginTop: 3 }}
+              />
+            </label>
+            <label style={{ display: "block", gridColumn: "1 / -1" }}>
+              <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Observation — what was found <span style={{ fontStyle: "italic", textTransform: "none" }}>(WHO · WHAT · WHEN · HOW MANY)</span></span>
+              <textarea
+                value={form.observation}
+                onChange={(e) => setForm({ ...form, observation: e.target.value })}
+                placeholder="e.g. Form ADM-05 (Pre-Course Counselling Record) was absent from 8 of 23 student intake files reviewed (Jan–Jun 2025 cohort). All 8 relate to international students enrolled after 1 April 2025. The Admissions Counsellor confirmed records are completed manually with no system prompt."
+                rows={3}
+                style={{ ...inputStyle, marginTop: 3, resize: "vertical" }}
+              />
+            </label>
+            <label style={{ display: "block", gridColumn: "1 / -1" }}>
+              <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Criteria — what GD4 requires <span style={{ fontStyle: "italic", textTransform: "none" }}>(cite the clause)</span></span>
+              <textarea
+                value={form.criteria}
+                onChange={(e) => setForm({ ...form, criteria: e.target.value })}
+                placeholder="e.g. GD4 4.2.1 requires documented pre-course counselling for every student before enrolment, covering course details, fees, FPS arrangement, and withdrawal/refund policy."
+                rows={2}
+                style={{ ...inputStyle, marginTop: 3, resize: "vertical" }}
+              />
+            </label>
+            <label style={{ display: "block", gridColumn: "1 / -1" }}>
+              <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Effect — why it matters <span style={{ fontStyle: "italic", textTransform: "none" }}>(regulatory / band consequence)</span></span>
+              <textarea
+                value={form.effect}
+                onChange={(e) => setForm({ ...form, effect: e.target.value })}
+                placeholder="e.g. This is a mandatory SSG requirement. Incomplete records expose the institution to enforcement action and will cap this sub-criterion at Band 2 regardless of policy quality."
                 rows={2}
                 style={{ ...inputStyle, marginTop: 3, resize: "vertical" }}
               />
             </label>
           </div>
-          <button
-            onClick={submitFinding}
-            disabled={!form.issue.trim()}
-            style={{ marginTop: 10, cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "7px 14px", borderRadius: 8, fontSize: 12.5 }}
-          >
-            Save finding
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+            <button
+              onClick={submitFinding}
+              disabled={!form.issue.trim()}
+              style={{ cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "7px 14px", borderRadius: 8, fontSize: 12.5 }}
+            >
+              Save finding
+            </button>
+            {aiEnabled && (
+              <button
+                onClick={draftObservation}
+                disabled={draftBusy || !form.gd4ItemId}
+                title="AI drafts Observation, Criteria and Effect from the selected GD4 item. Uses [placeholders] where you need to fill in specific names, dates, and counts."
+                style={{ cursor: "pointer", border: "1px solid #c9a24a", background: "#fbf3df", color: "#7a5c12", fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
+              >
+                {draftBusy ? "Drafting…" : "AI draft finding body"}
+              </button>
+            )}
+            {draftError && <span style={{ fontSize: 11.5, color: "#b23121" }}>{draftError}</span>}
+          </div>
         </Card>
       )}
 
@@ -306,7 +389,14 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
           GD4 {req.id} · {req.requirement}
           {f.clause && <span style={{ fontFamily: "ui-monospace,monospace", marginLeft: 8 }}>{f.clause}</span>}
           {f.source && <Pill s="neutral">{f.source}</Pill>}
+          {f.dimension && <span style={{ marginLeft: 4 }}><Pill s={dimensionTone(f.dimension)}>{dimensionLabel(f.dimension)}</Pill></span>}
         </div>
+      )}
+      <Section label="Observation — what was found (WHO · WHAT · WHEN · HOW MANY)" text={f.observation} />
+      <Section label="Criteria — what the standard requires" text={f.criteria} />
+      <Section label="Effect — regulatory / certification consequence" text={f.effect} />
+      {(f.observation || f.criteria || f.effect) && (f.rootCause || f.corrective || f.preventive) && (
+        <div style={{ borderTop: "1px solid #e2e8f0", margin: "8px 0" }} />
       )}
       <Section label="Root cause" text={f.rootCause} />
       <Section label="Corrective action (fix it now)" text={f.corrective} />

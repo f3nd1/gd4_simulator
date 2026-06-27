@@ -210,15 +210,47 @@ export function findingDimension(line: SpecificChecklistLine): FindingDimension 
 export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLine): DraftFindingInfo {
   const sufficiency = lineSufficiency(line);
   const analysis = buildFindingAnalysis(req, line);
+  const dim = findingDimension(line);
+  const apsr = lineApsr(line);
+
+  // Build a baseline observation from the APSR notes if available, otherwise
+  // from the line status. This is intentionally a template — the auditor should
+  // replace placeholders like [N of M] with actual counts from their review.
+  const apsrNoteLines = apsr
+    ? (
+        [
+          apsr.approach.status !== "Meeting" && apsr.approach.note ? `Approach: ${apsr.approach.note}` : "",
+          apsr.processes.status !== "Deployed" && apsr.processes.note ? `Processes: ${apsr.processes.note}` : "",
+          apsr.systemsOutcomes.status !== "Evident" && apsr.systemsOutcomes.note ? `Systems & Outcomes: ${apsr.systemsOutcomes.note}` : "",
+          apsr.review.status !== "Evident" && apsr.review.note ? `Review: ${apsr.review.note}` : "",
+        ] as string[]
+      ).filter(Boolean)
+    : [];
+
+  const observation = apsrNoteLines.length
+    ? `${line.text} — status: ${line.status}. Auditor AI notes: ${apsrNoteLines.join(". ")}.`
+    : `${line.text} — marked ${line.status}${sufficiency === "Missing" ? "; no implementation records were found in the evidence folder" : sufficiency === "Weak" ? "; the records found were incomplete or did not cover the full scope" : ""}.`;
+
+  const effectByDim: Record<string, string> = {
+    Procedure: `Without a documented, institution-specific procedure, this requirement cannot be consistently met. Under the EduTrust APSR rubric, an Approach rated "Beginning" or "Not evident" caps this sub-criterion at Band 2 regardless of any other evidence.`,
+    Evidence: `Without implementation records, this requirement is unverifiable at audit. A Processes dimension rated "Not evident" caps this sub-criterion at Band 2 even if the policy document is strong.`,
+    Outcomes: `Outcome data is required to demonstrate the process is producing the desired results. Without it, this sub-criterion cannot exceed Band 3 under the APSR rubric.`,
+    Review: `A formal review with documented improvement action is required for Band 4 or above. Without it, this sub-criterion is capped at Band 3 regardless of how complete the implementation records are.`,
+    Unverified: `This line is marked as met but has no evidence attached. An SSG assessor will treat it as unverified — it cannot contribute to the band until evidence is linked.`,
+  };
+
   return {
     gd4ItemId: req.id,
     clause: line.clause,
     issue: `${line.text} — marked ${line.status}${sufficiency === "Missing" ? ", evidence missing" : sufficiency === "Weak" ? ", evidence weak" : ""}.`,
     severity: req.gateSensitive ? "High" : "Medium",
     suggestedAction: `Provide and approve evidence for: ${line.text}`,
+    observation,
+    criteria: `GD4 ${req.id} requires: ${req.requirement}${req.expectedEvidence.length ? ` Expected evidence includes: ${req.expectedEvidence.join("; ")}.` : ""}`,
+    effect: effectByDim[dim] ?? effectByDim.Evidence,
     rootCause: analysis.rootCause,
     corrective: analysis.corrective,
     preventive: analysis.preventive,
-    dimension: findingDimension(line),
+    dimension: dim,
   };
 }
