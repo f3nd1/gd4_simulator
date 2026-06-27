@@ -29,7 +29,7 @@ import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit, type FolderAuditLineVerdict } from "../lib/ai/simulateAI";
-import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, FOLDER_DOC_CAP } from "../lib/ai/agentRuntime";
+import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
@@ -37,7 +37,7 @@ import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError } from "../lib/drive/driveClient";
 import { describeImage, summariseText, effectiveSettings } from "../lib/ai/aiClient";
-import { computeBand, lineApsr } from "../lib/checklistBanding";
+import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
 import { apsrReason } from "../lib/ai/simulateAI";
 
 // Best-effort evidence-type classification for audit-attached evidence, from
@@ -285,6 +285,7 @@ export type WorkspaceState = {
   addExportLogEntry: (e: ExportLogEntry) => void;
 
   addCustomFinding: (f: Finding) => void;
+  updateCustomFinding: (id: string, patch: Partial<Finding>) => void;
 
   // Lets other stores (e.g. the checklist module) record an AI run in the
   // shared review log without duplicating the id/timestamp boilerplate.
@@ -1195,6 +1196,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return;
         }
 
+        // Snapshot finding IDs before auto-raise so the post-audit pipeline
+        // can identify exactly which findings are new (= need AI enrichment).
+        const preRaiseFindingIds = new Set(get().customFindings.map((f) => f.id));
+
         // Auto-raise findings from the gaps this audit just set, so the
         // Findings register fills itself the moment an audit runs (instead of
         // staying empty until the user remembers to click "Raise findings").
@@ -1248,7 +1253,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // 1. Headline — the verdict, first.
         lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}).`);
         if (bandParts.length) lineParts.push(`Band: ${bandParts.join(", ")}.`);
-        if (autoRaised > 0) lineParts.push(`Raised ${autoRaised} new finding${autoRaised === 1 ? "" : "s"} from the gaps — see the Findings register.`);
+        if (autoRaised > 0) lineParts.push(`Raised ${autoRaised} new finding${autoRaised === 1 ? "" : "s"} from the gaps — see the Findings register.${live ? " AI agents are drafting finding bodies and closure actions in the background." : ""}`);
         // 2. Files read.
         lineParts.push(
           scanned.length
@@ -1272,6 +1277,101 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (parseWarnings.length) lineParts.push(`⚠ ${parseWarnings.length} APSR dimension(s) defaulted to "Not evident" due to unexpected model output — those verdicts may be overly harsh; spot-check them.`);
         const summary = lineParts.join("\n");
         finish(summary, live, liveError);
+
+        // Post-audit multi-agent pipeline — fires asynchronously so the audit
+        // result appears immediately and the finding enrichment arrives seconds
+        // later. Only runs when AI is live (no point enriching offline drafts).
+        if (live && autoRaised > 0) {
+          const newFindings = get().customFindings.filter(
+            (f) => !preRaiseFindingIds.has(f.id) && f.source === "Checklist"
+          );
+          if (newFindings.length > 0) {
+            (async () => {
+              const entries = useChecklistModuleStore.getState().entries;
+
+              // Pass 1 — Finding Writer: parallel AI observation/criteria/effect
+              // for every new finding. Each call gets the real APSR context that
+              // the folder audit just produced, so the body is specific, not generic.
+              const pass1 = newFindings.map(async (finding) => {
+                try {
+                  const req = GD4_REQUIREMENTS.find((r) => r.id === finding.gd4ItemId);
+                  if (!req) return;
+                  const entry = entries[finding.gd4ItemId];
+                  // Match line by clause first, then by issue-text prefix.
+                  const line = entry?.specific.find(
+                    (l) => l.clause === finding.clause || finding.issue.startsWith(l.text.slice(0, 50))
+                  );
+                  if (!line) return;
+                  const dim = findingDimension(line);
+                  const apsr = lineApsr(line);
+                  const result = await runLiveFindingObservation(
+                    { id: req.id, requirement: req.requirement, describeShow: req.describeShow, expectedEvidence: req.expectedEvidence },
+                    { text: line.text, status: line.status },
+                    dim,
+                    apsr,
+                    analysisSettings
+                  );
+                  get().updateCustomFinding(finding.id, {
+                    observation: result.observation,
+                    criteria: result.criteria,
+                    effect: result.effect,
+                  });
+                  get().pushAIReviewLog({
+                    agent: "Finding Writer",
+                    reviewType: "Finding",
+                    subjectId: finding.gd4ItemId,
+                    verdict: "Drafted",
+                    confidence: "Medium",
+                    keyConcerns: [dim],
+                    recommendedAction: "Review and edit the drafted finding body before closing.",
+                    live: true,
+                    generatedContent: `OBSERVATION:\n${result.observation}\n\nCRITERIA:\n${result.criteria}\n\nEFFECT:\n${result.effect}`,
+                  });
+                } catch {
+                  // Non-fatal — a failed finding draft never affects the audit result.
+                }
+              });
+              await Promise.all(pass1);
+
+              // Pass 2 — Closure Drafter: only for Cat A + B findings (the ones
+              // that carry the highest regulatory / Star-disqualifying risk). Uses
+              // the AI-enriched finding body from Pass 1 as input so the root cause
+              // is specific to what the Folder Audit and Finding Writer actually found.
+              const highPriority = get().customFindings.filter(
+                (f) => preRaiseFindingIds.has(f.id) === false && (f.riskCategory === "A" || f.riskCategory === "B")
+              );
+              const pass2 = highPriority.map(async (finding) => {
+                try {
+                  const req = GD4_REQUIREMENTS.find((r) => r.id === finding.gd4ItemId);
+                  const enriched = get().customFindings.find((f) => f.id === finding.id);
+                  const standard = req ? `${req.requirement}\n${req.describeShow.map((d) => `- ${d}`).join("\n")}` : "";
+                  const apsr = enriched?.apsr ? apsrReason(enriched.apsr) : undefined;
+                  const draft = await runLiveClosureDraft(
+                    { issue: finding.issue, gd4ItemId: finding.gd4ItemId },
+                    analysisSettings,
+                    { standard, apsr }
+                  );
+                  // seedClosure only fills blanks — never overwrites user text.
+                  get().seedClosure(finding.id, { root: draft.root, corr: draft.corr, prev: draft.prev });
+                  get().pushAIReviewLog({
+                    agent: "Closure Drafter",
+                    reviewType: "Closure",
+                    subjectId: finding.gd4ItemId,
+                    verdict: "Drafted",
+                    confidence: "Medium",
+                    keyConcerns: [`Cat ${finding.riskCategory} finding — root cause, corrective and preventive actions drafted`],
+                    recommendedAction: "Review the drafted actions in Quality Action / AFI, then link closure evidence.",
+                    live: true,
+                    generatedContent: `ROOT CAUSE:\n${draft.root}\n\nCORRECTIVE:\n${draft.corr}\n\nPREVENTIVE:\n${draft.prev}`,
+                  });
+                } catch {
+                  // Non-fatal.
+                }
+              });
+              await Promise.all(pass2);
+            })();
+          }
+        }
       },
 
       // Dashboard "Audit all folders": runs the full single-folder pipeline
@@ -1455,6 +1555,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       addExportLogEntry: (e) => set((s) => ({ exportLog: [e, ...s.exportLog].slice(0, 100) })),
 
       addCustomFinding: (f) => set((s) => ({ customFindings: [...s.customFindings, f] })),
+
+      updateCustomFinding: (id, patch) =>
+        set((s) => ({ customFindings: s.customFindings.map((f) => (f.id === id ? { ...f, ...patch } : f)) })),
 
       pushAIReviewLog: (entry) =>
         set((s) => {
