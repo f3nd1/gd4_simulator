@@ -19,6 +19,7 @@ import type {
   Confidence,
   Finding,
   DriveAccessStatus,
+  ApsrBreakdown,
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
@@ -27,7 +28,7 @@ import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { simulateItemReview, simulateClosure, simulateFolderAudit } from "../lib/ai/simulateAI";
+import { simulateItemReview, simulateClosure, simulateFolderAudit, type FolderAuditLineVerdict } from "../lib/ai/simulateAI";
 import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, FOLDER_DOC_CAP } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
@@ -304,7 +305,79 @@ export type WorkspaceState = {
   }) => void;
 
   setBusy: (id: string | null) => void;
+
+  // Running markdown log of every folder audit in this workspace.
+  // Auto-updated after each auditFolderContents call; fed into subsequent AI
+  // calls so the model can flag recurring cross-criterion gaps.
+  auditJournal: string;
+  clearAuditJournal: () => void;
 };
+
+// ---- Audit Journal helpers -----------------------------------------------
+
+// Maps an APSR breakdown to its weakest-link dimension label for the journal.
+function apsrDimLabel(apsr: ApsrBreakdown): string {
+  if (apsr.approach.status !== "Meeting") return "Approach gap";
+  if (apsr.processes.status !== "Deployed") return "Processes gap";
+  if (apsr.systemsOutcomes.status !== "Evident") return "Outcomes gap";
+  if (apsr.review.status !== "Evident") return "Review gap";
+  return "";
+}
+
+// Builds a compact markdown entry for one sub-criterion's audit result.
+function buildJournalEntry(
+  subCriterionId: string,
+  folderName: string,
+  bandParts: string[],
+  verdicts: FolderAuditLineVerdict[],
+  lineTextById: Map<string, string>,
+): string {
+  const counts = { Met: 0, Partial: 0, "Not met": 0 } as Record<string, number>;
+  for (const v of verdicts) counts[v.status]++;
+  const date = new Date().toLocaleDateString("en-GB");
+  const header = `### ${subCriterionId} — ${folderName} (${date})`;
+  const summary = `${bandParts.length ? `Band: ${bandParts.join(", ")}. ` : ""}${counts.Met} Met / ${counts.Partial} Partial / ${counts["Not met"]} Not met.`;
+  const gaps = verdicts.filter((v) => v.status !== "Met").slice(0, 4);
+  if (gaps.length === 0) return `${header}\n${summary}`;
+  const gapLines = gaps.map((v) => {
+    const text = (lineTextById.get(v.lineId) || v.lineId).slice(0, 70);
+    const dim = v.apsr ? apsrDimLabel(v.apsr) : "";
+    return `- ${text}${dim ? ` [${dim}]` : ""}`;
+  });
+  return `${header}\n${summary}\nGaps:\n${gapLines.join("\n")}`;
+}
+
+// Replaces any existing entry for subCriterionId in the journal and appends
+// the new entry at the end (most-recent-last order).
+function updateJournal(journal: string, subCriterionId: string, newEntry: string): string {
+  const prefix = `### ${subCriterionId} —`;
+  const lines = journal.split("\n");
+  const out: string[] = [];
+  let skip = false;
+  for (const line of lines) {
+    if (line.startsWith(prefix)) { skip = true; continue; }
+    if (skip && (line.startsWith("### ") || line.startsWith("⚠ Recurring"))) skip = false;
+    if (!skip) out.push(line);
+  }
+  const cleaned = out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+  return cleaned ? `${cleaned}\n\n${newEntry}` : newEntry;
+}
+
+// Scans the journal for dimensions that recur across 2+ sub-criteria and
+// returns a trailing warning line, or "" if no recurring pattern found.
+function patternNote(journal: string): string {
+  const dims = [
+    { key: "Approach gap", label: "Approach" },
+    { key: "Processes gap", label: "Processes" },
+    { key: "Outcomes gap", label: "Systems & Outcomes" },
+    { key: "Review gap", label: "Review" },
+  ];
+  const recurring = dims.filter(({ key }) => (journal.match(new RegExp(`\\[${key}\\]`, "g")) || []).length >= 2);
+  if (recurring.length === 0) return "";
+  return `\n\n⚠ Recurring patterns: ${recurring.map(({ label, key }) => `${label} gap (${(journal.match(new RegExp(`\\[${key}\\]`, "g")) || []).length}×)`).join(", ")} — may indicate systemic gaps.`;
+}
+
+// ---- End audit journal helpers --------------------------------------------
 
 let logCounter = 0;
 function logAI(
@@ -367,10 +440,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       additionalInfo: { link: "" },
       schoolContext: { text: "", link: "" },
       evidenceAuditReport: null,
+      auditJournal: "",
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
       cancelBusy: () => set({ busy: null, bulkAuditStatus: null }),
+      clearAuditJournal: () => set({ auditJournal: "" }),
 
       runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) =>
         set({ evidenceAuditReport: flags === null ? null : { flags, generatedAt: new Date().toLocaleString() } }),
@@ -421,6 +496,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             schoolContext: s.schoolContext,
             additionalInfo: s.additionalInfo,
             agentMemory: useAgentMemoryStore.getState().memory,
+            auditJournal: s.auditJournal,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -470,6 +546,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             aiReviewLog: snap.aiReviewLog ?? s.aiReviewLog,
             schoolContext: snap.schoolContext ?? s.schoolContext,
             additionalInfo: snap.additionalInfo ?? s.additionalInfo,
+            auditJournal: (snap as WorkspaceSnapshot & { auditJournal?: string }).auditJournal ?? s.auditJournal,
           };
         }),
 
@@ -494,6 +571,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             schoolContext: s.schoolContext,
             additionalInfo: s.additionalInfo,
             agentMemory: useAgentMemoryStore.getState().memory,
+            auditJournal: s.auditJournal,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -542,6 +620,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           customFindings: [],
           seedFindingsLoaded: false,
           evidenceAuditReport: null,
+          auditJournal: "",
         }));
       },
 
@@ -997,9 +1076,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // FINAL docText lands UNDER FOLDER_DOC_CAP — meaning the audit never has
         // to re-truncate, and no misleading "files may be missing" note fires
         // when in fact every document was read and condensed.
+        // Audit journal: prior findings from this workspace, fed in so the AI
+        // can spot cross-criterion recurring gaps (Review not documented in 1.1,
+        // 2.1, 3.1 → systemic gap worth calling out). Capped so it doesn't eat
+        // the document budget; excluded for this sub-criterion's own prior entry
+        // (that's replaced at the end of this run anyway).
+        const JOURNAL_AI_CAP = 2000;
+        const priorJournal = get().auditJournal.trim();
+        const journalBlock = priorJournal
+          ? `=== PRIOR AUDIT FINDINGS (other sub-criteria already audited in this workspace — use for cross-criterion pattern awareness; judge THIS sub-criterion on its own evidence) ===\n${priorJournal.slice(-JOURNAL_AI_CAP)}`
+          : "";
+
         let condensed = 0;
         const headingOverhead = parts.reduce((n, p) => n + p.heading.length + 2, 0);
-        const fixedOverhead = headingOverhead + (resolvedContext?.length || 0) + 300; // 300 ≈ section markers
+        const fixedOverhead = headingOverhead + (resolvedContext?.length || 0) + journalBlock.length + 300; // 300 ≈ section markers
         const bodyBudgetTotal = Math.max(4000, FOLDER_DOC_CAP - fixedOverhead);
         const rawTotal = parts.reduce((n, p) => n + p.body.length, 0);
         if (rawTotal > bodyBudgetTotal && aiSettings.enabled && aiSettings.apiKey && parts.length) {
@@ -1020,6 +1110,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const policyText = sectionText(true);
         const evidenceText = sectionText(false);
         const docText = [
+          journalBlock,
           resolvedContext ? `=== SCHOOL-WIDE CONTEXT (general supporting documents — background only, not primary evidence for this sub-criterion) ===\n${resolvedContext}` : "",
           policyText ? `=== POLICY & PROCEDURE ===\n${policyText}` : "",
           evidenceText ? `=== ACTUAL EVIDENCE ===\n${evidenceText}` : "",
@@ -1134,6 +1225,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             return `${item.id} → Band ${computeBand(e.generic, e.specific, item.gateSensitive).finalBand}`;
           })
           .filter(Boolean);
+
+        // Update the running audit journal with a compact entry for this
+        // sub-criterion (bands + key gaps + APSR dimension labels). The updated
+        // journal is then fed into the NEXT folder audit call so the AI can flag
+        // recurring cross-criterion gaps — it won't help this call (already done)
+        // but it improves every subsequent one in the same "Audit all" run.
+        try {
+          const entry = buildJournalEntry(folder.subCriterionId, folder.folderName, bandParts as string[], verdicts, lineTextById);
+          const updated = updateJournal(get().auditJournal, folder.subCriterionId, entry);
+          set({ auditJournal: updated + patternNote(updated) });
+        } catch {
+          // Non-fatal — journal update failure must not affect the audit result.
+        }
 
         // The summary is a structured, multi-line report (rendered with
         // white-space: pre-wrap) so a busy run reads as labelled sections

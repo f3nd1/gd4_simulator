@@ -4,6 +4,8 @@ import { CONTEXT_CHAR_CAP } from "../lib/ai/aiClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 
+const JOURNAL_AI_CAP = 2000;
+
 const ACCESS_TONE = { Connected: "good", Error: "critical", "Not Connected": "medium" } as const;
 
 const PLACEHOLDER = `# About this institution
@@ -23,7 +25,10 @@ export function SchoolContext() {
   const setSchoolContextLink = useWorkspaceStore((s) => s.setSchoolContextLink);
   const setSchoolContextEnabled = useWorkspaceStore((s) => s.setSchoolContextEnabled);
   const readSchoolContextFromDrive = useWorkspaceStore((s) => s.readSchoolContextFromDrive);
+  const auditJournal = useWorkspaceStore((s) => s.auditJournal);
+  const clearAuditJournal = useWorkspaceStore((s) => s.clearAuditJournal);
   const [reading, setReading] = useState(false);
+  const [journalExpanded, setJournalExpanded] = useState(false);
 
   const injectionOn = schoolContext.enabled !== false;
   const composed = composeSchoolContext({ ...schoolContext, enabled: true });
@@ -107,6 +112,46 @@ export function SchoolContext() {
             </div>
           )}
         </div>
+      </Card>
+
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+          <div>
+            <h3 style={{ marginTop: 0, marginBottom: 2, fontSize: 14 }}>Audit Journal — running findings log</h3>
+            <p style={{ fontSize: 12.5, color: "#6b7280", margin: 0 }}>
+              After each folder audit, a compact entry is added here (bands + gaps + APSR dimension). The last {JOURNAL_AI_CAP.toLocaleString()} characters are fed into every subsequent AI folder audit so it can flag <b>recurring cross-criterion gaps</b> (e.g. "Review not documented in 1.1, 2.3 and 4.4 — systemic gap"). Auto-updated; you can clear it to start fresh.
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {auditJournal ? (
+              <Pill s="good">{auditJournal.split("###").length - 1} sub-criteria logged</Pill>
+            ) : (
+              <Pill s="medium">Empty — no audits yet</Pill>
+            )}
+            <button
+              onClick={() => setJournalExpanded((v) => !v)}
+              style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}
+            >
+              {journalExpanded ? "Hide" : "View journal"}
+            </button>
+            {auditJournal && (
+              <button
+                onClick={() => { if (confirm("Clear the audit journal? This only removes the AI's running notepad — your checklist verdicts and findings are unaffected.")) clearAuditJournal(); }}
+                style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
+              >
+                Clear journal
+              </button>
+            )}
+          </div>
+        </div>
+        {auditJournal && <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
+          {auditJournal.length.toLocaleString()} chars total · last {Math.min(auditJournal.length, JOURNAL_AI_CAP).toLocaleString()} chars sent to AI per audit call
+        </div>}
+        {journalExpanded && (
+          <pre style={{ margin: 0, padding: "10px 12px", borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: 11.5, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 400, overflowY: "auto", color: auditJournal ? "#1e293b" : "#94a3b8" }}>
+            {auditJournal || "Nothing yet. Run a folder audit to start building the journal."}
+          </pre>
+        )}
       </Card>
     </div>
   );

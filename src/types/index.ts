@@ -414,6 +414,7 @@ export type WorkspaceSnapshot = {
   schoolContext?: { text: string; link: string; driveCache?: string; cachedAt?: string; accessStatus?: DriveAccessStatus; accessNote?: string; enabled?: boolean };
   additionalInfo?: { link: string; accessStatus?: DriveAccessStatus; accessNote?: string; accessAt?: string };
   agentMemory?: Record<string, AgentMemoryEntry[]>;
+  auditJournal?: string;
 };
 
 export type VersionEntry = {
