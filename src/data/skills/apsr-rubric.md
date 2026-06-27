@@ -18,7 +18,7 @@ Use this to self-check your ratings before returning a verdict. The most common 
 **Rate "Not evident" when:**
 - No document in the Policy & Procedure folder addresses this requirement at all
 - The only document is a template with unfilled placeholder text
-- The document is a reference to external regulations (e.g. "as per CPE guidelines") without the institution's own procedure
+- The document is a reference to external regulations (e.g. "as per SSG guidelines") without the institution's own procedure
 
 **Critical trap — the Approach hard-gate:** If Approach = "Beginning" or "Not evident", the overall line status MUST be "Not met" regardless of how much implementation evidence exists. A strong implementation of a weak policy is still a weak system.
 

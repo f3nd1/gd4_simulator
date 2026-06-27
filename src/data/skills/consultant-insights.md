@@ -1,6 +1,6 @@
 # Consultant Insights — What Leading PEIs Do Differently
 
-Use this when making strategic recommendations beyond gap identification. The goal is to move the institution from compliance to genuine quality — a distinction CPE assessors can recognise and a Star rating requires.
+Use this when making strategic recommendations beyond gap identification. The goal is to move the institution from compliance to genuine quality — a distinction SSG assessors can recognise and a Star rating requires.
 
 ## The compliance vs quality divide
 
@@ -38,7 +38,7 @@ Focus on completeness and consistency first. Get every required record produced 
 The review cycle is the key investment. Take one process (pick the most important or the one with the most data) and run a complete cycle: collect data → analyse → decide → act → record the improvement. Document this one cycle thoroughly. That documented improvement is the Band 4 evidence for that item.
 
 **Currently Band 4 → targeting Band 5 (Star):**
-Benchmarking is the unlock. Find an external reference point — industry employment rate data, graduate survey norms from a sector body, CPE published benchmarks. Show that you measure your outcomes against this external standard, and show what you do when you fall below it. Second Star lever: demonstrate that your system runs the same way even when key staff leave — what is the documented handover protocol, and has it been tested?
+Benchmarking is the unlock. Find an external reference point — industry employment rate data, graduate survey norms from a sector body, SSG published benchmarks. Show that you measure your outcomes against this external standard, and show what you do when you fall below it. Second Star lever: demonstrate that your system runs the same way even when key staff leave — what is the documented handover protocol, and has it been tested?
 
 ## Phrases that signal genuine quality
 

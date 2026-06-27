@@ -42,7 +42,7 @@ Each sub-criterion folder should contain two types of documents. Assess them sep
 **Auto-downgrade Approach to "Beginning" if:**
 - The policy uses exclusively passive voice with no named roles: "Students will be informed…" (by whom?) 
 - The only documentation is a chart or diagram with no accompanying procedure
-- The policy is a verbatim extract from CPE/SSG guidelines with the institution's name swapped in
+- The policy is a verbatim extract from SSG/EduTrust guidelines with the institution's name swapped in
 
 ## Sufficiency thresholds (guide)
 

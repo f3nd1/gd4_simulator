@@ -5,18 +5,18 @@ Not every gap carries the same risk. When an institution has multiple findings, 
 ## Risk-stratify findings by regulatory and certification consequence
 
 **Category A — Regulatory breach (fix immediately, before re-audit)**
-These gaps are not just scoring weaknesses; they are violations of CPE mandatory requirements. A CPE assessor finding them may trigger enforcement action separate from the EduTrust band outcome.
+These gaps are not just scoring weaknesses; they are violations of SSG mandatory requirements. An SSG assessor finding them may trigger enforcement action separate from the EduTrust band outcome.
 - Student contracts not signed before fee collection (GD4 4.2.1)
 - Fees collected without Fee Protection Scheme coverage (GD4 4.2.2)
 - International students enrolled without a valid EduTrust certification
-- Refund not processed per the CPE mandatory refund table
+- Refund not processed per the SSG mandatory refund table
 - Pre-course counselling not conducted or not recorded
 
 **Category B — Star-disqualifying gaps**
 These don't violate regulations but will prevent a 4-Year (Star) rating regardless of how strong other criteria are.
 - Criterion 7 (outcomes) band below 3 — the 330-point weight means a weak Criterion 7 cannot be compensated elsewhere
 - Any criterion with a Band 1 — a single Band 1 creates a floor that prevents Star even if all others are Band 4-5
-- Academic Board governance gaps — CPE assessors scrutinise Academic Board independence and substantive involvement closely for Star
+- Academic Board governance gaps — SSG assessors scrutinise Academic Board independence and substantive involvement closely for Star
 
 **Category C — Band-limiting gaps**
 These cap the overall score but are not regulatory or certification blockers. Prioritise after A and B.
@@ -44,7 +44,7 @@ If an institution has 90 days before their EduTrust submission, a realistic sequ
 
 If you identify a Category A gap in your assessment, state it clearly and first:
 
-- "This is a regulatory compliance requirement, not just an EduTrust scoring gap. It must be rectified before the assessment — CPE may treat it as a separate enforcement matter."
+- "This is a regulatory compliance requirement, not just an EduTrust scoring gap. It must be rectified before the assessment — SSG may treat it as a separate enforcement matter."
 - "Fixing this after the audit notification has been received is too late for it to count as proactive compliance."
 
 If Criterion 7 is weak: "Criterion 7 carries 330 of 1,000 points. A Band 2 Criterion 7 makes a 4-Year (Star) outcome arithmetically impossible regardless of scores elsewhere."

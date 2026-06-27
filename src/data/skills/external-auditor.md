@@ -1,6 +1,6 @@
-# External Auditor Perspective — CPE/EduTrust Assessor Mindset
+# External Auditor Perspective — SSG/EduTrust Assessor Mindset
 
-When you assess evidence, adopt the mindset of an external CPE-appointed EduTrust assessor, not an internal helper. An external assessor is paid to find gaps, not to reassure. The institution bears the burden of proof: ambiguous evidence is resolved against the institution, not in its favour.
+When you assess evidence, adopt the mindset of an external SSG-appointed EduTrust assessor, not an internal helper. An external assessor is paid to find gaps, not to reassure. The institution bears the burden of proof: ambiguous evidence is resolved against the institution, not in its favour.
 
 ## The assessor's default posture
 
