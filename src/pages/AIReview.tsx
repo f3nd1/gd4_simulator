@@ -69,15 +69,39 @@ export function AIReview() {
   const [typeFilter, setTypeFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"" | "live" | "simulated">("");
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "tokens">("newest");
+  // Date scope (yyyy-mm-dd; empty = open-ended). Applies to BOTH the cost
+  // calculator and the rows, so a period's spend can be totalled.
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  // Quick presets that set from/to relative to today.
+  function applyPreset(days: number | "all" | "today") {
+    if (days === "all") { setFromDate(""); setToDate(""); return; }
+    const today = new Date().toISOString().slice(0, 10);
+    if (days === "today") { setFromDate(today); setToDate(today); return; }
+    const from = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
+    setFromDate(from);
+    setToDate(today);
+  }
 
   // Distinct agents/types present, for the filter dropdowns.
   const agentOptions = useMemo(() => [...new Set(log.map((e) => e.agent))].sort(), [log]);
   const typeOptions = useMemo(() => [...new Set(log.map((e) => e.reviewType))].sort(), [log]);
 
-  // Filter + sort applied to the rows (the stats/calculator above stay on the
-  // full log so totals don't jump around as you filter).
+  // Date-scoped log: the calculator AND the rows both work off this, so the
+  // totals shown always match the selected period.
+  const dateScoped = useMemo(
+    () =>
+      log.filter((e) => {
+        const d = e.createdAt.slice(0, 10);
+        return (!fromDate || d >= fromDate) && (!toDate || d <= toDate);
+      }),
+    [log, fromDate, toDate]
+  );
+
+  // Agent/type/source filters + sort apply to the rows only (on top of the date scope).
   const visible = useMemo(() => {
-    const rows = log.filter(
+    const rows = dateScoped.filter(
       (e) =>
         (!agentFilter || e.agent === agentFilter) &&
         (!typeFilter || e.reviewType === typeFilter) &&
@@ -87,14 +111,14 @@ export function AIReview() {
     if (sortBy === "tokens") sorted.sort((a, b) => (b.totalTokens || 0) - (a.totalTokens || 0));
     else sorted.sort((a, b) => (sortBy === "newest" ? b.createdAt.localeCompare(a.createdAt) : a.createdAt.localeCompare(b.createdAt)));
     return sorted;
-  }, [log, agentFilter, typeFilter, sourceFilter, sortBy]);
+  }, [dateScoped, agentFilter, typeFilter, sourceFilter, sortBy]);
 
   const stats = useMemo(() => {
-    const total = log.length;
-    const live = log.filter((e) => e.live).length;
-    const failed = log.filter((e) => e.liveError).length;
+    const total = dateScoped.length;
+    const live = dateScoped.filter((e) => e.live).length;
+    const failed = dateScoped.filter((e) => e.liveError).length;
     const byAgent: Record<string, number> = {};
-    log.forEach((e) => {
+    dateScoped.forEach((e) => {
       byAgent[e.agent] = (byAgent[e.agent] || 0) + 1;
     });
     // Token + cost roll-up across every run that reported usage. byModel keeps a
@@ -103,7 +127,7 @@ export function AIReview() {
     let totalCost = 0;
     let trackedRuns = 0;
     const byModel: Record<string, { tokens: number; cost: number; runs: number }> = {};
-    log.forEach((e) => {
+    dateScoped.forEach((e) => {
       if (!e.totalTokens) return;
       trackedRuns += 1;
       totalTokens += e.totalTokens;
@@ -116,7 +140,7 @@ export function AIReview() {
       byModel[key].runs += 1;
     });
     return { total, live, simulated: total - live, failed, byAgent, totalTokens, totalCost, trackedRuns, byModel };
-  }, [log]);
+  }, [dateScoped]);
 
   return (
     <Card>
@@ -140,8 +164,32 @@ export function AIReview() {
         </div>
       )}
 
+      {/* Date scope for the cost calculator (and the rows). */}
+      {log.length > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>Period</span>
+          <input type="date" value={fromDate} max={toDate || undefined} onChange={(e) => setFromDate(e.target.value)} style={{ ...inputStyle, width: 150, padding: "5px 6px" }} />
+          <span style={{ fontSize: 12, color: "#94a3b8" }}>to</span>
+          <input type="date" value={toDate} min={fromDate || undefined} onChange={(e) => setToDate(e.target.value)} style={{ ...inputStyle, width: 150, padding: "5px 6px" }} />
+          {([["Today", "today"], ["7 days", 7], ["30 days", 30], ["All", "all"]] as const).map(([label, val]) => (
+            <button
+              key={label}
+              onClick={() => applyPreset(val as number | "all" | "today")}
+              style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "5px 9px" }}
+            >
+              {label}
+            </button>
+          ))}
+          {(fromDate || toDate) && (
+            <span style={{ fontSize: 11.5, color: "#94a3b8" }}>
+              Scoped to {fromDate || "start"} → {toDate || "now"}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Token + cost calculator: a rough running spend estimate from the token
-          counts the API reports per run. Live AI runs only — offline runs cost nothing. */}
+          counts the API reports per run, within the selected period. */}
       {stats.trackedRuns > 0 && (
         <div style={{ border: "1px solid #dbeafe", background: "#eff6ff", borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
           <div style={{ display: "flex", gap: 14, alignItems: "baseline", flexWrap: "wrap" }}>
