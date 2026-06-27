@@ -7,7 +7,7 @@
     "5173": {
       "label": "Vite dev server",
       "protocol": "http",
-      "onAutoForward": "openPreview"
+      "onAutoForward": "openBrowser"
     }
   }
 }
