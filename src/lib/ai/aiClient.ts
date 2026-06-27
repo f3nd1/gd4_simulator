@@ -52,7 +52,31 @@ function withContext(messages: AIChatMessage[], settings: AISettings): AIChatMes
   return [preamble, ...messages];
 }
 
-export async function chatComplete(messages: AIChatMessage[], settings: AISettings): Promise<string> {
+// Retries a fetch for 429 (rate-limit) and 5xx (transient server errors) with
+// exponential backoff. Returns the final Response even on exhaustion so the
+// caller can surface the status; only throws on network-level errors.
+async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 3): Promise<Response> {
+  let delay = 2000;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const res = await fetch(url, init);
+    // Success, or a definitive client error (bad request / auth) — stop immediately.
+    if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) return res;
+    if (attempt < maxAttempts - 1) {
+      await new Promise((r) => setTimeout(r, delay));
+      delay *= 2;
+    } else {
+      return res; // return the last failed response for the caller to inspect
+    }
+  }
+  // Unreachable but satisfies TS
+  throw new AIClientError("Unexpected retry loop exit");
+}
+
+export async function chatComplete(
+  messages: AIChatMessage[],
+  settings: AISettings,
+  opts?: { temperature?: number }
+): Promise<string> {
   if (!settings.enabled) throw new AIClientError("AI integration is disabled in Settings.");
   if (!settings.apiKey) throw new AIClientError("No OpenAI API key configured in Settings.");
 
@@ -62,9 +86,10 @@ export async function chatComplete(messages: AIChatMessage[], settings: AISettin
     messages: withContext(messages, settings),
     response_format: { type: "json_object" },
   };
-  if (supportsTemperature(model)) body.temperature = 0.2;
+  const temp = opts?.temperature ?? 0.2;
+  if (supportsTemperature(model)) body.temperature = temp;
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetchWithRetry("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

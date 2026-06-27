@@ -234,6 +234,23 @@ function keywordsOf(text: string): string[] {
   return Array.from(new Set((text.toLowerCase().match(/[a-z]{5,}/g) || []).filter((k) => !STOPWORDS.has(k))));
 }
 
+// Proximity check: requires keywords to co-occur within a ~200-word sliding
+// window rather than anywhere in the full document, preventing false positives
+// from unrelated passages that happen to share common words.
+function proximityHits(keywords: string[], docLower: string, windowWords = 200): string[] {
+  const words = docLower.split(/\s+/);
+  const matched = new Set<string>();
+  for (let i = 0; i < words.length; i++) {
+    const window = words.slice(i, i + windowWords).join(" ");
+    for (const kw of keywords) {
+      if (window.includes(kw)) matched.add(kw);
+    }
+    // Once all keywords are matched we can stop early
+    if (matched.size === keywords.length) break;
+  }
+  return Array.from(matched);
+}
+
 export function simulateFolderAudit(lines: { id: string; text: string }[], docText: string): FolderAuditLineVerdict[] {
   if (!docText.trim()) {
     return lines.map((l) => ({ lineId: l.id, status: "Not met" as const, reason: "No readable text was extracted from the folder's files." }));
@@ -242,9 +259,9 @@ export function simulateFolderAudit(lines: { id: string; text: string }[], docTe
   return lines.map((l) => {
     const kws = keywordsOf(l.text);
     if (kws.length === 0) return { lineId: l.id, status: "Not met" as const, reason: "Checklist line has no specific keywords to match against." };
-    const hits = kws.filter((k) => hay.includes(k));
+    const hits = proximityHits(kws, hay);
     const ratio = hits.length / kws.length;
-    if (ratio >= 0.6) return { lineId: l.id, status: "Met" as const, reason: `Matched terms in the scanned documents: ${hits.slice(0, 4).join(", ")}.` };
+    if (ratio >= 0.6) return { lineId: l.id, status: "Met" as const, reason: `Matched terms in proximity within the scanned documents: ${hits.slice(0, 4).join(", ")}.` };
     if (ratio > 0) return { lineId: l.id, status: "Partial" as const, reason: `Only partial overlap found in the scanned documents: ${hits.slice(0, 4).join(", ")}.` };
     return { lineId: l.id, status: "Not met" as const, reason: "No matching terms found in the scanned documents." };
   });

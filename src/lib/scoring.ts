@@ -161,7 +161,15 @@ export function buildScored(state: ScoringInput) {
 
   const T = awardThresholds || { provisional: 500, fourYear: 600, star: 750 };
   let award = total >= T.star ? "EduTrust Star" : total >= T.fourYear ? "EduTrust (4-Year)" : total >= T.provisional ? "EduTrust Provisional (1-Year)" : "Not certified";
-  if (!gatePass && total >= T.fourYear) award = "Capped: critical gate not met";
+  if (!gatePass) {
+    // Gate fail is noted on the award string regardless of tier so it is always
+    // visible — not just when the total would otherwise clear the 4-year bar.
+    if (total >= T.fourYear) {
+      award = "Capped: critical gate not met";
+    } else {
+      award = `${award} — critical gate not met`;
+    }
+  }
 
   const openAFIs = allFindings.filter((a) => (closures[a.id]?.human || "") !== "Accepted").length;
 

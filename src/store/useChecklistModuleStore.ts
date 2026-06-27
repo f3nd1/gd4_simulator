@@ -189,13 +189,16 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
 
       discardGenerated: (itemId) => set((s) => mapEntry(s, itemId, (e) => ({ ...e, pendingGenerated: [] }))),
 
-      addSpecificLine: (itemId, text, clause) =>
-        set((s) =>
+      addSpecificLine: (itemId, text, clause) => {
+        const trimmed = text.trim();
+        if (trimmed.length < 5) return; // ignore blank / near-blank lines
+        return set((s) =>
           mapEntry(s, itemId, (e) => ({
             ...e,
-            specific: [...e.specific, { id: newLineId(itemId), text, clause, status: "Not Started", evidence: [], generatedBy: "manual" }],
+            specific: [...e.specific, { id: newLineId(itemId), text: trimmed, clause, status: "Not Started", evidence: [], generatedBy: "manual" }],
           }))
-        ),
+        );
+      },
 
       updateSpecificLine: (itemId, lineId, patch) => set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, ...patch })))),
 
@@ -315,6 +318,11 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       raiseAllUnmetFindings: () => {
         const entries = get().entries;
         let raised = 0;
+        // Build a set of "gd4ItemId:issue-prefix" keys from already-raised findings
+        // so we can skip near-duplicates even on lines that lost their savedFindingId.
+        const existingKeys = new Set(
+          useWorkspaceStore.getState().customFindings.map((f) => `${f.gd4ItemId}:${f.issue.slice(0, 60)}`)
+        );
         for (const itemId of Object.keys(entries)) {
           const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
           if (!req) continue;
@@ -324,6 +332,9 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
             const warrants = line.status === "Not met" || (markedDone && lineSufficiency(line) === "Missing");
             if (!warrants) continue;
             const draft = buildDraftFinding(req, line);
+            const dupKey = `${itemId}:${draft.issue.slice(0, 60)}`;
+            if (existingKeys.has(dupKey)) continue; // skip near-duplicate
+            existingKeys.add(dupKey);
             get().confirmDraftFinding(itemId, line.id, draft);
             // confirmDraftFinding stamps the new finding id onto the line — use
             // it to pre-fill the closure with the derived root cause / corrective
