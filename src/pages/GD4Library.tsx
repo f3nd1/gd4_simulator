@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import {
+  GD4_REQUIREMENTS,
+  SUBMISSION_FILE_TYPES,
+  GENERAL_SUPPORTING_DOCS,
+  SUPPORTING_DOCS_TEMPLATE_NOTE,
+  SUBMISSION_PRIVACY_NOTE,
+} from "../data/gd4Requirements";
 
 export function GD4Library() {
   const [selId, setSelId] = useState(GD4_REQUIREMENTS[0]?.id);
@@ -39,8 +45,27 @@ export function GD4Library() {
         </div>
         <label style={{ display: "block", marginBottom: 8 }}>
           <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Intent</span>
-          <textarea readOnly rows={2} value={req.intent} style={{ ...inputStyle, marginTop: 3, resize: "vertical" }} />
+          <textarea readOnly rows={5} value={req.intent} style={{ ...inputStyle, marginTop: 3, resize: "vertical", minHeight: 96 }} />
         </label>
+
+        <div style={{ marginBottom: 10, border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", background: "#f8fafc" }}>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Files to submit — 3 types</span>
+          <ol style={{ fontSize: 12.5, margin: "4px 0 8px", paddingLeft: 18 }}>
+            {SUBMISSION_FILE_TYPES.map((t, i) => (
+              <li key={t}>
+                {t}
+                {i === 2 && (
+                  <ul style={{ margin: "3px 0 0", paddingLeft: 16, color: "#475569" }}>
+                    {GENERAL_SUPPORTING_DOCS.map((d) => <li key={d}>{d}</li>)}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ol>
+          <div style={{ fontSize: 11, color: "#6b7280" }}>{SUPPORTING_DOCS_TEMPLATE_NOTE}</div>
+          <div style={{ fontSize: 11, color: "#b23121", fontWeight: 600, marginTop: 2 }}>{SUBMISSION_PRIVACY_NOTE}</div>
+        </div>
+
         <div style={{ marginBottom: 8 }}>
           <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Expected evidence</span>
           <ul style={{ fontSize: 12.5, margin: "4px 0 0", paddingLeft: 18 }}>

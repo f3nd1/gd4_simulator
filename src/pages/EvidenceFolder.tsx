@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
+import { SUBMISSION_FILE_TYPES } from "../data/gd4Requirements";
 import type { FolderStatus } from "../types";
 
 const SUMMARY_CAP = 180; // chars shown before the audit summary collapses
@@ -63,6 +64,16 @@ export function EvidenceFolder() {
         sets each line's status, and updates the band/score — shown in the result line below. To audit every linked folder at once, use
         "Audit all folders → score" on the Dashboard. Both require connecting Google Drive in Settings first.
       </p>
+
+      <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", background: "#f8fafc", marginBottom: 10, fontSize: 12 }}>
+        <b style={{ fontSize: 11.5, color: "#475569" }}>Organise each folder by the 3 file types you submit:</b>
+        <ol style={{ margin: "4px 0 4px", paddingLeft: 18, color: "#475569" }}>
+          {SUBMISSION_FILE_TYPES.map((t) => <li key={t}>{t}</li>)}
+        </ol>
+        <span style={{ color: "#6b7280" }}>
+          See the <Link to="/gd4-library" style={{ color: "#2563eb" }}>GD4 Library</Link> for the full list of supporting documents and the per-item expected evidence. Omit NRIC/FIN details before uploading.
+        </span>
+      </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
         <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>Filter</span>
