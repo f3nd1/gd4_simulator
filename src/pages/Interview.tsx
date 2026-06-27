@@ -3,16 +3,53 @@ import { useScored } from "../hooks/useScored";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
-import type { InterviewQuestion } from "../types";
+import type { InterviewQuestion, ItemEvidence } from "../types";
 
-function generateQuestions(items: { id: string; title: string; ev: { approach: string; processes: string; review: string; systemsOutcomes: string } }[]): InterviewQuestion[] {
-  const weak = items.filter((i) => i.ev.review !== "good" || i.ev.systemsOutcomes !== "good" || i.ev.processes !== "good");
-  return weak.map((it) => ({
-    id: `IQ-${it.id}`,
-    gd4ItemId: it.id,
-    question: `Walk me through how ${it.title.toLowerCase()} is implemented, reviewed and how the outcome is measured.`,
-    expectedAnswer: `Staff should describe the documented process, point to a recent review record, and quote an outcome metric or trend for ${it.id}.`,
-  }));
+// Adaptive question bank, keyed by APSR dimension. Each question probes the
+// specific rubric dimension that fell short rather than asking a generic
+// "walk me through" question that can be deflected with a high-level summary.
+const DIM_Q: Record<
+  string,
+  (id: string, title: string) => { question: string; expectedAnswer: string }
+> = {
+  approach: (id, title) => ({
+    question: `[Approach] Show me the documented policy or procedure for "${title}" (${id}). Who approved it and when was it last reviewed?`,
+    expectedAnswer: `Staff should produce the signed policy/procedure, confirm the approving authority and date, and reference the last scheduled review for ${id}.`,
+  }),
+  processes: (id, title) => ({
+    question: `[Processes] Walk me through how "${title}" (${id}) is actually carried out day-to-day. What records prove it is happening?`,
+    expectedAnswer: `Staff should describe the operational steps, name the records generated (logs, registers, screenshots), and show a recent sample for ${id}.`,
+  }),
+  systemsOutcomes: (id, title) => ({
+    question: `[Outcomes] What measurable outcome does your "${title}" (${id}) process produce? How is this tracked?`,
+    expectedAnswer: `Staff should quote a metric or trend (e.g. pass rate, complaint count, retention rate) linked to ${id} and explain the tracking system.`,
+  }),
+  review: (id, title) => ({
+    question: `[Review] When was "${title}" (${id}) last formally reviewed? Who attended and what improvement action followed?`,
+    expectedAnswer: `Staff should cite a dated review meeting or report, name the attendees, and describe at least one specific action or change that resulted from the review of ${id}.`,
+  }),
+};
+
+function worstDimension(ev: ItemEvidence): string {
+  // Order: check for Missing first (most urgent), then Partial
+  const dims = [
+    { k: "approach" as keyof ItemEvidence, key: "approach" },
+    { k: "processes" as keyof ItemEvidence, key: "processes" },
+    { k: "systemsOutcomes" as keyof ItemEvidence, key: "systemsOutcomes" },
+    { k: "review" as keyof ItemEvidence, key: "review" },
+  ];
+  for (const d of dims) if (ev[d.k] === "Missing") return d.key;
+  for (const d of dims) if (ev[d.k] === "Partial") return d.key;
+  return "processes"; // default: implementation evidence
+}
+
+function generateQuestions(items: { id: string; title: string; ev: ItemEvidence }[]): InterviewQuestion[] {
+  const weak = items.filter((i) => i.ev.review !== "good" || i.ev.systemsOutcomes !== "good" || i.ev.processes !== "good" || i.ev.approach !== "good");
+  return weak.map((it) => {
+    const dim = worstDimension(it.ev);
+    const { question, expectedAnswer } = DIM_Q[dim](it.id, it.title);
+    return { id: `IQ-${it.id}`, gd4ItemId: it.id, question, expectedAnswer };
+  });
 }
 
 export function Interview() {

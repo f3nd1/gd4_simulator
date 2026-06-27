@@ -1,9 +1,12 @@
+import { useMemo } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
+import { detectForensicFlags } from "../lib/forensicFlags";
 
 export function Finalisation() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -13,17 +16,32 @@ export function Finalisation() {
   const lockCycle = useWorkspaceStore((s) => s.lockCycle);
   const scored = useScored();
   const findings = useAllFindings();
+  const checklistEntries = useChecklistModuleStore((s) => s.entries);
 
   const criticalOpen = findings.filter((f) => f.severity === "Critical" && (closures[f.id]?.human || "") !== "Accepted");
+  // Cat A = SSG regulatory breach — these are hard-blocking: the cycle must not
+  // be locked until every Cat A finding is accepted or escalated.
+  const catAOpen = findings.filter((f) => f.riskCategory === "A" && (closures[f.id]?.human || "") !== "Accepted");
   const decisionsOutstanding = managementReviewItems.filter((m) => m.decisionNeeded && !m.decision);
+
+  // Forensic check: out-of-period evidence is a compliance risk.
+  const forensicFlags = useMemo(
+    () => detectForensicFlags(checklistEntries, cycle.periodStart, cycle.periodEnd),
+    [checklistEntries, cycle.periodStart, cycle.periodEnd]
+  );
+  const outOfPeriodFlag = forensicFlags.find((f) => f.type === "out-of-period");
+
   const checks: [string, boolean, string][] = [
     ["Audit cycle scope confirmed", !!cycle.scope?.trim(), "Define audit scope in Audit Cycle Setup."],
+    ["Audit period defined (start and end dates)", !!(cycle.periodStart?.trim() && cycle.periodEnd?.trim()), "Set the audit cycle period start and end dates in Audit Cycle Setup."],
     ["Evidence folders created for all departments", folders.length > 0, "Create evidence folders in Evidence Folder Tracker."],
     ["All GD4 criteria scored", scored.items.every((i) => i.conf != null), "Confirm a score for every item in the GD4 Criterion Scorecard."],
     ["Score gate at Band 3+ on gate-sensitive items", scored.gatePass, "Resolve gate-sensitive items below Band 3."],
+    ["No Cat A (SSG regulatory breach) findings open", catAOpen.length === 0, `Accept closure on all ${catAOpen.length} Cat A regulatory-breach finding(s) before locking. Cat A findings require management sign-off.`],
     ["All Critical findings closed or escalated", criticalOpen.length === 0, "Accept closure on Critical findings or escalate via Management Review."],
     ["All AFIs / Improvement Actions accepted", scored.openAFIs === 0, "Accept closure on remaining findings in AFI Closure."],
     ["Human reviewer confirmed scores on overridden items", scored.items.every((i) => i.conf != null), "Confirm reviewer scores that differ from the AI suggestion."],
+    ["No out-of-period evidence detected", !outOfPeriodFlag, outOfPeriodFlag ? `${outOfPeriodFlag.description} Review evidence dates before locking.` : ""],
     ["Management review decisions recorded", decisionsOutstanding.length === 0, "Record decisions for items requiring management decision."],
     ["Cycle status is Ready for Management Review or Locked", cycle.status === "Ready for Management Review" || cycle.status === "Locked", "Move the cycle to Ready for Management Review in Draft Workspace."],
   ];

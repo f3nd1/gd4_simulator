@@ -8,6 +8,7 @@ import { GOLD, INK } from "../lib/theme";
 export function DraftWorkspace() {
   const cycle = useWorkspaceStore((s) => s.cycle);
   const versions = useWorkspaceStore((s) => s.versions);
+  const restoreLog = useWorkspaceStore((s) => s.restoreLog);
   const saveAsNewVersion = useWorkspaceStore((s) => s.saveAsNewVersion);
   const restoreVersion = useWorkspaceStore((s) => s.restoreVersion);
   const unlockCycle = useWorkspaceStore((s) => s.unlockCycle);
@@ -113,6 +114,33 @@ export function DraftWorkspace() {
           </div>
         ))}
       </Card>
+
+      {restoreLog.length > 0 && (
+        <Card style={{ gridColumn: "1 / -1" }}>
+          <h3 style={{ marginTop: 0, fontSize: 14 }}>Restore audit log ({restoreLog.length})</h3>
+          <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
+            Immutable record of every time a saved version was restored. Entries are never deleted.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Restored at</th>
+                <th>Version</th>
+                <th>Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...restoreLog].reverse().map((entry, i) => (
+                <tr key={i}>
+                  <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>{entry.restoredAt}</td>
+                  <td style={{ fontSize: 12, fontFamily: "ui-monospace,monospace" }}>{entry.fromVersion}</td>
+                  <td style={{ fontSize: 12, color: "#6b7280" }}>{entry.fromNote}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
     </div>
   );
 }

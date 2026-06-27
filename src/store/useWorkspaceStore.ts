@@ -312,6 +312,10 @@ export type WorkspaceState = {
   // calls so the model can flag recurring cross-criterion gaps.
   auditJournal: string;
   clearAuditJournal: () => void;
+
+  // Immutable audit trail of every version restore. Entries are appended
+  // whenever restoreVersion() is called; never deleted from the store.
+  restoreLog: { restoredAt: string; fromVersion: string; fromNote: string }[];
 };
 
 // ---- Audit Journal helpers -----------------------------------------------
@@ -442,6 +446,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       schoolContext: { text: "", link: "" },
       evidenceAuditReport: null,
       auditJournal: "",
+      restoreLog: [],
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
@@ -528,6 +533,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // case the current checklist is left untouched.
           if (snap.checklistEntries) useChecklistModuleStore.getState().replaceAllEntries(snap.checklistEntries);
           if (snap.agentMemory) useAgentMemoryStore.getState().replaceAllMemory(snap.agentMemory);
+          const logEntry = {
+            restoredAt: new Date().toLocaleString(),
+            fromVersion: entry.version,
+            fromNote: entry.note || entry.name,
+          };
           return {
             cycle: { ...snap.cycle, updatedAt: new Date().toISOString() },
             evidence: snap.evidence,
@@ -548,6 +558,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             schoolContext: snap.schoolContext ?? s.schoolContext,
             additionalInfo: snap.additionalInfo ?? s.additionalInfo,
             auditJournal: (snap as WorkspaceSnapshot & { auditJournal?: string }).auditJournal ?? s.auditJournal,
+            // Append to the immutable restore audit trail
+            restoreLog: [...s.restoreLog, logEntry],
           };
         }),
 

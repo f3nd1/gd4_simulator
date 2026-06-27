@@ -215,7 +215,51 @@ export function Findings() {
     setGenNote(n > 0 ? `Raised ${n} new finding${n === 1 ? "" : "s"} from audit/checklist gaps.` : "No new gaps to raise — every unmet line already has a finding.");
   }
 
+  const openFindings = allFindings.filter((f) => (closures[f.id]?.human || "") !== "Accepted");
+  // 90-day roadmap: group open findings by urgency into three monthly buckets.
+  // Cat A (regulatory breach) + Critical severity = Month 1 — must fix now.
+  // Cat B (Star-disqualifying) + High severity = Month 2 — fix this quarter.
+  // Cat C/D + lower severity = Month 3 — plan and schedule.
+  const roadmap = {
+    m1: openFindings.filter((f) => f.riskCategory === "A" || f.severity === "Critical"),
+    m2: openFindings.filter((f) => f.riskCategory !== "A" && f.severity !== "Critical" && (f.riskCategory === "B" || f.severity === "High")),
+    m3: openFindings.filter((f) => !["A", "B"].includes(f.riskCategory || "") && !["Critical", "High"].includes(f.severity)),
+  };
+  const showRoadmap = openFindings.length > 0;
+
   return (
+    <Fragment>
+    {showRoadmap && (
+      <Card style={{ marginBottom: 12 }}>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>90-day remediation roadmap</h3>
+        <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
+          Open findings grouped by urgency. Cat A / Critical findings must be resolved immediately before any EduTrust submission.
+        </p>
+        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
+          {[
+            { label: "Month 1 — Days 1–30", desc: "Cat A (regulatory) + Critical", items: roadmap.m1, color: "#fff1f2", border: "#fca5a5", headColor: "#b91c1c" },
+            { label: "Month 2 — Days 31–60", desc: "Cat B (Star risk) + High severity", items: roadmap.m2, color: "#fff7ed", border: "#fdba74", headColor: "#c2410c" },
+            { label: "Month 3 — Days 61–90", desc: "Cat C/D + Medium / Low severity", items: roadmap.m3, color: "#f0fdf4", border: "#86efac", headColor: "#15803d" },
+          ].map(({ label, desc, items, color, border, headColor }) => (
+            <div key={label} style={{ background: color, border: `1px solid ${border}`, borderRadius: 10, padding: "10px 12px" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: headColor }}>{label}</div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>{desc}</div>
+              {items.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: "#9ca3af" }}>None</div>
+              ) : (
+                items.slice(0, 4).map((f) => (
+                  <div key={f.id} style={{ fontSize: 12, padding: "3px 0", borderBottom: "1px solid rgba(0,0,0,0.06)" }}>
+                    <b>{f.gd4ItemId}</b> {f.issue.slice(0, 55)}{f.issue.length > 55 ? "…" : ""}
+                    {items.length > 4 && items[3] === f && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>+{items.length - 4} more</div>}
+                  </div>
+                ))
+              )}
+              {items.length > 0 && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6 }}><b>{items.length}</b> finding{items.length !== 1 ? "s" : ""}</div>}
+            </div>
+          ))}
+        </div>
+      </Card>
+    )}
     <Card>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Findings register</h3>
@@ -470,6 +514,7 @@ export function Findings() {
         Click a finding to read its full report. Manage closure for each on the Quality Action / AFI screen.
       </div>
     </Card>
+    </Fragment>
   );
 }
 

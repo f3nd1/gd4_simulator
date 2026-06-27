@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
@@ -10,6 +10,8 @@ import { Pill } from "../components/ui/Pill";
 import { Bar } from "../components/ui/Bar";
 import { GOLD, INK, TONE } from "../lib/theme";
 import { auditEvidence } from "../lib/evidenceAudit";
+import { detectForensicFlags } from "../lib/forensicFlags";
+import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { NAV } from "../nav";
 import { runLiveCrossCriterionAnalysis, AIClientError } from "../lib/ai/agentRuntime";
 import { effectiveSettings } from "../lib/ai/aiClient";
@@ -105,6 +107,28 @@ export function Dashboard() {
   const closures = useWorkspaceStore((s) => s.closures);
   const openCritical = findings.filter((a) => a.severity === "Critical" && (closures[a.id]?.human || "") !== "Accepted").length;
   const finalisationReady = scored.gatePass && scored.openAFIs === 0;
+
+  // Quick-win calculator: items below Band 3, ranked by impact/effort.
+  // Effort = band gap to Band 3 (1 = close, higher = more work).
+  // Impact = maxPoints from the GD4 rubric (bigger criterion = higher reward).
+  const quickWins = useMemo(() => {
+    return scored.items
+      .filter((i) => i.started && i.band < 3)
+      .map((i) => {
+        const req = GD4_REQUIREMENTS.find((r) => r.id === i.id);
+        const effort = Math.max(1, 3 - i.band);
+        const impact = req?.maxPoints ?? 1;
+        return { id: i.id, title: i.title, band: i.band, impact, effort, score: impact / effort };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+  }, [scored.items]);
+
+  // Forensic integrity flags (date clustering + out-of-period evidence)
+  const forensicFlags = useMemo(
+    () => detectForensicFlags(checklistEntries, cycle.periodStart, cycle.periodEnd),
+    [checklistEntries, cycle.periodStart, cycle.periodEnd]
+  );
 
   // Mirrors the 6 numbered groups in nav.ts so the Dashboard guide and the
   // sidebar always describe the same workflow stages — one source of truth.
@@ -402,6 +426,67 @@ export function Dashboard() {
           Open management review →
         </Link>
       </Card>
+
+      {quickWins.length > 0 && (
+        <Card style={{ gridColumn: "1 / -1" }}>
+          <h3 style={{ marginTop: 0, fontSize: 14 }}>Quick-win calculator — top {quickWins.length} highest-return items below Band 3</h3>
+          <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
+            Ranked by award-point impact ÷ effort to reach Band 3. Fix these first for the biggest score uplift with the least work.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Item</th>
+                <th>Current band</th>
+                <th>Max points</th>
+                <th>Effort (band gap)</th>
+                <th>Priority score</th>
+              </tr>
+            </thead>
+            <tbody>
+              {quickWins.map((w, i) => (
+                <tr key={w.id} className="rowh">
+                  <td style={{ fontSize: 12, fontWeight: 700 }}>{i + 1}</td>
+                  <td>
+                    <Link to={`/sub-criterion-checklist?item=${encodeURIComponent(w.id)}`} style={{ fontSize: 12.5, fontWeight: 600, color: INK }}>
+                      <b>{w.id}</b> {w.title.slice(0, 55)}{w.title.length > 55 ? "…" : ""}
+                    </Link>
+                  </td>
+                  <td><Pill s={w.band <= 1 ? "critical" : "medium"}>Band {w.band}</Pill></td>
+                  <td style={{ fontSize: 12 }}>{w.impact} pts</td>
+                  <td style={{ fontSize: 12 }}>{w.effort} {w.effort === 1 ? "band" : "bands"}</td>
+                  <td style={{ fontSize: 12, fontWeight: 700, color: i === 0 ? TONE.good.fg : INK }}>{w.score.toFixed(1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {forensicFlags.length > 0 && (
+        <Card style={{ gridColumn: "1 / -1" }}>
+          <h3 style={{ marginTop: 0, fontSize: 14 }}>Forensic integrity flags ({forensicFlags.length})</h3>
+          <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
+            Patterns detected in evidence dates that may indicate bulk document creation or out-of-period records.
+            Review before submitting.
+          </p>
+          {forensicFlags.map((f, i) => (
+            <div key={i} style={{ background: f.severity === "High" ? "#fff1f2" : "#fffbeb", border: `1px solid ${f.severity === "High" ? "#fca5a5" : "#fcd34d"}`, borderRadius: 8, padding: "10px 14px", marginBottom: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <Pill s={f.severity === "High" ? "critical" : "medium"}>{f.severity}</Pill>
+                <b style={{ fontSize: 12.5 }}>{f.type === "date-cluster" ? "Evidence date clustering" : "Out-of-period evidence"}</b>
+              </div>
+              <div style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5 }}>{f.description}</div>
+              {f.affectedItems.length > 0 && (
+                <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 4 }}>
+                  Affected: {f.affectedItems.join(", ")}
+                </div>
+              )}
+            </div>
+          ))}
+        </Card>
+      )}
     </div>
   );
 }
