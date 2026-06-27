@@ -894,6 +894,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!folder) return;
         set({ busy: "folderaudit" + id });
 
+        // Safety net: any unexpected exception that escapes the inner
+        // try/catches calls finish() with the error message so the button
+        // never gets stuck on "Auditing…" indefinitely.
+        try {
         // Newest file modifiedTime seen this run; recorded so a later
         // "re-audit only changed" pass can skip folders that haven't changed.
         let newestModified: string | undefined;
@@ -1383,6 +1387,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               await Promise.all(pass2);
             })();
           }
+        }
+        } catch (outerErr) {
+          // Safety net: surface any unexpected exception that escaped all inner
+          // try/catches so the button never gets stuck on "Auditing…" with no
+          // visible error. Finish() clears busy and writes the error as the
+          // audit summary so the auditor can see what went wrong.
+          const msg = outerErr instanceof Error ? outerErr.message : String(outerErr);
+          set((st) => ({
+            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `Audit failed unexpectedly — ${msg}`, lastAuditLive: false, lastAuditError: msg } : f)),
+            busy: null,
+          }));
         }
       },
 
