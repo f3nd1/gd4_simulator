@@ -234,6 +234,14 @@ export type FolderAuditOpts = {
   challenge?: { lineId: string; status: string }[];
 };
 
+// Wall-clock-safe ceiling on how much extracted document text is sent to one
+// audit call. Shared with the store so its condense-to-fit pass targets the
+// SAME budget — otherwise the store could condense to just over this and the
+// audit would re-truncate (and show an alarming "files may be missing" note)
+// even though every document was already read and summarised. ~48k chars is
+// ≈12k tokens: comfortably within the model's context and cheap to send.
+export const FOLDER_DOC_CAP = 48000;
+
 export type FolderAuditResult = {
   verdicts: FolderAuditLineVerdict[];
   // Set when any APSR dimension fell back to the worst-case default because
@@ -266,13 +274,13 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
     : "";
   const system = `${base}${challengeRule} Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string}, "review": {"status": "Evident"|"Not evident", "note": string}, "sources": string[]}]}.`;
 
-  const DOC_CAP = 12000;
+  const DOC_CAP = FOLDER_DOC_CAP;
   const truncated = docText.length > DOC_CAP;
   const truncationNote = truncated
-    ? `Note: the folder contained ${docText.length.toLocaleString()} characters of document text; only the first ${DOC_CAP.toLocaleString()} were sent to this audit. Some files may not have been reviewed — consider running the audit again after condensing large documents.`
+    ? `Some document text exceeded the ${DOC_CAP.toLocaleString()}-character audit limit even after condensing, so the last ${(docText.length - DOC_CAP).toLocaleString()} characters were not read. Split this sub-criterion's evidence into smaller folders, or remove duplicates, then re-run.`
     : undefined;
   const truncationHint = truncated
-    ? ` (NOTE: only ${DOC_CAP.toLocaleString()} of ${docText.length.toLocaleString()} total characters were provided below — some files may be missing from this review)`
+    ? ` (NOTE: only the first ${DOC_CAP.toLocaleString()} of ${docText.length.toLocaleString()} characters are included below — some content is missing)`
     : "";
 
   const standardBlock = opts.standard ? `The official GD4 requirement this folder must satisfy (judge the APPROACH against THIS standard, word by word):\n"""\n${opts.standard.slice(0, 4000)}\n"""\n\n` : "";

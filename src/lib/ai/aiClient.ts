@@ -52,13 +52,36 @@ function withContext(messages: AIChatMessage[], settings: AISettings): AIChatMes
   return [preamble, ...messages];
 }
 
+// Every OpenAI call is bounded by this wall-clock ceiling. Without it a single
+// request that never resolves (dead connection, proxy black-hole) would hang
+// forever — and because the folder audit awaits these calls in sequence, one
+// hung call leaves the whole audit stuck on "Auditing…" with no way to clear it.
+const REQUEST_TIMEOUT_MS = 90000;
+
+// fetch + an AbortController timeout. Converts the AbortError into a clear,
+// user-facing message so a timeout reads as a timeout, not a generic failure.
+export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new AIClientError(`OpenAI request timed out after ${Math.round(timeoutMs / 1000)}s. The folder may be too large, or the network/API is unresponsive — try again, or audit fewer files at once.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Retries a fetch for 429 (rate-limit) and 5xx (transient server errors) with
 // exponential backoff. Returns the final Response even on exhaustion so the
 // caller can surface the status; only throws on network-level errors.
 async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 3): Promise<Response> {
   let delay = 2000;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const res = await fetch(url, init);
+    const res = await fetchWithTimeout(url, init);
     // Success, or a definitive client error (bad request / auth) — stop immediately.
     if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) return res;
     if (attempt < maxAttempts - 1) {
@@ -136,7 +159,7 @@ export async function describeImage(imageDataUrl: string, settings: AISettings):
   };
   if (supportsTemperature(model)) body.temperature = 0.1;
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -171,11 +194,16 @@ export async function summariseText(label: string, text: string, settings: AISet
     ],
   };
   if (supportsTemperature(model)) body.temperature = 0.1;
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.apiKey}` },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.apiKey}` },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return text.slice(0, maxChars); // best-effort: a timeout/network error falls back to truncation
+  }
   if (!res.ok) return text.slice(0, maxChars); // best-effort: fall back to truncation
   const data = await res.json();
   const out = data?.choices?.[0]?.message?.content;

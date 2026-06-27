@@ -5,7 +5,7 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import type { FolderStatus } from "../types";
 
-const SUMMARY_CAP = 180; // chars shown before the audit summary collapses
+const SUMMARY_CAP = 320; // chars shown before the audit summary collapses
 
 const STATUSES: FolderStatus[] = ["Good", "In Progress", "Partial", "Missing"];
 const ACCESS_TONE = { Connected: "good", Error: "critical", "Not Connected": "medium" } as const;
@@ -16,6 +16,7 @@ export function EvidenceFolder() {
   const setFolderField = useWorkspaceStore((s) => s.setFolderField);
   const checkFolderAccess = useWorkspaceStore((s) => s.checkFolderAccess);
   const auditFolderContents = useWorkspaceStore((s) => s.auditFolderContents);
+  const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
   const busy = useWorkspaceStore((s) => s.busy);
   const additionalInfo = useWorkspaceStore((s) => s.additionalInfo);
   const setAdditionalInfoLink = useWorkspaceStore((s) => s.setAdditionalInfoLink);
@@ -96,7 +97,7 @@ export function EvidenceFolder() {
         </>
       )}
 
-      <div style={{ border: "1px solid #d8c7a4", borderRadius: 10, padding: "10px", background: "#fffaf0", marginBottom: 12, fontSize: 12 }}>
+      <div style={{ border: "1px solid #d8c7a4", borderRadius: 10, padding: "10px", background: "#fffaf0", marginTop: 16, marginBottom: 12, fontSize: 12 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
           <b style={{ fontSize: 12, color: "#7a5b12" }}>Additional info — general supporting documents (school-wide, applies to all criteria)</b>
           {additionalInfo.accessStatus && <Pill s={ACCESS_TONE[additionalInfo.accessStatus]}>{additionalInfo.accessStatus}</Pill>}
@@ -231,42 +232,66 @@ export function EvidenceFolder() {
                     <button
                       disabled={busy === "folderaudit" + f.id}
                       onClick={() => auditFolderContents(f.id)}
-                      style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", whiteSpace: "nowrap" }}
+                      style={{ cursor: busy === "folderaudit" + f.id ? "wait" : "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", whiteSpace: "nowrap" }}
                     >
                       {busy === "folderaudit" + f.id ? "Auditing…" : "Run audit"}
                     </button>
+                    {busy === "folderaudit" + f.id && (
+                      <button
+                        onClick={cancelBusy}
+                        title="Stop waiting and release the button. Any in-flight request finishes in the background."
+                        style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #e3b7b0", background: "#fff", color: "#b23121", whiteSpace: "nowrap" }}
+                      >
+                        Cancel
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
               {(isPolicy ? f.policyAccessNote : f.accessCheckNote) && (
                 <tr>
-                  <td colSpan={6} style={{ background: "#f8fafc", fontSize: 12, padding: "6px 10px" }}>
-                    <Pill s={ACCESS_TONE[(isPolicy ? f.policyAccessStatus : f.accessCheckStatus) || "Not Connected"]}>{(isPolicy ? f.policyAccessStatus : f.accessCheckStatus) || "Not Connected"}</Pill>{" "}
-                    {isPolicy ? f.policyAccessNote : f.accessCheckNote}{" "}
-                    <span style={{ color: "#94a3b8" }}>— checked {(isPolicy ? f.policyAccessAt : f.accessCheckAt) && new Date((isPolicy ? f.policyAccessAt : f.accessCheckAt)!).toLocaleString()}</span>
+                  <td colSpan={6} style={{ padding: "0 10px 8px 28px" }}>
+                    <div style={{ background: "#f8fafc", borderLeft: "3px solid #cbd5e1", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>Access check</span>
+                        <Pill s={ACCESS_TONE[(isPolicy ? f.policyAccessStatus : f.accessCheckStatus) || "Not Connected"]}>{(isPolicy ? f.policyAccessStatus : f.accessCheckStatus) || "Not Connected"}</Pill>
+                        <span style={{ color: "#94a3b8", marginLeft: "auto", fontSize: 11 }}>
+                          checked {(isPolicy ? f.policyAccessAt : f.accessCheckAt) && new Date((isPolicy ? f.policyAccessAt : f.accessCheckAt)!).toLocaleString()}
+                        </span>
+                      </div>
+                      <div style={{ color: "#475569", lineHeight: 1.5 }}>{isPolicy ? f.policyAccessNote : f.accessCheckNote}</div>
+                    </div>
                   </td>
                 </tr>
               )}
               {f.lastAuditSummary && (
                 <tr>
-                  <td colSpan={6} style={{ background: "#f0fdf4", fontSize: 12, padding: "6px 10px" }}>
-                    <Pill s="good">Audit</Pill>{" "}
-                    <Pill s={f.lastAuditLive ? "progress" : "medium"}>{f.lastAuditLive ? "AI" : "Offline estimate"}</Pill>{" "}
-                    {f.lastAuditLive === false && f.lastAuditError && (
-                      <span style={{ color: "#9a6b15" }} title={f.lastAuditError}>(AI unavailable — used keyword fallback) </span>
-                    )}
-                    {f.lastAuditSummary.length > SUMMARY_CAP && !expanded[f.id]
-                      ? `${f.lastAuditSummary.slice(0, SUMMARY_CAP)}… `
-                      : `${f.lastAuditSummary} `}
-                    {f.lastAuditSummary.length > SUMMARY_CAP && (
-                      <button
-                        onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))}
-                        style={{ cursor: "pointer", border: "none", background: "transparent", color: "#2563eb", fontSize: 11.5, padding: 0, textDecoration: "underline" }}
-                      >
-                        {expanded[f.id] ? "Show less" : "Show full result"}
-                      </button>
-                    )}{" "}
-                    <span style={{ color: "#94a3b8" }}>— audited {f.lastAuditAt && new Date(f.lastAuditAt).toLocaleString()}</span>
+                  <td colSpan={6} style={{ padding: "0 10px 10px 28px" }}>
+                    <div style={{ background: "#f0fdf4", borderLeft: "3px solid #86c79f", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.4 }}>Audit result</span>
+                        <Pill s={f.lastAuditLive ? "progress" : "medium"}>{f.lastAuditLive ? "AI" : "Offline estimate"}</Pill>
+                        {f.lastAuditLive === false && f.lastAuditError && (
+                          <span style={{ color: "#9a6b15", fontSize: 11 }} title={f.lastAuditError}>AI unavailable — used keyword fallback</span>
+                        )}
+                        <span style={{ color: "#94a3b8", marginLeft: "auto", fontSize: 11 }}>
+                          audited {f.lastAuditAt && new Date(f.lastAuditAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <div style={{ color: "#334155", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
+                        {f.lastAuditSummary.length > SUMMARY_CAP && !expanded[f.id]
+                          ? `${f.lastAuditSummary.slice(0, SUMMARY_CAP)}…`
+                          : f.lastAuditSummary}
+                      </div>
+                      {f.lastAuditSummary.length > SUMMARY_CAP && (
+                        <button
+                          onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))}
+                          style={{ cursor: "pointer", border: "none", background: "transparent", color: "#2563eb", fontSize: 11.5, padding: "4px 0 0", textDecoration: "underline" }}
+                        >
+                          {expanded[f.id] ? "Show less" : "Show full result"}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               )}

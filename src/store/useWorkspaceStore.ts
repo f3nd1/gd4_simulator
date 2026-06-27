@@ -28,7 +28,7 @@ import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit } from "../lib/ai/simulateAI";
-import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit } from "../lib/ai/agentRuntime";
+import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, FOLDER_DOC_CAP } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
@@ -200,6 +200,10 @@ export type WorkspaceState = {
   evidenceAuditReport: { flags: EvidenceAuditFlag[]; generatedAt: string } | null;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
+  // Clears a stranded busy/bulk state so a button stuck on "Auditing…" can be
+  // released. Any in-flight network call still finishes in the background
+  // (bounded by the AI client's request timeout) and harmlessly re-clears busy.
+  cancelBusy: () => void;
   runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) => void;
   loadDemoDataset: () => void;
   saveAsNewVersion: (name: string, note?: string) => void;
@@ -365,6 +369,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       evidenceAuditReport: null,
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
+
+      cancelBusy: () => set({ busy: null, bulkAuditStatus: null }),
 
       runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) =>
         set({ evidenceAuditReport: flags === null ? null : { flags, generatedAt: new Date().toLocaleString() } }),
@@ -978,14 +984,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }
         }
 
+        // School-wide context is background only — cap it so a large
+        // Additional-info folder can't eat the whole audit budget (and push
+        // the real evidence past the cap).
+        const CONTEXT_CAP = 6000;
+        if (resolvedContext && resolvedContext.length > CONTEXT_CAP) resolvedContext = resolvedContext.slice(0, CONTEXT_CAP);
+
         // Full-folder coverage: if the combined text would overflow the audit
         // cap, condense each document (utility model) instead of dropping
-        // everything past the first ~12k characters.
-        const DOC_CAP = 12000;
+        // everything past the cap. The budget reserves room for each chunk's
+        // heading, the section markers and the school-wide context so the
+        // FINAL docText lands UNDER FOLDER_DOC_CAP — meaning the audit never has
+        // to re-truncate, and no misleading "files may be missing" note fires
+        // when in fact every document was read and condensed.
         let condensed = 0;
+        const headingOverhead = parts.reduce((n, p) => n + p.heading.length + 2, 0);
+        const fixedOverhead = headingOverhead + (resolvedContext?.length || 0) + 300; // 300 ≈ section markers
+        const bodyBudgetTotal = Math.max(4000, FOLDER_DOC_CAP - fixedOverhead);
         const rawTotal = parts.reduce((n, p) => n + p.body.length, 0);
-        if (rawTotal > DOC_CAP && aiSettings.enabled && aiSettings.apiKey && parts.length) {
-          const budget = Math.max(500, Math.floor(DOC_CAP / parts.length));
+        if (rawTotal > bodyBudgetTotal && aiSettings.enabled && aiSettings.apiKey && parts.length) {
+          const budget = Math.max(500, Math.floor(bodyBudgetTotal / parts.length));
           for (const p of parts) {
             if (p.body.length > budget) {
               try {
@@ -1088,27 +1106,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         for (const v of verdicts) counts[v.status]++;
         // Cap the file lists so a folder of dozens of files can't produce a
         // multi-thousand-character summary that floods the row and the AI log.
-        const NAME_CAP = 6;
+        const NAME_CAP = 8;
         const briefList = (names: string[]) => {
           const shown = names.slice(0, NAME_CAP).join(", ");
           return names.length > NAME_CAP ? `${shown}, +${names.length - NAME_CAP} more` : shown;
         };
-        const fileSummary = scanned.length
-          ? `Scanned ${scanned.length} file${scanned.length === 1 ? "" : "s"} — Policy & Procedure: ${policyCount}, Actual Evidence: ${evidenceCount} (${briefList(scanned)}).`
-          : "No readable files were found in this folder.";
-        const skipSummary = skipped.length ? ` Skipped ${skipped.length} unsupported file${skipped.length === 1 ? "" : "s"} (${briefList(skipped)}).` : "";
-        // Collapse identical failure reasons (e.g. every PDF hitting the same
-        // worker error) to one line instead of repeating it per file.
-        const failSummary = (() => {
-          if (!failed.length) return "";
-          const reasons = [...new Set(failed.map((f) => f.reason))];
-          const reasonText = reasons.length === 1 ? reasons[0] : `${reasons.length} distinct errors, e.g. ${reasons[0]}`;
-          return ` Could not read ${failed.length} file${failed.length === 1 ? "" : "s"} (${reasonText}): ${briefList(failed.map((f) => f.path))}.`;
-        })();
 
-        // Resulting band per item, shown right here so the score is visible at
-        // the point of audit instead of only on the Scorecard — this is the
-        // same band computeChecklistOverrides feeds into the overall score.
+        // Resulting band per item — same band computeChecklistOverrides feeds
+        // into the overall score, shown here so it's visible at the point of audit.
         const freshEntries = useChecklistModuleStore.getState().entries;
         const bandParts = items
           .map((item) => {
@@ -1117,14 +1122,36 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             return `${item.id} → Band ${computeBand(e.generic, e.specific, item.gateSensitive).finalBand}`;
           })
           .filter(Boolean);
-        const bandSummary = bandParts.length ? ` Resulting band: ${bandParts.join(", ")}.` : "";
 
-        const methodNote = live
-          ? ` Judged on the EduTrust APSR rubric against the GD4 standard — Approach (documented policy/procedure) assessed first and gating the result, then Processes (implementation), Systems & Outcomes, and Review${condensed ? `; ${condensed} long document${condensed === 1 ? "" : "s"} condensed to read the whole folder` : ""}${challenged ? "; with a strict second-pass challenge" : ""}.`
-          : " (offline keyword estimate — AI not used).";
-        const truncNote = truncationNote ? ` ⚠ ${truncationNote}` : "";
-        const parseNote = parseWarnings.length ? ` ⚠ ${parseWarnings.length} APSR dimension(s) fell back to "Not evident" due to unexpected model output — verdicts for those lines may be overly harsh.` : "";
-        const summary = `${fileSummary}${skipSummary}${failSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.${bandSummary}${methodNote}${truncNote}${parseNote}`;
+        // The summary is a structured, multi-line report (rendered with
+        // white-space: pre-wrap) so a busy run reads as labelled sections
+        // instead of one long run-on sentence.
+        const lineParts: string[] = [];
+        // 1. Headline — the verdict, first.
+        lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}).`);
+        if (bandParts.length) lineParts.push(`Band: ${bandParts.join(", ")}.`);
+        // 2. Files read.
+        lineParts.push(
+          scanned.length
+            ? `Files read: ${scanned.length} (${policyCount} policy · ${evidenceCount} evidence) — ${briefList(scanned)}.`
+            : "Files read: none — no readable files were found in this folder."
+        );
+        if (skipped.length) lineParts.push(`Skipped ${skipped.length} unsupported file${skipped.length === 1 ? "" : "s"}: ${briefList(skipped)}.`);
+        if (failed.length) {
+          const reasons = [...new Set(failed.map((f) => f.reason))];
+          const reasonText = reasons.length === 1 ? reasons[0] : `${reasons.length} distinct errors, e.g. ${reasons[0]}`;
+          lineParts.push(`Could not read ${failed.length} file${failed.length === 1 ? "" : "s"} (${reasonText}): ${briefList(failed.map((f) => f.path))}.`);
+        }
+        // 3. Method.
+        lineParts.push(
+          live
+            ? `Method: EduTrust APSR rubric vs the GD4 standard — Approach (documented policy) gates the result, then Processes (implementation), Systems & Outcomes, Review.${condensed ? ` ${condensed} large document${condensed === 1 ? "" : "s"} condensed so the whole folder was read.` : ""}${challenged ? " A strict second-pass challenge was applied." : ""}`
+            : "Method: offline keyword estimate — AI was not used (check AI Settings)."
+        );
+        // 4. Warnings, each on its own line so they stand out.
+        if (truncationNote) lineParts.push(`⚠ ${truncationNote}`);
+        if (parseWarnings.length) lineParts.push(`⚠ ${parseWarnings.length} APSR dimension(s) defaulted to "Not evident" due to unexpected model output — those verdicts may be overly harsh; spot-check them.`);
+        const summary = lineParts.join("\n");
         finish(summary, live, liveError);
       },
 
