@@ -11,6 +11,9 @@ export type AgentMemoryState = {
   memory: Record<string, AgentMemoryEntry[]>;
   addMemory: (agentId: string, entry: AgentMemoryEntry) => void;
   clearMemory: (agentId?: string) => void;
+  // Used by version snapshot/restore so agent memory rolls back with the
+  // workspace (mirrors useChecklistModuleStore.replaceAllEntries).
+  replaceAllMemory: (memory: Record<string, AgentMemoryEntry[]>) => void;
 };
 
 const MAX_TURNS_PER_AGENT = 12;
@@ -28,6 +31,7 @@ export const useAgentMemoryStore = create<AgentMemoryState>()(
         })),
       clearMemory: (agentId) =>
         set((s) => (agentId ? { memory: { ...s.memory, [agentId]: [] } } : { memory: {} })),
+      replaceAllMemory: (memory) => set({ memory }),
     }),
     { name: "ucc-gd4-ai-memory:v1", storage: workspaceStorage }
   )

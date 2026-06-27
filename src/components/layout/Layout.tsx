@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { useGoogleDriveStore } from "../../store/useGoogleDriveStore";
+import { flushPendingSaves } from "../../store/supabaseStorage";
 
 export function Layout() {
   const [navOpen, setNavOpen] = useState(
@@ -20,6 +21,14 @@ export function Layout() {
     triedRef.current = true;
     connectSilently();
   }, [clientId, connectSilently]);
+
+  // Push any debounced-but-not-yet-synced edits to Supabase before the tab
+  // closes (localStorage already has them; this covers cross-device sync).
+  useEffect(() => {
+    const onUnload = () => { void flushPendingSaves(); };
+    window.addEventListener("beforeunload", onUnload);
+    return () => window.removeEventListener("beforeunload", onUnload);
+  }, []);
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", background: "#eef1f5" }}>

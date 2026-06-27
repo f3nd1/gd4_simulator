@@ -251,6 +251,10 @@ export function EvidenceFolder() {
                 <tr>
                   <td colSpan={6} style={{ background: "#f0fdf4", fontSize: 12, padding: "6px 10px" }}>
                     <Pill s="good">Audit</Pill>{" "}
+                    <Pill s={f.lastAuditLive ? "progress" : "medium"}>{f.lastAuditLive ? "AI" : "Offline estimate"}</Pill>{" "}
+                    {f.lastAuditLive === false && f.lastAuditError && (
+                      <span style={{ color: "#9a6b15" }} title={f.lastAuditError}>(AI unavailable — used keyword fallback) </span>
+                    )}
                     {f.lastAuditSummary.length > SUMMARY_CAP && !expanded[f.id]
                       ? `${f.lastAuditSummary.slice(0, SUMMARY_CAP)}… `
                       : `${f.lastAuditSummary} `}

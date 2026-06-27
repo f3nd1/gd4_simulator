@@ -289,6 +289,10 @@ export type EvidenceFolder = {
   // directly (Met/Partial/Not met) — see useWorkspaceStore.auditFolderContents.
   lastAuditAt?: string;
   lastAuditSummary?: string;
+  // Whether the last audit's verdicts came from a live AI call (true) or the
+  // offline keyword fallback (false), and the reason a live call fell back.
+  lastAuditLive?: boolean;
+  lastAuditError?: string;
 };
 
 export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation";
@@ -350,6 +354,14 @@ export type WorkspaceSnapshot = {
   checklistEntries?: Record<string, SubCriterionChecklistEntry>;
   customFindings?: Finding[];
   seedFindingsLoaded?: boolean;
+  // Added so a version captures the full picture and restore loses nothing:
+  // the AI verdicts/log, the School Context briefing, the Additional-info
+  // folder link, and per-agent memory. All optional for older snapshots.
+  itemReviews?: Record<string, unknown>;
+  aiReviewLog?: AIReviewLogEntry[];
+  schoolContext?: { text: string; link: string; driveCache?: string; cachedAt?: string; accessStatus?: DriveAccessStatus; accessNote?: string; enabled?: boolean };
+  additionalInfo?: { link: string; accessStatus?: DriveAccessStatus; accessNote?: string; accessAt?: string };
+  agentMemory?: Record<string, AgentMemoryEntry[]>;
 };
 
 export type VersionEntry = {

@@ -1,12 +1,45 @@
 import { createJSONStorage } from "zustand/middleware";
 import type { StateStorage } from "zustand/middleware";
 import { getSupabaseClient } from "../lib/supabaseClient";
+import { useSaveStatusStore } from "../store/useSaveStatusStore";
 
 // Single shared row per persisted store key — mirrors the one-blob shape the
 // localStorage version already used, so no store/action code has to change.
 const TABLE = "workspace_state";
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
+// Per-key debounce. (Previously a single shared timer meant a save to one
+// store — e.g. the checklist — could cancel another store's pending save —
+// e.g. the workspace — within the 600ms window, silently dropping it.)
+const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingValues = new Map<string, string>();
+
+async function flushKey(name: string): Promise<void> {
+  const value = pendingValues.get(name);
+  if (value === undefined) return;
+  pendingValues.delete(name);
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from(TABLE).upsert({ id: name, data: JSON.parse(value), updated_at: new Date().toISOString() });
+    if (error) {
+      console.error("Supabase save failed:", error.message);
+      useSaveStatusStore.getState().markError();
+    } else if (pendingValues.size === 0) {
+      useSaveStatusStore.getState().markSaved();
+    }
+  } catch (err) {
+    console.error("Supabase save failed:", err instanceof Error ? err.message : String(err));
+    useSaveStatusStore.getState().markError();
+  }
+}
+
+// Best-effort flush of all pending saves — wired to `beforeunload` so closing
+// the tab inside the debounce window still pushes the last edit to Supabase.
+export async function flushPendingSaves(): Promise<void> {
+  for (const t of saveTimers.values()) clearTimeout(t);
+  saveTimers.clear();
+  await Promise.all([...pendingValues.keys()].map(flushKey));
+}
 
 // localStorage is always written as an offline cache and as the fallback
 // when Supabase isn't configured or a request fails, so the app keeps
@@ -55,17 +88,19 @@ const dbStorage: StateStorage = {
     localStorage.setItem(name, value);
     const supabase = getSupabaseClient();
     if (!supabase) return Promise.resolve();
+    pendingValues.set(name, value);
+    useSaveStatusStore.getState().markSaving();
+    const existing = saveTimers.get(name);
+    if (existing) clearTimeout(existing);
     return new Promise<void>((resolve) => {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(async () => {
-        try {
-          const { error } = await supabase.from(TABLE).upsert({ id: name, data: JSON.parse(value), updated_at: new Date().toISOString() });
-          if (error) console.error("Supabase save failed:", error.message);
-        } catch (err) {
-          console.error("Supabase save failed:", err instanceof Error ? err.message : String(err));
-        }
-        resolve();
-      }, 600);
+      saveTimers.set(
+        name,
+        setTimeout(async () => {
+          saveTimers.delete(name);
+          await flushKey(name);
+          resolve();
+        }, 600)
+      );
     });
   },
 

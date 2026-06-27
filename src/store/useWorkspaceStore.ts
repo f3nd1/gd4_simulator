@@ -390,6 +390,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             checklistEntries: useChecklistModuleStore.getState().entries,
             customFindings: s.customFindings,
             seedFindingsLoaded: s.seedFindingsLoaded,
+            itemReviews: s.itemReviews,
+            aiReviewLog: s.aiReviewLog,
+            schoolContext: s.schoolContext,
+            additionalInfo: s.additionalInfo,
+            agentMemory: useAgentMemoryStore.getState().memory,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -415,6 +420,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // restored bands match. Older snapshots may not carry it, in which
           // case the current checklist is left untouched.
           if (snap.checklistEntries) useChecklistModuleStore.getState().replaceAllEntries(snap.checklistEntries);
+          if (snap.agentMemory) useAgentMemoryStore.getState().replaceAllMemory(snap.agentMemory);
           return {
             cycle: { ...snap.cycle, updatedAt: new Date().toISOString() },
             evidence: snap.evidence,
@@ -428,6 +434,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             managementReviewItems: snap.managementReviewItems,
             customFindings: snap.customFindings ?? s.customFindings,
             seedFindingsLoaded: snap.seedFindingsLoaded ?? s.seedFindingsLoaded,
+            // Restore the AI verdicts/log and context so nothing is silently
+            // lost; fall back to current state for pre-existing snapshots.
+            itemReviews: (snap.itemReviews as WorkspaceState["itemReviews"]) ?? s.itemReviews,
+            aiReviewLog: snap.aiReviewLog ?? s.aiReviewLog,
+            schoolContext: snap.schoolContext ?? s.schoolContext,
+            additionalInfo: snap.additionalInfo ?? s.additionalInfo,
           };
         }),
 
@@ -447,6 +459,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             checklistEntries: useChecklistModuleStore.getState().entries,
             customFindings: s.customFindings,
             seedFindingsLoaded: s.seedFindingsLoaded,
+            itemReviews: s.itemReviews,
+            aiReviewLog: s.aiReviewLog,
+            schoolContext: s.schoolContext,
+            additionalInfo: s.additionalInfo,
+            agentMemory: useAgentMemoryStore.getState().memory,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -723,7 +740,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             createdAt: new Date().toISOString(),
           };
           set((st) => ({
-            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary } : f)),
+            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError } : f)),
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
           }));

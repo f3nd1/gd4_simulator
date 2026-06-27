@@ -179,7 +179,8 @@ export function EvidenceIntelligence() {
           </div>
           {review && (
             <div style={{ marginBottom: 12, background: TONE.progress.bg, borderRadius: 8, padding: "9px 11px", fontSize: 12.5 }}>
-              <b>{review.by} · score {review.score} Band {review.band} ({review.confidence}):</b> {review.justification} <i>Higher band: {review.higherBand}</i>
+              <Pill s={review.live ? "progress" : "medium"}>{review.live ? "AI" : "Offline estimate"}</Pill>{" "}
+              <b>{review.by} · Band {review.band} ({review.confidence}):</b> {review.justification} <i>Higher band: {review.higherBand}</i>
             </div>
           )}
           <table>
