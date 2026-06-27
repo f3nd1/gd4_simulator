@@ -249,6 +249,15 @@ export function EvidenceFolder() {
                   </div>
                 </td>
               </tr>
+              {f.policyLink && f.folderLink && f.policyLink === f.folderLink && (
+                <tr>
+                  <td colSpan={6} style={{ padding: "0 10px 8px 28px" }}>
+                    <div style={{ background: "#fff7ed", borderLeft: "3px solid #fb923c", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12, color: "#9a3412" }}>
+                      ⚠ The <b>Policy &amp; Procedure</b> and <b>Actual Evidence</b> tabs link the <b>same folder</b>. The audit will read it once (not twice), but a proper audit needs two different folders — one of policies, one of actual records — so implementation can be verified separately from the documented approach.
+                    </div>
+                  </td>
+                </tr>
+              )}
               {(isPolicy ? f.policyAccessNote : f.accessCheckNote) && (
                 <tr>
                   <td colSpan={6} style={{ padding: "0 10px 8px 28px" }}>
@@ -272,6 +281,9 @@ export function EvidenceFolder() {
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.4 }}>Combined audit — policy &amp; evidence</span>
                         <Pill s={f.lastAuditLive ? "progress" : "medium"}>{f.lastAuditLive ? "AI" : "Offline estimate"}</Pill>
+                        {f.lastAuditRunId && (
+                          <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#64748b", background: "#fff", border: "1px solid #d1d5db", borderRadius: 5, padding: "1px 5px" }} title="Audit run id — also stamped on the checklist evidence, the AI Review Log row and the journal entry from this run.">{f.lastAuditRunId}</span>
+                        )}
                         {f.lastAuditLive === false && f.lastAuditError && (
                           <span style={{ color: "#9a6b15", fontSize: 11 }} title={f.lastAuditError}>AI unavailable — used keyword fallback</span>
                         )}

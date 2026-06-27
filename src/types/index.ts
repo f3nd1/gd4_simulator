@@ -229,6 +229,10 @@ export type SubChecklistEvidenceItem = {
   // Review) from the folder audit (when live), kept so a finding raised from
   // this line can name which rubric dimension fell short.
   apsr?: ApsrBreakdown;
+  // Audit-run id (e.g. "AR-1.2-K9QZ") when this item was created by a folder
+  // audit, so it can be traced to the matching result row, AI Review Log entry
+  // and journal entry. Also records that an AI run produced it, not a human.
+  runId?: string;
 };
 
 export type SamplingInfo = {
@@ -358,6 +362,11 @@ export type EvidenceFolder = {
   // "Re-audit only changed folders" to skip folders whose newest file has not
   // changed since this audit ran.
   lastAuditNewestModified?: string;
+  // Short, human-readable id for the last audit run (e.g. "AR-1.2-K9QZ"),
+  // stamped on the audit result row, every checklist evidence item it created,
+  // the AI Review Log row and the audit journal entry — so one verdict can be
+  // traced end-to-end.
+  lastAuditRunId?: string;
 };
 
 export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation" | "Finding" | "CrossCriterion";
@@ -379,6 +388,9 @@ export type AIReviewLogEntry = {
   liveError?: string;
   generatedContent?: string;
   createdAt: string;
+  // Short audit-run id shared with the folder result, checklist evidence and
+  // journal entry from the same run, so a log row can be traced back to source.
+  runId?: string;
 };
 
 export type ManagementReviewItem = {

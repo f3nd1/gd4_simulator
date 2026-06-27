@@ -60,7 +60,10 @@ export function AIReview() {
                     {!e.live && <div style={{ fontSize: 10, color: e.liveError ? "#b23121" : "#9ca3af" }}>{e.liveError ? "live call failed — simulated" : "simulated"}</div>}
                   </td>
                   <td>{e.reviewType}</td>
-                  <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>{e.subjectId}</td>
+                  <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>
+                    {e.subjectId}
+                    {e.runId && <div style={{ fontSize: 10, color: "#64748b" }} title="Audit run id — matches the Evidence Folder result, checklist evidence and journal entry from this run.">{e.runId}</div>}
+                  </td>
                   <td title={e.verdict}><Pill s={verdictTone(e.verdict)}>{e.verdict.length > 40 ? e.verdict.slice(0, 40) + "…" : e.verdict}</Pill></td>
                   <td>{e.confidence}</td>
                   <td style={{ fontSize: 12, color: "#6b7280" }} title={e.keyConcerns.join("; ")}>{e.keyConcerns.join("; ").slice(0, 60)}{e.keyConcerns.join("; ").length > 60 ? "…" : ""}</td>

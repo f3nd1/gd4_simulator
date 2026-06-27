@@ -228,6 +228,45 @@ export function apsrReason(p: ApsrBreakdown): string {
   return `Approach (documented policy): ${p.approach.status} — ${p.approach.note} | Processes (implementation): ${p.processes.status} — ${p.processes.note} | Systems & Outcomes: ${p.systemsOutcomes.status}${p.systemsOutcomes.note ? ` — ${p.systemsOutcomes.note}` : ""} | Review: ${p.review.status}${p.review.note ? ` — ${p.review.note}` : ""}`;
 }
 
+// Renders an APSR breakdown as a finding-style auditor note (POLICY / EVIDENCE
+// / OUTCOMES / REVIEW) rather than a raw rubric dump. Unlike apsrReason it is
+// written as an auditor's verdict-with-guidance: it states whether the policy
+// covers the requirement and what is missing, and — critically — is honest
+// when no actual implementation evidence was submitted (a documented policy on
+// its own is NOT evidence), so the note never reads as if a policy proved
+// implementation.
+export function apsrAuditNote(p: ApsrBreakdown): string {
+  const parts: string[] = [];
+
+  // POLICY (Approach)
+  if (p.approach.status === "Meeting")
+    parts.push(`POLICY: The documented approach covers this requirement.${p.approach.note ? ` ${p.approach.note}` : ""}`);
+  else if (p.approach.status === "Beginning")
+    parts.push(`POLICY: A documented approach exists but is incomplete or too generic for this requirement.${p.approach.note ? ` ${p.approach.note}` : ""} Make the policy specific and sustainable (who does what, when, repeatable year on year).`);
+  else
+    parts.push(`POLICY: No documented approach was found that addresses this requirement — add the policy/procedure for it.`);
+
+  // EVIDENCE (Processes)
+  if (p.processes.status === "Deployed")
+    parts.push(`EVIDENCE: Implementation records were found.${p.processes.note ? ` ${p.processes.note}` : ""}`);
+  else if (p.processes.status === "Weak")
+    parts.push(`EVIDENCE: Implementation records are weak or partial.${p.processes.note ? ` ${p.processes.note}` : ""} Add dated records (logs, registers, minutes, screenshots) showing it is actually done.`);
+  else
+    parts.push(`EVIDENCE: No implementation records were found in the Actual Evidence folder — a documented policy alone is not evidence. Submit dated records showing this is carried out in practice.`);
+
+  // OUTCOMES (Systems & Outcomes) — only worth a line when something exists
+  if (p.systemsOutcomes.status !== "Not evident")
+    parts.push(`OUTCOMES: ${p.systemsOutcomes.status}.${p.systemsOutcomes.note ? ` ${p.systemsOutcomes.note}` : ""}`);
+
+  // REVIEW
+  if (p.review.status === "Evident")
+    parts.push(`REVIEW: A review for continual improvement was evident.${p.review.note ? ` ${p.review.note}` : ""}`);
+  else
+    parts.push(`REVIEW: No formal review for continual improvement was found.`);
+
+  return parts.join(" ");
+}
+
 const STOPWORDS = new Set(["which", "where", "their", "there", "every", "shall", "should", "these", "those", "about", "within"]);
 
 function keywordsOf(text: string): string[] {

@@ -38,7 +38,7 @@ import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError } from "../lib/drive/driveClient";
 import { describeImage, summariseText, effectiveSettings } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
-import { apsrReason } from "../lib/ai/simulateAI";
+import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 
 // Best-effort evidence-type classification for audit-attached evidence, from
 // the checklist line being satisfied (the folder audit reads many files into
@@ -96,6 +96,24 @@ function inferEvidenceType(lineText: string): string {
   if (/\b(screenshot|system|dashboard|portal|software)\b/.test(t)) return "System screenshot";
   if (/\b(record|log|register|report|list|evidence|certificate|attendance)\b/.test(t)) return "Record/Log";
   return "Other";
+}
+
+// Picks a meaningful evidence Type for an audited line from its APSR result,
+// so an audited policy reads "Policy/Procedure" and an audited record reads
+// "Record/Log" instead of defaulting to "Other". Falls back to the line-text
+// heuristic when there is no APSR (offline runs).
+function evidenceTypeFromApsr(apsr: ApsrBreakdown | undefined, lineText: string): string {
+  if (!apsr) return inferEvidenceType(lineText);
+  if (apsr.processes.status === "Deployed" || apsr.processes.status === "Weak") return "Record/Log";
+  if (apsr.approach.status === "Meeting" || apsr.approach.status === "Beginning") return "Policy/Procedure";
+  return inferEvidenceType(lineText);
+}
+
+// Short, human-readable run id for a folder audit (e.g. "AR-1.2-K9QZ"). The
+// base-36 suffix of the current time keeps it short while staying unique enough
+// to tell two runs of the same sub-criterion apart.
+function makeRunId(subCriterionId: string): string {
+  return `AR-${subCriterionId}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
 }
 
 export type ClosureState = {
@@ -336,11 +354,12 @@ function buildJournalEntry(
   bandParts: string[],
   verdicts: FolderAuditLineVerdict[],
   lineTextById: Map<string, string>,
+  runId: string,
 ): string {
   const counts = { Met: 0, Partial: 0, "Not met": 0 } as Record<string, number>;
   for (const v of verdicts) counts[v.status]++;
   const date = new Date().toLocaleDateString("en-GB");
-  const header = `### ${subCriterionId} — ${folderName} (${date})`;
+  const header = `### ${subCriterionId} [${runId}] — ${folderName} (${date})`;
   const summary = `${bandParts.length ? `Band: ${bandParts.join(", ")}. ` : ""}${counts.Met} Met / ${counts.Partial} Partial / ${counts["Not met"]} Not met.`;
   const gaps = verdicts.filter((v) => v.status !== "Met").slice(0, 4);
   if (gaps.length === 0) return `${header}\n${summary}`;
@@ -355,13 +374,19 @@ function buildJournalEntry(
 // Replaces any existing entry for subCriterionId in the journal and appends
 // the new entry at the end (most-recent-last order).
 function updateJournal(journal: string, subCriterionId: string, newEntry: string): string {
-  const prefix = `### ${subCriterionId} —`;
+  // Match by sub-criterion id followed by a space (e.g. "### 1.2 ") so the
+  // optional "[runId]" in the header doesn't break the replace-in-place.
+  const prefix = `### ${subCriterionId} `;
   const lines = journal.split("\n");
   const out: string[] = [];
   let skip = false;
   for (const line of lines) {
     if (line.startsWith(prefix)) { skip = true; continue; }
     if (skip && (line.startsWith("### ") || line.startsWith("⚠ Recurring"))) skip = false;
+    // Drop any previously-appended trailing "Recurring patterns" summary lines
+    // wherever they sit — exactly one fresh one is re-appended by the caller,
+    // so they can never accumulate (the bug that showed the line 3×).
+    if (line.startsWith("⚠ Recurring patterns")) continue;
     if (!skip) out.push(line);
   }
   const cleaned = out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
@@ -902,6 +927,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // "re-audit only changed" pass can skip folders that haven't changed.
         let newestModified: string | undefined;
 
+        // One short id for this whole run, stamped on the result row, the AI
+        // Review Log entry, every checklist evidence item created, and the
+        // journal entry — so any verdict can be traced back to its source run.
+        const runId = makeRunId(folder.subCriterionId);
+
         const finish = (summary: string, live: boolean, liveError?: string) => {
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
@@ -917,9 +947,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             liveError,
             generatedContent: summary,
             createdAt: new Date().toISOString(),
+            runId,
           };
           set((st) => ({
-            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified } : f)),
+            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId } : f)),
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
           }));
@@ -983,6 +1014,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         type TaggedFile = Awaited<ReturnType<typeof listFolderFilesRecursive>>[number] & { bucket: "policy" | "evidence" | "auto" };
         const taggedFiles: TaggedFile[] = [];
         const listErrors: string[] = [];
+        // Setup warnings surfaced in the result summary (configuration problems
+        // detected before the AI even runs, e.g. the same folder linked twice).
+        const setupWarnings: string[] = [];
         const gather = async (fid: string | null, bucket: TaggedFile["bucket"], label: string) => {
           if (!fid) return;
           try {
@@ -992,14 +1026,28 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             listErrors.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
           }
         };
-        await gather(policyId, "policy", "Policy & Procedure");
-        await gather(evidenceId, "evidence", policyId ? "Actual Evidence" : "Evidence");
+        // Strict two-folder model: the Policy tab and Evidence tab must point to
+        // DIFFERENT folders. If the same folder is linked in both, reading it
+        // twice would double the file count AND force the AI to grade the policy
+        // document as if it were implementation evidence. So read it ONCE and
+        // let the subfolder-name classifier decide policy-vs-evidence per file.
+        const sameLink = !!policyId && !!evidenceId && policyId === evidenceId;
+        if (sameLink) {
+          await gather(evidenceId, "auto", "Folder");
+          setupWarnings.push(
+            "The Policy & Procedure tab and the Actual Evidence tab link the SAME Drive folder, so it was read once (not twice). For a proper audit, link two different folders — one of policies, one of actual records — or organise this folder into '1. Policy & Procedure' and '2. Actual Evidence' subfolders."
+          );
+        } else {
+          await gather(policyId, "policy", "Policy & Procedure");
+          await gather(evidenceId, "evidence", policyId ? "Actual Evidence" : "Evidence");
+        }
         for (const f of taggedFiles) {
           if (f.modifiedTime && (!newestModified || f.modifiedTime > newestModified)) newestModified = f.modifiedTime;
         }
         // No separate policy folder → let the evidence folder's own subfolders
-        // decide policy-vs-evidence (the previous behaviour).
-        if (!policyId) for (const f of taggedFiles) f.bucket = "auto";
+        // decide policy-vs-evidence (the previous behaviour). Same-link already
+        // tagged "auto" above.
+        if (!policyId && !sameLink) for (const f of taggedFiles) f.bucket = "auto";
         if (taggedFiles.length === 0 && listErrors.length) {
           finish(`Could not list the linked folder(s): ${listErrors.join("; ")}.`, false, listErrors.join("; "));
           return;
@@ -1193,21 +1241,28 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const itemId = lineOwners.get(v.lineId);
             if (!itemId) continue;
             checklist.setSpecificStatus(itemId, v.lineId, v.status);
+            // Finding-style note (POLICY / EVIDENCE / OUTCOMES / REVIEW) instead
+            // of a raw rubric dump, plus the cited source files and a "who/which
+            // run produced this" trailer so the row is traceable and honest
+            // about whether real evidence was actually submitted.
+            const baseNote = v.apsr ? apsrAuditNote(v.apsr) : v.reason;
+            const sourceSuffix = v.sources && v.sources.length ? ` (source: ${v.sources.join("; ")})` : "";
+            const provenance = ` — auto-filled by AI audit ${runId} (${live ? "Evidence Intake Assistant, live" : "offline keyword estimate"}); review before relying on it.`;
             checklist.addEvidence(itemId, v.lineId, {
-              title: `Drive audit: ${folder.folderName}`,
-              type: inferEvidenceType(lineTextById.get(v.lineId) || ""),
+              title: `Drive audit ${runId} — ${folder.folderName}`,
+              type: evidenceTypeFromApsr(v.apsr, lineTextById.get(v.lineId) || ""),
               drive: folder.folderLink || folder.policyLink,
               owner: folder.owner,
               date: new Date().toISOString().slice(0, 10),
               approved: false,
               reviewed: false,
               sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
-              // Keep the AI's cited source files so the verdict is traceable.
-              auditorNote: v.sources && v.sources.length ? `${v.reason} (source: ${v.sources.join("; ")})` : v.reason,
+              auditorNote: `${baseNote}${sourceSuffix}${provenance}`,
               // Persist the structured APSR so a finding raised from this line
               // can explain which rubric dimension (Approach/Processes/Systems &
               // Outcomes/Review) fell short.
               apsr: v.apsr,
+              runId,
             });
           }
         } catch (err) {
@@ -1258,7 +1313,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // recurring cross-criterion gaps — it won't help this call (already done)
         // but it improves every subsequent one in the same "Audit all" run.
         try {
-          const entry = buildJournalEntry(folder.subCriterionId, folder.folderName, bandParts as string[], verdicts, lineTextById);
+          const entry = buildJournalEntry(folder.subCriterionId, folder.folderName, bandParts as string[], verdicts, lineTextById, runId);
+          // updateJournal strips any old "⚠ Recurring patterns" lines, so we
+          // re-append exactly one fresh one — it can never accumulate now.
           const updated = updateJournal(get().auditJournal, folder.subCriterionId, entry);
           set({ auditJournal: updated + patternNote(updated) });
         } catch {
@@ -1269,7 +1326,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // white-space: pre-wrap) so a busy run reads as labelled sections
         // instead of one long run-on sentence.
         const lineParts: string[] = [];
-        // 1. Headline — the verdict, first.
+        // 1. Headline — the verdict, first. Run id leads so it can be matched to
+        // the AI Review Log, the checklist evidence, and the journal entry.
+        lineParts.push(`Run ${runId}.`);
         lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}).`);
         if (bandParts.length) lineParts.push(`Band: ${bandParts.join(", ")}.`);
         if (autoRaised > 0) lineParts.push(`Raised ${autoRaised} new finding${autoRaised === 1 ? "" : "s"} from the gaps — see the Findings register.${live ? " AI agents are drafting finding bodies and closure actions in the background." : ""}`);
@@ -1295,6 +1354,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (truncationNote) lineParts.push(`⚠ ${truncationNote}`);
         if (parseWarnings.length) lineParts.push(`⚠ ${parseWarnings.length} APSR dimension(s) defaulted to "Not evident" due to unexpected model output — those verdicts may be overly harsh; spot-check them.`);
         if (folderWarnings.length > 0) lineParts.push(`⚠ Possible mis-filed documents (${folderWarnings.length}): ${folderWarnings.join(" | ")}`);
+        for (const w of setupWarnings) lineParts.push(`⚠ ${w}`);
         const summary = lineParts.join("\n");
         finish(summary, live, liveError);
 
