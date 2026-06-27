@@ -162,6 +162,23 @@ export function AIReview() {
         </div>
       )}
 
+      {/* Legend: which of the two configured models runs which kind of work, so
+          the Model column is self-explanatory. Set both in Settings → AI integration. */}
+      <div style={{ border: "1px solid #e2e8f0", background: "#f8fafc", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 12, color: "#475569" }}>
+        <b style={{ fontSize: 12, color: "#334155" }}>Which model runs what?</b> Two models are configured in <i>Settings → AI integration</i>:
+        <div style={{ marginTop: 6 }}>
+          <span style={{ fontWeight: 700, color: "#1e3a8a" }}>Analysis model</span> (use a smarter one, e.g. <code>gpt-5</code>) — the judgement work:
+          audit verdicts, scoring &amp; banding, finding drafting, checklist generation, closure review, and cross-criterion analysis.
+        </div>
+        <div style={{ marginTop: 4 }}>
+          <span style={{ fontWeight: 700, color: "#15803d" }}>Utility model</span> (a cheaper one is fine, e.g. <code>gpt-5-nano</code>) — the mechanical work:
+          reading evidence images, condensing long documents, and drafting link metadata.
+        </div>
+        <div style={{ marginTop: 6, fontSize: 11, color: "#94a3b8" }}>
+          A folder audit can use both — the verdict on the Analysis model, plus image/condense steps on the Utility model. The Model column shows the Analysis model that did the main reasoning; the Tokens total includes every call.
+        </div>
+      </div>
+
       {log.length === 0 && <p style={{ fontSize: 12.5, color: "#6b7280" }}>No AI reviews run yet.</p>}
 
       {log.length > 0 && (
