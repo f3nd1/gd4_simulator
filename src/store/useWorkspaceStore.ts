@@ -40,6 +40,41 @@ import { computeBand } from "../lib/checklistBanding";
 // the checklist line being satisfied (the folder audit reads many files into
 // one verdict, so there's no single file type to copy). Keeps the Type column
 // meaningful instead of every audited line reading "Other".
+// Each sub-criterion's Drive folder is organised into two subfolders:
+// "1. Policy & Procedure" and "2. Actual Evidence". Classify a scanned file
+// by its top-level path segment so the audit can separate the documented
+// approach (policy) from deployed evidence — a band needs both. Files not
+// under a recognised policy subfolder default to evidence (preserves prior
+// behaviour for folders that aren't split into subfolders yet).
+function classifyFileBucket(path: string): "policy" | "evidence" {
+  const topSegment = path.split("/")[0]?.toLowerCase() || "";
+  return /polic|procedure/.test(topSegment) ? "policy" : "evidence";
+}
+
+// Reads a folder's text files (recursively) into one capped string, used for
+// the school-wide "Additional info" context. Text-only on purpose — images
+// are skipped here so the general-context folder can't quietly fan out into
+// extra AI vision calls on every audit.
+async function readFolderPlainText(folderId: string, token: string, maxChars = 12000): Promise<string> {
+  const files = await listFolderFilesRecursive(folderId, token);
+  const parts: string[] = [];
+  let total = 0;
+  for (const file of files) {
+    if (total >= maxChars) break;
+    try {
+      const text = await exportFileText(file, token);
+      if (text) {
+        const piece = `--- ${file.path} ---\n${text}`;
+        parts.push(piece);
+        total += piece.length;
+      }
+    } catch {
+      // skip unreadable files in the context folder
+    }
+  }
+  return parts.join("\n\n").slice(0, maxChars);
+}
+
 function inferEvidenceType(lineText: string): string {
   const t = lineText.toLowerCase();
   if (/\b(minutes?|meeting)\b/.test(t)) return "Minutes";
@@ -180,12 +215,22 @@ export type WorkspaceState = {
 
   setFolderField: <K extends keyof EvidenceFolder>(id: string, field: K, value: EvidenceFolder[K]) => void;
   checkFolderAccess: (id: string) => Promise<void>;
-  auditFolderContents: (id: string) => Promise<void>;
+  // extraContext (optional): school-wide "Additional info" folder text, fed in
+  // as labeled background — never primary evidence (the evidence-sufficiency
+  // caps still gate the band).
+  auditFolderContents: (id: string, extraContext?: string) => Promise<void>;
   // One-click "audit every folder that has a link" used by the Dashboard.
   // bulkAuditStatus carries human-readable progress ("Auditing 3/24 …") while
   // it runs, and is null when idle.
   bulkAuditStatus: string | null;
   auditAllFolders: () => Promise<void>;
+
+  // School-wide "Additional info" folder — general supporting documents that
+  // apply to every criterion (org chart, staff/student/partner listing, MR
+  // declaration, awards), not tied to any one sub-criterion.
+  additionalInfo: { link: string; accessStatus?: DriveAccessStatus; accessNote?: string; accessAt?: string };
+  setAdditionalInfoLink: (link: string) => void;
+  checkAdditionalInfoAccess: () => Promise<void>;
 
   setSamples: (samples: SampleRecord[]) => void;
   toggleSample: (id: string) => void;
@@ -280,6 +325,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       seedFindingsLoaded: false,
       busy: null,
       bulkAuditStatus: null,
+      additionalInfo: { link: "" },
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
@@ -624,7 +670,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // feature — writes the verdicts straight into the Sub-Criterion
       // Checklist rather than just advising. This is the only AI feature in
       // the app permitted to do that.
-      auditFolderContents: async (id) => {
+      auditFolderContents: async (id, extraContext) => {
         const s = get();
         const folder = s.folders.find((f) => f.id === id);
         if (!folder) return;
@@ -712,6 +758,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return;
         }
 
+        // Resolve school-wide "Additional info" context: the bulk audit reads
+        // it once and passes it in; a single Run audit reads it here (best
+        // effort, text files only to control cost). undefined extraContext =
+        // "read it yourself"; an explicit "" = "skip it".
+        let resolvedContext = extraContext;
+        if (resolvedContext === undefined) {
+          const addId = parseFolderId(get().additionalInfo.link);
+          if (addId) {
+            try {
+              resolvedContext = await readFolderPlainText(addId, token);
+            } catch {
+              resolvedContext = undefined;
+            }
+          }
+        }
+
         const aiSettings = useAISettingsStore.getState();
         const canDescribeImages = aiSettings.enabled && !!aiSettings.apiKey;
         // Each image costs one extra OpenAI vision call — capped separately
@@ -723,13 +785,27 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const scanned: string[] = [];
         const skipped: string[] = []; // recognized type, but no text path for it (e.g. video)
         const failed: { path: string; reason: string }[] = []; // tried to read, threw
-        const textParts: string[] = [];
+        // Split by the two-subfolder convention so policy docs and deployed
+        // evidence reach the AI as clearly-labeled sections.
+        const policyParts: string[] = [];
+        const evidenceParts: string[] = [];
+        let policyCount = 0;
+        let evidenceCount = 0;
+        const addPart = (path: string, body: string) => {
+          if (classifyFileBucket(path) === "policy") {
+            policyParts.push(`--- ${path} ---\n${body}`);
+            policyCount++;
+          } else {
+            evidenceParts.push(`--- ${path} ---\n${body}`);
+            evidenceCount++;
+          }
+        };
         for (const file of files) {
           try {
             const text = await exportFileText(file, token);
             if (text !== null) {
               scanned.push(file.path);
-              textParts.push(`--- ${file.path} ---\n${text}`);
+              addPart(file.path, text);
               continue;
             }
             if (IMAGE_MIME_TYPES.has(file.mimeType) && canDescribeImages && imagesDescribed < MAX_IMAGES) {
@@ -737,7 +813,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const dataUrl = await exportFileImageDataUrl(file, token);
               const description = await describeImage(dataUrl, aiSettings);
               scanned.push(file.path);
-              textParts.push(`--- ${file.path} (image) ---\n${description}`);
+              addPart(`${file.path} (image)`, description);
               continue;
             }
             skipped.push(file.path);
@@ -749,7 +825,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             failed.push({ path: file.path, reason: err instanceof Error ? err.message : String(err) });
           }
         }
-        const docText = textParts.join("\n\n");
+        const docText = [
+          resolvedContext
+            ? `=== SCHOOL-WIDE CONTEXT (general supporting documents — background only, not primary evidence for this sub-criterion) ===\n${resolvedContext}`
+            : "",
+          policyParts.length ? `=== POLICY & PROCEDURE ===\n${policyParts.join("\n\n")}` : "",
+          evidenceParts.length ? `=== ACTUAL EVIDENCE ===\n${evidenceParts.join("\n\n")}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n");
         let verdicts;
         let live = false;
         let liveError: string | undefined;
@@ -802,7 +886,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return names.length > NAME_CAP ? `${shown}, +${names.length - NAME_CAP} more` : shown;
         };
         const fileSummary = scanned.length
-          ? `Scanned ${scanned.length} file${scanned.length === 1 ? "" : "s"} (${briefList(scanned)}).`
+          ? `Scanned ${scanned.length} file${scanned.length === 1 ? "" : "s"} — Policy & Procedure: ${policyCount}, Actual Evidence: ${evidenceCount} (${briefList(scanned)}).`
           : "No readable files were found in this folder.";
         const skipSummary = skipped.length ? ` Skipped ${skipped.length} unsupported file${skipped.length === 1 ? "" : "s"} (${briefList(skipped)}).` : "";
         // Collapse identical failure reasons (e.g. every PDF hitting the same
@@ -842,12 +926,58 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set({ bulkAuditStatus: null });
           return;
         }
+        // Read the school-wide Additional-info folder ONCE and reuse it for
+        // every sub-criterion (vs re-reading it 24×). "" means "no context /
+        // don't read again" to each auditFolderContents call.
+        let sharedContext = "";
+        const addId = parseFolderId(get().additionalInfo.link);
+        const token = useGoogleDriveStore.getState().getValidToken();
+        if (addId && token) {
+          set({ bulkAuditStatus: "Reading school-wide additional info…" });
+          try {
+            sharedContext = await readFolderPlainText(addId, token);
+          } catch {
+            sharedContext = "";
+          }
+        }
         for (let i = 0; i < folders.length; i++) {
           const f = folders[i];
           set({ bulkAuditStatus: `Auditing ${i + 1}/${folders.length}: ${f.subCriterionId} ${f.folderName}` });
-          await get().auditFolderContents(f.id);
+          await get().auditFolderContents(f.id, sharedContext);
         }
         set({ bulkAuditStatus: null });
+      },
+
+      setAdditionalInfoLink: (link) => set((s) => ({ additionalInfo: { ...s.additionalInfo, link } })),
+
+      // Mirrors checkFolderAccess for the single school-wide folder.
+      checkAdditionalInfoAccess: async () => {
+        const link = get().additionalInfo.link;
+        const folderId = parseFolderId(link);
+        const token = useGoogleDriveStore.getState().getValidToken();
+        const checkedAt = new Date().toISOString();
+        let status: DriveAccessStatus;
+        let note: string;
+        if (!folderId) {
+          status = "Error";
+          note = "Could not find a Drive folder ID in the link. Paste a Google Drive folder link.";
+        } else if (!token) {
+          status = "Not Connected";
+          note = "Not connected to Google Drive. Connect your Google account in Settings, then try again.";
+        } else {
+          try {
+            const files = await listFolderFilesRecursive(folderId, token);
+            status = "Connected";
+            note = files.length ? `Connected — found ${files.length} file${files.length === 1 ? "" : "s"} (including subfolders).` : "Connected, but this folder appears to be empty.";
+          } catch (err) {
+            status = "Error";
+            if (err instanceof DriveApiError && err.status === 404) note = "Drive could not find this folder. Check the link points to a folder, not a file.";
+            else if (err instanceof DriveApiError && err.status === 403)
+              note = `Drive denied access (${err.reason || "no further detail from Google"}). Confirm the connected account has at least viewer access.`;
+            else note = err instanceof Error ? err.message : String(err);
+          }
+        }
+        set((st) => ({ additionalInfo: { ...st.additionalInfo, accessStatus: status, accessNote: note, accessAt: checkedAt } }));
       },
 
       setSamples: (samples) => set({ samples }),

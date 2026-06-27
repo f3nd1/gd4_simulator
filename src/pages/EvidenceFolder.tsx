@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { SUBMISSION_FILE_TYPES } from "../data/gd4Requirements";
+import { GENERAL_SUPPORTING_DOCS, SUPPORTING_DOCS_TEMPLATE_NOTE, SUBMISSION_PRIVACY_NOTE } from "../data/gd4Requirements";
 import type { FolderStatus } from "../types";
 
 const SUMMARY_CAP = 180; // chars shown before the audit summary collapses
@@ -18,6 +18,10 @@ export function EvidenceFolder() {
   const checkFolderAccess = useWorkspaceStore((s) => s.checkFolderAccess);
   const auditFolderContents = useWorkspaceStore((s) => s.auditFolderContents);
   const busy = useWorkspaceStore((s) => s.busy);
+  const additionalInfo = useWorkspaceStore((s) => s.additionalInfo);
+  const setAdditionalInfoLink = useWorkspaceStore((s) => s.setAdditionalInfoLink);
+  const checkAdditionalInfoAccess = useWorkspaceStore((s) => s.checkAdditionalInfoAccess);
+  const [checkingAdditional, setCheckingAdditional] = useState(false);
 
   // Deep link from the Dashboard recheck report (/evidence-folder?sub=1.1):
   // scroll the matching folder row into view and briefly highlight it so the
@@ -66,13 +70,56 @@ export function EvidenceFolder() {
       </p>
 
       <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", background: "#f8fafc", marginBottom: 10, fontSize: 12 }}>
-        <b style={{ fontSize: 11.5, color: "#475569" }}>Organise each folder by the 3 file types you submit:</b>
+        <b style={{ fontSize: 11.5, color: "#475569" }}>Inside each sub-criterion's Drive folder, use 2 subfolders:</b>
         <ol style={{ margin: "4px 0 4px", paddingLeft: 18, color: "#475569" }}>
-          {SUBMISSION_FILE_TYPES.map((t) => <li key={t}>{t}</li>)}
+          <li><b>1. Policy &amp; Procedure</b> — the documented approach</li>
+          <li><b>2. Actual Evidence</b> — records showing it is implemented</li>
         </ol>
         <span style={{ color: "#6b7280" }}>
-          See the <Link to="/gd4-library" style={{ color: "#2563eb" }}>GD4 Library</Link> for the full list of supporting documents and the per-item expected evidence. Omit NRIC/FIN details before uploading.
+          The audit reads both and reports a per-type breakdown. General, school-wide documents that aren't tied to one sub-criterion go in the <b>Additional info</b> folder below. Omit NRIC/FIN details before uploading.
         </span>
+      </div>
+
+      <div style={{ border: "1px solid #d8c7a4", borderRadius: 10, padding: "10px", background: "#fffaf0", marginBottom: 12, fontSize: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+          <b style={{ fontSize: 12, color: "#7a5b12" }}>Additional info — general supporting documents (school-wide, applies to all criteria)</b>
+          {additionalInfo.accessStatus && <Pill s={ACCESS_TONE[additionalInfo.accessStatus]}>{additionalInfo.accessStatus}</Pill>}
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", margin: "6px 0" }}>
+          <input
+            placeholder="https://drive.google.com/drive/folders/…"
+            value={additionalInfo.link || ""}
+            onChange={(e) => setAdditionalInfoLink(e.target.value)}
+            style={{ ...inputStyle, width: 280, padding: "4px 6px" }}
+          />
+          {additionalInfo.link && <a href={additionalInfo.link} target="_blank" rel="noreferrer" style={{ fontSize: 11.5 }}>Open</a>}
+          <button
+            disabled={checkingAdditional}
+            onClick={async () => {
+              setCheckingAdditional(true);
+              try { await checkAdditionalInfoAccess(); } finally { setCheckingAdditional(false); }
+            }}
+            style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", whiteSpace: "nowrap" }}
+          >
+            {checkingAdditional ? "Checking…" : "Check access"}
+          </button>
+        </div>
+        {additionalInfo.accessNote && (
+          <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 4 }}>
+            {additionalInfo.accessNote}{additionalInfo.accessAt && <span style={{ color: "#94a3b8" }}> — checked {new Date(additionalInfo.accessAt).toLocaleString()}</span>}
+          </div>
+        )}
+        <details>
+          <summary style={{ cursor: "pointer", color: "#6b7280" }}>What goes here</summary>
+          <ul style={{ margin: "4px 0", paddingLeft: 18, color: "#475569" }}>
+            {GENERAL_SUPPORTING_DOCS.map((d) => <li key={d}>{d}</li>)}
+          </ul>
+          <div style={{ color: "#6b7280" }}>{SUPPORTING_DOCS_TEMPLATE_NOTE}</div>
+          <div style={{ color: "#b23121", fontWeight: 600 }}>{SUBMISSION_PRIVACY_NOTE}</div>
+          <div style={{ color: "#6b7280", marginTop: 4 }}>
+            Read once per audit run and fed to the AI as background context for every sub-criterion — it never counts as primary evidence on its own. See the <Link to="/gd4-library" style={{ color: "#2563eb" }}>GD4 Library</Link> for per-item expected evidence.
+          </div>
+        </details>
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
