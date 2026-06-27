@@ -20,8 +20,10 @@ export function EvidenceFolder() {
       <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence folder index</h3>
       <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
         One evidence folder per GD4 sub-criterion. All folders live in Google Drive — the owning department is set up on the Audit Cycle page.
-        "Check access" confirms this app can see the folder's files; "Run audit" reads them and auto-sets the matching Sub-Criterion Checklist lines.
-        Both require connecting Google Drive in Settings first.
+        "Check access" confirms this app can see the folder's files (including subfolders). "Run audit" does the whole pipeline in one click:
+        it generates the Sub-Criterion Checklist lines if none exist yet, reads every supported file (PDF, Word, text/CSV, and images via AI),
+        sets each line's status, and updates the band/score — shown in the result line below. To audit every linked folder at once, use
+        "Audit all folders → score" on the Dashboard. Both require connecting Google Drive in Settings first.
       </p>
       <table>
         <thead>

@@ -34,6 +34,7 @@ import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError } from "../lib/drive/driveClient";
 import { describeImage } from "../lib/ai/aiClient";
+import { computeBand } from "../lib/checklistBanding";
 
 export type ClosureState = {
   root?: string;
@@ -166,6 +167,11 @@ export type WorkspaceState = {
   setFolderField: <K extends keyof EvidenceFolder>(id: string, field: K, value: EvidenceFolder[K]) => void;
   checkFolderAccess: (id: string) => Promise<void>;
   auditFolderContents: (id: string) => Promise<void>;
+  // One-click "audit every folder that has a link" used by the Dashboard.
+  // bulkAuditStatus carries human-readable progress ("Auditing 3/24 …") while
+  // it runs, and is null when idle.
+  bulkAuditStatus: string | null;
+  auditAllFolders: () => Promise<void>;
 
   setSamples: (samples: SampleRecord[]) => void;
   toggleSample: (id: string) => void;
@@ -259,6 +265,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       customFindings: [],
       seedFindingsLoaded: false,
       busy: null,
+      bulkAuditStatus: null,
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
@@ -644,6 +651,28 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
 
         const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === folder.subCriterionId);
+        if (items.length === 0) {
+          finish("No GD4 items map to this sub-criterion, so there is nothing to audit.", false);
+          return;
+        }
+
+        // Auto-generate the checklist lines for any item that has none, so a
+        // single "Run audit" covers generate → read → score without a separate
+        // trip to the Sub-Criterion Checklist page. Generated lines are
+        // confirmed straight in and stay fully editable there afterward.
+        for (const item of items) {
+          const existing = useChecklistModuleStore.getState().entries[item.id];
+          if (!existing || existing.specific.length === 0) {
+            try {
+              await useChecklistModuleStore.getState().generateSpecific(item.id);
+              useChecklistModuleStore.getState().confirmGenerated(item.id);
+            } catch {
+              // Generation failure (AI down, etc.) is non-fatal — the item
+              // simply contributes no lines and is reported as such below.
+            }
+          }
+        }
+
         const checklistEntries = useChecklistModuleStore.getState().entries;
         const lineOwners = new Map<string, string>(); // lineId -> itemId
         const lines: { id: string; text: string }[] = [];
@@ -656,7 +685,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }
         }
         if (lines.length === 0) {
-          finish("No Sub-Criterion Checklist lines exist yet for this sub-criterion — generate the checklist first, then run this audit.", false);
+          finish("Could not generate any checklist lines to audit against — check AI Settings, or add lines manually on the Sub-Criterion Checklist page.", false);
           return;
         }
 
@@ -757,8 +786,41 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const failSummary = failed.length
           ? ` Could not read ${failed.length} file${failed.length === 1 ? "" : "s"}: ${failed.map((f) => `${f.path} (${f.reason})`).join("; ")}.`
           : "";
-        const summary = `${fileSummary}${skipSummary}${failSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.`;
+
+        // Resulting band per item, shown right here so the score is visible at
+        // the point of audit instead of only on the Scorecard — this is the
+        // same band computeChecklistOverrides feeds into the overall score.
+        const freshEntries = useChecklistModuleStore.getState().entries;
+        const bandParts = items
+          .map((item) => {
+            const e = freshEntries[item.id];
+            if (!e || e.specific.length === 0) return null;
+            return `${item.id} → Band ${computeBand(e.generic, e.specific, item.gateSensitive).finalBand}`;
+          })
+          .filter(Boolean);
+        const bandSummary = bandParts.length ? ` Resulting band: ${bandParts.join(", ")}.` : "";
+
+        const summary = `${fileSummary}${skipSummary}${failSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.${bandSummary}`;
         finish(summary, live, liveError);
+      },
+
+      // Dashboard "Audit all folders": runs the full single-folder pipeline
+      // (auto-generate → read evidence → set statuses → band/score) on every
+      // folder that has a Drive link, in order, surfacing progress via
+      // bulkAuditStatus. The component navigates to the Scorecard when it
+      // resolves. Reuses auditFolderContents verbatim so behaviour can't drift.
+      auditAllFolders: async () => {
+        const folders = get().folders.filter((f) => parseFolderId(f.folderLink));
+        if (folders.length === 0) {
+          set({ bulkAuditStatus: null });
+          return;
+        }
+        for (let i = 0; i < folders.length; i++) {
+          const f = folders[i];
+          set({ bulkAuditStatus: `Auditing ${i + 1}/${folders.length}: ${f.subCriterionId} ${f.folderName}` });
+          await get().auditFolderContents(f.id);
+        }
+        set({ bulkAuditStatus: null });
       },
 
       setSamples: (samples) => set({ samples }),

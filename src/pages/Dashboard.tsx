@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
@@ -16,6 +16,10 @@ export function Dashboard() {
   const saveAsNewVersion = useWorkspaceStore((s) => s.saveAsNewVersion);
   const loadDemoDataset = useWorkspaceStore((s) => s.loadDemoDataset);
   const auditorsCount = useWorkspaceStore((s) => s.auditors.length);
+  const auditAllFolders = useWorkspaceStore((s) => s.auditAllFolders);
+  const bulkAuditStatus = useWorkspaceStore((s) => s.bulkAuditStatus);
+  const foldersWithLink = useWorkspaceStore((s) => s.folders.filter((f) => f.folderLink && f.folderLink.trim()).length);
+  const navigate = useNavigate();
   const scored = useScored();
   const findings = useAllFindings();
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
@@ -91,7 +95,20 @@ export function Dashboard() {
           >
             Recheck all evidence
           </button>
+          <button
+            disabled={!!bulkAuditStatus || foldersWithLink === 0}
+            title={foldersWithLink === 0 ? "Add a Drive folder link on the Evidence Folder page first." : `Reads every linked folder and scores all ${foldersWithLink} of them in one pass.`}
+            onClick={async () => {
+              if (!confirm(`Read and audit all ${foldersWithLink} folder(s) that have a Drive link? This generates checklist lines where missing, reads each folder's evidence, sets the checklist statuses and updates the bands/score. You'll land on the Scorecard when it finishes.`)) return;
+              await auditAllFolders();
+              navigate("/scorecard");
+            }}
+            style={{ cursor: bulkAuditStatus ? "default" : "pointer", border: "1px solid #3a4660", background: bulkAuditStatus ? "#3a4660" : "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12, opacity: foldersWithLink === 0 ? 0.5 : 1 }}
+          >
+            {bulkAuditStatus ? "Auditing…" : "Audit all folders → score"}
+          </button>
         </div>
+        {bulkAuditStatus && <div style={{ fontSize: 11.5, color: "#aeb8c7", marginTop: 8 }}>{bulkAuditStatus}</div>}
       </Card>
 
       {auditReport && (
