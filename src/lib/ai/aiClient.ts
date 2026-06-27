@@ -34,12 +34,20 @@ export function effectiveSettings(base: AISettings, opts: { purpose: "analysis" 
 
 // School Context is background, never evidence — labeled so the model weighs
 // it for interpretation but can't treat it as proof of a requirement.
+//
+// Hard cap on the injected context. The API is stateless — this prefix is
+// re-sent on EVERY call — so we bound it. It's also placed first and kept
+// identical across calls so OpenAI's automatic prompt caching applies (much
+// cheaper than full price for the repeated prefix). The School Context page
+// shows the live size + this cap so the user can see what's actually sent.
+export const CONTEXT_CHAR_CAP = 8000; // ≈ 2000 tokens
+
 function withContext(messages: AIChatMessage[], settings: AISettings): AIChatMessage[] {
   const ctx = settings.context?.trim();
   if (!ctx) return messages;
   const preamble: AIChatMessage = {
     role: "system",
-    content: `Background context about the institution being audited (use it to interpret evidence and tailor your comments to this school; it is itself NOT evidence and cannot on its own satisfy any requirement):\n${ctx.slice(0, 6000)}`,
+    content: `Background context about the institution being audited (use it to interpret evidence and tailor your comments to this school; it is itself NOT evidence and cannot on its own satisfy any requirement):\n${ctx.slice(0, CONTEXT_CHAR_CAP)}`,
   };
   return [preamble, ...messages];
 }

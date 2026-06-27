@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
+import { CONTEXT_CHAR_CAP } from "../lib/ai/aiClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 
@@ -20,18 +21,43 @@ export function SchoolContext() {
   const schoolContext = useWorkspaceStore((s) => s.schoolContext);
   const setSchoolContextText = useWorkspaceStore((s) => s.setSchoolContextText);
   const setSchoolContextLink = useWorkspaceStore((s) => s.setSchoolContextLink);
+  const setSchoolContextEnabled = useWorkspaceStore((s) => s.setSchoolContextEnabled);
   const readSchoolContextFromDrive = useWorkspaceStore((s) => s.readSchoolContextFromDrive);
   const [reading, setReading] = useState(false);
+
+  const injectionOn = schoolContext.enabled !== false;
+  const composed = composeSchoolContext({ ...schoolContext, enabled: true });
+  const sentChars = Math.min(composed.length, CONTEXT_CHAR_CAP);
+  const approxTokens = Math.ceil(sentChars / 4);
+  const overCap = composed.length > CONTEXT_CHAR_CAP;
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>School context — the auditor's briefing</h3>
         <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
-          Background knowledge about this institution. It is <b>injected into every AI assessment</b> (folder audits, item
-          reviews, checklist generation, closure reviews) as context, so the AI interprets evidence the way a briefed
+          Background knowledge about this institution. When on, it is <b>injected into every AI assessment</b> (folder
+          audits, item reviews, checklist generation, closure reviews) so the AI interprets evidence the way a briefed
           auditor would instead of starting blind each time. It is <b>not evidence</b> — it can't on its own satisfy any
           requirement. Saved with the workspace, so it persists across sessions.
+        </p>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8, padding: "8px 10px", border: "1px solid #e2e8f0", borderRadius: 10, background: "#f8fafc" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>
+            <input type="checkbox" checked={injectionOn} onChange={(e) => setSchoolContextEnabled(e.target.checked)} />
+            Inject context into AI calls
+          </label>
+          <Pill s={injectionOn ? "good" : "medium"}>{injectionOn ? "On" : "Off"}</Pill>
+          <span style={{ fontSize: 11.5, color: overCap ? "#b23121" : "#6b7280", marginLeft: "auto" }}>
+            Sends ~{sentChars.toLocaleString()} chars (~{approxTokens.toLocaleString()} tokens) per AI call
+            {overCap && ` — TRUNCATED: only the first ${CONTEXT_CHAR_CAP.toLocaleString()} of ${composed.length.toLocaleString()} chars are sent`}
+          </span>
+        </div>
+        <p style={{ fontSize: 11, color: "#94a3b8", marginTop: 0, marginBottom: 10 }}>
+          Cost note: the API is stateless, so this prefix is re-sent on every call (a full "Audit all folders" run makes
+          dozens). Keep the briefing tight. It's capped at {CONTEXT_CHAR_CAP.toLocaleString()} chars and sent first &amp;
+          unchanged, so OpenAI's prompt caching charges much less for the repeated part — but a smaller context is still
+          cheaper and sharper. Switch the toggle off to send no context tokens at all.
         </p>
 
         <label style={{ display: "block", marginBottom: 12 }}>

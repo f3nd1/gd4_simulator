@@ -52,8 +52,11 @@ function classifyFileBucket(path: string): "policy" | "evidence" {
 }
 
 // The full School Context string injected into AI calls: the typed markdown
-// briefing plus whatever was last read from the linked Drive context.
-export function composeSchoolContext(sc: { text?: string; driveCache?: string }): string {
+// briefing plus whatever was last read from the linked Drive context. Returns
+// "" when the user has switched injection off (cost control), so no context
+// tokens are sent at all.
+export function composeSchoolContext(sc: { text?: string; driveCache?: string; enabled?: boolean }): string {
+  if (sc.enabled === false) return "";
   return [sc.text?.trim(), sc.driveCache?.trim()].filter(Boolean).join("\n\n");
 }
 
@@ -241,9 +244,10 @@ export type WorkspaceState = {
   // School Context — the auditor's "briefing": a persistent markdown profile
   // of the institution (+ optional Drive link to pull more), injected as
   // background into every AI assessment so it never starts blind.
-  schoolContext: { text: string; link: string; driveCache?: string; cachedAt?: string; accessStatus?: DriveAccessStatus; accessNote?: string };
+  schoolContext: { text: string; link: string; driveCache?: string; cachedAt?: string; accessStatus?: DriveAccessStatus; accessNote?: string; enabled?: boolean };
   setSchoolContextText: (text: string) => void;
   setSchoolContextLink: (link: string) => void;
+  setSchoolContextEnabled: (enabled: boolean) => void;
   readSchoolContextFromDrive: () => Promise<void>;
 
   setSamples: (samples: SampleRecord[]) => void;
@@ -1002,6 +1006,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setSchoolContextText: (text) => set((s) => ({ schoolContext: { ...s.schoolContext, text } })),
       setSchoolContextLink: (link) => set((s) => ({ schoolContext: { ...s.schoolContext, link } })),
+      setSchoolContextEnabled: (enabled) => set((s) => ({ schoolContext: { ...s.schoolContext, enabled } })),
 
       // Reads the linked Drive context folder/doc into driveCache so it can be
       // injected alongside the typed briefing. Best-effort; surfaces an access
