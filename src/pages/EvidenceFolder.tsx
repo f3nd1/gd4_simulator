@@ -1,9 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { GENERAL_SUPPORTING_DOCS, SUPPORTING_DOCS_TEMPLATE_NOTE, SUBMISSION_PRIVACY_NOTE } from "../data/gd4Requirements";
 import type { FolderStatus } from "../types";
 
 const SUMMARY_CAP = 180; // chars shown before the audit summary collapses
@@ -65,28 +64,37 @@ export function EvidenceFolder() {
   const [tab, setTab] = useState<"policy" | "evidence">("evidence");
   const isPolicy = tab === "policy";
   const linkField: "policyLink" | "folderLink" = isPolicy ? "policyLink" : "folderLink";
+  const [showHelp, setShowHelp] = useState(false);
 
   return (
     <Card>
-      <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence folder index</h3>
-      <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
-        One evidence folder per GD4 sub-criterion. All folders live in Google Drive — the owning department is set up on the Audit Cycle page.
-        "Check access" confirms this app can see the folder's files (including subfolders). "Run audit" does the whole pipeline in one click:
-        it generates the Sub-Criterion Checklist lines if none exist yet, reads every supported file (PDF, Word, text/CSV, and images via AI),
-        sets each line's status, and updates the band/score — shown in the result line below. To audit every linked folder at once, use
-        "Audit all folders → score" on the Dashboard. Both require connecting Google Drive in Settings first.
-      </p>
-
-      <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", background: "#f8fafc", marginBottom: 10, fontSize: 12 }}>
-        <b style={{ fontSize: 11.5, color: "#475569" }}>Link two folders per sub-criterion, using the tabs below:</b>
-        <ol style={{ margin: "4px 0 4px", paddingLeft: 18, color: "#475569" }}>
-          <li><b>1. Policy &amp; Procedure</b> — the documented approach</li>
-          <li><b>2. Actual Evidence</b> — records showing it is implemented</li>
-        </ol>
-        <span style={{ color: "#6b7280" }}>
-          "Run audit" reads both folders and reports a per-type breakdown. (If you only link one, the audit still works and falls back to reading subfolders named "Policy"/"Procedure" inside it.) General, school-wide documents that aren't tied to one sub-criterion go in the <b>Additional info</b> folder below. Omit NRIC/FIN details before uploading.
-        </span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Evidence folder index</h3>
+        <button onClick={() => setShowHelp((h) => !h)} style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 8px", color: "#6b7280" }}>
+          {showHelp ? "Hide help" : "Show help"}
+        </button>
       </div>
+      {showHelp && (
+        <>
+          <p style={{ fontSize: 12.5, color: "#6b7280" }}>
+            One evidence folder per GD4 sub-criterion. All folders live in Google Drive — the owning department is set up on the Audit Cycle page.
+            "Check access" confirms this app can see the folder's files (including subfolders). "Run audit" does the whole pipeline in one click:
+            it generates the Sub-Criterion Checklist lines if none exist yet, reads every supported file (PDF, Word, text/CSV, and images via AI),
+            sets each line's status, and updates the band/score — shown in the result line below. To audit every linked folder at once, use
+            "Audit all folders → score" on the Dashboard. Both require connecting Google Drive in Settings first.
+          </p>
+          <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", background: "#f8fafc", marginBottom: 10, fontSize: 12 }}>
+            <b style={{ fontSize: 11.5, color: "#475569" }}>Link two folders per sub-criterion, using the tabs below:</b>
+            <ol style={{ margin: "4px 0 4px", paddingLeft: 18, color: "#475569" }}>
+              <li><b>1. Policy &amp; Procedure</b> — the documented approach</li>
+              <li><b>2. Actual Evidence</b> — records showing it is implemented</li>
+            </ol>
+            <span style={{ color: "#6b7280" }}>
+              "Run audit" reads both folders and reports a per-type breakdown. (If you only link one, the audit still works and falls back to reading subfolders named "Policy"/"Procedure" inside it.) General, school-wide documents that aren't tied to one sub-criterion go in the <b>Additional info</b> folder below. Omit NRIC/FIN details before uploading.
+            </span>
+          </div>
+        </>
+      )}
 
       <div style={{ border: "1px solid #d8c7a4", borderRadius: 10, padding: "10px", background: "#fffaf0", marginBottom: 12, fontSize: 12 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
@@ -117,17 +125,6 @@ export function EvidenceFolder() {
             {additionalInfo.accessNote}{additionalInfo.accessAt && <span style={{ color: "#94a3b8" }}> — checked {new Date(additionalInfo.accessAt).toLocaleString()}</span>}
           </div>
         )}
-        <details>
-          <summary style={{ cursor: "pointer", color: "#6b7280" }}>What goes here</summary>
-          <ul style={{ margin: "4px 0", paddingLeft: 18, color: "#475569" }}>
-            {GENERAL_SUPPORTING_DOCS.map((d) => <li key={d}>{d}</li>)}
-          </ul>
-          <div style={{ color: "#6b7280" }}>{SUPPORTING_DOCS_TEMPLATE_NOTE}</div>
-          <div style={{ color: "#b23121", fontWeight: 600 }}>{SUBMISSION_PRIVACY_NOTE}</div>
-          <div style={{ color: "#6b7280", marginTop: 4 }}>
-            Read once per audit run and fed to the AI as background context for every sub-criterion — it never counts as primary evidence on its own. See the <Link to="/gd4-library" style={{ color: "#2563eb" }}>GD4 Library</Link> for per-item expected evidence.
-          </div>
-        </details>
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
@@ -216,13 +213,11 @@ export function EvidenceFolder() {
                     </a>
                   )}
                 </td>
-                <td>
-                  <input
-                    type="date"
-                    value={f.lastCheckedDate || ""}
-                    onChange={(e) => setFolderField(f.id, "lastCheckedDate", e.target.value)}
-                    style={{ ...inputStyle, width: 130, padding: "4px 6px" }}
-                  />
+                <td style={{ fontSize: 11.5, color: "#475569", whiteSpace: "nowrap" }}>
+                  {(() => {
+                    const at = isPolicy ? f.policyAccessAt : f.accessCheckAt;
+                    return at ? new Date(at).toLocaleString() : <span style={{ color: "#cbd5e1" }}>— not checked</span>;
+                  })()}
                 </td>
                 <td>
                   <div style={{ display: "flex", gap: 4 }}>
