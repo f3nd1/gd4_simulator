@@ -18,7 +18,7 @@ export function Dashboard() {
   const auditorsCount = useWorkspaceStore((s) => s.auditors.length);
   const auditAllFolders = useWorkspaceStore((s) => s.auditAllFolders);
   const bulkAuditStatus = useWorkspaceStore((s) => s.bulkAuditStatus);
-  const foldersWithLink = useWorkspaceStore((s) => s.folders.filter((f) => f.folderLink && f.folderLink.trim()).length);
+  const foldersWithLink = useWorkspaceStore((s) => s.folders.filter((f) => (f.folderLink && f.folderLink.trim()) || (f.policyLink && f.policyLink.trim())).length);
   const navigate = useNavigate();
   const scored = useScored();
   const findings = useAllFindings();

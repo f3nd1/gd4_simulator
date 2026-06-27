@@ -58,6 +58,14 @@ export function EvidenceFolder() {
   // Per-row "show full audit summary" toggles (summaries can be long).
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
+  // Two tabs: each sub-criterion has a Policy & Procedure folder and an Actual
+  // Evidence folder. The Link column + Check access act on the active tab;
+  // Run audit reads both. Default to Evidence so existing single-link
+  // workspaces show their folders straight away.
+  const [tab, setTab] = useState<"policy" | "evidence">("evidence");
+  const isPolicy = tab === "policy";
+  const linkField: "policyLink" | "folderLink" = isPolicy ? "policyLink" : "folderLink";
+
   return (
     <Card>
       <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence folder index</h3>
@@ -70,13 +78,13 @@ export function EvidenceFolder() {
       </p>
 
       <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", background: "#f8fafc", marginBottom: 10, fontSize: 12 }}>
-        <b style={{ fontSize: 11.5, color: "#475569" }}>Inside each sub-criterion's Drive folder, use 2 subfolders:</b>
+        <b style={{ fontSize: 11.5, color: "#475569" }}>Link two folders per sub-criterion, using the tabs below:</b>
         <ol style={{ margin: "4px 0 4px", paddingLeft: 18, color: "#475569" }}>
           <li><b>1. Policy &amp; Procedure</b> — the documented approach</li>
           <li><b>2. Actual Evidence</b> — records showing it is implemented</li>
         </ol>
         <span style={{ color: "#6b7280" }}>
-          The audit reads both and reports a per-type breakdown. General, school-wide documents that aren't tied to one sub-criterion go in the <b>Additional info</b> folder below. Omit NRIC/FIN details before uploading.
+          "Run audit" reads both folders and reports a per-type breakdown. (If you only link one, the audit still works and falls back to reading subfolders named "Policy"/"Procedure" inside it.) General, school-wide documents that aren't tied to one sub-criterion go in the <b>Additional info</b> folder below. Omit NRIC/FIN details before uploading.
         </span>
       </div>
 
@@ -146,9 +154,34 @@ export function EvidenceFolder() {
         </span>
       </div>
 
+      <div style={{ display: "flex", gap: 4, marginBottom: 0, borderBottom: "2px solid #e2e8f0" }}>
+        {([["policy", "1. Policy & Procedure"], ["evidence", "2. Actual Evidence"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            style={{
+              cursor: "pointer",
+              border: "none",
+              background: "transparent",
+              padding: "8px 14px",
+              fontSize: 12.5,
+              fontWeight: 700,
+              color: tab === key ? "#1f2937" : "#94a3b8",
+              borderBottom: tab === key ? "2px solid #b8860b" : "2px solid transparent",
+              marginBottom: -2,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+        <span style={{ marginLeft: "auto", alignSelf: "center", fontSize: 11, color: "#94a3b8" }}>
+          {isPolicy ? "The documented approach" : "Records showing it's implemented"} · Run audit reads both tabs
+        </span>
+      </div>
+
       <table>
         <thead>
-          <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>Link</th><th>Last checked</th><th>Action</th></tr>
+          <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>{isPolicy ? "Policy link" : "Evidence link"}</th><th>Last checked</th><th>Action</th></tr>
         </thead>
         <tbody>
           {visibleFolders.map((f) => (
@@ -172,13 +205,13 @@ export function EvidenceFolder() {
                 </td>
                 <td>
                   <input
-                    placeholder="https://drive.google.com/…"
-                    value={f.folderLink || ""}
-                    onChange={(e) => setFolderField(f.id, "folderLink", e.target.value)}
+                    placeholder={isPolicy ? "Policy folder link…" : "Evidence folder link…"}
+                    value={f[linkField] || ""}
+                    onChange={(e) => setFolderField(f.id, linkField, e.target.value)}
                     style={{ ...inputStyle, width: 140, padding: "4px 6px" }}
                   />
-                  {f.folderLink && (
-                    <a href={f.folderLink} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, marginLeft: 4 }}>
+                  {f[linkField] && (
+                    <a href={f[linkField]} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, marginLeft: 4 }}>
                       Open
                     </a>
                   )}
@@ -194,11 +227,11 @@ export function EvidenceFolder() {
                 <td>
                   <div style={{ display: "flex", gap: 4 }}>
                     <button
-                      disabled={busy === "folderaccess" + f.id}
-                      onClick={() => checkFolderAccess(f.id)}
+                      disabled={busy === `folderaccess:${tab}:` + f.id}
+                      onClick={() => checkFolderAccess(f.id, tab)}
                       style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", whiteSpace: "nowrap" }}
                     >
-                      {busy === "folderaccess" + f.id ? "Checking…" : "Check access"}
+                      {busy === `folderaccess:${tab}:` + f.id ? "Checking…" : "Check access"}
                     </button>
                     <button
                       disabled={busy === "folderaudit" + f.id}
@@ -210,11 +243,12 @@ export function EvidenceFolder() {
                   </div>
                 </td>
               </tr>
-              {f.accessCheckNote && (
+              {(isPolicy ? f.policyAccessNote : f.accessCheckNote) && (
                 <tr>
                   <td colSpan={6} style={{ background: "#f8fafc", fontSize: 12, padding: "6px 10px" }}>
-                    <Pill s={ACCESS_TONE[f.accessCheckStatus || "Not Connected"]}>{f.accessCheckStatus || "Not Connected"}</Pill>{" "}
-                    {f.accessCheckNote} <span style={{ color: "#94a3b8" }}>— checked {f.accessCheckAt && new Date(f.accessCheckAt).toLocaleString()}</span>
+                    <Pill s={ACCESS_TONE[(isPolicy ? f.policyAccessStatus : f.accessCheckStatus) || "Not Connected"]}>{(isPolicy ? f.policyAccessStatus : f.accessCheckStatus) || "Not Connected"}</Pill>{" "}
+                    {isPolicy ? f.policyAccessNote : f.accessCheckNote}{" "}
+                    <span style={{ color: "#94a3b8" }}>— checked {(isPolicy ? f.policyAccessAt : f.accessCheckAt) && new Date((isPolicy ? f.policyAccessAt : f.accessCheckAt)!).toLocaleString()}</span>
                   </td>
                 </tr>
               )}

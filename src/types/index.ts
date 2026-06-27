@@ -267,13 +267,23 @@ export type EvidenceFolder = {
   subCriterionId: string;
   folderName: string;
   sourceSystem: SourceSystem;
+  // folderLink is the "Actual Evidence" folder (kept under this name for
+  // back-compat); policyLink is the "Policy & Procedure" folder. The Evidence
+  // Folder module shows them as two tabs and the audit reads both, tagging
+  // files from each into the matching bucket.
   folderLink?: string;
+  policyLink?: string;
   owner: string;
   status: FolderStatus;
   lastCheckedDate?: string;
+  // Access-check results are kept per tab: accessCheck* for the evidence
+  // folder, policyAccess* for the policy folder.
   accessCheckStatus?: DriveAccessStatus;
   accessCheckNote?: string;
   accessCheckAt?: string;
+  policyAccessStatus?: DriveAccessStatus;
+  policyAccessNote?: string;
+  policyAccessAt?: string;
   // "Run audit" results: real Drive file text was read and scored against
   // this sub-criterion's Sub-Criterion Checklist lines, which were updated
   // directly (Met/Partial/Not met) — see useWorkspaceStore.auditFolderContents.

@@ -223,7 +223,7 @@ export type WorkspaceState = {
   removeDepartment: (id: string) => void;
 
   setFolderField: <K extends keyof EvidenceFolder>(id: string, field: K, value: EvidenceFolder[K]) => void;
-  checkFolderAccess: (id: string) => Promise<void>;
+  checkFolderAccess: (id: string, tab?: "policy" | "evidence") => Promise<void>;
   // extraContext (optional): school-wide "Additional info" folder text, fed in
   // as labeled background — never primary evidence (the evidence-sufficiency
   // caps still gate the band).
@@ -643,21 +643,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // call (files.list) confirming whether the connected Google account can
       // actually see this folder's files. No AI involved — this only answers
       // "can we read it", not "what's in it".
-      checkFolderAccess: async (id) => {
+      checkFolderAccess: async (id, tab = "evidence") => {
         const s = get();
         const folder = s.folders.find((f) => f.id === id);
         if (!folder) return;
-        set({ busy: "folderaccess" + id });
+        set({ busy: `folderaccess:${tab}:` + id });
 
-        const folderId = parseFolderId(folder.folderLink);
+        const link = tab === "policy" ? folder.policyLink : folder.folderLink;
+        const folderId = parseFolderId(link);
         const token = useGoogleDriveStore.getState().getValidToken();
         const checkedAt = new Date().toISOString();
+        const label = tab === "policy" ? "Policy & Procedure" : "Actual Evidence";
 
         let status: DriveAccessStatus;
         let note: string;
         if (!folderId) {
           status = "Error";
-          note = "Could not find a Drive folder ID in the folder link. Paste a Google Drive folder link (e.g. https://drive.google.com/drive/folders/<id>).";
+          note = `Could not find a Drive folder ID in the ${label} link. Paste a Google Drive folder link (e.g. https://drive.google.com/drive/folders/<id>).`;
         } else if (!token) {
           status = "Not Connected";
           note = "Not connected to Google Drive. Connect your Google account in Settings, then try again.";
@@ -666,8 +668,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const files = await listFolderFilesRecursive(folderId, token);
             status = "Connected";
             note = files.length
-              ? `Connected — found ${files.length} file${files.length === 1 ? "" : "s"} in this folder (including subfolders).`
-              : "Connected, but this folder (and its subfolders) appears to be empty.";
+              ? `Connected — found ${files.length} file${files.length === 1 ? "" : "s"} in the ${label} folder (including subfolders).`
+              : `Connected, but the ${label} folder (and its subfolders) appears to be empty.`;
           } catch (err) {
             status = "Error";
             if (err instanceof DriveApiError && err.status === 404) note = "Drive could not find this folder. Check the link and that it points to a folder, not a file.";
@@ -678,7 +680,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
 
         set((st) => ({
-          folders: st.folders.map((f) => (f.id === id ? { ...f, accessCheckStatus: status, accessCheckNote: note, accessCheckAt: checkedAt } : f)),
+          folders: st.folders.map((f) =>
+            f.id === id
+              ? tab === "policy"
+                ? { ...f, policyAccessStatus: status, policyAccessNote: note, policyAccessAt: checkedAt }
+                : { ...f, accessCheckStatus: status, accessCheckNote: note, accessCheckAt: checkedAt }
+              : f
+          ),
           busy: null,
         }));
       },
@@ -720,10 +728,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }));
         };
 
-        const folderId = parseFolderId(folder.folderLink);
+        const evidenceId = parseFolderId(folder.folderLink);
+        const policyId = parseFolderId(folder.policyLink);
         const token = useGoogleDriveStore.getState().getValidToken();
-        if (!folderId) {
-          finish("Could not find a Drive folder ID in the folder link. Paste a Google Drive folder link first.", false);
+        if (!evidenceId && !policyId) {
+          finish("No Drive folder linked. Add a Policy & Procedure and/or Actual Evidence folder link first.", false);
           return;
         }
         if (!token) {
@@ -770,12 +779,29 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return;
         }
 
-        let files;
-        try {
-          files = await listFolderFilesRecursive(folderId, token);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          finish(`Could not list this folder's files: ${msg}`, false, msg);
+        // Gather files from BOTH tab folders, tagging each with its bucket by
+        // source folder. If only the evidence folder is linked (legacy / no
+        // separate policy folder), fall back to the subfolder-name classifier
+        // within it so the old single-folder convention still works.
+        type TaggedFile = Awaited<ReturnType<typeof listFolderFilesRecursive>>[number] & { bucket: "policy" | "evidence" | "auto" };
+        const taggedFiles: TaggedFile[] = [];
+        const listErrors: string[] = [];
+        const gather = async (fid: string | null, bucket: TaggedFile["bucket"], label: string) => {
+          if (!fid) return;
+          try {
+            const fs = await listFolderFilesRecursive(fid, token);
+            for (const f of fs) taggedFiles.push({ ...f, bucket });
+          } catch (err) {
+            listErrors.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        };
+        await gather(policyId, "policy", "Policy & Procedure");
+        await gather(evidenceId, "evidence", policyId ? "Actual Evidence" : "Evidence");
+        // No separate policy folder → let the evidence folder's own subfolders
+        // decide policy-vs-evidence (the previous behaviour).
+        if (!policyId) for (const f of taggedFiles) f.bucket = "auto";
+        if (taggedFiles.length === 0 && listErrors.length) {
+          finish(`Could not list the linked folder(s): ${listErrors.join("; ")}.`, false, listErrors.join("; "));
           return;
         }
 
@@ -815,8 +841,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const evidenceParts: string[] = [];
         let policyCount = 0;
         let evidenceCount = 0;
-        const addPart = (path: string, body: string) => {
-          if (classifyFileBucket(path) === "policy") {
+        const addPart = (path: string, body: string, bucket: TaggedFile["bucket"]) => {
+          const isPolicy = bucket === "policy" || (bucket === "auto" && classifyFileBucket(path) === "policy");
+          if (isPolicy) {
             policyParts.push(`--- ${path} ---\n${body}`);
             policyCount++;
           } else {
@@ -824,12 +851,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             evidenceCount++;
           }
         };
-        for (const file of files) {
+        for (const file of taggedFiles) {
           try {
             const text = await exportFileText(file, token);
             if (text !== null) {
               scanned.push(file.path);
-              addPart(file.path, text);
+              addPart(file.path, text, file.bucket);
               continue;
             }
             if (IMAGE_MIME_TYPES.has(file.mimeType) && canDescribeImages && imagesDescribed < MAX_IMAGES) {
@@ -837,7 +864,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const dataUrl = await exportFileImageDataUrl(file, token);
               const description = await describeImage(dataUrl, utilitySettings);
               scanned.push(file.path);
-              addPart(`${file.path} (image)`, description);
+              addPart(`${file.path} (image)`, description, file.bucket);
               continue;
             }
             skipped.push(file.path);
@@ -886,7 +913,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             checklist.addEvidence(itemId, v.lineId, {
               title: `Drive audit: ${folder.folderName}`,
               type: inferEvidenceType(lineTextById.get(v.lineId) || ""),
-              drive: folder.folderLink,
+              drive: folder.folderLink || folder.policyLink,
               owner: folder.owner,
               date: new Date().toISOString().slice(0, 10),
               approved: false,
@@ -945,7 +972,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // bulkAuditStatus. The component navigates to the Scorecard when it
       // resolves. Reuses auditFolderContents verbatim so behaviour can't drift.
       auditAllFolders: async () => {
-        const folders = get().folders.filter((f) => parseFolderId(f.folderLink));
+        const folders = get().folders.filter((f) => parseFolderId(f.folderLink) || parseFolderId(f.policyLink));
         if (folders.length === 0) {
           set({ bulkAuditStatus: null });
           return;

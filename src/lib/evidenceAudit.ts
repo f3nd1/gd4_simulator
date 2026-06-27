@@ -59,7 +59,7 @@ export function auditEvidence(
     if (it.ev.drive) return; // an Evidence Matrix link already counts as evidence
 
     const folder = folderBySub.get(it.subCriterionId);
-    const hasFolderLink = !!folder?.folderLink?.trim();
+    const hasFolderLink = !!(folder?.folderLink?.trim() || folder?.policyLink?.trim());
     flags.push({
       id: it.id,
       subCriterionId: it.subCriterionId,
