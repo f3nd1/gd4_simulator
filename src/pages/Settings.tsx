@@ -10,7 +10,9 @@ import { GOLD, INK } from "../lib/theme";
 
 // GPT-5 family first (current default). The GPT-4 entries stay as fallbacks
 // for anyone whose key/org doesn't yet have GPT-5 access.
-const MODELS = ["gpt-5-mini", "gpt-5", "gpt-5-nano", "gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o"];
+// Suggestions only — the model fields are editable, so any newer id OpenAI
+// releases (e.g. a gpt-5.x) can simply be typed in. Roughly smartest → cheapest.
+const MODELS = ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"];
 
 export function Settings() {
   const { apiKey, model, utilityModel, enabled, setApiKey, setModel, setUtilityModel, setEnabled, clearApiKey } = useAISettingsStore();
@@ -177,28 +179,26 @@ create policy "anon read/write" on public.workspace_state
           />
         </label>
 
+        {/* Editable model fields (input + datalist) rather than a fixed dropdown:
+            OpenAI ships new model ids faster than this list can be hard-coded, and
+            the id must match exactly or the API rejects the call. Pick a suggestion
+            or type any model id your OpenAI account has access to (e.g. a newer gpt-5.x). */}
+        <datalist id="openai-models">
+          {MODELS.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+
         <label style={{ display: "block", marginBottom: 12 }}>
           <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Analysis model</span>
-          <select value={model} onChange={(e) => setModel(e.target.value)} style={{ ...inputStyle, marginTop: 3 }}>
-            {MODELS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-          <span style={{ fontSize: 11, color: "#94a3b8" }}>Audit verdicts, reviews, banding, checklist generation. Use a smarter model here (e.g. gpt-5).</span>
+          <input list="openai-models" value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-5" style={{ ...inputStyle, marginTop: 3 }} />
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>Audit verdicts, reviews, banding, checklist &amp; finding drafting, closure review, cross-criterion analysis. Use a smarter model here (e.g. gpt-5 or a newer gpt-5.x). Pick a suggestion or type any model id your account supports.</span>
         </label>
 
         <label style={{ display: "block", marginBottom: 12 }}>
           <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Utility model</span>
-          <select value={utilityModel} onChange={(e) => setUtilityModel(e.target.value)} style={{ ...inputStyle, marginTop: 3 }}>
-            {MODELS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-          <span style={{ fontSize: 11, color: "#94a3b8" }}>Reading evidence images and drafting link metadata. A cheaper model (e.g. gpt-5-nano) is fine here.</span>
+          <input list="openai-models" value={utilityModel} onChange={(e) => setUtilityModel(e.target.value)} placeholder="gpt-5-nano" style={{ ...inputStyle, marginTop: 3 }} />
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>Reading evidence images and condensing/drafting metadata. A cheaper model is fine (e.g. gpt-5-nano, gpt-4o-mini, or gpt-4o). Pick a suggestion or type any model id your account supports.</span>
         </label>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
