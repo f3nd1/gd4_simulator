@@ -196,16 +196,18 @@ export async function runLiveClosureDraft(
   finding: { issue: string; gd4ItemId: string },
   settings: AISettings,
   context?: { standard?: string; apsr?: string }
-): Promise<{ root: string; corr: string; prev: string }> {
+): Promise<{ root: string; corr: string; prev: string; usage?: AIUsage }> {
   const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — distinguish an Approach gap (the documented policy/procedure is missing or too generic in the PPD) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — then a CORRECTIVE action that fixes this specific gap now, and a PREVENTIVE action that stops it recurring. Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.${skills(findingWritingSkill, sgPeiContextSkill, riskRemediationSkill, findingSpecificitySkill)}`;
   const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}${context?.standard ? `\n\nOfficial GD4 requirement:\n${context.standard}` : ""}${context?.apsr ? `\n\nAPSR assessment of this line:\n${context.apsr}` : ""}`;
   // Higher temperature for drafting (natural, varied narrative) vs deterministic verdicts.
-  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.7 });
+  let usage: AIUsage | undefined;
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.7, onUsage: (u) => { usage = u; } });
   const parsed = parseJSONObject(content, ["root", "corr", "prev"]);
   return {
     root: (parsed.root as string) || "",
     corr: (parsed.corr as string) || "",
     prev: (parsed.prev as string) || "",
+    usage,
   };
 }
 
@@ -438,7 +440,7 @@ export async function runLiveFindingObservation(
   dimension: string,
   apsr: ApsrBreakdown | undefined,
   settings: AISettings
-): Promise<{ observation: string; criteria: string; effect: string }> {
+): Promise<{ observation: string; criteria: string; effect: string; usage?: AIUsage }> {
   const apsrSummary = apsr
     ? [
         `Approach: ${apsr.approach.status}${apsr.approach.note ? ` — ${apsr.approach.note}` : ""}`,
@@ -467,11 +469,13 @@ Checklist line: "${line.text}" — status: ${line.status}
 APSR assessment: ${apsrSummary}
 Dimension (APSR leg that fell short): ${dimension}`;
 
-  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.5 });
+  let usage: AIUsage | undefined;
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.5, onUsage: (u) => { usage = u; } });
   const parsed = parseJSONObject(content, ["observation", "criteria", "effect"]);
   return {
     observation: (parsed.observation as string) || `${line.text} — status: ${line.status}. [Auditor: add WHO, WHAT, WHEN, and HOW MANY specifics here.]`,
     criteria: (parsed.criteria as string) || `GD4 ${req.id} requires: ${req.requirement}`,
     effect: (parsed.effect as string) || `This gap must be resolved before the EduTrust assessment. See the dimension (${dimension}) for the applicable band ceiling.`,
+    usage,
   };
 }

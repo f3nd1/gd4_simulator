@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import type { AIReviewLogEntry } from "../types";
-import { Card } from "../components/ui/Card";
+import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 
 function verdictTone(v: string) {
@@ -48,6 +48,29 @@ function fmtUSD(n: number): string {
 export function AIReview() {
   const log = useWorkspaceStore((s) => s.aiReviewLog);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [agentFilter, setAgentFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<"" | "live" | "simulated">("");
+  const [sortBy, setSortBy] = useState<"newest" | "oldest" | "tokens">("newest");
+
+  // Distinct agents/types present, for the filter dropdowns.
+  const agentOptions = useMemo(() => [...new Set(log.map((e) => e.agent))].sort(), [log]);
+  const typeOptions = useMemo(() => [...new Set(log.map((e) => e.reviewType))].sort(), [log]);
+
+  // Filter + sort applied to the rows (the stats/calculator above stay on the
+  // full log so totals don't jump around as you filter).
+  const visible = useMemo(() => {
+    const rows = log.filter(
+      (e) =>
+        (!agentFilter || e.agent === agentFilter) &&
+        (!typeFilter || e.reviewType === typeFilter) &&
+        (!sourceFilter || (sourceFilter === "live" ? e.live : !e.live))
+    );
+    const sorted = [...rows];
+    if (sortBy === "tokens") sorted.sort((a, b) => (b.totalTokens || 0) - (a.totalTokens || 0));
+    else sorted.sort((a, b) => (sortBy === "newest" ? b.createdAt.localeCompare(a.createdAt) : a.createdAt.localeCompare(b.createdAt)));
+    return sorted;
+  }, [log, agentFilter, typeFilter, sourceFilter, sortBy]);
 
   const stats = useMemo(() => {
     const total = log.length;
@@ -123,12 +146,44 @@ export function AIReview() {
       )}
 
       {log.length === 0 && <p style={{ fontSize: 12.5, color: "#6b7280" }}>No AI reviews run yet.</p>}
+
+      {log.length > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>Filter</span>
+          <select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)} style={{ ...inputStyle, width: 180, padding: "5px 6px" }}>
+            <option value="">All agents</option>
+            {agentOptions.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ ...inputStyle, width: 140, padding: "5px 6px" }}>
+            <option value="">All types</option>
+            {typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)} style={{ ...inputStyle, width: 130, padding: "5px 6px" }}>
+            <option value="">Live + simulated</option>
+            <option value="live">Live only</option>
+            <option value="simulated">Simulated only</option>
+          </select>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3, marginLeft: 6 }}>Sort</span>
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)} style={{ ...inputStyle, width: 150, padding: "5px 6px" }}>
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="tokens">Most tokens</option>
+          </select>
+          {(agentFilter || typeFilter || sourceFilter) && (
+            <button onClick={() => { setAgentFilter(""); setTypeFilter(""); setSourceFilter(""); }} style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "5px 9px" }}>
+              Clear
+            </button>
+          )}
+          <span style={{ fontSize: 11.5, color: "#94a3b8", marginLeft: "auto" }}>Showing {visible.length} of {log.length}</span>
+        </div>
+      )}
+
       <table>
         <thead>
-          <tr><th>Agent</th><th>Type</th><th>Subject</th><th>Verdict</th><th>Model</th><th>Tokens</th><th>Concerns</th><th>Recommended action</th><th>When</th></tr>
+          <tr><th>Agent</th><th>Type</th><th>Subject</th><th>Verdict</th><th>Model</th><th>Tokens</th><th>When</th></tr>
         </thead>
         <tbody>
-          {log.map((e) => {
+          {visible.map((e) => {
             const open = expanded === e.id;
             return (
               <Fragment key={e.id}>
@@ -147,13 +202,11 @@ export function AIReview() {
                   <td style={{ fontSize: 11, color: "#334155", whiteSpace: "nowrap" }} title={e.totalTokens ? `${e.promptTokens ?? "?"} prompt + ${e.completionTokens ?? "?"} completion ≈ ${fmtUSD(costOf(e))}` : undefined}>
                     {e.totalTokens ? `${e.totalTokens.toLocaleString()}${costOf(e) ? ` · ${fmtUSD(costOf(e))}` : ""}` : "—"}
                   </td>
-                  <td style={{ fontSize: 12, color: "#6b7280" }} title={e.keyConcerns.join("; ")}>{e.keyConcerns.join("; ").slice(0, 60)}{e.keyConcerns.join("; ").length > 60 ? "…" : ""}</td>
-                  <td style={{ fontSize: 12, color: "#6b7280" }} title={e.recommendedAction}>{e.recommendedAction.length > 60 ? e.recommendedAction.slice(0, 60) + "…" : e.recommendedAction}</td>
                   <td style={{ fontSize: 11.5, color: "#9ca3af" }}>{new Date(e.createdAt).toLocaleString()}</td>
                 </tr>
                 {open && (
                   <tr>
-                    <td colSpan={9} style={{ background: "#fbfcfe", padding: "10px 14px", fontSize: 12.5 }}>
+                    <td colSpan={7} style={{ background: "#fbfcfe", padding: "10px 14px", fontSize: 12.5 }}>
                       {e.liveError && (
                         <div style={{ color: "#b23121", marginBottom: 8 }}>
                           <b>Live call failed:</b> {e.liveError}

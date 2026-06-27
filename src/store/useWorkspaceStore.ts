@@ -330,6 +330,8 @@ export type WorkspaceState = {
     live: boolean;
     liveError?: string;
     generatedContent?: string;
+    runId?: string;
+    usage?: AIUsage;
   }) => void;
 
   setBusy: (id: string | null) => void;
@@ -1454,6 +1456,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                     recommendedAction: "Review and edit the drafted finding body before closing.",
                     live: true,
                     generatedContent: `OBSERVATION:\n${result.observation}\n\nCRITERIA:\n${result.criteria}\n\nEFFECT:\n${result.effect}`,
+                    runId,
+                    usage: result.usage,
                   });
                 } catch {
                   // Non-fatal — a failed finding draft never affects the audit result.
@@ -1491,6 +1495,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                     recommendedAction: "Review the drafted actions in Quality Action / AFI, then link closure evidence.",
                     live: true,
                     generatedContent: `ROOT CAUSE:\n${draft.root}\n\nCORRECTIVE:\n${draft.corr}\n\nPREVENTIVE:\n${draft.prev}`,
+                    runId,
+                    usage: draft.usage,
                   });
                 } catch {
                   // Non-fatal.
@@ -1717,6 +1723,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             liveError: entry.liveError,
             generatedContent: entry.generatedContent,
             createdAt: new Date().toISOString(),
+            runId: entry.runId,
+            model: entry.usage?.model,
+            promptTokens: entry.usage?.promptTokens,
+            completionTokens: entry.usage?.completionTokens,
+            totalTokens: entry.usage?.totalTokens,
           };
           return { aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200) };
         }),
