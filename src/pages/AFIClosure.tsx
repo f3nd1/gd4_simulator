@@ -22,6 +22,7 @@ export function AFIClosure() {
   const [selFinding, setSelFinding] = useState<string | null>(null);
   const [critFilter, setCritFilter] = useState<string>("All");
   const [subCritFilter, setSubCritFilter] = useState<string>("All");
+  const [draftErrors, setDraftErrors] = useState<Record<string, string>>({});
 
   const subCritOptions = useMemo(
     () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter)),
@@ -113,14 +114,26 @@ export function AFIClosure() {
                 ))}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {aiEnabled && (
-                    <button
-                      onClick={() => draftClosureActions(f.id, f.issue, f.gd4ItemId)}
-                      disabled={busy === "clxdraft" + f.id}
-                      title="AI drafts root cause + corrective + preventive action for you to edit. Won't overwrite fields you've already filled."
-                      style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #c9a24a", background: "#fbf3df", color: "#7a5c12" }}
-                    >
-                      {busy === "clxdraft" + f.id ? "Drafting…" : "Suggest actions (AI)"}
-                    </button>
+                    <>
+                      <button
+                        onClick={async () => {
+                          setDraftErrors((e) => { const n = { ...e }; delete n[f.id]; return n; });
+                          try {
+                            await draftClosureActions(f.id, f.issue, f.gd4ItemId);
+                          } catch {
+                            setDraftErrors((e) => ({ ...e, [f.id]: "AI draft failed — check your API key in Settings, or try again." }));
+                          }
+                        }}
+                        disabled={busy === "clxdraft" + f.id}
+                        title="AI drafts root cause + corrective + preventive action for you to edit. Won't overwrite fields you've already filled."
+                        style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #c9a24a", background: "#fbf3df", color: "#7a5c12" }}
+                      >
+                        {busy === "clxdraft" + f.id ? "Drafting…" : "Suggest actions (AI)"}
+                      </button>
+                      {draftErrors[f.id] && (
+                        <span style={{ fontSize: 11.5, color: "#b23121", alignSelf: "center" }}>{draftErrors[f.id]}</span>
+                      )}
+                    </>
                   )}
                   <button
                     onClick={() => runClosureAI(f.id)}
@@ -131,19 +144,25 @@ export function AFIClosure() {
                   </button>
                   <button
                     onClick={() => setClosureHuman(f.id, c.human === "Accepted" ? "" : "Accepted")}
+                    disabled={c.human !== "Accepted" && !c.evid?.trim()}
+                    title={c.human !== "Accepted" && !c.evid?.trim() ? "Add a closure evidence link before accepting" : undefined}
                     style={{
-                      cursor: "pointer",
+                      cursor: c.human !== "Accepted" && !c.evid?.trim() ? "not-allowed" : "pointer",
                       fontSize: 12,
                       fontWeight: 700,
                       padding: "7px 12px",
                       borderRadius: 8,
                       border: `1px solid ${TONE.good.fg}55`,
                       background: c.human === "Accepted" ? TONE.good.bg : "#fff",
-                      color: TONE.good.fg,
+                      color: c.human !== "Accepted" && !c.evid?.trim() ? "#94a3b8" : TONE.good.fg,
+                      opacity: c.human !== "Accepted" && !c.evid?.trim() ? 0.6 : 1,
                     }}
                   >
                     {c.human === "Accepted" ? "Closed ✓" : "Accept closure"}
                   </button>
+                  {c.human !== "Accepted" && !c.evid?.trim() && (
+                    <span style={{ fontSize: 11, color: "#94a3b8", alignSelf: "center" }}>Evidence link required to close</span>
+                  )}
                 </div>
                 {c.ai && (
                   <div

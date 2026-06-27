@@ -86,6 +86,7 @@ export function SubCriterionChecklist() {
   const [selectedId, setSelectedId] = useState<string>(() => searchParams.get("item") || "1.1.1");
   // The 35-item picker is wide; let it collapse to reclaim horizontal space.
   const [menuOpen, setMenuOpen] = useState(true);
+  const [menuCritFilter, setMenuCritFilter] = useState<string>("All");
   const [newLineText, setNewLineText] = useState("");
   const [pendingAddText, setPendingAddText] = useState("");
   const [expandedLine, setExpandedLine] = useState<string | null>(null);
@@ -170,7 +171,15 @@ export function SubCriterionChecklist() {
             ✕ Hide
           </button>
         </div>
-        {GD4_CRITERIA.map((c) => (
+        <select
+          value={menuCritFilter}
+          onChange={(e) => setMenuCritFilter(e.target.value)}
+          style={{ width: "100%", marginBottom: 8, padding: "4px 6px", border: "1px solid #e2e8f0", borderRadius: 6, fontSize: 11.5 }}
+        >
+          <option value="All">All criteria</option>
+          {GD4_CRITERIA.map((c) => <option key={c.id} value={c.id}>C{c.id} · {c.title}</option>)}
+        </select>
+        {GD4_CRITERIA.filter((c) => menuCritFilter === "All" || c.id === menuCritFilter).map((c) => (
           <div key={c.id} style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6b7280", margin: "8px 0 4px" }}>C{c.id} · {c.title}</div>
             {GD4_SUB_CRITERIA.filter((s) => s.criterionId === c.id).map((s) => (
@@ -256,6 +265,15 @@ export function SubCriterionChecklist() {
             {req.gateSensitive && <Pill s="high">Gate-sensitive</Pill>}
           </div>
           <p style={{ fontSize: 11.5, color: "#6b7280" }}>{sub.title} — {sub.description}</p>
+
+          {req.expectedEvidence.length > 0 && (
+            <div style={{ background: "#f0f6ff", borderRadius: 8, padding: "7px 11px", marginBottom: 8, fontSize: 11.5, color: "#374151" }}>
+              <b style={{ fontSize: 11, color: "#4a5a8a", textTransform: "uppercase", letterSpacing: 0.3 }}>Expected evidence</b>
+              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                {req.expectedEvidence.map((e) => <li key={e}>{e}</li>)}
+              </ul>
+            </div>
+          )}
 
           {bandResult.started && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0 0" }}>

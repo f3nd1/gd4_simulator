@@ -25,6 +25,7 @@ import { seedFolders } from "../data/folders";
 import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore, needsJustification } from "../lib/scoring";
+import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit } from "../lib/ai/simulateAI";
 import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit } from "../lib/ai/agentRuntime";
@@ -194,8 +195,12 @@ export type WorkspaceState = {
   // those 22 sample findings only appear once "Use demo data" is clicked.
   seedFindingsLoaded: boolean;
   busy: string | null;
+  // Persisted "Recheck all evidence" report so it survives navigation and
+  // page refreshes. null means the report hasn't been run yet this session.
+  evidenceAuditReport: { flags: EvidenceAuditFlag[]; generatedAt: string } | null;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
+  runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) => void;
   loadDemoDataset: () => void;
   saveAsNewVersion: (name: string, note?: string) => void;
   restoreVersion: (versionId: string) => void;
@@ -357,8 +362,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       bulkAuditStatus: null,
       additionalInfo: { link: "" },
       schoolContext: { text: "", link: "" },
+      evidenceAuditReport: null,
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
+
+      runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) =>
+        set({ evidenceAuditReport: flags === null ? null : { flags, generatedAt: new Date().toLocaleString() } }),
 
       // Fills the workspace with realistic sample evidence ratings plus the
       // workflow-progress fields derived from them (reviewer drafts,
@@ -416,9 +425,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             note: note?.trim() || "Saved",
             snapshot,
           };
+          const allVersions = [entry, ...s.versions];
+          if (allVersions.length > 50) {
+            console.warn(`Version history capped at 50 — oldest version "${allVersions[50].name}" was dropped.`);
+          }
           return {
             cycle: snapshot.cycle,
-            versions: [entry, ...s.versions].slice(0, 50),
+            versions: allVersions.slice(0, 50),
           };
         }),
 
@@ -522,6 +535,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           exportLog: [],
           customFindings: [],
           seedFindingsLoaded: false,
+          evidenceAuditReport: null,
         }));
       },
 
@@ -696,8 +710,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               busy: null,
             };
           });
-        } catch {
+        } catch (err) {
           set({ busy: null });
+          throw err;
         }
       },
 
@@ -1001,20 +1016,27 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           .join("\n\n");
 
         const strictness = useScoringConfigStore.getState().aiStrictness;
-        let verdicts;
+        let verdicts: ReturnType<typeof simulateFolderAudit>;
         let live = false;
         let liveError: string | undefined;
         let challenged = false;
+        let truncationNote: string | undefined;
+        let parseWarnings: string[] = [];
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
-            verdicts = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard });
+            const result = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard });
+            verdicts = result.verdicts;
+            truncationNote = result.truncationNote;
+            parseWarnings = result.parseWarnings;
             // Strict mode runs a second "challenge" pass that re-examines every
             // Met/Partial and downgrades any not fully and explicitly evidenced.
             if (strictness === "Strict") {
               const toChallenge = verdicts.filter((v) => v.status !== "Not met").map((v) => ({ lineId: v.lineId, status: v.status }));
               if (toChallenge.length) {
                 try {
-                  verdicts = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard, challenge: toChallenge });
+                  const r2 = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard, challenge: toChallenge });
+                  verdicts = r2.verdicts;
+                  parseWarnings = [...parseWarnings, ...r2.parseWarnings];
                   challenged = true;
                 } catch {
                   // keep first-pass verdicts if the challenge call fails
@@ -1100,7 +1122,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const methodNote = live
           ? ` Judged on the EduTrust APSR rubric against the GD4 standard — Approach (documented policy/procedure) assessed first and gating the result, then Processes (implementation), Systems & Outcomes, and Review${condensed ? `; ${condensed} long document${condensed === 1 ? "" : "s"} condensed to read the whole folder` : ""}${challenged ? "; with a strict second-pass challenge" : ""}.`
           : " (offline keyword estimate — AI not used).";
-        const summary = `${fileSummary}${skipSummary}${failSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.${bandSummary}${methodNote}`;
+        const truncNote = truncationNote ? ` ⚠ ${truncationNote}` : "";
+        const parseNote = parseWarnings.length ? ` ⚠ ${parseWarnings.length} APSR dimension(s) fell back to "Not evident" due to unexpected model output — verdicts for those lines may be overly harsh.` : "";
+        const summary = `${fileSummary}${skipSummary}${failSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.${bandSummary}${methodNote}${truncNote}${parseNote}`;
         finish(summary, live, liveError);
       },
 

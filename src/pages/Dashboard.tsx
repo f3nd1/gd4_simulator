@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
@@ -8,7 +8,7 @@ import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { Bar } from "../components/ui/Bar";
 import { GOLD, INK, TONE } from "../lib/theme";
-import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
+import { auditEvidence } from "../lib/evidenceAudit";
 import { NAV } from "../nav";
 
 export function Dashboard() {
@@ -20,21 +20,22 @@ export function Dashboard() {
   const auditChangedFolders = useWorkspaceStore((s) => s.auditChangedFolders);
   const raiseAllUnmetFindings = useChecklistModuleStore((s) => s.raiseAllUnmetFindings);
   const bulkAuditStatus = useWorkspaceStore((s) => s.bulkAuditStatus);
+  const runEvidenceAudit = useWorkspaceStore((s) => s.runEvidenceAudit);
+  const evidenceAuditReport = useWorkspaceStore((s) => s.evidenceAuditReport);
   const foldersWithLink = useWorkspaceStore((s) => s.folders.filter((f) => (f.folderLink && f.folderLink.trim()) || (f.policyLink && f.policyLink.trim())).length);
   const navigate = useNavigate();
   const scored = useScored();
   const findings = useAllFindings();
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
   const folders = useWorkspaceStore((s) => s.folders);
-  const [auditReport, setAuditReport] = useState<EvidenceAuditFlag[] | null>(null);
   const reportRef = useRef<HTMLDivElement | null>(null);
 
   // The report renders below the score header, so on a tall page a click on
   // the button could otherwise look like nothing happened — scroll it into
   // view whenever it opens.
   useEffect(() => {
-    if (auditReport) reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [auditReport]);
+    if (evidenceAuditReport) reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [evidenceAuditReport]);
 
   const belowBand3 = scored.items.filter((i) => i.band < 3).length;
   const closures = useWorkspaceStore((s) => s.closures);
@@ -49,6 +50,10 @@ export function Dashboard() {
   const samplesRecorded = Object.values(checklistEntries).reduce((sum, e) => sum + e.specific.filter((l) => l.sampling).length, 0);
   const findingsClosed = findings.length - scored.openAFIs;
 
+  const gateGroupsSummary = scored.gateFail.length === 0
+    ? `${scored.gateFail.length === 0 ? "3/3" : `${3 - scored.gateFail.length}/3`} gate groups at Band 3+`
+    : `${3 - scored.gateFail.length}/3 gate groups at Band 3+ — failing: ${scored.gateFail.map((g) => g.id).join(", ")}`;
+
   function stepProgress(step: number): { label: string; pct: number | null } {
     switch (step) {
       case 1:
@@ -56,7 +61,10 @@ export function Dashboard() {
       case 2:
         return { label: `${evidenceAttached}/${totalItems} items have evidence attached`, pct: totalItems ? Math.round((evidenceAttached / totalItems) * 100) : 0 };
       case 3:
-        return { label: `${itemsScored}/${totalItems} items scored`, pct: totalItems ? Math.round((itemsScored / totalItems) * 100) : 0 };
+        return {
+          label: `${itemsScored}/${totalItems} items scored · Gate: ${gateGroupsSummary}`,
+          pct: totalItems ? Math.round((itemsScored / totalItems) * 100) : 0,
+        };
       case 4:
         return { label: samplesRecorded > 0 ? `${samplesRecorded} sample(s) recorded` : "Not started yet", pct: samplesRecorded > 0 ? 100 : 0 };
       case 5:
@@ -93,7 +101,7 @@ export function Dashboard() {
             Use demo data
           </button>
           <button
-            onClick={() => setAuditReport(auditEvidence(scored.items, checklistEntries, folders))}
+            onClick={() => runEvidenceAudit(auditEvidence(scored.items, checklistEntries, folders))}
             style={{ cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: "#9fe0bd", fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
           >
             Recheck all evidence
@@ -104,6 +112,8 @@ export function Dashboard() {
             onClick={async () => {
               if (!confirm(`Read and audit all ${foldersWithLink} folder(s) that have a Drive link? This generates checklist lines where missing, reads each folder's evidence, sets the checklist statuses and updates the bands/score. You'll land on the Scorecard when it finishes.`)) return;
               await auditAllFolders();
+              // Refresh evidence audit report after a bulk audit so summary stays current
+              runEvidenceAudit(auditEvidence(scored.items, checklistEntries, folders));
               navigate("/scorecard");
             }}
             style={{ cursor: bulkAuditStatus ? "default" : "pointer", border: "1px solid #3a4660", background: bulkAuditStatus ? "#3a4660" : "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12, opacity: foldersWithLink === 0 ? 0.5 : 1 }}
@@ -138,18 +148,21 @@ export function Dashboard() {
         {bulkAuditStatus && <div style={{ fontSize: 11.5, color: "#aeb8c7", marginTop: 8 }}>{bulkAuditStatus}</div>}
       </Card>
 
-      {auditReport && (
+      {evidenceAuditReport && (
         <Card style={{ gridColumn: "1 / -1" }}>
           <div ref={reportRef} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-            <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence recheck report ({auditReport.length})</h3>
-            <button onClick={() => setAuditReport(null)} style={{ cursor: "pointer", border: "none", background: "transparent", color: "#6b7280", fontSize: 12 }}>
+            <div>
+              <h3 style={{ marginTop: 0, marginBottom: 2, fontSize: 14 }}>Evidence recheck report ({evidenceAuditReport.flags.length})</h3>
+              <div style={{ fontSize: 11, color: "#6b7280" }}>Generated {evidenceAuditReport.generatedAt}</div>
+            </div>
+            <button onClick={() => runEvidenceAudit(null)} style={{ cursor: "pointer", border: "none", background: "transparent", color: "#6b7280", fontSize: 12 }}>
               Close
             </button>
           </div>
           <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
             Report only — re-derives the same evidence gaps the scoring engine already caps bands for. Nothing on the workspace is changed by running this.
           </div>
-          {auditReport.length === 0 ? (
+          {evidenceAuditReport.flags.length === 0 ? (
             <p style={{ fontSize: 13, color: TONE.good.fg }}>No unverified-evidence items found — every band-carrying item has at least some evidence attached.</p>
           ) : (
             <table>
@@ -162,7 +175,7 @@ export function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {auditReport.map((f) => (
+                {evidenceAuditReport.flags.map((f) => (
                   <tr key={f.id}>
                     <td>
                       <Link to={`/evidence-folder?sub=${encodeURIComponent(f.subCriterionId)}`} style={{ color: INK, fontWeight: 600 }} title={`Open the ${f.subCriterionId} evidence folder`}>

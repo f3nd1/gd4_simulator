@@ -85,10 +85,12 @@ describe("buildScored — award tiers honour configurable thresholds", () => {
   });
   it("zero-evidence workspace scores zero and is Not certified", () => {
     // Each criterion's effective score is 0, so the all-zero special case
-    // awards nothing (rather than crediting Band 1's share of points).
+    // awards nothing. With no evidence the gate groups also fail (Band 0/1 < 3),
+    // so the award string includes the gate-fail suffix.
     const s = buildScored(input(fullEvidence("Missing", false)));
     expect(s.total).toBe(0);
-    expect(s.award).toBe("Not certified");
+    expect(s.award).toMatch(/Not certified/);
+    expect(s.gatePass).toBe(false);
   });
 });
 
