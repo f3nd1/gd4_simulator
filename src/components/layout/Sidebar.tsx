@@ -39,12 +39,12 @@ export function Sidebar({ open, onClose }: Props) {
       {open && (
         <div
           onClick={onClose}
-          className="md:hidden"
+          className="md:hidden no-print"
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 40 }}
         />
       )}
       <nav
-        className={`fixed md:static top-0 left-0 h-screen md:h-auto z-50 md:z-auto overflow-hidden transition-all duration-200 ${
+        className={`no-print fixed md:static top-0 left-0 h-screen md:h-auto z-50 md:z-auto overflow-hidden transition-all duration-200 ${
           open ? "translate-x-0 w-[220px]" : "-translate-x-full w-[220px] md:translate-x-0 md:w-0"
         }`}
         style={{

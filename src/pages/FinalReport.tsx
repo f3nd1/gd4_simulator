@@ -10,7 +10,7 @@ import { useAISettingsStore } from "../store/useAISettingsStore";
 import { composeSchoolContext } from "../store/useWorkspaceStore";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { Gauge, HBars, VBars, BAND_COLOR } from "../components/ui/charts";
+import { Gauge, HBars, VBars, BAND_COLOR, AttainmentLadder } from "../components/ui/charts";
 import { GOLD, INK, bandTone } from "../lib/theme";
 
 const SEV_TONE: Record<string, string> = { Critical: "critical", High: "critical", Medium: "medium", Low: "progress" };
@@ -71,7 +71,7 @@ export function FinalReport() {
               {cycle.periodStart} to {cycle.periodEnd} · {cycle.version} · {cycle.status} · owner {cycle.owner}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div className="no-print" style={{ display: "flex", gap: 8 }}>
             <button onClick={() => window.print()} style={{ cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}>
               Print / Save as PDF
             </button>
@@ -94,6 +94,9 @@ export function FinalReport() {
           {report.overall.gatePass ? "Score gate met (4.2, 4.6, C5 at Band 3+)" : `Score gate NOT met: ${report.overall.gateFail.join(", ")}`} · Open AFIs: {report.overall.openAFIs}
         </div>
         <div style={{ fontSize: 11, color: "#7e8da0", marginTop: 8 }}>Not an official SSG or EduTrust result. Internal readiness simulation only.</div>
+        <div style={{ background: "#fff", color: INK, borderRadius: 10, padding: "10px 12px", marginTop: 12 }}>
+          <AttainmentLadder total={report.overall.total} award={report.overall.award} />
+        </div>
       </Card>
 
       {aiError && <Card style={{ borderLeft: "3px solid #b23121" }}><div style={{ fontSize: 12.5, color: "#b23121" }}>AI summary failed: {aiError}</div></Card>}

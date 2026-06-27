@@ -6,7 +6,7 @@ type Props = { onMenuClick: () => void };
 export function Header({ onMenuClick }: Props) {
   const cycle = useWorkspaceStore((s) => s.cycle);
   return (
-    <header style={{ background: INK, color: "#fff", padding: "14px 20px", borderBottom: "1px solid #243042" }}>
+    <header className="no-print" style={{ background: INK, color: "#fff", padding: "14px 20px", borderBottom: "1px solid #243042" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button
           onClick={onMenuClick}

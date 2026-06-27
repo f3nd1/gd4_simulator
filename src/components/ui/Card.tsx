@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 export function Card({ children, style }: { children: ReactNode; style?: CSSProperties }) {
   return (
     <div
+      className="gd-card"
       style={{
         background: "#fff",
         border: "1px solid #e8edf3",

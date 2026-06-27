@@ -6,7 +6,7 @@ import { useAllFindings } from "../hooks/useAllFindings";
 import { buildAnalytics } from "../lib/analytics";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { Gauge, HBars, VBars, StackedBar, BAND_COLOR } from "../components/ui/charts";
+import { Gauge, HBars, VBars, StackedBar, BAND_COLOR, AttainmentLadder } from "../components/ui/charts";
 import { GOLD, INK } from "../lib/theme";
 
 const SEV_COLOR: Record<string, string> = { Critical: "#c0392b", High: "#d97706", Medium: "#5b6ea8", Low: "#94a3b8" };
@@ -33,13 +33,13 @@ export function Analytics() {
         <div style={{ fontSize: 12, color: "#6b7280" }}>A visual read-out across scores, bands, gates, findings, evidence and checklist coverage. Internal simulation only — not an official SSG/EduTrust result.</div>
       </Card>
 
-      <Card>
-        <h4 style={{ marginTop: 0, fontSize: 13 }}>Overall readiness</h4>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      <Card style={{ gridColumn: "1 / -1" }}>
+        <h4 style={{ marginTop: 0, fontSize: 13 }}>Overall readiness & EduTrust attainment</h4>
+        <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
           <Gauge value={a.total} max={1000} label="of 1000" color={GOLD} />
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>{a.award}</div>
-            <div style={{ marginTop: 4 }}><Pill s={a.gatePass ? "good" : "critical"}>{a.gatePass ? "Score gate met" : "Score gate not met"}</Pill></div>
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <AttainmentLadder total={a.total} award={a.award} />
+            <div style={{ marginTop: 8 }}><Pill s={a.gatePass ? "good" : "critical"}>{a.gatePass ? "Score gate met" : "Score gate not met"}</Pill></div>
           </div>
         </div>
       </Card>

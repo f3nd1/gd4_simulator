@@ -94,3 +94,17 @@ textarea:focus {
   background: #b3bdcc;
   background-clip: padding-box;
 }
+
+/* Print: show only the report content, hide app chrome. Used by the
+   "Print / Save as PDF" button on the Final Report. */
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff !important; }
+  main { max-width: none !important; padding: 0 !important; margin: 0 !important; }
+  .gd-card {
+    box-shadow: none !important;
+    border-color: #d6dde6 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

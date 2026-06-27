@@ -75,6 +75,59 @@ export function VBars({ data, height = 130 }: { data: BarDatum[]; height?: numbe
   );
 }
 
+// EduTrust attainment tiers (by total /1000). Mirrors scoring.ts thresholds.
+const ATTAINMENT_TIERS = [
+  { key: "Fail", label: "Not certified", min: 0, color: "#c0392b" },
+  { key: "Provisional", label: "Provisional (1-Year)", min: 500, color: "#d97706" },
+  { key: "4-Year", label: "EduTrust (4-Year)", min: 600, color: "#5b6ea8" },
+  { key: "Star", label: "EduTrust Star", min: 750, color: "#1f7a4d" },
+] as const;
+
+// Derive the achieved tier index from the scoring engine's award string so it
+// can't diverge from the actual score logic.
+export function attainmentFromAward(award: string): { index: number; capped: boolean } {
+  if (award.startsWith("Capped")) return { index: 2, capped: true }; // gate-capped at/above 4-Year band
+  if (award.includes("Star")) return { index: 3, capped: false };
+  if (award.includes("4-Year")) return { index: 2, capped: false };
+  if (award.includes("Provisional")) return { index: 1, capped: false };
+  return { index: 0, capped: false };
+}
+
+// Horizontal ladder of the 4 EduTrust tiers with the achieved one highlighted.
+export function AttainmentLadder({ total, award }: { total: number; award: string }) {
+  const { index, capped } = attainmentFromAward(award);
+  const achieved = ATTAINMENT_TIERS[index];
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        <span style={{ fontSize: 11.5, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4 }}>EduTrust attainment</span>
+        <span style={{ fontSize: 18, fontWeight: 800, color: capped ? "#c0392b" : achieved.color }}>
+          {capped ? "Capped — critical gate not met" : achieved.label}
+        </span>
+        <span style={{ fontSize: 12, color: "#94a3b8" }}>· {total}/1000</span>
+      </div>
+      <div style={{ display: "flex", gap: 4 }}>
+        {ATTAINMENT_TIERS.map((t, i) => {
+          const on = !capped && i === index;
+          const reached = !capped && i <= index;
+          return (
+            <div key={t.key} style={{ flex: 1, textAlign: "center" }}>
+              <div style={{ height: 10, background: reached ? t.color : "#e9edf2", borderRadius: 999, border: on ? `2px solid ${INK}` : "2px solid transparent" }} />
+              <div style={{ fontSize: 10.5, fontWeight: on ? 800 : 500, color: on ? INK : "#94a3b8", marginTop: 3 }}>{t.label}</div>
+              <div style={{ fontSize: 9.5, color: "#cbd5e1" }}>{t.min === 0 ? "<500" : `${t.min}+`}</div>
+            </div>
+          );
+        })}
+      </div>
+      {capped && (
+        <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 6 }}>
+          Score qualifies for a higher tier, but a critical gate (Sub-criterion 4.2 / 4.6 / Criterion 5 at Band 3+) is not met, so the award is capped until that gate is cleared.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Single stacked horizontal bar from segments (e.g. checklist Met/Partial/Not met).
 export function StackedBar({ segments, height = 16 }: { segments: { label: string; value: number; color: string }[]; height?: number }) {
   const total = segments.reduce((a, s) => a + s.value, 0) || 1;
