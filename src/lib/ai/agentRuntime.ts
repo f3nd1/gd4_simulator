@@ -5,9 +5,9 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, PdcaBreakdown } from "../../types";
 import { chatComplete, AIClientError } from "./aiClient";
-import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict, PdcaBreakdown } from "./simulateAI";
+import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { derivePdcaStatus, pdcaReason } from "./simulateAI";
 
 export { AIClientError };
@@ -137,10 +137,11 @@ export async function runLiveClosureReview(
 // actually clear the finding.
 export async function runLiveClosureDraft(
   finding: { issue: string; gd4ItemId: string },
-  settings: AISettings
+  settings: AISettings,
+  context?: { standard?: string; pdca?: string }
 ): Promise<{ root: string; corr: string; prev: string }> {
-  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding, propose a likely root cause, a corrective action (fixes this specific gap now), and a preventive action (stops it recurring). Be concrete and specific to the finding; these are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.`;
-  const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}`;
+  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the PDCA breakdown of which stage failed), propose: a ROOT CAUSE that names WHY the gap exists — distinguish a Plan gap (the procedure is missing or too generic in the PPD) from a Do gap (documented but not implemented) from a Check/Act gap (no control or no review) — then a CORRECTIVE action that fixes this specific gap now, and a PREVENTIVE action that stops it recurring. Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.`;
+  const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}${context?.standard ? `\n\nOfficial GD4 requirement:\n${context.standard}` : ""}${context?.pdca ? `\n\nPDCA assessment of this line:\n${context.pdca}` : ""}`;
   const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
   const parsed = parseJSONObject(content);
   return {

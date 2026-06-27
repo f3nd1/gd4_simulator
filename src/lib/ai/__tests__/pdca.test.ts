@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { derivePdcaStatus, pdcaReason, type PdcaBreakdown } from "../simulateAI";
+import { derivePdcaStatus, pdcaReason } from "../simulateAI";
+import type { PdcaBreakdown } from "../../../types";
 
 function mk(p: Partial<Record<keyof PdcaBreakdown, { status: string; note?: string }>>): PdcaBreakdown {
   return {

@@ -323,7 +323,13 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
             const markedDone = line.status === "Met" || line.status === "Partial";
             const warrants = line.status === "Not met" || (markedDone && lineSufficiency(line) === "Missing");
             if (!warrants) continue;
-            get().confirmDraftFinding(itemId, line.id, buildDraftFinding(req, line));
+            const draft = buildDraftFinding(req, line);
+            get().confirmDraftFinding(itemId, line.id, draft);
+            // confirmDraftFinding stamps the new finding id onto the line — use
+            // it to pre-fill the closure with the derived root cause / corrective
+            // / preventive, so the AFI reads deep from the moment it is raised.
+            const savedId = get().entries[itemId]?.specific.find((l) => l.id === line.id)?.draftFinding?.savedFindingId;
+            if (savedId) useWorkspaceStore.getState().seedClosure(savedId, { root: draft.rootCause, corr: draft.corrective, prev: draft.preventive });
             raised += 1;
           }
         }

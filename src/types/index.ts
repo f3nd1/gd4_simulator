@@ -164,6 +164,16 @@ export type GenericLineStatus = ChecklistLineStatus | "Not Started";
 export type SpecificLineStatus = ChecklistLineStatus | "Not Applicable" | "Not Started";
 export type EvidenceSufficiency = "Present" | "Weak" | "Missing";
 
+// PDCA (Plan-Do-Check-Act) breakdown for one checklist line, produced by the
+// folder audit. Persisted on the evidence item so findings raised later can
+// explain the ROOT CAUSE (which stage failed) rather than just "not met".
+export type PdcaBreakdown = {
+  plan: { status: "Adequate" | "Generic" | "Missing"; note: string };
+  do: { status: "Implemented" | "Partial" | "None"; note: string };
+  check: { status: "Yes" | "No"; note: string };
+  act: { status: "Yes" | "No"; note: string };
+};
+
 export type SubChecklistEvidenceItem = {
   id: string;
   title: string;
@@ -180,6 +190,9 @@ export type SubChecklistEvidenceItem = {
   // Free-text auditor note on this evidence item: justify the sufficiency
   // verdict, record strengths/weaknesses/gaps, or suggest how to close a gap.
   auditorNote?: string;
+  // Structured Plan-Do-Check-Act assessment from the folder audit (when live),
+  // kept so a finding raised from this line can name which stage failed.
+  pdca?: PdcaBreakdown;
 };
 
 export type SamplingInfo = {
@@ -195,6 +208,13 @@ export type DraftFindingInfo = {
   severity: Severity;
   suggestedAction: string;
   savedFindingId?: string;
+  // In-depth analysis derived from the PDCA stage that failed, so a raised
+  // finding reads deeper than a plain "not evident" line: why it happened
+  // (rootCause), how to fix it now (corrective) and how to stop it recurring
+  // (preventive). These pre-fill the AFI Closure form and the Final Report.
+  rootCause?: string;
+  corrective?: string;
+  preventive?: string;
 };
 
 export type GenericChecklistLine = {

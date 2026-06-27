@@ -17,7 +17,7 @@
 //       cap, just with sharper wording since recurrence risk there is higher).
 //   This cannot be overridden except by fixing the evidence, because the
 //   band is always recomputed from current state.
-import type { Band, GD4Requirement, GenericChecklistLine, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry } from "../types";
+import type { Band, GD4Requirement, GenericChecklistLine, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, PdcaBreakdown } from "../types";
 
 export function lineSufficiency(line: SpecificChecklistLine): EvidenceSufficiency {
   if (line.evidence.length === 0) return "Missing";
@@ -118,13 +118,84 @@ export function computeChecklistOverrides(
   return map;
 }
 
+// Pulls the most informative PDCA breakdown attached to a line's evidence
+// (the folder audit records one per audited line). Returns undefined if the
+// line was never audited live (offline/manual lines have no PDCA).
+export function linePdca(line: SpecificChecklistLine): PdcaBreakdown | undefined {
+  for (const ev of line.evidence) if (ev.pdca) return ev.pdca;
+  return undefined;
+}
+
+// In-depth, plain-language analysis of WHY a line failed and how to fix it,
+// derived from the PDCA stage that broke (or, with no PDCA, from the status /
+// evidence). This is what makes a raised finding read deeper than SSG's flat
+// "It was not evident that…": a root cause, a corrective action (fix it now)
+// and a preventive action (stop it recurring).
+export function buildFindingAnalysis(req: GD4Requirement, line: SpecificChecklistLine): { rootCause: string; corrective: string; preventive: string } {
+  const p = linePdca(line);
+  const expected = req.expectedEvidence.length ? req.expectedEvidence.join("; ") : "the records that demonstrate this requirement";
+
+  if (p) {
+    if (p.plan.status === "Missing") {
+      return {
+        rootCause: `Plan stage: the Policies & Procedures Document (PPD) does not document a procedure for this requirement${p.plan.note ? ` — ${p.plan.note}` : ""}. The activity may happen in practice, but with nothing written down it cannot be assessed or sustained.`,
+        corrective: `Write a specific procedure into the PPD covering "${req.requirement}": who is responsible, what they do, when/how often, and what record is kept.`,
+        preventive: `Add this requirement to the PPD review checklist and assign a document owner so it is not missed in the next PPD revision.`,
+      };
+    }
+    if (p.plan.status === "Generic") {
+      return {
+        rootCause: `Plan stage: a procedure exists but is too generic/boilerplate and not sustainable${p.plan.note ? ` — ${p.plan.note}` : ""}. It does not say specifically who does what, when and how, so it cannot be relied on or consistently followed.`,
+        corrective: `Rewrite the PPD procedure to be specific to this institution: name the responsible role, the frequency, the steps, and the record produced. Replace vague phrasing like "reviewed periodically" with a defined cycle.`,
+        preventive: `Adopt a PPD template that forces every procedure to state owner, frequency and the record kept, and check new procedures against it before approval.`,
+      };
+    }
+    // Plan is adequate from here — the gap is in implementation / control / review.
+    if (p.do.status === "None") {
+      return {
+        rootCause: `Do stage: the procedure is documented but there is no evidence it has actually been carried out — a policy on paper only. The implementation records are missing.`,
+        corrective: `Carry out the procedure and keep the records that prove it, e.g. ${expected}. Attach them as evidence against this line.`,
+        preventive: `Schedule the activity (calendar/owner) and store its records in a fixed location so each cycle is captured automatically.`,
+      };
+    }
+    const missing: string[] = [];
+    if (p.do.status === "Partial") missing.push("implementation is only partial / not consistently evidenced");
+    if (p.check.status === "No") missing.push("there is no control that monitors the procedure is actually followed");
+    if (p.act.status === "No") missing.push("there is no review/evaluation loop that improves it over time");
+    return {
+      rootCause: `The procedure is documented and at least partly implemented, but ${missing.join("; ") || "it is not yet fully and consistently evidenced"}. This is what keeps it short of a higher band.`,
+      corrective: `${p.check.status === "No" ? "Put a monitoring control in place (checklist, sign-off or audit) and keep its records. " : ""}${p.act.status === "No" ? "Add a periodic review that evaluates effectiveness and feeds improvements back into the procedure. " : ""}Then attach the resulting records (${expected}) as evidence.`,
+      preventive: `Make the control and the review recurring with a named owner, so the cycle is sustained without prompting.`,
+    };
+  }
+
+  // No PDCA (offline keyword audit or a manually-set line): fall back to status.
+  const sufficiency = lineSufficiency(line);
+  if (line.status !== "Not met" && sufficiency === "Missing") {
+    return {
+      rootCause: `This line is marked ${line.status} but no supporting evidence is attached, so it cannot be verified — an unverifiable claim counts as a gap.`,
+      corrective: `Attach the evidence that demonstrates it (${expected}) and confirm it is approved/reviewed.`,
+      preventive: `Require evidence to be linked before a line is marked Met, so unverified passes can't accumulate.`,
+    };
+  }
+  return {
+    rootCause: `The evidence reviewed did not demonstrate this requirement (${expected} not found or insufficient).`,
+    corrective: `Provide and approve the evidence that demonstrates "${req.requirement}", then re-run the audit on this line.`,
+    preventive: `Keep this requirement's records current and in a fixed location so it is demonstrable at the next review.`,
+  };
+}
+
 export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLine): DraftFindingInfo {
   const sufficiency = lineSufficiency(line);
+  const analysis = buildFindingAnalysis(req, line);
   return {
     gd4ItemId: req.id,
     clause: line.clause,
     issue: `${line.text} — marked ${line.status}${sufficiency === "Missing" ? ", evidence missing" : sufficiency === "Weak" ? ", evidence weak" : ""}.`,
     severity: req.gateSensitive ? "High" : "Medium",
     suggestedAction: `Provide and approve evidence for: ${line.text}`,
+    rootCause: analysis.rootCause,
+    corrective: analysis.corrective,
+    preventive: analysis.preventive,
   };
 }

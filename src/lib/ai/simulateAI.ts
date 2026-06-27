@@ -12,7 +12,7 @@
 // LLM-backed agent would be asked to do; they are reproduced as comments so
 // a future swap-in to a real model call has the exact wording to use.
 
-import type { AgentDefinition, Finding, GD4Requirement, ItemEvidence, SpecificChecklistLine } from "../../types";
+import type { AgentDefinition, Finding, GD4Requirement, ItemEvidence, SpecificChecklistLine, PdcaBreakdown } from "../../types";
 import { aiScore } from "../scoring";
 import { FINDINGS } from "../../data/findings";
 
@@ -206,17 +206,6 @@ function guessDate(filename: string): string {
 // each line Met/Partial/Not met by simple keyword overlap. Offline fallback
 // only — mirrors every other simulate* function's role as the no-network
 // stand-in for the live OpenAI call in agentRuntime.ts.
-// PDCA (Plan-Do-Check-Act) breakdown for one checklist line. The audit
-// assesses these IN ORDER: Plan (is the policy/procedure adequate vs the
-// requirement, or generic/missing?), then Do (is it implemented per the
-// evidence?), then Check (is there a control?), then Act (is there a review?).
-export type PdcaBreakdown = {
-  plan: { status: "Adequate" | "Generic" | "Missing"; note: string };
-  do: { status: "Implemented" | "Partial" | "None"; note: string };
-  check: { status: "Yes" | "No"; note: string };
-  act: { status: "Yes" | "No"; note: string };
-};
-
 export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial" | "Not met"; reason: string; sources?: string[]; pdca?: PdcaBreakdown };
 
 // Derives the overall Met/Partial/Not met from a PDCA breakdown with Plan

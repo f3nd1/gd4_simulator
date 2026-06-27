@@ -35,7 +35,8 @@ import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError } from "../lib/drive/driveClient";
 import { describeImage, summariseText, effectiveSettings } from "../lib/ai/aiClient";
-import { computeBand } from "../lib/checklistBanding";
+import { computeBand, linePdca } from "../lib/checklistBanding";
+import { pdcaReason } from "../lib/ai/simulateAI";
 
 // Best-effort evidence-type classification for audit-attached evidence, from
 // the checklist line being satisfied (the folder audit reads many files into
@@ -212,6 +213,11 @@ export type WorkspaceState = {
   runItemAI: (agentId: string, itemId: string) => Promise<void>;
 
   setClosureField: (afiId: string, field: keyof ClosureState, value: string) => void;
+  // Pre-fills a finding's closure with a derived root cause / corrective /
+  // preventive (from buildFindingAnalysis), WITHOUT overwriting anything the
+  // user has already written. Used when findings are auto-raised so the AFI
+  // Closure form and Final Report start deep instead of blank.
+  seedClosure: (afiId: string, seed: { root?: string; corr?: string; prev?: string }) => void;
   runClosureAI: (afiId: string) => Promise<void>;
   draftClosureActions: (afiId: string, issue: string, gd4ItemId: string) => Promise<void>;
   setClosureHuman: (afiId: string, value: "" | "Accepted") => void;
@@ -604,6 +610,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setClosureField: (afiId, field, value) => set((s) => ({ closures: { ...s.closures, [afiId]: { ...(s.closures[afiId] || {}), [field]: value } } })),
 
+      seedClosure: (afiId, seed) =>
+        set((s) => {
+          const c = s.closures[afiId] || {};
+          return {
+            closures: {
+              ...s.closures,
+              // Only fill blanks — never clobber the user's own text.
+              [afiId]: { ...c, root: c.root || seed.root, corr: c.corr || seed.corr, prev: c.prev || seed.prev },
+            },
+          };
+        }),
+
       runClosureAI: async (afiId) => {
         const s = get();
         set({ busy: "clx" + afiId });
@@ -659,7 +677,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set({ busy: "clxdraft" + afiId });
         try {
           const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
-          const draft = await runLiveClosureDraft({ issue, gd4ItemId }, settings);
+          // Give the AI the real GD4 requirement and (if the line was audited)
+          // the PDCA breakdown, so the draft is grounded in the standard and
+          // names the stage that failed — not a generic guess from the issue text.
+          const req = GD4_REQUIREMENTS.find((r) => r.id === gd4ItemId);
+          const standard = req ? `${req.requirement}\nIntent: ${req.intent}\nExpected evidence: ${req.expectedEvidence.join("; ")}` : undefined;
+          const entry = useChecklistModuleStore.getState().entries[gd4ItemId];
+          const auditedLine = entry?.specific.find((l) => l.draftFinding?.savedFindingId === afiId);
+          const pdca = auditedLine ? linePdca(auditedLine) : undefined;
+          const draft = await runLiveClosureDraft({ issue, gd4ItemId }, settings, { standard, pdca: pdca ? pdcaReason(pdca) : undefined });
           set((s) => {
             const c = s.closures[afiId] || {};
             return {
@@ -1025,6 +1051,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
               // Keep the AI's cited source files so the verdict is traceable.
               auditorNote: v.sources && v.sources.length ? `${v.reason} (source: ${v.sources.join("; ")})` : v.reason,
+              // Persist the structured PDCA so a finding raised from this line
+              // can explain which stage (Plan/Do/Check/Act) failed.
+              pdca: v.pdca,
             });
           }
         } catch (err) {
