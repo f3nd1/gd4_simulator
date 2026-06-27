@@ -72,6 +72,7 @@ export function SubCriterionChecklist() {
   const discardGenerated = useChecklistModuleStore((s) => s.discardGenerated);
   const addSpecificLine = useChecklistModuleStore((s) => s.addSpecificLine);
   const removeSpecificLine = useChecklistModuleStore((s) => s.removeSpecificLine);
+  const clearSpecificLines = useChecklistModuleStore((s) => s.clearSpecificLines);
   const setSpecificStatus = useChecklistModuleStore((s) => s.setSpecificStatus);
   const addEvidence = useChecklistModuleStore((s) => s.addEvidence);
   const fillEvidenceFromLink = useChecklistModuleStore((s) => s.fillEvidenceFromLink);
@@ -82,7 +83,9 @@ export function SubCriterionChecklist() {
   const confirmDraftFinding = useChecklistModuleStore((s) => s.confirmDraftFinding);
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedId, setSelectedId] = useState<string>(() => searchParams.get("item") || "4.2.1");
+  const [selectedId, setSelectedId] = useState<string>(() => searchParams.get("item") || "1.1.1");
+  // The 35-item picker is wide; let it collapse to reclaim horizontal space.
+  const [menuOpen, setMenuOpen] = useState(true);
   const [newLineText, setNewLineText] = useState("");
   const [pendingAddText, setPendingAddText] = useState("");
   const [expandedLine, setExpandedLine] = useState<string | null>(null);
@@ -158,9 +161,15 @@ export function SubCriterionChecklist() {
   const cameFromRubricBanding = searchParams.get("from") === "rubric-banding";
 
   return (
-    <div className="grid gap-3" style={{ gridTemplateColumns: "300px 1fr" }}>
+    <div className="grid gap-3" style={{ gridTemplateColumns: menuOpen ? "300px 1fr" : "1fr" }}>
+      {menuOpen && (
       <Card style={{ maxHeight: "calc(100vh - 140px)", overflowY: "auto" }}>
-        <h3 style={{ marginTop: 0, fontSize: 13 }}>24 sub-criteria · 35 items</h3>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h3 style={{ margin: 0, fontSize: 13 }}>24 sub-criteria · 35 items</h3>
+          <button onClick={() => setMenuOpen(false)} title="Hide list" style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 8px" }}>
+            ✕ Hide
+          </button>
+        </div>
         {GD4_CRITERIA.map((c) => (
           <div key={c.id} style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6b7280", margin: "8px 0 4px" }}>C{c.id} · {c.title}</div>
@@ -202,8 +211,17 @@ export function SubCriterionChecklist() {
           </div>
         ))}
       </Card>
+      )}
 
       <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
+        {!menuOpen && (
+          <button
+            onClick={() => setMenuOpen(true)}
+            style={{ cursor: "pointer", alignSelf: "flex-start", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 8, fontSize: 12, fontWeight: 700, padding: "6px 12px" }}
+          >
+            ☰ Show item list
+          </button>
+        )}
         <Card>
           <h3 style={{ marginTop: 0, fontSize: 14 }}>Coverage vs maturity</h3>
           <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: 0 }}>
@@ -284,6 +302,16 @@ export function SubCriterionChecklist() {
             >
               + Add line
             </button>
+            {specific.length > 0 && (
+              <button
+                onClick={() => {
+                  if (confirm(`Remove all ${specific.length} Layer 2 line(s) for ${selectedId}? This clears their statuses and attached evidence too, so you can regenerate from scratch.`)) clearSpecificLines(selectedId);
+                }}
+                style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #e3b7b0", background: "#fff", color: "#b23121", marginLeft: "auto" }}
+              >
+                Remove all
+              </button>
+            )}
           </div>
 
           {pending.length > 0 && (

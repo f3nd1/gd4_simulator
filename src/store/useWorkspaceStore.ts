@@ -36,6 +36,20 @@ import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImag
 import { describeImage } from "../lib/ai/aiClient";
 import { computeBand } from "../lib/checklistBanding";
 
+// Best-effort evidence-type classification for audit-attached evidence, from
+// the checklist line being satisfied (the folder audit reads many files into
+// one verdict, so there's no single file type to copy). Keeps the Type column
+// meaningful instead of every audited line reading "Other".
+function inferEvidenceType(lineText: string): string {
+  const t = lineText.toLowerCase();
+  if (/\b(minutes?|meeting)\b/.test(t)) return "Minutes";
+  if (/\b(polic(y|ies)|procedure|manual|framework|plan|guideline|sop)\b/.test(t)) return "Policy/Procedure";
+  if (/\b(survey|feedback|questionnaire)\b/.test(t)) return "Survey/Feedback";
+  if (/\b(screenshot|system|dashboard|portal|software)\b/.test(t)) return "System screenshot";
+  if (/\b(record|log|register|report|list|evidence|certificate|attendance)\b/.test(t)) return "Record/Log";
+  return "Other";
+}
+
 export type ClosureState = {
   root?: string;
   corr?: string;
@@ -754,6 +768,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Guarded so an unexpected throw while writing verdicts can't strand
         // `busy` (which would leave this row's button stuck on "Auditing…"
         // forever) — finish() below always runs and clears it.
+        const lineTextById = new Map(lines.map((l) => [l.id, l.text]));
         try {
           const checklist = useChecklistModuleStore.getState();
           for (const v of verdicts) {
@@ -762,7 +777,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             checklist.setSpecificStatus(itemId, v.lineId, v.status);
             checklist.addEvidence(itemId, v.lineId, {
               title: `Drive audit: ${folder.folderName}`,
-              type: "Other",
+              type: inferEvidenceType(lineTextById.get(v.lineId) || ""),
               drive: folder.folderLink,
               owner: folder.owner,
               date: new Date().toISOString().slice(0, 10),

@@ -60,6 +60,7 @@ export type ChecklistModuleState = {
   addSpecificLine: (itemId: string, text: string, clause?: string) => void;
   updateSpecificLine: (itemId: string, lineId: string, patch: Partial<SpecificChecklistLine>) => void;
   removeSpecificLine: (itemId: string, lineId: string) => void;
+  clearSpecificLines: (itemId: string) => void;
   setSpecificStatus: (itemId: string, lineId: string, status: SpecificLineStatus) => void;
 
   addEvidence: (itemId: string, lineId: string, evidence: Omit<SubChecklistEvidenceItem, "id">) => void;
@@ -191,6 +192,10 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       updateSpecificLine: (itemId, lineId, patch) => set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, ...patch })))),
 
       removeSpecificLine: (itemId, lineId) => set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: e.specific.filter((l) => l.id !== lineId) }))),
+
+      // Wipe all Layer 2 lines for an item (e.g. to regenerate from scratch).
+      // Also clears any unconfirmed pending lines so the slate is truly clean.
+      clearSpecificLines: (itemId) => set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: [], pendingGenerated: [] }))),
 
       setSpecificStatus: (itemId, lineId, status) => set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, status })))),
 
