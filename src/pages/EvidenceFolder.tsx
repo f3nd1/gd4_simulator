@@ -1,4 +1,5 @@
-import { Fragment } from "react";
+import { Fragment, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -14,6 +15,25 @@ export function EvidenceFolder() {
   const checkFolderAccess = useWorkspaceStore((s) => s.checkFolderAccess);
   const auditFolderContents = useWorkspaceStore((s) => s.auditFolderContents);
   const busy = useWorkspaceStore((s) => s.busy);
+
+  // Deep link from the Dashboard recheck report (/evidence-folder?sub=1.1):
+  // scroll the matching folder row into view and briefly highlight it so the
+  // auditor doesn't have to hunt for it among all 24.
+  const [searchParams] = useSearchParams();
+  const focusSub = searchParams.get("sub");
+  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+  useEffect(() => {
+    if (!focusSub) return;
+    const row = rowRefs.current[focusSub];
+    if (!row) return;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.style.transition = "background 0.3s";
+    row.style.background = "#fff7e0";
+    const t = setTimeout(() => {
+      row.style.background = "";
+    }, 2200);
+    return () => clearTimeout(t);
+  }, [focusSub, folders]);
 
   return (
     <Card>
@@ -32,7 +52,7 @@ export function EvidenceFolder() {
         <tbody>
           {folders.map((f) => (
             <Fragment key={f.id}>
-              <tr className="rowh">
+              <tr className="rowh" ref={(el) => { rowRefs.current[f.subCriterionId] = el; }}>
                 <td><b>{f.folderName}</b></td>
                 <td>
                   <select value={f.owner} onChange={(e) => setFolderField(f.id, "owner", e.target.value)} style={{ ...inputStyle, width: 110, padding: "4px 6px" }}>

@@ -23,6 +23,7 @@ export function Dashboard() {
   const scored = useScored();
   const findings = useAllFindings();
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
+  const folders = useWorkspaceStore((s) => s.folders);
   const [auditReport, setAuditReport] = useState<EvidenceAuditFlag[] | null>(null);
   const reportRef = useRef<HTMLDivElement | null>(null);
 
@@ -90,7 +91,7 @@ export function Dashboard() {
             Use demo data
           </button>
           <button
-            onClick={() => setAuditReport(auditEvidence(scored.items, checklistEntries))}
+            onClick={() => setAuditReport(auditEvidence(scored.items, checklistEntries, folders))}
             style={{ cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: "#9fe0bd", fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
           >
             Recheck all evidence
@@ -138,7 +139,9 @@ export function Dashboard() {
                 {auditReport.map((f) => (
                   <tr key={f.id}>
                     <td>
-                      <b>{f.id}</b> {f.title}
+                      <Link to={`/evidence-folder?sub=${encodeURIComponent(f.subCriterionId)}`} style={{ color: INK, fontWeight: 600 }} title={`Open the ${f.subCriterionId} evidence folder`}>
+                        <b>{f.id}</b> {f.title}
+                      </Link>
                     </td>
                     <td>
                       <Pill s="progress">{f.source}</Pill>

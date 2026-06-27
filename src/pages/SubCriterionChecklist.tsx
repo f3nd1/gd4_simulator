@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
+import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
@@ -101,10 +102,11 @@ export function SubCriterionChecklist() {
   const bandResult = useMemo(() => computeBand(generic, specific, req.gateSensitive), [generic, specific, req.gateSensitive]);
 
   const scored = useScored();
+  const folders = useWorkspaceStore((s) => s.folders);
   const itemAudit = useMemo(() => {
     const item = scored.items.find((i) => i.id === selectedId);
-    return item ? auditEvidence([item], entries) : [];
-  }, [scored.items, selectedId, entries]);
+    return item ? auditEvidence([item], entries, folders) : [];
+  }, [scored.items, selectedId, entries, folders]);
 
   const sortedSpecific = useMemo(() => [...specific].sort((a, b) => (b.afiTag ? 1 : 0) - (a.afiTag ? 1 : 0)), [specific]);
 
