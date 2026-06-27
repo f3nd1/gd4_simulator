@@ -257,6 +257,17 @@ export function SubCriterionChecklist() {
           </div>
           <p style={{ fontSize: 11.5, color: "#6b7280" }}>{sub.title} — {sub.description}</p>
 
+          {bandResult.started && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0 0" }}>
+              <Pill s={bandTone(bandResult.finalBand)}>Band {bandResult.finalBand}</Pill>
+              {bandResult.evidenceCapWarning && (
+                <span style={{ fontSize: 11.5, color: "#b23121" }}>
+                  ⚠ Capped: {bandResult.evidenceCapWarning}
+                </span>
+              )}
+            </div>
+          )}
+
           <h4 style={{ fontSize: 12.5, margin: "12px 0 6px" }}>Layer 1 · Generic maturity check</h4>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
             {generic.map((g) => (

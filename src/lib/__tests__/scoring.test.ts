@@ -1,0 +1,104 @@
+import { describe, it, expect } from "vitest";
+import { getBand, needsJustification, aiScore, levelValue, buildScored, type ScoringInput } from "../scoring";
+import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
+import type { ItemEvidence, EvidenceLevel } from "../../types";
+
+function mkEv(level: EvidenceLevel, drive: boolean): ItemEvidence {
+  return { approach: level, processes: level, systemsOutcomes: level, review: level, owner: "SQ", age: 10, trace: 100, drive: drive ? "https://drive.google.com/x" : undefined };
+}
+
+// Build a full evidence map for all 35 items at a given level/drive.
+function fullEvidence(level: EvidenceLevel, drive: boolean): Record<string, ItemEvidence> {
+  const m: Record<string, ItemEvidence> = {};
+  for (const r of GD4_REQUIREMENTS) m[r.id] = mkEv(level, drive);
+  return m;
+}
+
+function input(evidence: Record<string, ItemEvidence>, awardThresholds?: ScoringInput["awardThresholds"]): ScoringInput {
+  return { evidence, reviewer: {}, confirmed: {}, closures: {}, awardThresholds };
+}
+
+describe("getBand thresholds", () => {
+  it("maps scores to bands", () => {
+    expect(getBand(90)).toBe(5);
+    expect(getBand(70)).toBe(4);
+    expect(getBand(55)).toBe(3);
+    expect(getBand(40)).toBe(2);
+    expect(getBand(0)).toBe(1);
+  });
+});
+
+describe("levelValue / aiScore", () => {
+  it("levelValue", () => {
+    expect(levelValue("good")).toBe(1);
+    expect(levelValue("Partial")).toBe(0.5);
+    expect(levelValue("Missing")).toBe(0);
+  });
+  it("aiScore is 100 when all limbs good", () => {
+    expect(aiScore(mkEv("good", true))).toBe(100);
+  });
+  it("aiScore is 0 when all limbs missing", () => {
+    expect(aiScore(mkEv("Missing", false))).toBe(0);
+  });
+});
+
+describe("needsJustification", () => {
+  it("requires justification for a big gap (>=5)", () => {
+    expect(needsJustification(60, 70, false)).toBe(true);
+  });
+  it("no justification for a small non-gate change", () => {
+    expect(needsJustification(60, 62, false)).toBe(false);
+  });
+  it("gate item: requires justification when scored ABOVE the AI", () => {
+    expect(needsJustification(60, 62, true)).toBe(true);
+  });
+  it("gate item: requires justification when scored BELOW the AI too (the fix)", () => {
+    expect(needsJustification(60, 58, true)).toBe(true);
+  });
+  it("gate item: equal score needs none", () => {
+    expect(needsJustification(60, 60, true)).toBe(false);
+  });
+});
+
+describe("buildScored — evidence cap", () => {
+  it("no Drive link caps every item at Band 1 even with perfect limbs", () => {
+    const s = buildScored(input(fullEvidence("good", false)));
+    expect(s.items.every((i) => i.band === 1)).toBe(true);
+  });
+  it("full evidence + Drive link → all Band 5, max total, gate passes", () => {
+    const s = buildScored(input(fullEvidence("good", true)));
+    expect(s.items.every((i) => i.band === 5)).toBe(true);
+    expect(s.total).toBe(1000);
+    expect(s.gatePass).toBe(true);
+  });
+});
+
+describe("buildScored — award tiers honour configurable thresholds", () => {
+  it("max score is Star under default thresholds", () => {
+    const s = buildScored(input(fullEvidence("good", true)));
+    expect(s.award).toContain("Star");
+  });
+  it("max score is NOT Star if the star threshold is raised above it", () => {
+    const s = buildScored(input(fullEvidence("good", true), { provisional: 500, fourYear: 700, star: 1001 }));
+    expect(s.award).not.toContain("Star");
+    expect(s.award).toContain("4-Year");
+  });
+  it("zero-evidence workspace scores zero and is Not certified", () => {
+    // Each criterion's effective score is 0, so the all-zero special case
+    // awards nothing (rather than crediting Band 1's share of points).
+    const s = buildScored(input(fullEvidence("Missing", false)));
+    expect(s.total).toBe(0);
+    expect(s.award).toBe("Not certified");
+  });
+});
+
+describe("buildScored — gate failure caps the award", () => {
+  it("failing Criterion 5 (gate) blocks/cap a high score", () => {
+    const evidence = fullEvidence("good", true);
+    // Knock Criterion 5 items down to no evidence → band 1 → gate fails.
+    for (const r of GD4_REQUIREMENTS) if (r.criterion === "5") evidence[r.id] = mkEv("Missing", false);
+    const s = buildScored(input(evidence));
+    expect(s.gatePass).toBe(false);
+    expect(s.gateFail.some((g) => g.id === "Criterion 5")).toBe(true);
+  });
+});

@@ -51,7 +51,10 @@ export function getBand(score: number): Band {
 // action, which let a score be confirmed with no justification text.
 export function needsJustification(ais: number, reviewerValue: number, gate: boolean): boolean {
   const diff = Math.abs(reviewerValue - ais);
-  return diff >= 5 || (gate && reviewerValue > ais);
+  // Gate-sensitive items need a written reason for ANY override (up or down) —
+  // scoring a critical gate item below the AI without explanation hides
+  // auditor bias just as much as scoring it above.
+  return diff >= 5 || (gate && reviewerValue !== ais);
 }
 
 // A weak review limb or weak processes limb caps the achievable band even if
@@ -147,8 +150,11 @@ export function buildScored(state: ScoringInput) {
     { id: "Sub-criterion 4.6", items: items.filter((i) => i.subCriterionId === "4.6") },
     { id: "Criterion 5", items: items.filter((i) => i.crit === "5") },
   ].map((g) => {
-    const avgBand = g.items.reduce((a, i) => a + i.band, 0) / g.items.length;
-    return { ...g, avgBand, pass: avgBand >= 3 };
+    // Guard the empty case: an empty group would give 0/0 = NaN, and NaN >= 3
+    // is false, so the gate would silently "fail" (or with other arithmetic
+    // silently pass). An empty gate group is "not started", not a pass.
+    const avgBand = g.items.length ? g.items.reduce((a, i) => a + i.band, 0) / g.items.length : 0;
+    return { ...g, avgBand, pass: g.items.length > 0 && avgBand >= 3 };
   });
   const gateFail = gateGroups.filter((g) => !g.pass);
   const gatePass = gateFail.length === 0;
