@@ -75,13 +75,17 @@ export function VBars({ data, height = 130 }: { data: BarDatum[]; height?: numbe
   );
 }
 
-// EduTrust attainment tiers (by total /1000). Mirrors scoring.ts thresholds.
-const ATTAINMENT_TIERS = [
-  { key: "Fail", label: "Not certified", min: 0, color: "#c0392b" },
-  { key: "Provisional", label: "Provisional (1-Year)", min: 500, color: "#d97706" },
-  { key: "4-Year", label: "EduTrust (4-Year)", min: 600, color: "#5b6ea8" },
-  { key: "Star", label: "EduTrust Star", min: 750, color: "#1f7a4d" },
-] as const;
+// EduTrust attainment tiers (by total /1000). Thresholds come from the
+// configurable scoring config (passed in); these are just the fallback.
+const DEFAULT_THRESHOLDS = { provisional: 500, fourYear: 600, star: 750 };
+function tiersFrom(t: { provisional: number; fourYear: number; star: number }) {
+  return [
+    { key: "Fail", label: "Not certified", min: 0, color: "#c0392b" },
+    { key: "Provisional", label: "Provisional (1-Year)", min: t.provisional, color: "#d97706" },
+    { key: "4-Year", label: "EduTrust (4-Year)", min: t.fourYear, color: "#5b6ea8" },
+    { key: "Star", label: "EduTrust Star", min: t.star, color: "#1f7a4d" },
+  ];
+}
 
 // Derive the achieved tier index from the scoring engine's award string so it
 // can't diverge from the actual score logic.
@@ -94,9 +98,10 @@ export function attainmentFromAward(award: string): { index: number; capped: boo
 }
 
 // Horizontal ladder of the 4 EduTrust tiers with the achieved one highlighted.
-export function AttainmentLadder({ total, award }: { total: number; award: string }) {
+export function AttainmentLadder({ total, award, thresholds = DEFAULT_THRESHOLDS }: { total: number; award: string; thresholds?: { provisional: number; fourYear: number; star: number } }) {
+  const tiers = tiersFrom(thresholds);
   const { index, capped } = attainmentFromAward(award);
-  const achieved = ATTAINMENT_TIERS[index];
+  const achieved = tiers[index];
   return (
     <div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
@@ -107,7 +112,7 @@ export function AttainmentLadder({ total, award }: { total: number; award: strin
         <span style={{ fontSize: 12, color: "#94a3b8" }}>· {total}/1000</span>
       </div>
       <div style={{ display: "flex", gap: 4 }}>
-        {ATTAINMENT_TIERS.map((t, i) => {
+        {tiers.map((t, i) => {
           const on = !capped && i === index;
           const reached = !capped && i <= index;
           return (

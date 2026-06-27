@@ -162,12 +162,20 @@ export async function runLiveEvidenceFill(
 // the honesty constraint becomes the opposite one: it must judge each line
 // ONLY against the text actually provided, not invent or assume anything
 // about parts of the folder that weren't readable/exported.
+const STRICTNESS_CLAUSE: Record<string, string> = {
+  Lenient: " Calibration: give reasonable benefit of the doubt — if the documents broadly address the statement, lean towards Met or Partial.",
+  Standard: "",
+  Strict:
+    " Calibration: be conservative and hard to satisfy. Mark a line Met ONLY when the documents EXPLICITLY and FULLY evidence it, including records that it is actually implemented and reviewed — a policy or intention alone is at most Partial. When in doubt, choose the lower status. Reserve Met for clearly and completely demonstrated requirements; a high band must be genuinely earned.",
+};
+
 export async function runLiveFolderAudit(
   lines: { id: string; text: string }[],
   docText: string,
-  settings: AISettings
+  settings: AISettings,
+  strictness: "Lenient" | "Standard" | "Strict" = "Standard"
 ): Promise<FolderAuditLineVerdict[]> {
-  const system = `You are a GD4 internal audit evidence reviewer. You are given the actual text extracted from documents in an evidence folder, and a list of checklist statements that folder is meant to support. For each statement, judge it Met, Partial, or "Not met" using ONLY the document text given — never assume content that isn't there, and if the text doesn't mention something relevant, mark it "Not met" rather than guessing. Give a one-sentence reason per line citing what was or wasn't found. Respond with JSON only: {"lines": [{"lineId": string, "status": "Met" | "Partial" | "Not met", "reason": string}]}.`;
+  const system = `You are a GD4 internal audit evidence reviewer. You are given the actual text extracted from documents in an evidence folder, and a list of checklist statements that folder is meant to support. For each statement, judge it Met, Partial, or "Not met" using ONLY the document text given — never assume content that isn't there, and if the text doesn't mention something relevant, mark it "Not met" rather than guessing.${STRICTNESS_CLAUSE[strictness] || ""} Give a one-sentence reason per line citing what was or wasn't found. Respond with JSON only: {"lines": [{"lineId": string, "status": "Met" | "Partial" | "Not met", "reason": string}]}.`;
   const user = `Document text extracted from the folder (may be truncated):\n"""\n${docText.slice(0, 12000)}\n"""\n\nChecklist statements to assess:\n${lines
     .map((l) => `[${l.id}] ${l.text}`)
     .join("\n")}`;

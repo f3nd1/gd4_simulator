@@ -7,6 +7,7 @@ import { buildFinalReport, type ItemReport } from "../lib/finalReport";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { useAISettingsStore } from "../store/useAISettingsStore";
+import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import { composeSchoolContext } from "../store/useWorkspaceStore";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -24,6 +25,7 @@ export function FinalReport() {
   const cycle = useWorkspaceStore((s) => s.cycle);
   const schoolContext = useWorkspaceStore((s) => s.schoolContext);
   const aiSettings = useAISettingsStore();
+  const awardThresholds = useScoringConfigStore((s) => s.awardThresholds);
 
   const report = useMemo(() => buildFinalReport(scored, entries, findings, closures), [scored, entries, findings, closures]);
   const a = useMemo(() => buildAnalytics(scored, entries, findings, folders, closures), [scored, entries, findings, folders, closures]);
@@ -95,7 +97,7 @@ export function FinalReport() {
         </div>
         <div style={{ fontSize: 11, color: "#7e8da0", marginTop: 8 }}>Not an official SSG or EduTrust result. Internal readiness simulation only.</div>
         <div style={{ background: "#fff", color: INK, borderRadius: 10, padding: "10px 12px", marginTop: 12 }}>
-          <AttainmentLadder total={report.overall.total} award={report.overall.award} />
+          <AttainmentLadder total={report.overall.total} award={report.overall.award} thresholds={awardThresholds} />
         </div>
       </Card>
 

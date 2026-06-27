@@ -16,6 +16,10 @@ export type ScoringInput = {
   // Gates the hard-coded sample findings register so openAFIs/gate counts
   // on a brand-new workspace don't count findings the user hasn't loaded.
   seedFindingsLoaded?: boolean;
+  // Tunable EduTrust tier cut-offs (/1000), from useScoringConfigStore. Lets
+  // the difficulty of each tier be set on the GD4 Scoring Setup page instead
+  // of being hardcoded here.
+  awardThresholds?: { provisional: number; fourYear: number; star: number };
 };
 
 // Internal simulation weighting across the four official rubric dimensions
@@ -116,7 +120,7 @@ function buildScoredItem(
 }
 
 export function buildScored(state: ScoringInput) {
-  const { evidence, reviewer, confirmed, closures, checklistBandOverrides, customFindings, seedFindingsLoaded } = state;
+  const { evidence, reviewer, confirmed, closures, checklistBandOverrides, customFindings, seedFindingsLoaded, awardThresholds } = state;
   const allFindings: Finding[] = [...(seedFindingsLoaded ? FINDINGS : []), ...(customFindings || [])];
 
   const items = GD4_REQUIREMENTS.map((req) => buildScoredItem(req, evidence, reviewer, confirmed, checklistBandOverrides));
@@ -149,8 +153,9 @@ export function buildScored(state: ScoringInput) {
   const gateFail = gateGroups.filter((g) => !g.pass);
   const gatePass = gateFail.length === 0;
 
-  let award = total >= 750 ? "EduTrust Star" : total >= 600 ? "EduTrust (4-Year)" : total >= 500 ? "EduTrust Provisional (1-Year)" : "Not certified";
-  if (!gatePass && total >= 600) award = "Capped: critical gate not met";
+  const T = awardThresholds || { provisional: 500, fourYear: 600, star: 750 };
+  let award = total >= T.star ? "EduTrust Star" : total >= T.fourYear ? "EduTrust (4-Year)" : total >= T.provisional ? "EduTrust Provisional (1-Year)" : "Not certified";
+  if (!gatePass && total >= T.fourYear) award = "Capped: critical gate not met";
 
   const openAFIs = allFindings.filter((a) => (closures[a.id]?.human || "") !== "Accepted").length;
 

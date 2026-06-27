@@ -3,6 +3,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
+import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import { buildAnalytics } from "../lib/analytics";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -17,6 +18,7 @@ export function Analytics() {
   const findings = useAllFindings();
   const folders = useWorkspaceStore((s) => s.folders);
   const closures = useWorkspaceStore((s) => s.closures);
+  const awardThresholds = useScoringConfigStore((s) => s.awardThresholds);
 
   const a = useMemo(() => buildAnalytics(scored, entries, findings, folders, closures), [scored, entries, findings, folders, closures]);
 
@@ -38,7 +40,7 @@ export function Analytics() {
         <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
           <Gauge value={a.total} max={1000} label="of 1000" color={GOLD} />
           <div style={{ flex: 1, minWidth: 240 }}>
-            <AttainmentLadder total={a.total} award={a.award} />
+            <AttainmentLadder total={a.total} award={a.award} thresholds={awardThresholds} />
             <div style={{ marginTop: 8 }}><Pill s={a.gatePass ? "good" : "critical"}>{a.gatePass ? "Score gate met" : "Score gate not met"}</Pill></div>
           </div>
         </div>

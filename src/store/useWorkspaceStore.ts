@@ -29,6 +29,7 @@ import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit } from "../lib/ai/simulateAI";
 import { runLiveItemReview, runLiveClosureReview, runLiveFolderAudit } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
+import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
@@ -890,7 +891,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let liveError: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
-            verdicts = await runLiveFolderAudit(lines, docText, analysisSettings);
+            verdicts = await runLiveFolderAudit(lines, docText, analysisSettings, useScoringConfigStore.getState().aiStrictness);
             live = true;
           } catch (err) {
             liveError = err instanceof Error ? err.message : String(err);
