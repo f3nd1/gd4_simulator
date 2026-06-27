@@ -12,7 +12,7 @@ import type {
   Finding,
 } from "../types";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { buildDraftFinding, lineSufficiency } from "../lib/checklistBanding";
+import { buildDraftFinding, lineSufficiency, lineApsr } from "../lib/checklistBanding";
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill } from "../lib/ai/agentRuntime";
@@ -305,6 +305,16 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           overdue: false,
           managementDecisionNeeded: draft.severity === "Critical" || draft.severity === "High",
           status: "Open",
+          // Carry the detailed report + dimension onto the finding so the
+          // Findings register can show why it failed (procedure vs evidence)
+          // without re-deriving it.
+          source: "Checklist",
+          dimension: draft.dimension,
+          clause: draft.clause,
+          rootCause: draft.rootCause,
+          corrective: draft.corrective,
+          preventive: draft.preventive,
+          apsr: lineApsr(line),
         };
         useWorkspaceStore.getState().addCustomFinding(finding);
         set((st) => mapEntry(st, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, draftFinding: { ...draft, savedFindingId: finding.id } }))));

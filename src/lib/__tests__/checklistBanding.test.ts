@@ -6,11 +6,21 @@ import {
   coverageCap,
   computeBand,
   bandToScore,
+  findingDimension,
 } from "../checklistBanding";
-import type { GenericChecklistLine, SpecificChecklistLine, SubChecklistEvidenceItem, EvidenceSufficiency } from "../../types";
+import type { GenericChecklistLine, SpecificChecklistLine, SubChecklistEvidenceItem, EvidenceSufficiency, ApsrBreakdown } from "../../types";
 
-function ev(sufficiency: EvidenceSufficiency): SubChecklistEvidenceItem {
-  return { id: "e", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency };
+function ev(sufficiency: EvidenceSufficiency, apsr?: ApsrBreakdown): SubChecklistEvidenceItem {
+  return { id: "e", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency, apsr };
+}
+
+function apsr(over: Partial<{ approach: string; processes: string; systemsOutcomes: string; review: string }>): ApsrBreakdown {
+  return {
+    approach: { status: (over.approach as ApsrBreakdown["approach"]["status"]) || "Meeting", note: "" },
+    processes: { status: (over.processes as ApsrBreakdown["processes"]["status"]) || "Deployed", note: "" },
+    systemsOutcomes: { status: (over.systemsOutcomes as ApsrBreakdown["systemsOutcomes"]["status"]) || "Evident", note: "" },
+    review: { status: (over.review as ApsrBreakdown["review"]["status"]) || "Evident", note: "" },
+  };
 }
 
 function line(status: SpecificChecklistLine["status"], evidence: SubChecklistEvidenceItem[] = []): SpecificChecklistLine {
@@ -76,6 +86,28 @@ describe("computeBand evidence weakest-link rules", () => {
     // full coverage (cap 5) but only G1 met (ceiling 2) → min = 2
     const r = computeBand(generic(["G1"]), [line("Met", [ev("Present")])], false);
     expect(r.finalBand).toBe(2);
+  });
+});
+
+describe("findingDimension — splits procedure (policy) from evidence (implementation)", () => {
+  it("weak/absent Approach → Procedure (the documented policy is the gap)", () => {
+    expect(findingDimension(line("Not met", [ev("Missing", apsr({ approach: "Not evident" }))]))).toBe("Procedure");
+    expect(findingDimension(line("Partial", [ev("Weak", apsr({ approach: "Beginning" }))]))).toBe("Procedure");
+  });
+  it("Approach met but Processes not deployed → Evidence (implementation is the gap)", () => {
+    expect(findingDimension(line("Not met", [ev("Missing", apsr({ approach: "Meeting", processes: "Not evident" }))]))).toBe("Evidence");
+  });
+  it("Approach + Processes fine but Systems & Outcomes weak → Outcomes", () => {
+    expect(findingDimension(line("Partial", [ev("Weak", apsr({ systemsOutcomes: "Limited" }))]))).toBe("Outcomes");
+  });
+  it("only Review missing → Review", () => {
+    expect(findingDimension(line("Partial", [ev("Present", apsr({ review: "Not evident" }))]))).toBe("Review");
+  });
+  it("no APSR + marked Met with no evidence → Unverified", () => {
+    expect(findingDimension(line("Met"))).toBe("Unverified");
+  });
+  it("no APSR + Not met → Evidence", () => {
+    expect(findingDimension(line("Not met"))).toBe("Evidence");
   });
 });
 

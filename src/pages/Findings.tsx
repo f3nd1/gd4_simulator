@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
+import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
@@ -6,14 +7,25 @@ import { Card, filterSelectStyle, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { GOLD, INK } from "../lib/theme";
-import type { Finding, FindingType, Severity } from "../types";
+import type { Finding, FindingType, Severity, FindingDimension } from "../types";
 
 const TYPES: (FindingType | "All")[] = ["All", "AFI", "Improvement Action", "Observation", "Quality Action", "Critical Readiness Risk"];
 const SEVERITIES: (Severity | "All")[] = ["All", "Critical", "High", "Medium", "Low"];
 const RAISABLE_TYPES: FindingType[] = ["AFI", "Improvement Action", "Observation", "Quality Action", "Critical Readiness Risk"];
+const DIMENSIONS: (FindingDimension | "All")[] = ["All", "Procedure", "Evidence", "Outcomes", "Review", "Unverified"];
 
 function severityTone(sev: Severity) {
   return sev === "Critical" || sev === "High" ? "critical" : sev === "Medium" ? "medium" : "neutral";
+}
+
+// Procedure (documented policy) vs Evidence (implementation) are the two the
+// user most cares about, so they get the two strongest, most distinct colours.
+function dimensionTone(d: FindingDimension): "good" | "medium" | "critical" | "neutral" | "high" | "progress" {
+  return d === "Procedure" ? "progress" : d === "Evidence" ? "medium" : d === "Outcomes" ? "high" : d === "Unverified" ? "critical" : "neutral";
+}
+
+function dimensionLabel(d: FindingDimension): string {
+  return d === "Procedure" ? "Procedure (policy)" : d === "Evidence" ? "Evidence (implementation)" : d;
 }
 
 const EMPTY_FORM = {
@@ -31,14 +43,26 @@ export function Findings() {
   const closures = useWorkspaceStore((s) => s.closures);
   const addCustomFinding = useWorkspaceStore((s) => s.addCustomFinding);
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
+  const raiseAllUnmetFindings = useChecklistModuleStore((s) => s.raiseAllUnmetFindings);
   const scored = useScored();
   const allFindings = useAllFindings();
   const [typeFilter, setTypeFilter] = useState<FindingType | "All">("All");
   const [sevFilter, setSevFilter] = useState<Severity | "All">("All");
   const [critFilter, setCritFilter] = useState<string>("All");
   const [subCritFilter, setSubCritFilter] = useState<string>("All");
+  const [dimFilter, setDimFilter] = useState<FindingDimension | "All">("All");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [genNote, setGenNote] = useState<string | null>(null);
+
+  // Counts by dimension across the whole register, so the procedure-vs-evidence
+  // split is visible at a glance above the table.
+  const dimCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const f of allFindings) if (f.dimension) c[f.dimension] = (c[f.dimension] || 0) + 1;
+    return c;
+  }, [allFindings]);
 
   const subCritOptions = useMemo(
     () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter)),
@@ -60,6 +84,7 @@ export function Findings() {
       overdue: false,
       managementDecisionNeeded: form.severity === "Critical" || form.severity === "High",
       status: "Open",
+      source: "Manual",
     };
     addCustomFinding(finding);
     setForm(EMPTY_FORM);
@@ -69,11 +94,17 @@ export function Findings() {
   const rows = allFindings.filter((f) => {
     if (typeFilter !== "All" && f.type !== typeFilter) return false;
     if (sevFilter !== "All" && f.severity !== sevFilter) return false;
+    if (dimFilter !== "All" && f.dimension !== dimFilter) return false;
     const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
     if (critFilter !== "All" && req?.criterion !== critFilter) return false;
     if (subCritFilter !== "All" && req?.subCriterionId !== subCritFilter) return false;
     return true;
   });
+
+  function generateFromGaps() {
+    const n = raiseAllUnmetFindings();
+    setGenNote(n > 0 ? `Raised ${n} new finding${n === 1 ? "" : "s"} from audit/checklist gaps.` : "No new gaps to raise — every unmet line already has a finding.");
+  }
 
   return (
     <Card>
@@ -83,12 +114,37 @@ export function Findings() {
           {scored.openAFIs} of {allFindings.length} still open
         </span>
         <button
+          onClick={generateFromGaps}
+          title="Turn every Not-met / unverified checklist line into a finding (deduped). Runs automatically after each folder audit too."
+          style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #c9a24a", background: "#fbf3df", color: "#7a5c12", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}
+        >
+          Generate from gaps
+        </button>
+        <button
           onClick={() => setShowForm((v) => !v)}
-          style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}
+          style={{ cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}
         >
           {showForm ? "Cancel" : "Raise finding"}
         </button>
       </div>
+
+      {/* Procedure-vs-evidence breakdown — answers "what kind of gaps do I have". */}
+      {Object.keys(dimCounts).length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>By dimension</span>
+          {(["Procedure", "Evidence", "Outcomes", "Review", "Unverified"] as FindingDimension[]).filter((d) => dimCounts[d]).map((d) => (
+            <button
+              key={d}
+              onClick={() => setDimFilter((cur) => (cur === d ? "All" : d))}
+              title={`Filter to ${dimensionLabel(d)} findings`}
+              style={{ cursor: "pointer", border: dimFilter === d ? "1px solid #1f2937" : "1px solid transparent", background: "transparent", borderRadius: 999, padding: 0 }}
+            >
+              <Pill s={dimensionTone(d)}>{dimensionLabel(d)}: {dimCounts[d]}</Pill>
+            </button>
+          ))}
+        </div>
+      )}
+      {genNote && <div style={{ fontSize: 12, color: "#15803d", marginBottom: 10 }}>{genNote}</div>}
 
       {showForm && (
         <Card style={{ background: "#f8fafc", marginBottom: 12 }}>
@@ -172,6 +228,9 @@ export function Findings() {
             </option>
           ))}
         </select>
+        <select value={dimFilter} onChange={(e) => setDimFilter(e.target.value as FindingDimension | "All")} style={filterSelectStyle}>
+          {DIMENSIONS.map((d) => <option key={d} value={d}>{d === "All" ? "All dimensions" : dimensionLabel(d)}</option>)}
+        </select>
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as FindingType | "All")} style={filterSelectStyle}>
           {TYPES.map((t) => <option key={t}>{t}</option>)}
         </select>
@@ -181,30 +240,95 @@ export function Findings() {
       </div>
       <table>
         <thead>
-          <tr><th>ID</th><th>GD4 item</th><th>Issue</th><th>Type</th><th>Severity</th><th>Owner</th><th>Due</th><th>Status</th></tr>
+          <tr><th /><th>ID</th><th>GD4 item</th><th>Issue</th><th>Dimension</th><th>Severity</th><th>Owner</th><th>Status</th></tr>
         </thead>
         <tbody>
           {rows.map((f) => {
             const closed = (closures[f.id]?.human || "") === "Accepted";
+            const open = expandedId === f.id;
+            const hasDetail = !!(f.rootCause || f.corrective || f.preventive || f.apsr);
             return (
-              <tr key={f.id} className="rowh">
-                <td><b style={{ color: "#ce9e5d" }}>{f.id}</b></td>
-                <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5, color: "#6b7280" }}>{f.gd4ItemId}</td>
-                <td style={{ fontSize: 12.5 }}>{f.issue}</td>
-                <td>{f.type}</td>
-                <td><Pill s={severityTone(f.severity)}>{f.severity}</Pill></td>
-                <td>{f.owner}</td>
-                <td style={{ color: "#6b7280" }}>{f.dueDate}</td>
-                <td><Pill s={closed ? "good" : "critical"}>{closed ? "Closed" : "Open"}</Pill></td>
-              </tr>
+              <Fragment key={f.id}>
+                <tr className="rowh" style={{ cursor: hasDetail ? "pointer" : "default" }} onClick={() => hasDetail && setExpandedId(open ? null : f.id)}>
+                  <td style={{ width: 18, color: "#94a3b8", textAlign: "center" }}>{hasDetail ? (open ? "▾" : "▸") : ""}</td>
+                  <td><b style={{ color: "#ce9e5d" }}>{f.id}</b></td>
+                  <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5, color: "#6b7280" }}>{f.gd4ItemId}</td>
+                  <td style={{ fontSize: 12.5 }}>{f.issue}</td>
+                  <td>{f.dimension ? <Pill s={dimensionTone(f.dimension)}>{dimensionLabel(f.dimension)}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
+                  <td><Pill s={severityTone(f.severity)}>{f.severity}</Pill></td>
+                  <td>{f.owner}</td>
+                  <td><Pill s={closed ? "good" : "critical"}>{closed ? "Closed" : "Open"}</Pill></td>
+                </tr>
+                {open && hasDetail && (
+                  <tr>
+                    <td colSpan={8} style={{ background: "#f8fafc", padding: "10px 14px" }}>
+                      <FindingDetail finding={f} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             );
           })}
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={8} style={{ padding: "18px 14px", color: "#6b7280", fontSize: 12.5 }}>
+                No findings to show. Run a folder audit (Evidence Folder page) — findings are raised automatically from the gaps — or click <b>Generate from gaps</b> above to create them from the current Sub-Criterion Checklist.
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
       <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 10 }}>
         {seedFindingsLoaded && "Includes findings carried over from the loaded demo dataset. "}
-        Open and manage closure for each finding on the Quality Action / AFI screen.
+        Click a finding to read its full report. Manage closure for each on the Quality Action / AFI screen.
       </div>
     </Card>
+  );
+}
+
+// The expandable per-finding report: the detailed root-cause / corrective /
+// preventive analysis plus the APSR rubric breakdown the audit produced, so the
+// "why" behind each finding is visible here, not just on the closure screen.
+function FindingDetail({ finding: f }: { finding: Finding }) {
+  const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
+  const apsr = f.apsr;
+  const Section = ({ label, text }: { label: string; text?: string }) =>
+    text ? (
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>{label}</div>
+        <div style={{ fontSize: 12.5, color: "#334155", lineHeight: 1.5 }}>{text}</div>
+      </div>
+    ) : null;
+  return (
+    <div>
+      {req && (
+        <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
+          GD4 {req.id} · {req.requirement}
+          {f.clause && <span style={{ fontFamily: "ui-monospace,monospace", marginLeft: 8 }}>{f.clause}</span>}
+          {f.source && <Pill s="neutral">{f.source}</Pill>}
+        </div>
+      )}
+      <Section label="Root cause" text={f.rootCause} />
+      <Section label="Corrective action (fix it now)" text={f.corrective} />
+      <Section label="Preventive action (stop recurrence)" text={f.preventive} />
+      {apsr && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>APSR rubric breakdown</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 6 }}>
+            {([
+              ["Approach (policy)", apsr.approach],
+              ["Processes (implementation)", apsr.processes],
+              ["Systems & Outcomes", apsr.systemsOutcomes],
+              ["Review", apsr.review],
+            ] as const).map(([label, leg]) => (
+              <div key={label} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 9px", background: "#fff" }}>
+                <div style={{ fontSize: 11, fontWeight: 700 }}>{label}: {leg.status}</div>
+                {leg.note && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>{leg.note}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

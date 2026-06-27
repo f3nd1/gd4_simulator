@@ -17,7 +17,7 @@
 //       cap, just with sharper wording since recurrence risk there is higher).
 //   This cannot be overridden except by fixing the evidence, because the
 //   band is always recomputed from current state.
-import type { Band, GD4Requirement, GenericChecklistLine, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown } from "../types";
+import type { Band, GD4Requirement, GenericChecklistLine, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
 
 export function lineSufficiency(line: SpecificChecklistLine): EvidenceSufficiency {
   if (line.evidence.length === 0) return "Missing";
@@ -187,6 +187,26 @@ export function buildFindingAnalysis(req: GD4Requirement, line: SpecificChecklis
   };
 }
 
+// Classifies which side of the rubric a line's gap is on, using the first
+// APSR dimension that falls short (Approach gates first, so it wins when both
+// Approach and Processes are weak). This is what lets the Findings register
+// separate "your procedure document is missing/weak" (Procedure) from "the
+// procedure exists but there's no evidence it's implemented" (Evidence).
+export function findingDimension(line: SpecificChecklistLine): FindingDimension {
+  const p = lineApsr(line);
+  if (p) {
+    if (p.approach.status !== "Meeting") return "Procedure";
+    if (p.processes.status !== "Deployed") return "Evidence";
+    if (p.systemsOutcomes.status !== "Evident") return "Outcomes";
+    if (p.review.status !== "Evident") return "Review";
+    return "Evidence";
+  }
+  // No APSR (offline keyword audit / manual line): a line marked done but with
+  // no evidence is an unverified claim; otherwise treat it as an evidence gap.
+  if (line.status !== "Not met" && lineSufficiency(line) === "Missing") return "Unverified";
+  return "Evidence";
+}
+
 export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLine): DraftFindingInfo {
   const sufficiency = lineSufficiency(line);
   const analysis = buildFindingAnalysis(req, line);
@@ -199,5 +219,6 @@ export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLi
     rootCause: analysis.rootCause,
     corrective: analysis.corrective,
     preventive: analysis.preventive,
+    dimension: findingDimension(line),
   };
 }

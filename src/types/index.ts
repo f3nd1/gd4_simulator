@@ -137,6 +137,14 @@ export type FindingType = "Observation" | "Improvement Action" | "Quality Action
 export type Severity = "Low" | "Medium" | "High" | "Critical";
 export type FindingStatus = "Open" | "In Progress" | "Submitted for Review" | "Closed" | "Escalated";
 
+// Which side of the rubric a finding sits on, mapped from the APSR dimension
+// that fell short: Approach → "Procedure" (the documented policy), Processes →
+// "Evidence" (implementation records), Systems & Outcomes → "Outcomes", Review
+// → "Review". "Unverified" is a line marked done with no evidence attached.
+// Lets the Findings register show, at a glance, whether a gap is in the
+// procedure documents or in the actual evidence of implementation.
+export type FindingDimension = "Procedure" | "Evidence" | "Outcomes" | "Review" | "Unverified";
+
 export type Finding = {
   id: string;
   auditCycleId: string;
@@ -153,6 +161,15 @@ export type Finding = {
   aiComment?: string;
   humanComment?: string;
   status: FindingStatus;
+  // Provenance + detailed report, populated when a finding is raised from a
+  // checklist line / folder audit (undefined on a plain manual finding).
+  source?: "Audit" | "Checklist" | "Manual" | "Seed";
+  dimension?: FindingDimension;
+  clause?: string;
+  rootCause?: string;
+  corrective?: string;
+  preventive?: string;
+  apsr?: ApsrBreakdown;
 };
 
 // Two-layer sub-criterion checklist module: a generic 4-line maturity check
@@ -223,6 +240,9 @@ export type DraftFindingInfo = {
   rootCause?: string;
   corrective?: string;
   preventive?: string;
+  // Which APSR dimension the gap is in (Procedure vs Evidence vs …), surfaced
+  // on the raised finding so the register can split procedure from evidence.
+  dimension?: FindingDimension;
 };
 
 export type GenericChecklistLine = {

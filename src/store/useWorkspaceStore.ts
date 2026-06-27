@@ -1102,6 +1102,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return;
         }
 
+        // Auto-raise findings from the gaps this audit just set, so the
+        // Findings register fills itself the moment an audit runs (instead of
+        // staying empty until the user remembers to click "Raise findings").
+        // Deduped, so re-auditing never double-raises; each carries its APSR
+        // dimension (procedure vs evidence) and the detailed root-cause report.
+        let autoRaised = 0;
+        try {
+          autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings();
+        } catch {
+          // Non-fatal: a finding-raise failure must not strand the audit.
+        }
+
         const counts = { Met: 0, Partial: 0, "Not met": 0 } as Record<string, number>;
         for (const v of verdicts) counts[v.status]++;
         // Cap the file lists so a folder of dozens of files can't produce a
@@ -1130,6 +1142,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // 1. Headline — the verdict, first.
         lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}).`);
         if (bandParts.length) lineParts.push(`Band: ${bandParts.join(", ")}.`);
+        if (autoRaised > 0) lineParts.push(`Raised ${autoRaised} new finding${autoRaised === 1 ? "" : "s"} from the gaps — see the Findings register.`);
         // 2. Files read.
         lineParts.push(
           scanned.length
