@@ -2,6 +2,17 @@
 
 Use this as a cross-check when you have assessed each APSR dimension and are calibrating whether the overall picture is consistent with the band the scoring engine will assign.
 
+## One-line interpretation (use in summaries and recommendations)
+
+| Band | Core meaning | What the institution needs to do next |
+|---|---|---|
+| Band 1–2 | **Exist but not controlled** — systems are absent or ad-hoc; compliance is accidental, not designed | Establish documented, owned processes and generate consistent implementation records |
+| Band 3 | **Exist and review** — systems are documented and running; review happens but rarely drives change | Close the loop: show that each review produces an improvement, not just a sign-off |
+| Band 4 | **Review, Learn and Adjust** — the institution uses evidence from its own operations to improve; cycle visible in records | Extend learning outward: benchmark against external standards, not just internal targets |
+| Band 5 | **Anticipate, prevent, stability** — the institution identifies risks before they materialise; systems are resilient to staff changes and proactively strengthened | Sustain and document resilience; demonstrate the system works without relying on specific individuals |
+
+When writing recommendations, frame the gap in these terms: "You are currently at Band X (exist but not controlled / exist and review / review-learn-adjust / anticipate-prevent). To move to Band X+1, you need to…"
+
 ## Band 1 — No system in place
 
 **What you will see:**
