@@ -8,7 +8,9 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 
-const MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
+// GPT-5 family first (current default). The GPT-4 entries stay as fallbacks
+// for anyone whose key/org doesn't yet have GPT-5 access.
+const MODELS = ["gpt-5-mini", "gpt-5", "gpt-5-nano", "gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o"];
 
 export function Settings() {
   const { apiKey, model, enabled, setApiKey, setModel, setEnabled, clearApiKey } = useAISettingsStore();

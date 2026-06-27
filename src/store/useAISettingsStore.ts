@@ -18,7 +18,7 @@ export const useAISettingsStore = create<AISettingsState>()(
     (set) => ({
       provider: "openai",
       apiKey: "",
-      model: "gpt-4o-mini",
+      model: "gpt-5-mini",
       enabled: false,
 
       setApiKey: (apiKey) => set({ apiKey }),
@@ -26,6 +26,21 @@ export const useAISettingsStore = create<AISettingsState>()(
       setEnabled: (enabled) => set({ enabled }),
       clearApiKey: () => set({ apiKey: "", enabled: false }),
     }),
-    { name: "ucc-gd4-ai-settings:v1", storage: workspaceStorage }
+    {
+      name: "ucc-gd4-ai-settings:v1",
+      storage: workspaceStorage,
+      // Bump anyone still carrying the old gpt-4o-mini default onto the new
+      // GPT-5 default. Only the old default is migrated — a deliberately
+      // chosen GPT-4 model is left alone — and the API key/enabled flag are
+      // preserved untouched.
+      version: 1,
+      migrate: (persisted, version) => {
+        const state = persisted as Partial<AISettingsState> | undefined;
+        if (version < 1 && state && state.model === "gpt-4o-mini") {
+          return { ...state, model: "gpt-5-mini" } as AISettingsState;
+        }
+        return state as AISettingsState;
+      },
+    }
   )
 );
