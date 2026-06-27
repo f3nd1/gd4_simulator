@@ -130,3 +130,29 @@ export async function describeImage(imageDataUrl: string, settings: AISettings):
   if (typeof content !== "string") throw new AIClientError("OpenAI response did not contain a message.");
   return content;
 }
+
+// Condenses one document's text to a fact-dense summary (utility model) so a
+// big folder can be audited in full instead of being silently truncated.
+// Keeps concrete specifics — dates, names, approvals, figures, the presence of
+// records/implementation — which is exactly what the audit judges on.
+export async function summariseText(label: string, text: string, settings: AISettings, maxChars = 1500): Promise<string> {
+  if (!settings.enabled || !settings.apiKey) return text.slice(0, maxChars);
+  const model = settings.model || DEFAULT_MODEL;
+  const body: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: "system", content: `Summarise this audit-evidence document into at most ${Math.round(maxChars / 5)} words. Preserve concrete, verifiable specifics: dates, names, approvals/sign-offs, figures, version/record numbers, and any sign that something is actually implemented and reviewed (not just a policy). Do not add anything not in the text. Plain text only.` },
+      { role: "user", content: `Document: ${label}\n"""\n${text.slice(0, 16000)}\n"""` },
+    ],
+  };
+  if (supportsTemperature(model)) body.temperature = 0.1;
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.apiKey}` },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return text.slice(0, maxChars); // best-effort: fall back to truncation
+  const data = await res.json();
+  const out = data?.choices?.[0]?.message?.content;
+  return typeof out === "string" ? out.slice(0, maxChars) : text.slice(0, maxChars);
+}

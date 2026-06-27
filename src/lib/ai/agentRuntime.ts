@@ -38,7 +38,7 @@ export async function runLiveItemReview(
   settings: AISettings,
   memory: AgentMemoryEntry[]
 ): Promise<Omit<SimulatedItemVerdict, "live"> & { live: true }> {
-  const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine (sourced from the Sub-Criterion Checklist outcome where one exists, otherwise from the evidence matrix below) and given to you here; you must not contradict it or imply a different one. Your tone must match that fixed band exactly: never use positive, encouraging or reassuring language when the band is low, when any evidence limb below is "Missing", or when the Drive evidence link is absent — in every such case you must name the gap plainly instead of softening it. A missing Drive evidence link is itself a real gap to call out even if the four evidence limbs look strong, because it means the human auditor cannot actually verify the evidence. Write a short, specific justification (2-3 sentences) referencing only the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.`;
+  const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine (sourced from the Sub-Criterion Checklist outcome where one exists, otherwise from the evidence matrix below) and given to you here; you must not contradict it or imply a different one. Your tone must match that fixed band exactly: never use positive, encouraging or reassuring language when the band is low, when any evidence limb below is "Missing", or when the Drive evidence link is absent — in every such case you must name the gap plainly instead of softening it. A missing Drive evidence link is itself a real gap to call out even if the four evidence limbs look strong, because it means the human auditor cannot actually verify the evidence. Use your earlier-turn memory of other items you have reviewed to flag when the SAME gap recurs across items (e.g. a missing review/record pattern), so the auditor can fix it systemically. Write a short, specific justification (2-3 sentences) referencing only the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.`;
   const user = `Item ${item.id}. Fixed evidence score: ${item.eff}/100, fixed band: ${item.band} (source: ${item.checklistOverride ? "Sub-Criterion Checklist outcome" : "evidence matrix quick rating"}). Evidence: approach=${ev.approach}, processes=${ev.processes}, systemsOutcomes=${ev.systemsOutcomes}, review=${ev.review}, traceability=${ev.trace}%, evidence age=${ev.age} days, owner=${ev.owner || "(unassigned)"}, Drive evidence link=${ev.drive ? ev.drive : "MISSING — no link has been provided"}.`;
 
   const content = await chatComplete(
@@ -169,14 +169,34 @@ const STRICTNESS_CLAUSE: Record<string, string> = {
     " Calibration: be conservative and hard to satisfy. Mark a line Met ONLY when the documents EXPLICITLY and FULLY evidence it, including records that it is actually implemented and reviewed — a policy or intention alone is at most Partial. When in doubt, choose the lower status. Reserve Met for clearly and completely demonstrated requirements; a high band must be genuinely earned.",
 };
 
+export type FolderAuditOpts = {
+  strictness?: "Lenient" | "Standard" | "Strict";
+  // The official GD4 requirement context for this sub-criterion (intent +
+  // Describe/Show + Notes + expected evidence) so lines are judged against the
+  // real standard, not just their own short wording.
+  standard?: string;
+  // When set, this is a second "challenge" pass: re-examine these prior
+  // verdicts and downgrade any not fully and explicitly evidenced.
+  challenge?: { lineId: string; status: string }[];
+};
+
 export async function runLiveFolderAudit(
   lines: { id: string; text: string }[],
   docText: string,
   settings: AISettings,
-  strictness: "Lenient" | "Standard" | "Strict" = "Standard"
+  opts: FolderAuditOpts = {}
 ): Promise<FolderAuditLineVerdict[]> {
-  const system = `You are a GD4 internal audit evidence reviewer. You are given the actual text extracted from documents in an evidence folder, and a list of checklist statements that folder is meant to support. For each statement, judge it Met, Partial, or "Not met" using ONLY the document text given — never assume content that isn't there, and if the text doesn't mention something relevant, mark it "Not met" rather than guessing.${STRICTNESS_CLAUSE[strictness] || ""} Give a one-sentence reason per line citing what was or wasn't found. Respond with JSON only: {"lines": [{"lineId": string, "status": "Met" | "Partial" | "Not met", "reason": string}]}.`;
-  const user = `Document text extracted from the folder (may be truncated):\n"""\n${docText.slice(0, 12000)}\n"""\n\nChecklist statements to assess:\n${lines
+  const strictness = opts.strictness || "Standard";
+  const base = `You are a GD4 internal audit evidence reviewer. You are given the actual text extracted from documents in an evidence folder (each chunk is headed by its file path and type), and a list of checklist statements that folder is meant to support. For each statement, judge it Met, Partial, or "Not met" using ONLY the document text given — never assume content that isn't there, and if the text doesn't mention something relevant, mark it "Not met" rather than guessing.${STRICTNESS_CLAUSE[strictness] || ""}`;
+  const sourcesRule = ` For every Met or Partial verdict you MUST cite the specific source file(s) (by their "--- path ---" heading) whose text supports it, in "sources"; if you cannot point to a source, the line is "Not met".`;
+  const challengeRule = opts.challenge
+    ? ` This is a SECOND review pass. Earlier verdicts are given; re-examine each Met/Partial critically and DOWNGRADE any that is not fully, explicitly and verifiably evidenced (a policy with no implementation record is not "Met"). Keep "Not met" as is. Be stricter than the first pass.`
+    : "";
+  const system = `${base}${sourcesRule}${challengeRule} Give a one-sentence reason per line citing what was or wasn't found. Respond with JSON only: {"lines": [{"lineId": string, "status": "Met" | "Partial" | "Not met", "reason": string, "sources": string[]}]}.`;
+
+  const standardBlock = opts.standard ? `The official GD4 requirement this folder must satisfy (judge against THIS standard, not just the line wording):\n"""\n${opts.standard.slice(0, 4000)}\n"""\n\n` : "";
+  const priorBlock = opts.challenge ? `Earlier (first-pass) verdicts to re-examine:\n${opts.challenge.map((c) => `[${c.lineId}] ${c.status}`).join("\n")}\n\n` : "";
+  const user = `${standardBlock}${priorBlock}Document text extracted from the folder (each chunk headed by file path + type; may be truncated):\n"""\n${docText.slice(0, 12000)}\n"""\n\nChecklist statements to assess:\n${lines
     .map((l) => `[${l.id}] ${l.text}`)
     .join("\n")}`;
 
@@ -185,13 +205,14 @@ export async function runLiveFolderAudit(
 
   const byId = new Map(
     arr
-      .filter((x): x is { lineId: string; status: string; reason?: string } => !!x && typeof x === "object" && typeof (x as { lineId?: unknown }).lineId === "string")
+      .filter((x): x is { lineId: string; status: string; reason?: string; sources?: unknown } => !!x && typeof x === "object" && typeof (x as { lineId?: unknown }).lineId === "string")
       .map((x) => [x.lineId, x])
   );
 
   return lines.map((l) => {
     const v = byId.get(l.id);
     const status = v?.status === "Met" || v?.status === "Partial" || v?.status === "Not met" ? v.status : "Not met";
-    return { lineId: l.id, status, reason: v?.reason || "The model did not return a verdict for this line; treated as unmet pending re-run." };
+    const sources = Array.isArray(v?.sources) ? (v!.sources as unknown[]).filter((s): s is string => typeof s === "string") : undefined;
+    return { lineId: l.id, status, reason: v?.reason || "The model did not return a verdict for this line; treated as unmet pending re-run.", sources };
   });
 }

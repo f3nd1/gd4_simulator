@@ -206,7 +206,7 @@ function guessDate(filename: string): string {
 // each line Met/Partial/Not met by simple keyword overlap. Offline fallback
 // only — mirrors every other simulate* function's role as the no-network
 // stand-in for the live OpenAI call in agentRuntime.ts.
-export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial" | "Not met"; reason: string };
+export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial" | "Not met"; reason: string; sources?: string[] };
 
 const STOPWORDS = new Set(["which", "where", "their", "there", "every", "shall", "should", "these", "those", "about", "within"]);
 

@@ -34,7 +34,7 @@ import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError } from "../lib/drive/driveClient";
-import { describeImage, effectiveSettings } from "../lib/ai/aiClient";
+import { describeImage, summariseText, effectiveSettings } from "../lib/ai/aiClient";
 import { computeBand } from "../lib/checklistBanding";
 
 // Best-effort evidence-type classification for audit-attached evidence, from
@@ -853,28 +853,33 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const scanned: string[] = [];
         const skipped: string[] = []; // recognized type, but no text path for it (e.g. video)
         const failed: { path: string; reason: string }[] = []; // tried to read, threw
-        // Split by the two-subfolder convention so policy docs and deployed
-        // evidence reach the AI as clearly-labeled sections.
-        const policyParts: string[] = [];
-        const evidenceParts: string[] = [];
+        // Each chunk keeps its heading (path + file type) so the AI knows a
+        // photo from a policy PDF, and its body separately so a big folder can
+        // be summarised rather than silently truncated.
+        type Part = { heading: string; body: string; isPolicy: boolean };
+        const parts: Part[] = [];
         let policyCount = 0;
         let evidenceCount = 0;
-        const addPart = (path: string, body: string, bucket: TaggedFile["bucket"]) => {
+        const fileKind = (mime: string) =>
+          mime === "application/pdf" ? "PDF"
+            : mime.includes("wordprocessingml") ? "Word"
+            : mime.includes("google-apps.document") ? "Google Doc"
+            : mime.includes("google-apps.spreadsheet") || mime === "text/csv" ? "spreadsheet/CSV"
+            : mime.includes("google-apps.presentation") ? "Google Slides"
+            : mime.startsWith("image/") ? "image"
+            : "text";
+        const pushPart = (path: string, body: string, bucket: TaggedFile["bucket"], kind: string) => {
           const isPolicy = bucket === "policy" || (bucket === "auto" && classifyFileBucket(path) === "policy");
-          if (isPolicy) {
-            policyParts.push(`--- ${path} ---\n${body}`);
-            policyCount++;
-          } else {
-            evidenceParts.push(`--- ${path} ---\n${body}`);
-            evidenceCount++;
-          }
+          parts.push({ heading: `--- ${path} [${kind}] ---`, body, isPolicy });
+          if (isPolicy) policyCount++;
+          else evidenceCount++;
         };
         for (const file of taggedFiles) {
           try {
             const text = await exportFileText(file, token);
             if (text !== null) {
               scanned.push(file.path);
-              addPart(file.path, text, file.bucket);
+              pushPart(file.path, text, file.bucket, fileKind(file.mimeType));
               continue;
             }
             if (IMAGE_MIME_TYPES.has(file.mimeType) && canDescribeImages && imagesDescribed < MAX_IMAGES) {
@@ -882,7 +887,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const dataUrl = await exportFileImageDataUrl(file, token);
               const description = await describeImage(dataUrl, utilitySettings);
               scanned.push(file.path);
-              addPart(`${file.path} (image)`, description, file.bucket);
+              pushPart(file.path, description, file.bucket, "image");
               continue;
             }
             skipped.push(file.path);
@@ -894,21 +899,65 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             failed.push({ path: file.path, reason: err instanceof Error ? err.message : String(err) });
           }
         }
+
+        // Full-folder coverage: if the combined text would overflow the audit
+        // cap, condense each document (utility model) instead of dropping
+        // everything past the first ~12k characters.
+        const DOC_CAP = 12000;
+        let condensed = 0;
+        const rawTotal = parts.reduce((n, p) => n + p.body.length, 0);
+        if (rawTotal > DOC_CAP && aiSettings.enabled && aiSettings.apiKey && parts.length) {
+          const budget = Math.max(500, Math.floor(DOC_CAP / parts.length));
+          for (const p of parts) {
+            if (p.body.length > budget) {
+              try {
+                p.body = await summariseText(p.heading, p.body, utilitySettings, budget);
+                condensed++;
+              } catch {
+                p.body = p.body.slice(0, budget);
+              }
+            }
+          }
+        }
+
+        const sectionText = (isPolicy: boolean) => parts.filter((p) => p.isPolicy === isPolicy).map((p) => `${p.heading}\n${p.body}`).join("\n\n");
+        const policyText = sectionText(true);
+        const evidenceText = sectionText(false);
         const docText = [
-          resolvedContext
-            ? `=== SCHOOL-WIDE CONTEXT (general supporting documents — background only, not primary evidence for this sub-criterion) ===\n${resolvedContext}`
-            : "",
-          policyParts.length ? `=== POLICY & PROCEDURE ===\n${policyParts.join("\n\n")}` : "",
-          evidenceParts.length ? `=== ACTUAL EVIDENCE ===\n${evidenceParts.join("\n\n")}` : "",
+          resolvedContext ? `=== SCHOOL-WIDE CONTEXT (general supporting documents — background only, not primary evidence for this sub-criterion) ===\n${resolvedContext}` : "",
+          policyText ? `=== POLICY & PROCEDURE ===\n${policyText}` : "",
+          evidenceText ? `=== ACTUAL EVIDENCE ===\n${evidenceText}` : "",
         ]
           .filter(Boolean)
           .join("\n\n");
+
+        // The official GD4 standard for this sub-criterion, so the AI judges
+        // each line against what is actually required, not just its wording.
+        const standard = items
+          .map((it) => `GD4 ${it.id} — ${it.requirement}\nIntent: ${it.intent}\nDescribe/Show:\n${it.describeShow.map((d) => `- ${d}`).join("\n")}${it.notes.length ? `\nNotes:\n${it.notes.map((n) => `- ${n}`).join("\n")}` : ""}\nExpected evidence: ${it.expectedEvidence.join("; ")}`)
+          .join("\n\n");
+
+        const strictness = useScoringConfigStore.getState().aiStrictness;
         let verdicts;
         let live = false;
         let liveError: string | undefined;
+        let challenged = false;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
-            verdicts = await runLiveFolderAudit(lines, docText, analysisSettings, useScoringConfigStore.getState().aiStrictness);
+            verdicts = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard });
+            // Strict mode runs a second "challenge" pass that re-examines every
+            // Met/Partial and downgrades any not fully and explicitly evidenced.
+            if (strictness === "Strict") {
+              const toChallenge = verdicts.filter((v) => v.status !== "Not met").map((v) => ({ lineId: v.lineId, status: v.status }));
+              if (toChallenge.length) {
+                try {
+                  verdicts = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard, challenge: toChallenge });
+                  challenged = true;
+                } catch {
+                  // keep first-pass verdicts if the challenge call fails
+                }
+              }
+            }
             live = true;
           } catch (err) {
             liveError = err instanceof Error ? err.message : String(err);
@@ -937,7 +986,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               approved: false,
               reviewed: false,
               sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
-              auditorNote: v.reason,
+              // Keep the AI's cited source files so the verdict is traceable.
+              auditorNote: v.sources && v.sources.length ? `${v.reason} (source: ${v.sources.join("; ")})` : v.reason,
             });
           }
         } catch (err) {
@@ -980,7 +1030,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           .filter(Boolean);
         const bandSummary = bandParts.length ? ` Resulting band: ${bandParts.join(", ")}.` : "";
 
-        const summary = `${fileSummary}${skipSummary}${failSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.${bandSummary}`;
+        const methodNote = live
+          ? ` Judged against the GD4 standard${condensed ? `, ${condensed} long document${condensed === 1 ? "" : "s"} condensed to read the whole folder` : ""}${challenged ? ", with a strict second-pass challenge" : ""}.`
+          : " (offline keyword estimate — AI not used).";
+        const summary = `${fileSummary}${skipSummary}${failSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.${bandSummary}${methodNote}`;
         finish(summary, live, liveError);
       },
 
