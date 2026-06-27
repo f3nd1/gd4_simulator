@@ -206,7 +206,37 @@ function guessDate(filename: string): string {
 // each line Met/Partial/Not met by simple keyword overlap. Offline fallback
 // only — mirrors every other simulate* function's role as the no-network
 // stand-in for the live OpenAI call in agentRuntime.ts.
-export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial" | "Not met"; reason: string; sources?: string[] };
+// PDCA (Plan-Do-Check-Act) breakdown for one checklist line. The audit
+// assesses these IN ORDER: Plan (is the policy/procedure adequate vs the
+// requirement, or generic/missing?), then Do (is it implemented per the
+// evidence?), then Check (is there a control?), then Act (is there a review?).
+export type PdcaBreakdown = {
+  plan: { status: "Adequate" | "Generic" | "Missing"; note: string };
+  do: { status: "Implemented" | "Partial" | "None"; note: string };
+  check: { status: "Yes" | "No"; note: string };
+  act: { status: "Yes" | "No"; note: string };
+};
+
+export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial" | "Not met"; reason: string; sources?: string[]; pdca?: PdcaBreakdown };
+
+// Derives the overall Met/Partial/Not met from a PDCA breakdown with Plan
+// hard-gating: a generic or missing policy/procedure caps the line at "Not met"
+// no matter how much implementation evidence exists — you cannot pass on
+// evidence alone when the plan itself is weak. Met requires the FULL cycle:
+// an adequate plan, implemented evidence, a control, and a review.
+export function derivePdcaStatus(p: PdcaBreakdown): "Met" | "Partial" | "Not met" {
+  if (p.plan.status !== "Adequate") return "Not met"; // Plan gates everything
+  if (p.do.status === "None") return "Not met"; // policy on paper, nothing deployed
+  if (p.do.status === "Implemented" && p.check.status === "Yes" && p.act.status === "Yes") return "Met";
+  return "Partial"; // implemented but missing a control and/or a review
+}
+
+// Renders a PDCA breakdown as a one-line, human-readable critique for the
+// auditor note (the "comment on whether the procedure is sustainable / too
+// generic" the user asked for lives in plan.note).
+export function pdcaReason(p: PdcaBreakdown): string {
+  return `Plan (policy): ${p.plan.status} — ${p.plan.note} | Do (implementation): ${p.do.status} — ${p.do.note} | Check (control): ${p.check.status}${p.check.note ? ` — ${p.check.note}` : ""} | Act (review): ${p.act.status}${p.act.note ? ` — ${p.act.note}` : ""}`;
+}
 
 const STOPWORDS = new Set(["which", "where", "their", "there", "every", "shall", "should", "these", "those", "about", "within"]);
 

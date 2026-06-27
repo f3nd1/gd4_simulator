@@ -7,7 +7,8 @@
 
 import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement } from "../../types";
 import { chatComplete, AIClientError } from "./aiClient";
-import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
+import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict, PdcaBreakdown } from "./simulateAI";
+import { derivePdcaStatus, pdcaReason } from "./simulateAI";
 
 export { AIClientError };
 
@@ -183,10 +184,10 @@ export async function runLiveEvidenceFill(
 // ONLY against the text actually provided, not invent or assume anything
 // about parts of the folder that weren't readable/exported.
 const STRICTNESS_CLAUSE: Record<string, string> = {
-  Lenient: " Calibration: give reasonable benefit of the doubt — if the documents broadly address the statement, lean towards Met or Partial.",
+  Lenient: " Calibration: give reasonable benefit of the doubt on each PDCA leg — if the documents broadly address it, lean towards the more favourable rating.",
   Standard: "",
   Strict:
-    " Calibration: be conservative and hard to satisfy. Mark a line Met ONLY when the documents EXPLICITLY and FULLY evidence it, including records that it is actually implemented and reviewed — a policy or intention alone is at most Partial. When in doubt, choose the lower status. Reserve Met for clearly and completely demonstrated requirements; a high band must be genuinely earned.",
+    " Calibration: be conservative and hard to satisfy on every PDCA leg. Rate plan.status \"Adequate\" ONLY when the procedure is genuinely specific, complete and sustainable; rate do.status \"Implemented\" ONLY when records explicitly show it happening; require an actual control for Check and an actual review for Act. When in doubt, choose the lower rating — a high band must be genuinely earned.",
 };
 
 export type FolderAuditOpts = {
@@ -207,32 +208,56 @@ export async function runLiveFolderAudit(
   opts: FolderAuditOpts = {}
 ): Promise<FolderAuditLineVerdict[]> {
   const strictness = opts.strictness || "Standard";
-  const base = `You are a GD4 internal audit evidence reviewer. You are given the actual text extracted from documents in an evidence folder (each chunk is headed by its file path and type), and a list of checklist statements that folder is meant to support. For each statement, judge it Met, Partial, or "Not met" using ONLY the document text given — never assume content that isn't there, and if the text doesn't mention something relevant, mark it "Not met" rather than guessing.${STRICTNESS_CLAUSE[strictness] || ""}`;
-  const sourcesRule = ` For every Met or Partial verdict you MUST cite the specific source file(s) (by their "--- path ---" heading) whose text supports it, in "sources"; if you cannot point to a source, the line is "Not met".`;
+  // PDCA-staged assessment: the model assesses Plan → Do → Check → Act in
+  // strict order. The overall Met/Partial/Not met is NOT decided by the model —
+  // it is derived in code by derivePdcaStatus (Plan hard-gates), the same way
+  // the score/band are never left to the model alone.
+  const base = `You are a GD4 internal auditor applying the PDCA cycle (Plan-Do-Check-Act). You are given the official GD4 requirement, the institution's documents split into a "=== POLICY & PROCEDURE ===" section and an "=== ACTUAL EVIDENCE ===" section (each chunk headed by its file path and type), and checklist statements. Assess each statement in this STRICT ORDER, using ONLY the text given and never assuming content that isn't there:
+1. PLAN — Read the POLICY & PROCEDURE text against the requirement WORD BY WORD. Decide plan.status: "Adequate" only if the procedure is specific, complete against the requirement, AND sustainable (it actually states who does what, when and how, and could be repeated year on year); "Generic" if it is vague, boilerplate, copy-paste, not specific to this institution, or not sustainable; "Missing" if no procedure addresses it. Be critical and ungenerous — comment in plan.note on exactly why it is or isn't sustainable / too generic.
+2. DO — Using ONLY the ACTUAL EVIDENCE text, decide do.status: "Implemented" if records show the procedure is actually carried out, "Partial" if only partly, "None" if there is no implementation evidence (a policy on paper is NOT implementation).
+3. CHECK — Is there a control that monitors the procedure is followed (checklist, audit, sign-off, monitoring record)? check.status "Yes"/"No".
+4. ACT — Is there a review that improves the procedure (management review, lessons learned, revision history)? act.status "Yes"/"No".
+For every non-empty claim cite the specific source file(s) (by their "--- path ---" heading) in "sources".${STRICTNESS_CLAUSE[strictness] || ""}`;
   const challengeRule = opts.challenge
-    ? ` This is a SECOND review pass. Earlier verdicts are given; re-examine each Met/Partial critically and DOWNGRADE any that is not fully, explicitly and verifiably evidenced (a policy with no implementation record is not "Met"). Keep "Not met" as is. Be stricter than the first pass.`
+    ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote plan.status from "Adequate" to "Generic" unless the procedure is genuinely specific and sustainable, and demote do.status unless implementation is explicitly evidenced.`
     : "";
-  const system = `${base}${sourcesRule}${challengeRule} Give a one-sentence reason per line citing what was or wasn't found. Respond with JSON only: {"lines": [{"lineId": string, "status": "Met" | "Partial" | "Not met", "reason": string, "sources": string[]}]}.`;
+  const system = `${base}${challengeRule} Respond with JSON only: {"lines": [{"lineId": string, "plan": {"status": "Adequate"|"Generic"|"Missing", "note": string}, "do": {"status": "Implemented"|"Partial"|"None", "note": string}, "check": {"status": "Yes"|"No", "note": string}, "act": {"status": "Yes"|"No", "note": string}, "sources": string[]}]}.`;
 
-  const standardBlock = opts.standard ? `The official GD4 requirement this folder must satisfy (judge against THIS standard, not just the line wording):\n"""\n${opts.standard.slice(0, 4000)}\n"""\n\n` : "";
-  const priorBlock = opts.challenge ? `Earlier (first-pass) verdicts to re-examine:\n${opts.challenge.map((c) => `[${c.lineId}] ${c.status}`).join("\n")}\n\n` : "";
-  const user = `${standardBlock}${priorBlock}Document text extracted from the folder (each chunk headed by file path + type; may be truncated):\n"""\n${docText.slice(0, 12000)}\n"""\n\nChecklist statements to assess:\n${lines
+  const standardBlock = opts.standard ? `The official GD4 requirement this folder must satisfy (judge the POLICY against THIS standard, word by word):\n"""\n${opts.standard.slice(0, 4000)}\n"""\n\n` : "";
+  const priorBlock = opts.challenge ? `Earlier (first-pass) overall verdicts to re-examine and toughen:\n${opts.challenge.map((c) => `[${c.lineId}] ${c.status}`).join("\n")}\n\n` : "";
+  const user = `${standardBlock}${priorBlock}Document text extracted from the folder (split into POLICY & PROCEDURE and ACTUAL EVIDENCE; each chunk headed by file path + type; may be truncated):\n"""\n${docText.slice(0, 12000)}\n"""\n\nChecklist statements to assess:\n${lines
     .map((l) => `[${l.id}] ${l.text}`)
     .join("\n")}`;
 
   const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
   const arr = parseJSONArray(content);
 
+  type RawLeg = { status?: unknown; note?: unknown };
+  type RawLine = { lineId: string; plan?: RawLeg; do?: RawLeg; check?: RawLeg; act?: RawLeg; sources?: unknown };
   const byId = new Map(
     arr
-      .filter((x): x is { lineId: string; status: string; reason?: string; sources?: unknown } => !!x && typeof x === "object" && typeof (x as { lineId?: unknown }).lineId === "string")
+      .filter((x): x is RawLine => !!x && typeof x === "object" && typeof (x as { lineId?: unknown }).lineId === "string")
       .map((x) => [x.lineId, x])
   );
 
+  // Coerce each leg into the typed PDCA shape, defaulting to the WORST value so
+  // a missing/garbled leg never accidentally credits the line.
+  const leg = <T extends string>(raw: RawLeg | undefined, allowed: readonly T[], fallback: T): { status: T; note: string } => {
+    const s = raw?.status;
+    return { status: (allowed as readonly string[]).includes(s as string) ? (s as T) : fallback, note: typeof raw?.note === "string" ? raw.note : "" };
+  };
+
   return lines.map((l) => {
     const v = byId.get(l.id);
-    const status = v?.status === "Met" || v?.status === "Partial" || v?.status === "Not met" ? v.status : "Not met";
+    const pdca: PdcaBreakdown = {
+      plan: leg(v?.plan, ["Adequate", "Generic", "Missing"] as const, "Missing"),
+      do: leg(v?.do, ["Implemented", "Partial", "None"] as const, "None"),
+      check: leg(v?.check, ["Yes", "No"] as const, "No"),
+      act: leg(v?.act, ["Yes", "No"] as const, "No"),
+    };
+    const status = derivePdcaStatus(pdca);
     const sources = Array.isArray(v?.sources) ? (v!.sources as unknown[]).filter((s): s is string => typeof s === "string") : undefined;
-    return { lineId: l.id, status, reason: v?.reason || "The model did not return a verdict for this line; treated as unmet pending re-run.", sources };
+    const reason = v ? pdcaReason(pdca) : "The model did not return a verdict for this line; treated as unmet pending re-run.";
+    return { lineId: l.id, status, reason, sources, pdca };
   });
 }

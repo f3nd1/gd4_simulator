@@ -1068,7 +1068,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const bandSummary = bandParts.length ? ` Resulting band: ${bandParts.join(", ")}.` : "";
 
         const methodNote = live
-          ? ` Judged against the GD4 standard${condensed ? `, ${condensed} long document${condensed === 1 ? "" : "s"} condensed to read the whole folder` : ""}${challenged ? ", with a strict second-pass challenge" : ""}.`
+          ? ` Judged PDCA-style against the GD4 standard — policy/procedure assessed first (Plan gates the result), then implementation evidence (Do), control (Check) and review (Act)${condensed ? `; ${condensed} long document${condensed === 1 ? "" : "s"} condensed to read the whole folder` : ""}${challenged ? "; with a strict second-pass challenge" : ""}.`
           : " (offline keyword estimate — AI not used).";
         const summary = `${fileSummary}${skipSummary}${failSummary} Set ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}: ${counts.Met} Met, ${counts.Partial} Partial, ${counts["Not met"]} Not met.${bandSummary}${methodNote}`;
         finish(summary, live, liveError);
