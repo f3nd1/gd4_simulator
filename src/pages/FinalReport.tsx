@@ -4,11 +4,13 @@ import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { buildFinalReport, type ItemReport } from "../lib/finalReport";
+import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { composeSchoolContext } from "../store/useWorkspaceStore";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
+import { Gauge, HBars, VBars, BAND_COLOR } from "../components/ui/charts";
 import { GOLD, INK, bandTone } from "../lib/theme";
 
 const SEV_TONE: Record<string, string> = { Critical: "critical", High: "critical", Medium: "medium", Low: "progress" };
@@ -17,12 +19,14 @@ export function FinalReport() {
   const scored = useScored();
   const entries = useChecklistModuleStore((s) => s.entries);
   const findings = useAllFindings();
+  const folders = useWorkspaceStore((s) => s.folders);
   const closures = useWorkspaceStore((s) => s.closures);
   const cycle = useWorkspaceStore((s) => s.cycle);
   const schoolContext = useWorkspaceStore((s) => s.schoolContext);
   const aiSettings = useAISettingsStore();
 
   const report = useMemo(() => buildFinalReport(scored, entries, findings, closures), [scored, entries, findings, closures]);
+  const a = useMemo(() => buildAnalytics(scored, entries, findings, folders, closures), [scored, entries, findings, folders, closures]);
 
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
@@ -99,6 +103,29 @@ export function FinalReport() {
           <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{aiSummary}</p>
         </Card>
       )}
+
+      <Card>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Visual summary</h3>
+        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", alignItems: "center" }}>
+          <div style={{ textAlign: "center" }}>
+            <Gauge value={a.total} max={1000} label="of 1000" color={GOLD} />
+            <div style={{ fontSize: 12, fontWeight: 700, color: INK }}>{a.award}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.3 }}>Items by band</div>
+            <VBars data={["Not started", "B1", "B2", "B3", "B4", "B5"].map((label, i) => ({ label, value: a.itemsByBand[i], color: BAND_COLOR[i] }))} height={120} />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.3 }}>Band by criterion</div>
+            <HBars data={a.bandByCriterion.map((c) => ({ label: `C${c.id}`, value: c.band, color: BAND_COLOR[c.band] }))} max={5} fmt={(v) => `B${v}`} />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.3 }}>Critical gates (need B3+)</div>
+            <HBars data={a.gates.map((g) => ({ label: g.id.replace("Sub-criterion ", "").replace("Criterion ", "C"), value: g.avgBand, color: g.pass ? "#2f9e6e" : "#c0392b" }))} max={5} fmt={(v) => `B${v}`} />
+            <div style={{ fontSize: 11.5, color: "#475569", marginTop: 6 }}>Findings: {a.findingsClosed} closed · {a.findingsOpen} open</div>
+          </div>
+        </div>
+      </Card>
 
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Banding by criterion</h3>
