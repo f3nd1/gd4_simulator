@@ -9,6 +9,21 @@ import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confi
 import { chatComplete, AIClientError } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
+import apsrRubricSkill from "../../data/skills/apsr-rubric.md?raw";
+import evidenceStandardsSkill from "../../data/skills/evidence-standards.md?raw";
+import findingWritingSkill from "../../data/skills/finding-writing.md?raw";
+import bandCalibrationSkill from "../../data/skills/band-calibration.md?raw";
+import sgPeiContextSkill from "../../data/skills/sg-pei-context.md?raw";
+
+// Injects one or more skill documents into the system prompt, capped so a
+// large skill file can't dominate the token budget. Skills are domain-expert
+// knowledge that condition the model's judgement without replacing the
+// per-call instructions.
+const SKILL_CAP = 3000;
+function skills(...docs: string[]): string {
+  const content = docs.map((d) => d.trim().slice(0, SKILL_CAP)).join("\n\n---\n\n");
+  return content ? `\n\n## Auditor knowledge base (apply this expertise to your assessment)\n\n${content}` : "";
+}
 
 export { AIClientError };
 
@@ -58,7 +73,7 @@ export async function runLiveItemReview(
   settings: AISettings,
   memory: AgentMemoryEntry[]
 ): Promise<Omit<SimulatedItemVerdict, "live"> & { live: true }> {
-  const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine (sourced from the Sub-Criterion Checklist outcome where one exists, otherwise from the evidence matrix below) and given to you here; you must not contradict it or imply a different one. Your tone must match that fixed band exactly: never use positive, encouraging or reassuring language when the band is low, when any evidence limb below is "Missing", or when the Drive evidence link is absent — in every such case you must name the gap plainly instead of softening it. A missing Drive evidence link is itself a real gap to call out even if the four evidence limbs look strong, because it means the human auditor cannot actually verify the evidence. Use your earlier-turn memory of other items you have reviewed to flag when the SAME gap recurs across items (e.g. a missing review/record pattern), so the auditor can fix it systemically. Write a short, specific justification (2-3 sentences) referencing only the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.`;
+  const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine (sourced from the Sub-Criterion Checklist outcome where one exists, otherwise from the evidence matrix below) and given to you here; you must not contradict it or imply a different one. Your tone must match that fixed band exactly: never use positive, encouraging or reassuring language when the band is low, when any evidence limb below is "Missing", or when the Drive evidence link is absent — in every such case you must name the gap plainly instead of softening it. A missing Drive evidence link is itself a real gap to call out even if the four evidence limbs look strong, because it means the human auditor cannot actually verify the evidence. Use your earlier-turn memory of other items you have reviewed to flag when the SAME gap recurs across items (e.g. a missing review/record pattern), so the auditor can fix it systemically. Write a short, specific justification (2-3 sentences) referencing only the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.${skills(bandCalibrationSkill, sgPeiContextSkill)}`;
   const user = `Item ${item.id}. Fixed evidence score: ${item.eff}/100, fixed band: ${item.band} (source: ${item.checklistOverride ? "Sub-Criterion Checklist outcome" : "evidence matrix quick rating"}). Evidence: approach=${ev.approach}, processes=${ev.processes}, systemsOutcomes=${ev.systemsOutcomes}, review=${ev.review}, traceability=${ev.trace}%, evidence age=${ev.age} days, owner=${ev.owner || "(unassigned)"}, Drive evidence link=${ev.drive ? ev.drive : "MISSING — no link has been provided"}.`;
 
   const content = await chatComplete(
@@ -112,7 +127,7 @@ function parseJSONArray(text: string): unknown[] {
 // item's Describe/Show points and Notes into atomic, testable checklist
 // statements for the Sub-Criterion Checklist module's "AI first pass".
 export async function runLiveChecklistGeneration(req: GD4Requirement, settings: AISettings): Promise<{ text: string; clause: string }[]> {
-  const system = `You are a GD4 internal audit checklist assistant. Decompose the given GD4 item's Describe/Show points and Notes into a JSON array of atomic, testable checklist statements an auditor can mark Met, Partial, Not met or Not Applicable against real evidence. Each statement must be specific and independently verifiable, and must cite the GD4 item id as its clause. Respond with JSON only: an array of objects {"text": string, "clause": string}, nothing else.`;
+  const system = `You are a GD4 internal audit checklist assistant. Decompose the given GD4 item's Describe/Show points and Notes into a JSON array of atomic, testable checklist statements an auditor can mark Met, Partial, Not met or Not Applicable against real evidence. Each statement must be specific and independently verifiable, and must cite the GD4 item id as its clause. Generate statements that test all four APSR dimensions — at least one line each for: (A) whether the documented approach/policy is specific and sustainable, (P) whether there are records proving implementation, (S) whether outcomes are measured and demonstrate the process works, and (R) whether the approach and processes are formally reviewed for improvement. Respond with JSON only: an array of objects {"text": string, "clause": string}, nothing else.${skills(apsrRubricSkill, sgPeiContextSkill)}`;
   const user = `GD4 item ${req.id} — ${req.requirement}\nDescribe/Show:\n${req.describeShow.map((d, i) => `${i + 1}. ${d}`).join("\n")}${
     req.notes.length ? `\nNotes:\n${req.notes.map((n, i) => `${i + 1}. ${n}`).join("\n")}` : ""
   }`;
@@ -171,7 +186,7 @@ export async function runLiveClosureDraft(
   settings: AISettings,
   context?: { standard?: string; apsr?: string }
 ): Promise<{ root: string; corr: string; prev: string }> {
-  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — distinguish an Approach gap (the documented policy/procedure is missing or too generic in the PPD) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — then a CORRECTIVE action that fixes this specific gap now, and a PREVENTIVE action that stops it recurring. Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.`;
+  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — distinguish an Approach gap (the documented policy/procedure is missing or too generic in the PPD) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — then a CORRECTIVE action that fixes this specific gap now, and a PREVENTIVE action that stops it recurring. Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.${skills(findingWritingSkill, sgPeiContextSkill)}`;
   const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}${context?.standard ? `\n\nOfficial GD4 requirement:\n${context.standard}` : ""}${context?.apsr ? `\n\nAPSR assessment of this line:\n${context.apsr}` : ""}`;
   // Higher temperature for drafting (natural, varied narrative) vs deterministic verdicts.
   const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.7 });
@@ -268,7 +283,7 @@ export async function runLiveFolderAudit(
 2. PROCESSES (actual implementation of those policies and procedures). Using ONLY the ACTUAL EVIDENCE text, processes.status: "Deployed" if records show it implemented and managed, "Weak" if deployment is weak/partial, "Not evident" if there is no implementation evidence (a documented approach on paper is NOT implementation).
 3. SYSTEMS & OUTCOMES (the desired outcomes derived from that implementation). systemsOutcomes.status: "Evident" if the desired outcomes/results are actually produced, "Limited" if outcomes are limited, "Not evident" if none.
 4. REVIEW (evaluation of the appropriateness, relevance and effectiveness of the approach and process for continual improvement). review.status: "Evident" if there is a real review with improvement action, "Not evident" otherwise.
-For every non-empty claim cite the specific source file(s) (by their "--- path ---" heading) in "sources".${STRICTNESS_CLAUSE[strictness] || ""}`;
+For every non-empty claim cite the specific source file(s) (by their "--- path ---" heading) in "sources".${STRICTNESS_CLAUSE[strictness] || ""}${skills(apsrRubricSkill, evidenceStandardsSkill, sgPeiContextSkill)}`;
   const challengeRule = opts.challenge
     ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote approach.status from "Meeting" to "Beginning" unless the documented approach is genuinely specific and sustainable, and demote processes.status unless implementation is explicitly evidenced.`
     : "";
