@@ -116,6 +116,15 @@ function makeRunId(subCriterionId: string): string {
   return `AR-${subCriterionId}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
 }
 
+// Maps an auditor's 20–95 strictness slider onto the three audit calibration
+// levels the AI prompt understands, so the auditor's own setting (not a global
+// one) controls how hard their audits judge.
+function strictnessFromScore(n: number): "Lenient" | "Standard" | "Strict" {
+  if (n >= 78) return "Strict";
+  if (n <= 45) return "Lenient";
+  return "Standard";
+}
+
 export type ClosureState = {
   root?: string;
   corr?: string;
@@ -334,6 +343,13 @@ export type WorkspaceState = {
   // Immutable audit trail of every version restore. Entries are appended
   // whenever restoreVersion() is called; never deleted from the store.
   restoreLog: { restoredAt: string; fromVersion: string; fromNote: string }[];
+
+  // The auditor a folder audit is run "on behalf of": the AI does the reading,
+  // but a named human auditor owns the result and their strictness drives how
+  // hard the AI judges. null → fall back to the Audit Lead, then the first
+  // auditor, then the global AI strictness setting.
+  activeAuditorId: string | null;
+  setActiveAuditor: (id: string | null) => void;
 };
 
 // ---- Audit Journal helpers -----------------------------------------------
@@ -472,6 +488,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       evidenceAuditReport: null,
       auditJournal: "",
       restoreLog: [],
+      activeAuditorId: null,
+
+      setActiveAuditor: (id) => set({ activeAuditorId: id }),
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
@@ -932,6 +951,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // journal entry — so any verdict can be traced back to its source run.
         const runId = makeRunId(folder.subCriterionId);
 
+        // The auditor this run is on behalf of: the chosen "active" auditor,
+        // else the Audit Lead, else the first auditor. Their strictness drives
+        // the AI; their name is stamped on the result so it's attributed to a
+        // person, not just "AI".
+        const actingAuditor =
+          s.auditors.find((a) => a.id === get().activeAuditorId) ||
+          s.auditors.find((a) => a.role === "Audit Lead") ||
+          s.auditors[0];
+        const auditorName = actingAuditor?.name || "Unassigned (no auditor set up)";
+        const auditorStrictness = actingAuditor ? strictnessFromScore(actingAuditor.strictness) : undefined;
+        const auditorLabel = actingAuditor ? `${auditorName} (strictness: ${auditorStrictness})` : auditorName;
+
         const finish = (summary: string, live: boolean, liveError?: string) => {
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
@@ -950,7 +981,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             runId,
           };
           set((st) => ({
-            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId } : f)),
+            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel } : f)),
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
           }));
@@ -1191,7 +1222,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           .map((it) => `GD4 ${it.id} — ${it.requirement}\nIntent: ${it.intent}\nDescribe/Show:\n${it.describeShow.map((d) => `- ${d}`).join("\n")}${it.notes.length ? `\nNotes:\n${it.notes.map((n) => `- ${n}`).join("\n")}` : ""}\nExpected evidence: ${it.expectedEvidence.join("; ")}`)
           .join("\n\n");
 
-        const strictness = useScoringConfigStore.getState().aiStrictness;
+        // The acting auditor's own strictness drives the audit; only when no
+        // auditor exists do we fall back to the global AI strictness setting.
+        const strictness = auditorStrictness || useScoringConfigStore.getState().aiStrictness;
         let verdicts: ReturnType<typeof simulateFolderAudit>;
         let live = false;
         let liveError: string | undefined;
@@ -1247,7 +1280,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // about whether real evidence was actually submitted.
             const baseNote = v.apsr ? apsrAuditNote(v.apsr) : v.reason;
             const sourceSuffix = v.sources && v.sources.length ? ` (source: ${v.sources.join("; ")})` : "";
-            const provenance = ` — auto-filled by AI audit ${runId} (${live ? "Evidence Intake Assistant, live" : "offline keyword estimate"}); review before relying on it.`;
+            const provenance = ` — auto-filled by AI audit ${runId} on behalf of ${auditorName} (${live ? "Evidence Intake Assistant, live" : "offline keyword estimate"}); ${auditorName === "Unassigned (no auditor set up)" ? "set up an auditor and " : ""}review before relying on it.`;
             checklist.addEvidence(itemId, v.lineId, {
               title: `Drive audit ${runId} — ${folder.folderName}`,
               type: evidenceTypeFromApsr(v.apsr, lineTextById.get(v.lineId) || ""),
@@ -1328,7 +1361,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const lineParts: string[] = [];
         // 1. Headline — the verdict, first. Run id leads so it can be matched to
         // the AI Review Log, the checklist evidence, and the journal entry.
-        lineParts.push(`Run ${runId}.`);
+        lineParts.push(`Run ${runId} · Auditor: ${auditorLabel}.`);
         lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}).`);
         if (bandParts.length) lineParts.push(`Band: ${bandParts.join(", ")}.`);
         if (autoRaised > 0) lineParts.push(`Raised ${autoRaised} new finding${autoRaised === 1 ? "" : "s"} from the gaps — see the Findings register.${live ? " AI agents are drafting finding bodies and closure actions in the background." : ""}`);

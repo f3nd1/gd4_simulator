@@ -21,7 +21,16 @@ export function EvidenceFolder() {
   const additionalInfo = useWorkspaceStore((s) => s.additionalInfo);
   const setAdditionalInfoLink = useWorkspaceStore((s) => s.setAdditionalInfoLink);
   const checkAdditionalInfoAccess = useWorkspaceStore((s) => s.checkAdditionalInfoAccess);
+  const auditors = useWorkspaceStore((s) => s.auditors);
+  const activeAuditorId = useWorkspaceStore((s) => s.activeAuditorId);
+  const setActiveAuditor = useWorkspaceStore((s) => s.setActiveAuditor);
   const [checkingAdditional, setCheckingAdditional] = useState(false);
+
+  // The auditor a "Run audit" is performed on behalf of: explicit choice, else
+  // the Audit Lead, else the first auditor. Mirrors the store's resolution so
+  // the dropdown shows who will actually own the next run.
+  const effectiveAuditor =
+    auditors.find((a) => a.id === activeAuditorId) || auditors.find((a) => a.role === "Audit Lead") || auditors[0];
 
   // Deep link from the Dashboard recheck report (/evidence-folder?sub=1.1):
   // scroll the matching folder row into view and briefly highlight it so the
@@ -150,6 +159,32 @@ export function EvidenceFolder() {
         <span style={{ fontSize: 11.5, color: "#94a3b8", marginLeft: "auto" }}>
           Showing {visibleFolders.length} of {folders.length}
         </span>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10, padding: "8px 10px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+        <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>Run audit as</span>
+        {auditors.length === 0 ? (
+          <span style={{ fontSize: 12, color: "#b23121" }}>
+            No auditors yet — add one on <Link to="/auditors" style={{ color: "#2563eb" }}>Auditor Creation</Link> so audits are attributed to a person.
+          </span>
+        ) : (
+          <>
+            <select
+              value={activeAuditorId || effectiveAuditor?.id || ""}
+              onChange={(e) => setActiveAuditor(e.target.value || null)}
+              style={{ ...inputStyle, width: 230, padding: "5px 6px" }}
+            >
+              {auditors.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} — {a.role} (strictness {a.strictness})
+                </option>
+              ))}
+            </select>
+            <span style={{ fontSize: 11.5, color: "#94a3b8" }}>
+              The named auditor owns the result; their strictness drives how hard the AI judges.
+            </span>
+          </>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 4, marginBottom: 0, borderBottom: "2px solid #e2e8f0" }}>
@@ -283,6 +318,9 @@ export function EvidenceFolder() {
                         <Pill s={f.lastAuditLive ? "progress" : "medium"}>{f.lastAuditLive ? "AI" : "Offline estimate"}</Pill>
                         {f.lastAuditRunId && (
                           <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#64748b", background: "#fff", border: "1px solid #d1d5db", borderRadius: 5, padding: "1px 5px" }} title="Audit run id — also stamped on the checklist evidence, the AI Review Log row and the journal entry from this run.">{f.lastAuditRunId}</span>
+                        )}
+                        {f.lastAuditAuditor && (
+                          <span style={{ fontSize: 11, color: "#475569" }} title="The auditor this run was performed on behalf of.">by {f.lastAuditAuditor}</span>
                         )}
                         {f.lastAuditLive === false && f.lastAuditError && (
                           <span style={{ color: "#9a6b15", fontSize: 11 }} title={f.lastAuditError}>AI unavailable — used keyword fallback</span>

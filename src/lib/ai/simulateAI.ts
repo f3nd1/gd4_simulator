@@ -236,7 +236,20 @@ export function apsrReason(p: ApsrBreakdown): string {
 // its own is NOT evidence), so the note never reads as if a policy proved
 // implementation.
 export function apsrAuditNote(p: ApsrBreakdown): string {
-  const parts: string[] = [];
+  // Lead with the overall verdict and the ONE binding reason, so the note and
+  // the line's status dropdown visibly agree (e.g. "policy is fine, but no
+  // evidence" makes a "Not met" status make sense at a glance).
+  const status = deriveApsrStatus(p);
+  let why: string;
+  if (p.approach.status !== "Meeting")
+    why = "the documented approach itself is incomplete or too generic — Approach gates the whole line";
+  else if (p.processes.status === "Not evident")
+    why = "the policy is adequate, but no implementation evidence was submitted to prove it is actually done";
+  else if (status === "Met")
+    why = "policy, implementation, outcomes and review are all evidenced";
+  else
+    why = "it is implemented, but the outcomes and/or a review for continual improvement are not yet evidenced";
+  const parts: string[] = [`VERDICT: ${status} — ${why}.`];
 
   // POLICY (Approach)
   if (p.approach.status === "Meeting")

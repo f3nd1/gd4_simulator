@@ -367,6 +367,10 @@ export type EvidenceFolder = {
   // the AI Review Log row and the audit journal entry — so one verdict can be
   // traced end-to-end.
   lastAuditRunId?: string;
+  // The responsible auditor the last audit was run on behalf of (name +
+  // derived strictness label), so the result is attributed to a person, not
+  // just "AI".
+  lastAuditAuditor?: string;
 };
 
 export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation" | "Finding" | "CrossCriterion";
