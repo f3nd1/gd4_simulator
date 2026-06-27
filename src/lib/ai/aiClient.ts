@@ -14,12 +14,15 @@ export type AIChatMessage = { role: "system" | "user" | "assistant"; content: st
 export type AIUsage = { model: string; promptTokens: number; completionTokens: number; totalTokens: number };
 
 // Adds two usage records (for functions that make more than one API call, e.g.
-// the folder audit's challenge pass). Keeps the model of the most recent call.
+// the folder audit's challenge pass, or a verdict call plus its image/condense
+// helper calls). Keeps the FIRST/primary call's model — the primary call is
+// always accumulated first — so a row reports the model that did the main
+// analysis, not whichever helper happened to run last on the utility model.
 export function addUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage | undefined {
   if (!a) return b;
   if (!b) return a;
   return {
-    model: b.model || a.model,
+    model: a.model || b.model,
     promptTokens: a.promptTokens + b.promptTokens,
     completionTokens: a.completionTokens + b.completionTokens,
     totalTokens: a.totalTokens + b.totalTokens,
