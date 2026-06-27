@@ -1,9 +1,11 @@
-import { Fragment, useEffect, useRef } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import type { FolderStatus } from "../types";
+
+const SUMMARY_CAP = 180; // chars shown before the audit summary collapses
 
 const STATUSES: FolderStatus[] = ["Good", "In Progress", "Partial", "Missing"];
 const ACCESS_TONE = { Connected: "good", Error: "critical", "Not Connected": "medium" } as const;
@@ -35,6 +37,22 @@ export function EvidenceFolder() {
     return () => clearTimeout(t);
   }, [focusSub, folders]);
 
+  // Filter by criterion (e.g. "1") and/or sub-criterion (e.g. "1.2"), derived
+  // from the folders themselves so the options always match what's present.
+  const [critFilter, setCritFilter] = useState("");
+  const [subFilter, setSubFilter] = useState("");
+  const criteria = useMemo(() => [...new Set(folders.map((f) => f.subCriterionId.split(".")[0]))].sort((a, b) => Number(a) - Number(b)), [folders]);
+  const subCriteria = useMemo(
+    () => folders.filter((f) => !critFilter || f.subCriterionId.split(".")[0] === critFilter).map((f) => ({ id: f.subCriterionId, name: f.folderName })),
+    [folders, critFilter]
+  );
+  const visibleFolders = folders.filter(
+    (f) => (!critFilter || f.subCriterionId.split(".")[0] === critFilter) && (!subFilter || f.subCriterionId === subFilter)
+  );
+
+  // Per-row "show full audit summary" toggles (summaries can be long).
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
   return (
     <Card>
       <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence folder index</h3>
@@ -45,12 +63,37 @@ export function EvidenceFolder() {
         sets each line's status, and updates the band/score — shown in the result line below. To audit every linked folder at once, use
         "Audit all folders → score" on the Dashboard. Both require connecting Google Drive in Settings first.
       </p>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+        <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>Filter</span>
+        <select
+          value={critFilter}
+          onChange={(e) => { setCritFilter(e.target.value); setSubFilter(""); }}
+          style={{ ...inputStyle, width: 150, padding: "5px 6px" }}
+        >
+          <option value="">All criteria</option>
+          {criteria.map((c) => <option key={c} value={c}>Criterion {c}</option>)}
+        </select>
+        <select value={subFilter} onChange={(e) => setSubFilter(e.target.value)} style={{ ...inputStyle, width: 230, padding: "5px 6px" }}>
+          <option value="">All sub-criteria</option>
+          {subCriteria.map((s) => <option key={s.id} value={s.id}>{s.id} {s.name}</option>)}
+        </select>
+        {(critFilter || subFilter) && (
+          <button onClick={() => { setCritFilter(""); setSubFilter(""); }} style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "5px 9px" }}>
+            Clear
+          </button>
+        )}
+        <span style={{ fontSize: 11.5, color: "#94a3b8", marginLeft: "auto" }}>
+          Showing {visibleFolders.length} of {folders.length}
+        </span>
+      </div>
+
       <table>
         <thead>
           <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>Link</th><th>Last checked</th><th>Action</th></tr>
         </thead>
         <tbody>
-          {folders.map((f) => (
+          {visibleFolders.map((f) => (
             <Fragment key={f.id}>
               <tr className="rowh" ref={(el) => { rowRefs.current[f.subCriterionId] = el; }}>
                 <td><b>{f.folderName}</b></td>
@@ -120,7 +163,18 @@ export function EvidenceFolder() {
               {f.lastAuditSummary && (
                 <tr>
                   <td colSpan={6} style={{ background: "#f0fdf4", fontSize: 12, padding: "6px 10px" }}>
-                    <Pill s="good">Audit</Pill> {f.lastAuditSummary}{" "}
+                    <Pill s="good">Audit</Pill>{" "}
+                    {f.lastAuditSummary.length > SUMMARY_CAP && !expanded[f.id]
+                      ? `${f.lastAuditSummary.slice(0, SUMMARY_CAP)}… `
+                      : `${f.lastAuditSummary} `}
+                    {f.lastAuditSummary.length > SUMMARY_CAP && (
+                      <button
+                        onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))}
+                        style={{ cursor: "pointer", border: "none", background: "transparent", color: "#2563eb", fontSize: 11.5, padding: 0, textDecoration: "underline" }}
+                      >
+                        {expanded[f.id] ? "Show less" : "Show full result"}
+                      </button>
+                    )}{" "}
                     <span style={{ color: "#94a3b8" }}>— audited {f.lastAuditAt && new Date(f.lastAuditAt).toLocaleString()}</span>
                   </td>
                 </tr>

@@ -7,20 +7,20 @@
 // (never persisted), is requested directly from the browser, and there is
 // no backend proxy.
 
-// The /legacy build is Babel-transpiled for older/Safari engines — the
-// default build uses modern JS (async ReadableStream iteration, etc.) that
-// WebKit chokes on with "undefined is not a function (near ...readableStream)".
-// Pair it with the matching legacy worker. The ?url suffix makes Vite emit
-// the worker as an asset and hand back its served URL (works in both
-// `vite dev` and a production build); the older `new URL(..., import.meta.url)`
-// form silently failed for this node_modules file under dev, so pdfjs fell
-// back to an in-thread fake worker — which both blocked the main thread and
-// threw, leaving every PDF "unsupported".
+// pdfCompat MUST load before pdfjs: it polyfills the ReadableStream async
+// iterator / Promise.withResolvers that pdfjs v6 needs and Safari lacks.
+import "./pdfCompat";
+// The /legacy build is Babel-transpiled for older engines. We drive it
+// through our OWN worker wrapper (pdfWorker.ts, loaded as a Vite ?worker)
+// rather than pointing workerSrc at the raw pdfjs worker file — the wrapper
+// installs the same polyfills inside the worker's separate global scope,
+// which is where the PDF parsing (and the ReadableStream use that throws on
+// Safari) actually runs. A plain workerSrc URL can't inject that.
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
-import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
+import PdfjsWorker from "./pdfWorker?worker";
 import mammoth from "mammoth";
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+pdfjsLib.GlobalWorkerOptions.workerPort = new PdfjsWorker();
 
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const GSI_SRC = "https://accounts.google.com/gsi/client";
@@ -192,14 +192,21 @@ const GOOGLE_EXPORT_MIME: Record<string, string> = {
 // formats) — read the raw bytes via alt=media instead and extract text
 // client-side, consistent with this app having no backend to do it for us.
 async function extractPdfText(bytes: ArrayBuffer): Promise<string> {
-  const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
-  const pages: string[] = [];
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    pages.push(content.items.map((item) => ("str" in item ? item.str : "")).join(" "));
+  const loadingTask = pdfjsLib.getDocument({ data: bytes });
+  const pdf = await loadingTask.promise;
+  try {
+    const pages: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      pages.push(content.items.map((item) => ("str" in item ? item.str : "")).join(" "));
+    }
+    return pages.join("\n\n");
+  } finally {
+    // Free the document in the (shared) worker — without this, auditing a
+    // folder of dozens of PDFs would pile them all up in worker memory.
+    await loadingTask.destroy();
   }
-  return pages.join("\n\n");
 }
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";

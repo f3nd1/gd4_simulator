@@ -779,13 +779,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const counts = { Met: 0, Partial: 0, "Not met": 0 } as Record<string, number>;
         for (const v of verdicts) counts[v.status]++;
+        // Cap the file lists so a folder of dozens of files can't produce a
+        // multi-thousand-character summary that floods the row and the AI log.
+        const NAME_CAP = 6;
+        const briefList = (names: string[]) => {
+          const shown = names.slice(0, NAME_CAP).join(", ");
+          return names.length > NAME_CAP ? `${shown}, +${names.length - NAME_CAP} more` : shown;
+        };
         const fileSummary = scanned.length
-          ? `Scanned ${scanned.length} file${scanned.length === 1 ? "" : "s"} (${scanned.join(", ")}).`
+          ? `Scanned ${scanned.length} file${scanned.length === 1 ? "" : "s"} (${briefList(scanned)}).`
           : "No readable files were found in this folder.";
-        const skipSummary = skipped.length ? ` Skipped ${skipped.length} unsupported file${skipped.length === 1 ? "" : "s"} (${skipped.join(", ")}).` : "";
-        const failSummary = failed.length
-          ? ` Could not read ${failed.length} file${failed.length === 1 ? "" : "s"}: ${failed.map((f) => `${f.path} (${f.reason})`).join("; ")}.`
-          : "";
+        const skipSummary = skipped.length ? ` Skipped ${skipped.length} unsupported file${skipped.length === 1 ? "" : "s"} (${briefList(skipped)}).` : "";
+        // Collapse identical failure reasons (e.g. every PDF hitting the same
+        // worker error) to one line instead of repeating it per file.
+        const failSummary = (() => {
+          if (!failed.length) return "";
+          const reasons = [...new Set(failed.map((f) => f.reason))];
+          const reasonText = reasons.length === 1 ? reasons[0] : `${reasons.length} distinct errors, e.g. ${reasons[0]}`;
+          return ` Could not read ${failed.length} file${failed.length === 1 ? "" : "s"} (${reasonText}): ${briefList(failed.map((f) => f.path))}.`;
+        })();
 
         // Resulting band per item, shown right here so the score is visible at
         // the point of audit instead of only on the Scorecard — this is the
