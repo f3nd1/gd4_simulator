@@ -6,7 +6,7 @@
 // official GD4 scoring engine never depends on a live AI call.
 
 import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown } from "../../types";
-import { chatComplete, AIClientError } from "./aiClient";
+import { chatComplete, AIClientError, addUsage, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
 import apsrRubricSkill from "../../data/skills/apsr-rubric.md?raw";
@@ -76,13 +76,15 @@ export async function runLiveItemReview(
   ev: ItemEvidence,
   settings: AISettings,
   memory: AgentMemoryEntry[]
-): Promise<Omit<SimulatedItemVerdict, "live"> & { live: true }> {
+): Promise<Omit<SimulatedItemVerdict, "live"> & { live: true; usage?: AIUsage }> {
   const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine (sourced from the Sub-Criterion Checklist outcome where one exists, otherwise from the evidence matrix below) and given to you here; you must not contradict it or imply a different one. Your tone must match that fixed band exactly: never use positive, encouraging or reassuring language when the band is low, when any evidence limb below is "Missing", or when the Drive evidence link is absent — in every such case you must name the gap plainly instead of softening it. A missing Drive evidence link is itself a real gap to call out even if the four evidence limbs look strong, because it means the human auditor cannot actually verify the evidence. Use your earlier-turn memory of other items you have reviewed to flag when the SAME gap recurs across items (e.g. a missing review/record pattern), so the auditor can fix it systemically. Write a short, specific justification (2-3 sentences) referencing only the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.${skills(bandCalibrationSkill, sgPeiContextSkill, consultantInsightsSkill)}`;
   const user = `Item ${item.id}. Fixed evidence score: ${item.eff}/100, fixed band: ${item.band} (source: ${item.checklistOverride ? "Sub-Criterion Checklist outcome" : "evidence matrix quick rating"}). Evidence: approach=${ev.approach}, processes=${ev.processes}, systemsOutcomes=${ev.systemsOutcomes}, review=${ev.review}, traceability=${ev.trace}%, evidence age=${ev.age} days, owner=${ev.owner || "(unassigned)"}, Drive evidence link=${ev.drive ? ev.drive : "MISSING — no link has been provided"}.`;
 
+  let usage: AIUsage | undefined;
   const content = await chatComplete(
     [{ role: "system", content: system }, ...memoryToMessages(memory), { role: "user", content: user }],
-    settings
+    settings,
+    { onUsage: (u) => { usage = u; } }
   );
   const parsed = parseJSONObject(content, ["justification", "higherBand", "confidence"]);
 
@@ -94,6 +96,7 @@ export async function runLiveItemReview(
     higherBand: (parsed.higherBand as string) || "Add or strengthen the weakest evidence limb and re-run this review.",
     by: agent.name,
     live: true,
+    usage,
   };
 }
 
@@ -149,13 +152,15 @@ export async function runLiveClosureReview(
   closure: { root?: string; corr?: string; prev?: string; evid?: string },
   settings: AISettings,
   memory: AgentMemoryEntry[]
-): Promise<Omit<SimulatedClosureVerdict, "live"> & { live: true }> {
+): Promise<Omit<SimulatedClosureVerdict, "live"> & { live: true; usage?: AIUsage }> {
   const system = `You are the Closure Reviewer Agent for an EduTrust GD4 internal audit. Assess whether a corrective/preventive action closure is Acceptable, Partial, should Maintain Finding, or should Escalate, using only the narrative given — never assume evidence that wasn't described, and never let well-written narrative substitute for missing evidence. If no closure evidence link is provided, you must return "Maintain Finding" regardless of how complete or convincing the narrative sounds. Respond with JSON only: {"verdict": "Acceptable" | "Partial" | "Maintain Finding" | "Escalate", "reason": string, "evidenceNeeded": string}.`;
   const user = `Root cause: ${closure.root || "(none provided)"}\nCorrective action: ${closure.corr || "(none provided)"}\nPreventive action: ${closure.prev || "(none provided)"}\nClosure evidence link: ${closure.evid || "(none provided — no evidence is linked)"}`;
 
+  let usage: AIUsage | undefined;
   const content = await chatComplete(
     [{ role: "system", content: system }, ...memoryToMessages(memory), { role: "user", content: user }],
-    settings
+    settings,
+    { onUsage: (u) => { usage = u; } }
   );
   const parsed = parseJSONObject(content);
 
@@ -169,6 +174,7 @@ export async function runLiveClosureReview(
       reason: "No closure evidence linked, so the finding stands regardless of the narrative.",
       evidenceNeeded: (parsed.evidenceNeeded as string) || "Link the evidence that supports this closure.",
       live: true,
+      usage,
     };
   }
 
@@ -177,6 +183,7 @@ export async function runLiveClosureReview(
     reason: (parsed.reason as string) || content,
     evidenceNeeded: (parsed.evidenceNeeded as string) || "Specify the evidence still needed.",
     live: true,
+    usage,
   };
 }
 
@@ -268,6 +275,8 @@ export type FolderAuditResult = {
   // AI-detected file mis-filing warnings (e.g. a record found in the Policy
   // folder, or a pure policy doc found in the Evidence folder).
   folderWarnings: string[];
+  // Model + token usage for this audit (undefined offline).
+  usage?: AIUsage;
 };
 
 export async function runLiveFolderAudit(
@@ -309,7 +318,8 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
     .map((l) => `[${l.id}] ${l.text}`)
     .join("\n")}`;
 
-  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
+  let usage: AIUsage | undefined;
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { onUsage: (u) => { usage = addUsage(usage, u); } });
   const arr = parseJSONArray(content);
   // Extract optional folderWarnings from the same response object (backward
   // compatible — older/simpler model responses that return a plain array won't
@@ -352,7 +362,7 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
     return { lineId: l.id, status, reason, sources, apsr };
   });
 
-  return { verdicts, parseWarnings, truncationNote, folderWarnings };
+  return { verdicts, parseWarnings, truncationNote, folderWarnings, usage };
 }
 
 // Cross-criterion strategic analysis: synthesises criterion bands, open

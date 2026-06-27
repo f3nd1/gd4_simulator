@@ -395,6 +395,13 @@ export type AIReviewLogEntry = {
   // Short audit-run id shared with the folder result, checklist evidence and
   // journal entry from the same run, so a log row can be traced back to source.
   runId?: string;
+  // Model + token usage for live runs (undefined for offline/simulated runs),
+  // so the AI Review Log can show which model ran, how many tokens it used, and
+  // a rough cost estimate.
+  model?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 };
 
 export type ManagementReviewItem = {

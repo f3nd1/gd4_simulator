@@ -36,7 +36,7 @@ import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError } from "../lib/drive/driveClient";
-import { describeImage, summariseText, effectiveSettings } from "../lib/ai/aiClient";
+import { describeImage, summariseText, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 
@@ -762,6 +762,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           liveError,
           generatedContent: verdict.justification,
           createdAt: new Date().toISOString(),
+          model: (verdict as { usage?: AIUsage }).usage?.model,
+          promptTokens: (verdict as { usage?: AIUsage }).usage?.promptTokens,
+          completionTokens: (verdict as { usage?: AIUsage }).usage?.completionTokens,
+          totalTokens: (verdict as { usage?: AIUsage }).usage?.totalTokens,
         };
         set({ itemReviews: { ...s.itemReviews, [itemId]: verdict }, aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200), busy: null });
       },
@@ -818,6 +822,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           liveError,
           generatedContent: verdict.reason,
           createdAt: new Date().toISOString(),
+          model: (verdict as { usage?: AIUsage }).usage?.model,
+          promptTokens: (verdict as { usage?: AIUsage }).usage?.promptTokens,
+          completionTokens: (verdict as { usage?: AIUsage }).usage?.completionTokens,
+          totalTokens: (verdict as { usage?: AIUsage }).usage?.totalTokens,
         };
         set({
           closures: { ...s.closures, [afiId]: { ...c, ai: verdict.verdict, aiReason: verdict.reason, aiNeed: verdict.evidenceNeeded, live: verdict.live } },
@@ -963,7 +971,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const auditorStrictness = actingAuditor ? strictnessFromScore(actingAuditor.strictness) : undefined;
         const auditorLabel = actingAuditor ? `${auditorName} (strictness: ${auditorStrictness})` : auditorName;
 
-        const finish = (summary: string, live: boolean, liveError?: string) => {
+        const finish = (summary: string, live: boolean, liveError?: string, usage?: AIUsage) => {
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
             auditCycleId: s.cycle.id,
@@ -979,6 +987,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             generatedContent: summary,
             createdAt: new Date().toISOString(),
             runId,
+            model: usage?.model,
+            promptTokens: usage?.promptTokens,
+            completionTokens: usage?.completionTokens,
+            totalTokens: usage?.totalTokens,
           };
           set((st) => ({
             folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel } : f)),
@@ -1232,6 +1244,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let truncationNote: string | undefined;
         let parseWarnings: string[] = [];
         let folderWarnings: string[] = [];
+        let auditUsage: AIUsage | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             const result = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard });
@@ -1239,6 +1252,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             truncationNote = result.truncationNote;
             parseWarnings = result.parseWarnings;
             folderWarnings = result.folderWarnings;
+            auditUsage = result.usage;
             // Strict mode runs a second "challenge" pass that re-examines every
             // Met/Partial and downgrades any not fully and explicitly evidenced.
             if (strictness === "Strict") {
@@ -1249,6 +1263,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   verdicts = r2.verdicts;
                   parseWarnings = [...parseWarnings, ...r2.parseWarnings];
                   folderWarnings = [...new Set([...folderWarnings, ...r2.folderWarnings])];
+                  auditUsage = addUsage(auditUsage, r2.usage);
                   challenged = true;
                 } catch {
                   // keep first-pass verdicts if the challenge call fails
@@ -1389,7 +1404,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (folderWarnings.length > 0) lineParts.push(`⚠ Possible mis-filed documents (${folderWarnings.length}): ${folderWarnings.join(" | ")}`);
         for (const w of setupWarnings) lineParts.push(`⚠ ${w}`);
         const summary = lineParts.join("\n");
-        finish(summary, live, liveError);
+        finish(summary, live, liveError, auditUsage);
 
         // Post-audit multi-agent pipeline — fires asynchronously so the audit
         // result appears immediately and the finding enrichment arrives seconds

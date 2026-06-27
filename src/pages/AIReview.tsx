@@ -1,10 +1,48 @@
 import { Fragment, useMemo, useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import type { AIReviewLogEntry } from "../types";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 
 function verdictTone(v: string) {
   return v === "Acceptable" ? "good" : v === "Partial" || v === "At risk" ? "medium" : v === "Pass" ? "good" : "critical";
+}
+
+// Rough USD price per 1,000,000 tokens (input / output), matched by model-name
+// prefix. These are ESTIMATES for a ballpark spend figure — adjust here if
+// OpenAI's pricing changes. Order matters: more specific patterns first.
+const PRICING: { match: RegExp; in: number; out: number }[] = [
+  { match: /gpt-5-nano/, in: 0.05, out: 0.4 },
+  { match: /gpt-5-mini/, in: 0.25, out: 2 },
+  { match: /gpt-5/, in: 1.25, out: 10 },
+  { match: /gpt-4o-mini/, in: 0.15, out: 0.6 },
+  { match: /gpt-4o/, in: 2.5, out: 10 },
+  { match: /gpt-4\.1-nano/, in: 0.1, out: 0.4 },
+  { match: /gpt-4\.1-mini/, in: 0.4, out: 1.6 },
+  { match: /gpt-4\.1/, in: 2, out: 8 },
+  { match: /gpt-4-turbo/, in: 10, out: 30 },
+];
+const DEFAULT_RATE = { in: 0.5, out: 1.5 };
+
+function rateFor(model?: string) {
+  if (!model) return DEFAULT_RATE;
+  return PRICING.find((p) => p.match.test(model)) ?? DEFAULT_RATE;
+}
+
+// Estimated USD cost of one logged run from its token counts.
+function costOf(e: AIReviewLogEntry): number {
+  const r = rateFor(e.model);
+  const pt = e.promptTokens || 0;
+  const ct = e.completionTokens || 0;
+  // If only a total is known, assume a typical ~75% prompt / 25% completion split.
+  if (!pt && !ct && e.totalTokens) return (e.totalTokens * 0.75 * r.in + e.totalTokens * 0.25 * r.out) / 1e6;
+  return (pt * r.in + ct * r.out) / 1e6;
+}
+
+function fmtUSD(n: number): string {
+  if (n === 0) return "$0.00";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  return `$${n.toFixed(2)}`;
 }
 
 export function AIReview() {
@@ -19,7 +57,25 @@ export function AIReview() {
     log.forEach((e) => {
       byAgent[e.agent] = (byAgent[e.agent] || 0) + 1;
     });
-    return { total, live, simulated: total - live, failed, byAgent };
+    // Token + cost roll-up across every run that reported usage. byModel keeps a
+    // per-model breakdown so the calculator shows which model drove the spend.
+    let totalTokens = 0;
+    let totalCost = 0;
+    let trackedRuns = 0;
+    const byModel: Record<string, { tokens: number; cost: number; runs: number }> = {};
+    log.forEach((e) => {
+      if (!e.totalTokens) return;
+      trackedRuns += 1;
+      totalTokens += e.totalTokens;
+      const cost = costOf(e);
+      totalCost += cost;
+      const key = e.model || "unknown";
+      byModel[key] = byModel[key] || { tokens: 0, cost: 0, runs: 0 };
+      byModel[key].tokens += e.totalTokens;
+      byModel[key].cost += cost;
+      byModel[key].runs += 1;
+    });
+    return { total, live, simulated: total - live, failed, byAgent, totalTokens, totalCost, trackedRuns, byModel };
   }, [log]);
 
   return (
@@ -44,10 +100,32 @@ export function AIReview() {
         </div>
       )}
 
+      {/* Token + cost calculator: a rough running spend estimate from the token
+          counts the API reports per run. Live AI runs only — offline runs cost nothing. */}
+      {stats.trackedRuns > 0 && (
+        <div style={{ border: "1px solid #dbeafe", background: "#eff6ff", borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
+          <div style={{ display: "flex", gap: 14, alignItems: "baseline", flexWrap: "wrap" }}>
+            <b style={{ fontSize: 12.5, color: "#1e3a8a" }}>Token &amp; cost estimate</b>
+            <span style={{ fontSize: 13 }}><b>{stats.totalTokens.toLocaleString()}</b> tokens</span>
+            <span style={{ fontSize: 13 }}>≈ <b>{fmtUSD(stats.totalCost)}</b></span>
+            <span style={{ fontSize: 11, color: "#64748b" }}>across {stats.trackedRuns} live run{stats.trackedRuns === 1 ? "" : "s"}</span>
+          </div>
+          <div style={{ fontSize: 11.5, color: "#475569", marginTop: 6 }}>
+            {Object.entries(stats.byModel)
+              .sort((a, b) => b[1].cost - a[1].cost)
+              .map(([m, v]) => `${m}: ${v.tokens.toLocaleString()} tok ≈ ${fmtUSD(v.cost)} (${v.runs} run${v.runs === 1 ? "" : "s"})`)
+              .join("  ·  ")}
+          </div>
+          <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 5 }}>
+            Rough estimate using public per-1M-token rates; actual billing is on your OpenAI account. Runs before this feature have no token data.
+          </div>
+        </div>
+      )}
+
       {log.length === 0 && <p style={{ fontSize: 12.5, color: "#6b7280" }}>No AI reviews run yet.</p>}
       <table>
         <thead>
-          <tr><th>Agent</th><th>Type</th><th>Subject</th><th>Verdict</th><th>Confidence</th><th>Concerns</th><th>Recommended action</th><th>When</th></tr>
+          <tr><th>Agent</th><th>Type</th><th>Subject</th><th>Verdict</th><th>Model</th><th>Tokens</th><th>Concerns</th><th>Recommended action</th><th>When</th></tr>
         </thead>
         <tbody>
           {log.map((e) => {
@@ -65,14 +143,17 @@ export function AIReview() {
                     {e.runId && <div style={{ fontSize: 10, color: "#64748b" }} title="Audit run id — matches the Evidence Folder result, checklist evidence and journal entry from this run.">{e.runId}</div>}
                   </td>
                   <td title={e.verdict}><Pill s={verdictTone(e.verdict)}>{e.verdict.length > 40 ? e.verdict.slice(0, 40) + "…" : e.verdict}</Pill></td>
-                  <td>{e.confidence}</td>
+                  <td style={{ fontSize: 11, color: e.model ? "#334155" : "#9ca3af", whiteSpace: "nowrap" }}>{e.model || (e.live ? "live" : "offline")}</td>
+                  <td style={{ fontSize: 11, color: "#334155", whiteSpace: "nowrap" }} title={e.totalTokens ? `${e.promptTokens ?? "?"} prompt + ${e.completionTokens ?? "?"} completion ≈ ${fmtUSD(costOf(e))}` : undefined}>
+                    {e.totalTokens ? `${e.totalTokens.toLocaleString()}${costOf(e) ? ` · ${fmtUSD(costOf(e))}` : ""}` : "—"}
+                  </td>
                   <td style={{ fontSize: 12, color: "#6b7280" }} title={e.keyConcerns.join("; ")}>{e.keyConcerns.join("; ").slice(0, 60)}{e.keyConcerns.join("; ").length > 60 ? "…" : ""}</td>
                   <td style={{ fontSize: 12, color: "#6b7280" }} title={e.recommendedAction}>{e.recommendedAction.length > 60 ? e.recommendedAction.slice(0, 60) + "…" : e.recommendedAction}</td>
                   <td style={{ fontSize: 11.5, color: "#9ca3af" }}>{new Date(e.createdAt).toLocaleString()}</td>
                 </tr>
                 {open && (
                   <tr>
-                    <td colSpan={8} style={{ background: "#fbfcfe", padding: "10px 14px", fontSize: 12.5 }}>
+                    <td colSpan={9} style={{ background: "#fbfcfe", padding: "10px 14px", fontSize: 12.5 }}>
                       {e.liveError && (
                         <div style={{ color: "#b23121", marginBottom: 8 }}>
                           <b>Live call failed:</b> {e.liveError}

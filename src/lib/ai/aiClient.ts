@@ -9,6 +9,23 @@ import type { AISettings } from "../../types";
 
 export type AIChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
+// Token usage reported by the API for one call, surfaced so the AI Review Log
+// can show which model ran and how many tokens it cost.
+export type AIUsage = { model: string; promptTokens: number; completionTokens: number; totalTokens: number };
+
+// Adds two usage records (for functions that make more than one API call, e.g.
+// the folder audit's challenge pass). Keeps the model of the most recent call.
+export function addUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsage | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    model: b.model || a.model,
+    promptTokens: a.promptTokens + b.promptTokens,
+    completionTokens: a.completionTokens + b.completionTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+  };
+}
+
 export class AIClientError extends Error {}
 
 const DEFAULT_MODEL = "gpt-5-mini";
@@ -98,7 +115,7 @@ async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 3): 
 export async function chatComplete(
   messages: AIChatMessage[],
   settings: AISettings,
-  opts?: { temperature?: number }
+  opts?: { temperature?: number; onUsage?: (u: AIUsage) => void }
 ): Promise<string> {
   if (!settings.enabled) throw new AIClientError("AI integration is disabled in Settings.");
   if (!settings.apiKey) throw new AIClientError("No OpenAI API key configured in Settings.");
@@ -129,6 +146,14 @@ export async function chatComplete(
   const data = await res.json();
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new AIClientError("OpenAI response did not contain a message.");
+  if (opts?.onUsage && data?.usage) {
+    opts.onUsage({
+      model: typeof data.model === "string" ? data.model : model,
+      promptTokens: Number(data.usage.prompt_tokens) || 0,
+      completionTokens: Number(data.usage.completion_tokens) || 0,
+      totalTokens: Number(data.usage.total_tokens) || 0,
+    });
+  }
   return content;
 }
 
