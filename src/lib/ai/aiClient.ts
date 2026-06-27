@@ -115,6 +115,28 @@ async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 3): 
   throw new AIClientError("Unexpected retry loop exit");
 }
 
+// Fetches the exact list of model ids the given API key can access, so the
+// Settings page can offer real choices and flag a typo'd/unavailable model
+// before it fails mid-audit. Returns ids sorted, filtered to chat-capable
+// families (gpt / o-series) to keep the list relevant.
+export async function listModels(apiKey: string): Promise<string[]> {
+  if (!apiKey) throw new AIClientError("No OpenAI API key configured in Settings.");
+  const res = await fetchWithTimeout(
+    "https://api.openai.com/v1/models",
+    { method: "GET", headers: { Authorization: `Bearer ${apiKey}` } },
+    30000
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new AIClientError(`Could not list models (${res.status}): ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const ids: string[] = Array.isArray(data?.data)
+    ? data.data.map((m: { id?: unknown }) => (typeof m.id === "string" ? m.id : "")).filter(Boolean)
+    : [];
+  return ids.filter((id) => /^(gpt-|o\d|chatgpt-)/.test(id)).sort();
+}
+
 export async function chatComplete(
   messages: AIChatMessage[],
   settings: AISettings,

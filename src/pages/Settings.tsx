@@ -7,6 +7,7 @@ import { getSupabaseClient, getSupabaseConfig } from "../lib/supabaseClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
+import { listModels } from "../lib/ai/aiClient";
 
 // GPT-5 family first (current default). The GPT-4 entries stay as fallbacks
 // for anyone whose key/org doesn't yet have GPT-5 access.
@@ -23,6 +24,32 @@ export function Settings() {
   // timeout fallback), so it can still be the empty default when this
   // component first mounts — keep the draft in sync once it resolves.
   useEffect(() => setDraftKey(apiKey), [apiKey]);
+
+  // Live list of model ids the saved key can access (fetched on demand from
+  // OpenAI's /v1/models). Lets the user pick real ids and flags a typo before
+  // it fails mid-audit. Falls back to the static suggestions until fetched.
+  const [availableModels, setAvailableModels] = useState<string[] | null>(null);
+  const [modelsBusy, setModelsBusy] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  async function fetchModels() {
+    setModelsBusy(true);
+    setModelsError(null);
+    try {
+      setAvailableModels(await listModels(apiKey));
+    } catch (err) {
+      setModelsError(err instanceof Error ? err.message : String(err));
+      setAvailableModels(null);
+    } finally {
+      setModelsBusy(false);
+    }
+  }
+  // ✓ when the typed model is in the fetched list, ⚠ when it isn't, nothing
+  // until the list has been fetched (we can't know before then).
+  function modelValidity(m: string): "ok" | "unknown" | null {
+    if (!availableModels) return null;
+    return availableModels.includes(m) ? "ok" : "unknown";
+  }
+  const suggestions = availableModels && availableModels.length ? availableModels : MODELS;
 
   const { clientId, accessToken, connecting, lastError, setClientId, connect, disconnect } = useGoogleDriveStore();
   const [draftClientId, setDraftClientId] = useState(clientId);
@@ -181,25 +208,51 @@ create policy "anon read/write" on public.workspace_state
 
         {/* Editable model fields (input + datalist) rather than a fixed dropdown:
             OpenAI ships new model ids faster than this list can be hard-coded, and
-            the id must match exactly or the API rejects the call. Pick a suggestion
-            or type any model id your OpenAI account has access to (e.g. a newer gpt-5.x). */}
+            the id must match exactly or the API rejects the call. "Fetch available
+            models" pulls the real list your key can access so you can pick a valid
+            id and see a ✓/⚠ check on what you typed. */}
         <datalist id="openai-models">
-          {MODELS.map((m) => (
+          {suggestions.map((m) => (
             <option key={m} value={m} />
           ))}
         </datalist>
 
-        <label style={{ display: "block", marginBottom: 12 }}>
-          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Analysis model</span>
-          <input list="openai-models" value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-5" style={{ ...inputStyle, marginTop: 3 }} />
-          <span style={{ fontSize: 11, color: "#94a3b8" }}>Audit verdicts, reviews, banding, checklist &amp; finding drafting, closure review, cross-criterion analysis. Use a smarter model here (e.g. gpt-5 or a newer gpt-5.x). Pick a suggestion or type any model id your account supports.</span>
-        </label>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={fetchModels}
+            disabled={!apiKey || modelsBusy}
+            style={{ cursor: !apiKey || modelsBusy ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: apiKey ? "#1f2733" : "#94a3b8" }}
+          >
+            {modelsBusy ? "Fetching…" : "Fetch available models"}
+          </button>
+          {availableModels && <span style={{ fontSize: 11.5, color: "#15803d" }}>{availableModels.length} models available to this key</span>}
+          {!apiKey && <span style={{ fontSize: 11.5, color: "#94a3b8" }}>Save your API key first</span>}
+          {modelsError && <span style={{ fontSize: 11.5, color: "#b23121" }}>{modelsError}</span>}
+        </div>
 
-        <label style={{ display: "block", marginBottom: 12 }}>
-          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Utility model</span>
-          <input list="openai-models" value={utilityModel} onChange={(e) => setUtilityModel(e.target.value)} placeholder="gpt-5-nano" style={{ ...inputStyle, marginTop: 3 }} />
-          <span style={{ fontSize: 11, color: "#94a3b8" }}>Reading evidence images and condensing/drafting metadata. A cheaper model is fine (e.g. gpt-5-nano, gpt-4o-mini, or gpt-4o). Pick a suggestion or type any model id your account supports.</span>
-        </label>
+        {(["analysis", "utility"] as const).map((kind) => {
+          const value = kind === "analysis" ? model : utilityModel;
+          const setter = kind === "analysis" ? setModel : setUtilityModel;
+          const v = modelValidity(value);
+          return (
+            <label key={kind} style={{ display: "block", marginBottom: 12 }}>
+              <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>{kind === "analysis" ? "Analysis model" : "Utility model"}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3 }}>
+                <input list="openai-models" value={value} onChange={(e) => setter(e.target.value)} placeholder={kind === "analysis" ? "gpt-5" : "gpt-5-nano"} style={{ ...inputStyle, flex: 1 }} />
+                {v === "ok" && <span title="This model is available to your key." style={{ color: "#15803d", fontSize: 16, fontWeight: 700 }}>✓</span>}
+                {v === "unknown" && <span title="Not in your key's model list — check the spelling, or your account may not have access." style={{ color: "#b45309", fontSize: 14, fontWeight: 700 }}>⚠</span>}
+              </div>
+              <span style={{ fontSize: 11, color: v === "unknown" ? "#b45309" : "#94a3b8" }}>
+                {v === "unknown"
+                  ? `"${value}" isn't in your key's available models — fix the spelling or pick from the list.`
+                  : kind === "analysis"
+                    ? "Audit verdicts, reviews, banding, checklist & finding drafting, closure review, cross-criterion analysis. Use a smarter model (e.g. gpt-5)."
+                    : "Reading evidence images and condensing/drafting metadata. A cheaper model is fine (e.g. gpt-5-nano, gpt-4o-mini, or gpt-4o)."}
+              </span>
+            </label>
+          );
+        })}
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button
