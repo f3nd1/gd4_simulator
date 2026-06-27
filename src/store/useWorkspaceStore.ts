@@ -1150,12 +1150,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let challenged = false;
         let truncationNote: string | undefined;
         let parseWarnings: string[] = [];
+        let folderWarnings: string[] = [];
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             const result = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard });
             verdicts = result.verdicts;
             truncationNote = result.truncationNote;
             parseWarnings = result.parseWarnings;
+            folderWarnings = result.folderWarnings;
             // Strict mode runs a second "challenge" pass that re-examines every
             // Met/Partial and downgrades any not fully and explicitly evidenced.
             if (strictness === "Strict") {
@@ -1165,6 +1167,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   const r2 = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard, challenge: toChallenge });
                   verdicts = r2.verdicts;
                   parseWarnings = [...parseWarnings, ...r2.parseWarnings];
+                  folderWarnings = [...new Set([...folderWarnings, ...r2.folderWarnings])];
                   challenged = true;
                 } catch {
                   // keep first-pass verdicts if the challenge call fails
@@ -1291,6 +1294,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // 4. Warnings, each on its own line so they stand out.
         if (truncationNote) lineParts.push(`⚠ ${truncationNote}`);
         if (parseWarnings.length) lineParts.push(`⚠ ${parseWarnings.length} APSR dimension(s) defaulted to "Not evident" due to unexpected model output — those verdicts may be overly harsh; spot-check them.`);
+        if (folderWarnings.length > 0) lineParts.push(`⚠ Possible mis-filed documents (${folderWarnings.length}): ${folderWarnings.join(" | ")}`);
         const summary = lineParts.join("\n");
         finish(summary, live, liveError);
 

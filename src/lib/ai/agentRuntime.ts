@@ -263,11 +263,11 @@ export const FOLDER_DOC_CAP = 48000;
 
 export type FolderAuditResult = {
   verdicts: FolderAuditLineVerdict[];
-  // Set when any APSR dimension fell back to the worst-case default because
-  // the model's JSON for that leg was missing or malformed.
   parseWarnings: string[];
-  // Set when docText was larger than the cap and some content was not sent.
   truncationNote?: string;
+  // AI-detected file mis-filing warnings (e.g. a record found in the Policy
+  // folder, or a pure policy doc found in the Evidence folder).
+  folderWarnings: string[];
 };
 
 export async function runLiveFolderAudit(
@@ -287,11 +287,11 @@ export async function runLiveFolderAudit(
 2. PROCESSES (actual implementation of those policies and procedures). Using ONLY the ACTUAL EVIDENCE text, processes.status: "Deployed" if records show it implemented and managed, "Weak" if deployment is weak/partial, "Not evident" if there is no implementation evidence (a documented approach on paper is NOT implementation).
 3. SYSTEMS & OUTCOMES (the desired outcomes derived from that implementation). systemsOutcomes.status: "Evident" if the desired outcomes/results are actually produced, "Limited" if outcomes are limited, "Not evident" if none.
 4. REVIEW (evaluation of the appropriateness, relevance and effectiveness of the approach and process for continual improvement). review.status: "Evident" if there is a real review with improvement action, "Not evident" otherwise.
-For every non-empty claim cite the specific source file(s) (by their "--- path ---" heading) in "sources".${STRICTNESS_CLAUSE[strictness] || ""}${skills(apsrRubricSkill, evidenceStandardsSkill, sgPeiContextSkill, externalAuditorSkill)}`;
+For every non-empty claim cite the specific source file(s) (by their "--- path ---" heading) in "sources". Cross-check file types: if a file in the POLICY & PROCEDURE section looks like an operational record, log, attendance sheet, minutes or filled-in form (not a policy/SOP/procedure/plan/framework), or a file in the ACTUAL EVIDENCE section looks like a pure undated policy document with no implementation records, add a one-sentence warning per problematic file to "folderWarnings" (e.g. "Policy folder: 'HR_Attendance_Log_Jan.xlsx' appears to be an attendance record, not a procedure — move to Actual Evidence").${STRICTNESS_CLAUSE[strictness] || ""}${skills(apsrRubricSkill, evidenceStandardsSkill, sgPeiContextSkill, externalAuditorSkill)}`;
   const challengeRule = opts.challenge
     ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote approach.status from "Meeting" to "Beginning" unless the documented approach is genuinely specific and sustainable, and demote processes.status unless implementation is explicitly evidenced.`
     : "";
-  const system = `${base}${challengeRule} Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string}, "review": {"status": "Evident"|"Not evident", "note": string}, "sources": string[]}]}.`;
+  const system = `${base}${challengeRule} Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string}, "review": {"status": "Evident"|"Not evident", "note": string}, "sources": string[]}], "folderWarnings": ["optional one-sentence warnings about mis-filed documents"]}.`;
 
   const DOC_CAP = FOLDER_DOC_CAP;
   const truncated = docText.length > DOC_CAP;
@@ -310,6 +310,13 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
 
   const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
   const arr = parseJSONArray(content);
+  // Extract optional folderWarnings from the same response object (backward
+  // compatible — older/simpler model responses that return a plain array won't
+  // have this key and will safely produce an empty warnings list).
+  const parsedTop = parseJSONObject(content);
+  const folderWarnings = Array.isArray(parsedTop.folderWarnings)
+    ? (parsedTop.folderWarnings as unknown[]).filter((s): s is string => typeof s === "string")
+    : [];
 
   type RawLeg = { status?: unknown; note?: unknown };
   type RawLine = { lineId: string; approach?: RawLeg; processes?: RawLeg; systemsOutcomes?: RawLeg; review?: RawLeg; sources?: unknown };
@@ -344,7 +351,7 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
     return { lineId: l.id, status, reason, sources, apsr };
   });
 
-  return { verdicts, parseWarnings, truncationNote };
+  return { verdicts, parseWarnings, truncationNote, folderWarnings };
 }
 
 // Cross-criterion strategic analysis: synthesises criterion bands, open

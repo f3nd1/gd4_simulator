@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -160,12 +160,13 @@ export function EvidenceFolder() {
             style={{
               cursor: "pointer",
               border: "none",
-              background: "transparent",
+              background: tab === key ? (key === "policy" ? "#eff6ff" : "#f0fdf4") : "transparent",
+              borderRadius: "4px 4px 0 0",
               padding: "8px 14px",
               fontSize: 12.5,
               fontWeight: 700,
-              color: tab === key ? "#1f2937" : "#94a3b8",
-              borderBottom: tab === key ? "2px solid #b8860b" : "2px solid transparent",
+              color: tab === key ? (key === "policy" ? "#1d4ed8" : "#15803d") : "#94a3b8",
+              borderBottom: tab === key ? `2px solid ${key === "policy" ? "#3b82f6" : "#22c55e"}` : "2px solid transparent",
               marginBottom: -2,
             }}
           >
@@ -179,7 +180,7 @@ export function EvidenceFolder() {
 
       <table>
         <thead>
-          <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>{isPolicy ? "Policy link" : "Evidence link"}</th><th>Last checked</th><th>Action</th></tr>
+          <tr style={{ background: isPolicy ? "#dbeafe" : "#dcfce7" }}><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>{isPolicy ? "Policy link" : "Evidence link"}</th><th>Last checked</th><th>Action</th></tr>
         </thead>
         <tbody>
           {visibleFolders.map((f) => (
@@ -269,11 +270,12 @@ export function EvidenceFolder() {
                   <td colSpan={6} style={{ padding: "0 10px 10px 28px" }}>
                     <div style={{ background: "#f0fdf4", borderLeft: "3px solid #86c79f", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.4 }}>Audit result</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.4 }}>Combined audit — policy &amp; evidence</span>
                         <Pill s={f.lastAuditLive ? "progress" : "medium"}>{f.lastAuditLive ? "AI" : "Offline estimate"}</Pill>
                         {f.lastAuditLive === false && f.lastAuditError && (
                           <span style={{ color: "#9a6b15", fontSize: 11 }} title={f.lastAuditError}>AI unavailable — used keyword fallback</span>
                         )}
+                        <Link to={`/sub-checklist?item=${f.subCriterionId}.1`} style={{ fontSize: 11, color: "#2563eb", textDecoration: "none", whiteSpace: "nowrap" }}>→ Sub-Criterion Checklist</Link>
                         <span style={{ color: "#94a3b8", marginLeft: "auto", fontSize: 11 }}>
                           audited {f.lastAuditAt && new Date(f.lastAuditAt).toLocaleString()}
                         </span>
