@@ -425,6 +425,14 @@ export type InterviewQuestion = {
 export type AISettings = {
   provider: "openai";
   apiKey: string;
+  // The smart "analysis" model — audit verdicts, reviews, banding, checklist
+  // generation. (`model` kept as the field name for back-compat.)
   model: string;
+  // Cheaper "utility" model — image reading and link-metadata drafting, which
+  // don't need the analysis model's reasoning.
+  utilityModel: string;
   enabled: boolean;
+  // Transient, merged in per call (never persisted in the settings store):
+  // the School Context briefing injected as background into every AI call.
+  context?: string;
 };

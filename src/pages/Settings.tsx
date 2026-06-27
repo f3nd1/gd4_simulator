@@ -13,7 +13,7 @@ import { GOLD, INK } from "../lib/theme";
 const MODELS = ["gpt-5-mini", "gpt-5", "gpt-5-nano", "gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o"];
 
 export function Settings() {
-  const { apiKey, model, enabled, setApiKey, setModel, setEnabled, clearApiKey } = useAISettingsStore();
+  const { apiKey, model, utilityModel, enabled, setApiKey, setModel, setUtilityModel, setEnabled, clearApiKey } = useAISettingsStore();
   const memory = useAgentMemoryStore((s) => s.memory);
   const clearMemory = useAgentMemoryStore((s) => s.clearMemory);
   const [draftKey, setDraftKey] = useState(apiKey);
@@ -178,7 +178,7 @@ create policy "anon read/write" on public.workspace_state
         </label>
 
         <label style={{ display: "block", marginBottom: 12 }}>
-          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Model</span>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Analysis model</span>
           <select value={model} onChange={(e) => setModel(e.target.value)} style={{ ...inputStyle, marginTop: 3 }}>
             {MODELS.map((m) => (
               <option key={m} value={m}>
@@ -186,6 +186,19 @@ create policy "anon read/write" on public.workspace_state
               </option>
             ))}
           </select>
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>Audit verdicts, reviews, banding, checklist generation. Use a smarter model here (e.g. gpt-5).</span>
+        </label>
+
+        <label style={{ display: "block", marginBottom: 12 }}>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Utility model</span>
+          <select value={utilityModel} onChange={(e) => setUtilityModel(e.target.value)} style={{ ...inputStyle, marginTop: 3 }}>
+            {MODELS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>Reading evidence images and drafting link metadata. A cheaper model (e.g. gpt-5-nano) is fine here.</span>
         </label>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

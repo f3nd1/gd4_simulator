@@ -33,7 +33,7 @@ import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError } from "../lib/drive/driveClient";
-import { describeImage } from "../lib/ai/aiClient";
+import { describeImage, effectiveSettings } from "../lib/ai/aiClient";
 import { computeBand } from "../lib/checklistBanding";
 
 // Best-effort evidence-type classification for audit-attached evidence, from
@@ -49,6 +49,12 @@ import { computeBand } from "../lib/checklistBanding";
 function classifyFileBucket(path: string): "policy" | "evidence" {
   const topSegment = path.split("/")[0]?.toLowerCase() || "";
   return /polic|procedure/.test(topSegment) ? "policy" : "evidence";
+}
+
+// The full School Context string injected into AI calls: the typed markdown
+// briefing plus whatever was last read from the linked Drive context.
+export function composeSchoolContext(sc: { text?: string; driveCache?: string }): string {
+  return [sc.text?.trim(), sc.driveCache?.trim()].filter(Boolean).join("\n\n");
 }
 
 // Reads a folder's text files (recursively) into one capped string, used for
@@ -232,6 +238,14 @@ export type WorkspaceState = {
   setAdditionalInfoLink: (link: string) => void;
   checkAdditionalInfoAccess: () => Promise<void>;
 
+  // School Context — the auditor's "briefing": a persistent markdown profile
+  // of the institution (+ optional Drive link to pull more), injected as
+  // background into every AI assessment so it never starts blind.
+  schoolContext: { text: string; link: string; driveCache?: string; cachedAt?: string; accessStatus?: DriveAccessStatus; accessNote?: string };
+  setSchoolContextText: (text: string) => void;
+  setSchoolContextLink: (link: string) => void;
+  readSchoolContextFromDrive: () => Promise<void>;
+
   setSamples: (samples: SampleRecord[]) => void;
   toggleSample: (id: string) => void;
   setSampleOutcome: (id: string, outcome: SampleRecord["testedOutcome"], notes?: string) => void;
@@ -326,6 +340,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       busy: null,
       bulkAuditStatus: null,
       additionalInfo: { link: "" },
+      schoolContext: { text: "", link: "" },
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
@@ -528,7 +543,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             const memory = useAgentMemoryStore.getState().memory[agentId] || [];
-            verdict = await runLiveItemReview(agent, item, ev, aiSettings, memory);
+            const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
+            verdict = await runLiveItemReview(agent, item, ev, settings, memory);
             useAgentMemoryStore.getState().addMemory(agentId, { role: "user", content: `Reviewed item ${itemId}.`, createdAt: new Date().toISOString() });
             useAgentMemoryStore.getState().addMemory(agentId, { role: "assistant", content: verdict.justification, createdAt: new Date().toISOString() });
           } catch (err) {
@@ -572,7 +588,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             const memory = useAgentMemoryStore.getState().memory["closure-reviewer"] || [];
-            verdict = await runLiveClosureReview(c, aiSettings, memory);
+            const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
+            verdict = await runLiveClosureReview(c, settings, memory);
             useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "user", content: `Reviewed closure for ${afiId}.`, createdAt: new Date().toISOString() });
             useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "assistant", content: verdict.reason, createdAt: new Date().toISOString() });
           } catch (err) {
@@ -775,6 +792,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
 
         const aiSettings = useAISettingsStore.getState();
+        const schoolCtx = composeSchoolContext(get().schoolContext);
+        const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: schoolCtx });
+        const utilitySettings = effectiveSettings(aiSettings, { purpose: "utility", context: schoolCtx });
         const canDescribeImages = aiSettings.enabled && !!aiSettings.apiKey;
         // Each image costs one extra OpenAI vision call — capped separately
         // from the (unbounded) text-file count so a folder full of scanned
@@ -811,7 +831,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (IMAGE_MIME_TYPES.has(file.mimeType) && canDescribeImages && imagesDescribed < MAX_IMAGES) {
               imagesDescribed++;
               const dataUrl = await exportFileImageDataUrl(file, token);
-              const description = await describeImage(dataUrl, aiSettings);
+              const description = await describeImage(dataUrl, utilitySettings);
               scanned.push(file.path);
               addPart(`${file.path} (image)`, description);
               continue;
@@ -839,7 +859,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let liveError: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
-            verdicts = await runLiveFolderAudit(lines, docText, aiSettings);
+            verdicts = await runLiveFolderAudit(lines, docText, analysisSettings);
             live = true;
           } catch (err) {
             liveError = err instanceof Error ? err.message : String(err);
@@ -978,6 +998,41 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }
         }
         set((st) => ({ additionalInfo: { ...st.additionalInfo, accessStatus: status, accessNote: note, accessAt: checkedAt } }));
+      },
+
+      setSchoolContextText: (text) => set((s) => ({ schoolContext: { ...s.schoolContext, text } })),
+      setSchoolContextLink: (link) => set((s) => ({ schoolContext: { ...s.schoolContext, link } })),
+
+      // Reads the linked Drive context folder/doc into driveCache so it can be
+      // injected alongside the typed briefing. Best-effort; surfaces an access
+      // status like the folder checks do.
+      readSchoolContextFromDrive: async () => {
+        const link = get().schoolContext.link;
+        const folderId = parseFolderId(link);
+        const token = useGoogleDriveStore.getState().getValidToken();
+        if (!folderId) {
+          set((s) => ({ schoolContext: { ...s.schoolContext, accessStatus: "Error", accessNote: "Could not find a Drive folder ID in the link." } }));
+          return;
+        }
+        if (!token) {
+          set((s) => ({ schoolContext: { ...s.schoolContext, accessStatus: "Not Connected", accessNote: "Not connected to Google Drive. Connect in Settings, then try again." } }));
+          return;
+        }
+        try {
+          const text = await readFolderPlainText(folderId, token);
+          set((s) => ({
+            schoolContext: {
+              ...s.schoolContext,
+              driveCache: text,
+              cachedAt: new Date().toISOString(),
+              accessStatus: "Connected",
+              accessNote: text ? `Read ${text.length} characters of context from Drive.` : "Connected, but no readable text was found in this folder.",
+            },
+          }));
+        } catch (err) {
+          const msg = err instanceof DriveApiError ? err.reason || err.message : err instanceof Error ? err.message : String(err);
+          set((s) => ({ schoolContext: { ...s.schoolContext, accessStatus: "Error", accessNote: `Could not read the context folder: ${msg}` } }));
+        }
       },
 
       setSamples: (samples) => set({ samples }),

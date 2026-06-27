@@ -9,6 +9,7 @@ import type { AISettings } from "../types";
 export type AISettingsState = AISettings & {
   setApiKey: (apiKey: string) => void;
   setModel: (model: string) => void;
+  setUtilityModel: (model: string) => void;
   setEnabled: (enabled: boolean) => void;
   clearApiKey: () => void;
 };
@@ -19,10 +20,12 @@ export const useAISettingsStore = create<AISettingsState>()(
       provider: "openai",
       apiKey: "",
       model: "gpt-5-mini",
+      utilityModel: "gpt-5-nano",
       enabled: false,
 
       setApiKey: (apiKey) => set({ apiKey }),
       setModel: (model) => set({ model }),
+      setUtilityModel: (utilityModel) => set({ utilityModel }),
       setEnabled: (enabled) => set({ enabled }),
       clearApiKey: () => set({ apiKey: "", enabled: false }),
     }),

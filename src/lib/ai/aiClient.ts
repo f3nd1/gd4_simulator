@@ -21,6 +21,29 @@ function supportsTemperature(model: string): boolean {
   return !/^(gpt-5|o1|o3|o4)/.test(model);
 }
 
+// Builds a per-call settings object: picks the analysis vs utility model and
+// merges in the School Context briefing. One helper so every call site routes
+// the model and injects context consistently.
+export function effectiveSettings(base: AISettings, opts: { purpose: "analysis" | "utility"; context?: string }): AISettings {
+  return {
+    ...base,
+    model: opts.purpose === "utility" ? base.utilityModel || base.model : base.model,
+    context: opts.context,
+  };
+}
+
+// School Context is background, never evidence — labeled so the model weighs
+// it for interpretation but can't treat it as proof of a requirement.
+function withContext(messages: AIChatMessage[], settings: AISettings): AIChatMessage[] {
+  const ctx = settings.context?.trim();
+  if (!ctx) return messages;
+  const preamble: AIChatMessage = {
+    role: "system",
+    content: `Background context about the institution being audited (use it to interpret evidence and tailor your comments to this school; it is itself NOT evidence and cannot on its own satisfy any requirement):\n${ctx.slice(0, 6000)}`,
+  };
+  return [preamble, ...messages];
+}
+
 export async function chatComplete(messages: AIChatMessage[], settings: AISettings): Promise<string> {
   if (!settings.enabled) throw new AIClientError("AI integration is disabled in Settings.");
   if (!settings.apiKey) throw new AIClientError("No OpenAI API key configured in Settings.");
@@ -28,7 +51,7 @@ export async function chatComplete(messages: AIChatMessage[], settings: AISettin
   const model = settings.model || DEFAULT_MODEL;
   const body: Record<string, unknown> = {
     model,
-    messages,
+    messages: withContext(messages, settings),
     response_format: { type: "json_object" },
   };
   if (supportsTemperature(model)) body.temperature = 0.2;

@@ -15,8 +15,9 @@ import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill } from "../lib/ai/agentRuntime";
+import { effectiveSettings } from "../lib/ai/aiClient";
 import { useAISettingsStore } from "./useAISettingsStore";
-import { useWorkspaceStore } from "./useWorkspaceStore";
+import { useWorkspaceStore, composeSchoolContext } from "./useWorkspaceStore";
 
 let lineCounter = 0;
 function newLineId(itemId: string) {
@@ -123,7 +124,8 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         let liveError: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
-            raw = await runLiveChecklistGeneration(req, aiSettings);
+            const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(useWorkspaceStore.getState().schoolContext) });
+            raw = await runLiveChecklistGeneration(req, settings);
             if (!raw.length) raw = simulateChecklistGeneration(req);
             else live = true;
           } catch (err) {
@@ -212,7 +214,8 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         let liveError: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
-            draft = await runLiveEvidenceFill(link, lineText, aiSettings);
+            const settings = effectiveSettings(aiSettings, { purpose: "utility", context: composeSchoolContext(useWorkspaceStore.getState().schoolContext) });
+            draft = await runLiveEvidenceFill(link, lineText, settings);
           } catch (err) {
             liveError = err instanceof Error ? err.message : String(err);
             draft = simulateEvidenceFill(link, lineText);

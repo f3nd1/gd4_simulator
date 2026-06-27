@@ -17,8 +17,9 @@ export const NAV: NavGroup[] = [
   {
     group: "1 · Setup",
     step: 1,
-    hint: "Set up the audit cycle, the audit team, and the GD4 rubric reference before collecting any evidence.",
+    hint: "Brief the AI on the school, then set up the audit cycle, the audit team, and the GD4 rubric reference before collecting any evidence.",
     items: [
+      { path: "/school-context", label: "School Context", hint: "Background briefing about the school — injected into every AI assessment" },
       { path: "/audit-cycle", label: "Audit Cycle", hint: "Set the audit cycle dates and lifecycle status" },
       { path: "/auditors", label: "Auditor Creation", hint: "Add the auditors who will run this audit" },
       { path: "/gd4-scoring-setup", label: "GD4 Scoring Setup", hint: "Confirm scoring weights and criteria points" },
