@@ -64,7 +64,7 @@ export const NAV: NavGroup[] = [
     items: [
       { path: "/findings", label: "Findings", hint: "Raise and track AFIs / quality actions" },
       { path: "/afi-closure", label: "Quality Action / AFI", hint: "Decide whether a finding can be closed" },
-      { path: "/ai-review", label: "AI Agent Review", hint: "Log of every AI review run, live or simulated" },
+      { path: "/ai-review", label: "AI Review Log", hint: "Log of every AI review run, live or simulated" },
       { path: "/human-review", label: "Human Review / Override", hint: "Confirm or override a band, with justification" },
       { path: "/re-audit", label: "Re-audit and Re-score", hint: "Re-check items that were below band or had closed findings" },
     ],

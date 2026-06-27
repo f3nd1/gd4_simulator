@@ -61,10 +61,10 @@ export function AIReview() {
                   </td>
                   <td>{e.reviewType}</td>
                   <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>{e.subjectId}</td>
-                  <td><Pill s={verdictTone(e.verdict)}>{e.verdict}</Pill></td>
+                  <td title={e.verdict}><Pill s={verdictTone(e.verdict)}>{e.verdict.length > 40 ? e.verdict.slice(0, 40) + "…" : e.verdict}</Pill></td>
                   <td>{e.confidence}</td>
-                  <td style={{ fontSize: 12, color: "#6b7280" }}>{e.keyConcerns.join("; ")}</td>
-                  <td style={{ fontSize: 12, color: "#6b7280" }}>{e.recommendedAction}</td>
+                  <td style={{ fontSize: 12, color: "#6b7280" }} title={e.keyConcerns.join("; ")}>{e.keyConcerns.join("; ").slice(0, 60)}{e.keyConcerns.join("; ").length > 60 ? "…" : ""}</td>
+                  <td style={{ fontSize: 12, color: "#6b7280" }} title={e.recommendedAction}>{e.recommendedAction.length > 60 ? e.recommendedAction.slice(0, 60) + "…" : e.recommendedAction}</td>
                   <td style={{ fontSize: 11.5, color: "#9ca3af" }}>{new Date(e.createdAt).toLocaleString()}</td>
                 </tr>
                 {open && (
