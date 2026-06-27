@@ -17,6 +17,8 @@ export function Dashboard() {
   const loadDemoDataset = useWorkspaceStore((s) => s.loadDemoDataset);
   const auditorsCount = useWorkspaceStore((s) => s.auditors.length);
   const auditAllFolders = useWorkspaceStore((s) => s.auditAllFolders);
+  const auditChangedFolders = useWorkspaceStore((s) => s.auditChangedFolders);
+  const raiseAllUnmetFindings = useChecklistModuleStore((s) => s.raiseAllUnmetFindings);
   const bulkAuditStatus = useWorkspaceStore((s) => s.bulkAuditStatus);
   const foldersWithLink = useWorkspaceStore((s) => s.folders.filter((f) => (f.folderLink && f.folderLink.trim()) || (f.policyLink && f.policyLink.trim())).length);
   const navigate = useNavigate();
@@ -107,6 +109,30 @@ export function Dashboard() {
             style={{ cursor: bulkAuditStatus ? "default" : "pointer", border: "1px solid #3a4660", background: bulkAuditStatus ? "#3a4660" : "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12, opacity: foldersWithLink === 0 ? 0.5 : 1 }}
           >
             {bulkAuditStatus ? "Auditing…" : "Audit all folders → score"}
+          </button>
+          <button
+            disabled={!!bulkAuditStatus || foldersWithLink === 0}
+            title={foldersWithLink === 0 ? "Add a Drive folder link on the Evidence Folder page first." : "Re-reads only folders whose files changed since their last audit — skips unchanged ones to save time and AI cost."}
+            onClick={async () => {
+              const r = await auditChangedFolders();
+              alert(`Re-audit of changed folders complete.\n\nAudited: ${r.audited}\nSkipped (unchanged): ${r.skipped}\nNot linked: ${r.unlinked}`);
+              if (r.audited > 0) navigate("/scorecard");
+            }}
+            style={{ cursor: bulkAuditStatus ? "default" : "pointer", border: "1px solid #3a4660", background: "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12, opacity: foldersWithLink === 0 ? 0.5 : 1 }}
+          >
+            Re-audit changed only
+          </button>
+          <button
+            title="Turns every unresolved checklist line (Not met, or marked done but with no evidence) into a draft AFI in the Findings register for you to action."
+            onClick={() => {
+              if (!confirm("Raise a draft finding for every checklist line that is Not met, or marked done with no evidence attached? Lines that already produced a finding are skipped. You can edit or delete them afterwards in the Findings register.")) return;
+              const n = raiseAllUnmetFindings();
+              alert(n === 0 ? "No new findings to raise — every unresolved line already has one (or there are no unresolved lines)." : `Raised ${n} draft finding${n === 1 ? "" : "s"} into the Findings register.`);
+              if (n > 0) navigate("/findings");
+            }}
+            style={{ cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: "#f4b3aa", fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
+          >
+            Raise findings from gaps
           </button>
         </div>
         {bulkAuditStatus && <div style={{ fontSize: 11.5, color: "#aeb8c7", marginTop: 8 }}>{bulkAuditStatus}</div>}

@@ -12,6 +12,7 @@ import type {
   Finding,
 } from "../types";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { buildDraftFinding, lineSufficiency } from "../lib/checklistBanding";
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill } from "../lib/ai/agentRuntime";
@@ -73,6 +74,11 @@ export type ChecklistModuleState = {
   setSampling: (itemId: string, lineId: string, sampling: SamplingInfo) => void;
 
   confirmDraftFinding: (itemId: string, lineId: string, draft: DraftFindingInfo) => void;
+  // Scans every checklist line and raises a draft finding for each one that is
+  // Not met, or marked Met/Partial but with no real evidence attached
+  // (the "capped" case). Skips lines that already produced a finding. Returns
+  // the number of NEW findings raised so the caller can confirm to the user.
+  raiseAllUnmetFindings: () => number;
 };
 
 function mapEntry(
@@ -299,6 +305,29 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         };
         useWorkspaceStore.getState().addCustomFinding(finding);
         set((st) => mapEntry(st, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, draftFinding: { ...draft, savedFindingId: finding.id } }))));
+      },
+
+      // Automation: turn every unresolved checklist line into a draft AFI in
+      // one click. A line warrants a finding when it is Not met, or when it is
+      // marked Met/Partial but no real evidence backs it (sufficiency Missing —
+      // the "false pass" the audit caps to Band 1). Reuses confirmDraftFinding
+      // so each finding is deduped and traceable exactly like a manual one.
+      raiseAllUnmetFindings: () => {
+        const entries = get().entries;
+        let raised = 0;
+        for (const itemId of Object.keys(entries)) {
+          const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
+          if (!req) continue;
+          for (const line of entries[itemId].specific) {
+            if (line.draftFinding?.savedFindingId) continue;
+            const markedDone = line.status === "Met" || line.status === "Partial";
+            const warrants = line.status === "Not met" || (markedDone && lineSufficiency(line) === "Missing");
+            if (!warrants) continue;
+            get().confirmDraftFinding(itemId, line.id, buildDraftFinding(req, line));
+            raised += 1;
+          }
+        }
+        return raised;
       },
     }),
     { name: "ucc-gd4-checklist:v2", storage: workspaceStorage }

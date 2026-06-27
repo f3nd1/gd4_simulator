@@ -27,7 +27,7 @@ import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit } from "../lib/ai/simulateAI";
-import { runLiveItemReview, runLiveClosureReview, runLiveFolderAudit } from "../lib/ai/agentRuntime";
+import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
@@ -213,6 +213,7 @@ export type WorkspaceState = {
 
   setClosureField: (afiId: string, field: keyof ClosureState, value: string) => void;
   runClosureAI: (afiId: string) => Promise<void>;
+  draftClosureActions: (afiId: string, issue: string, gd4ItemId: string) => Promise<void>;
   setClosureHuman: (afiId: string, value: "" | "Accepted") => void;
 
   addAuditor: (a: AuditorProfile) => void;
@@ -234,6 +235,10 @@ export type WorkspaceState = {
   // it runs, and is null when idle.
   bulkAuditStatus: string | null;
   auditAllFolders: () => Promise<void>;
+  // Like auditAllFolders, but skips any folder whose newest Drive file has not
+  // changed since its last audit (compared via lastAuditNewestModified). Saves
+  // time and AI cost on re-runs. Returns a short summary of what it did.
+  auditChangedFolders: () => Promise<{ audited: number; skipped: number; unlinked: number }>;
 
   // School-wide "Additional info" folder — general supporting documents that
   // apply to every criterion (org chart, staff/student/partner listing, MR
@@ -645,6 +650,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         });
       },
 
+      // Automation: AI first-draft of root/corrective/preventive for a finding,
+      // written into the closure fields for the auditor to edit. Only fills a
+      // field the auditor hasn't already written, so it never overwrites work.
+      draftClosureActions: async (afiId, issue, gd4ItemId) => {
+        const aiSettings = useAISettingsStore.getState();
+        if (!aiSettings.enabled || !aiSettings.apiKey) return;
+        set({ busy: "clxdraft" + afiId });
+        try {
+          const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
+          const draft = await runLiveClosureDraft({ issue, gd4ItemId }, settings);
+          set((s) => {
+            const c = s.closures[afiId] || {};
+            return {
+              closures: {
+                ...s.closures,
+                [afiId]: { ...c, root: c.root || draft.root, corr: c.corr || draft.corr, prev: c.prev || draft.prev },
+              },
+              busy: null,
+            };
+          });
+        } catch {
+          set({ busy: null });
+        }
+      },
+
       setClosureHuman: (afiId, value) => set((s) => ({ closures: { ...s.closures, [afiId]: { ...(s.closures[afiId] || {}), human: value } } })),
 
       addAuditor: (a) => set((s) => ({ auditors: [...s.auditors, a] })),
@@ -723,6 +753,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!folder) return;
         set({ busy: "folderaudit" + id });
 
+        // Newest file modifiedTime seen this run; recorded so a later
+        // "re-audit only changed" pass can skip folders that haven't changed.
+        let newestModified: string | undefined;
+
         const finish = (summary: string, live: boolean, liveError?: string) => {
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
@@ -740,7 +774,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             createdAt: new Date().toISOString(),
           };
           set((st) => ({
-            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError } : f)),
+            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified } : f)),
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
           }));
@@ -815,6 +849,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         };
         await gather(policyId, "policy", "Policy & Procedure");
         await gather(evidenceId, "evidence", policyId ? "Actual Evidence" : "Evidence");
+        for (const f of taggedFiles) {
+          if (f.modifiedTime && (!newestModified || f.modifiedTime > newestModified)) newestModified = f.modifiedTime;
+        }
         // No separate policy folder → let the evidence folder's own subfolders
         // decide policy-vs-evidence (the previous behaviour).
         if (!policyId) for (const f of taggedFiles) f.bucket = "auto";
@@ -1068,6 +1105,69 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           await get().auditFolderContents(f.id, sharedContext);
         }
         set({ bulkAuditStatus: null });
+      },
+
+      auditChangedFolders: async () => {
+        const token = useGoogleDriveStore.getState().getValidToken();
+        const folders = get().folders;
+        const linked = folders.filter((f) => parseFolderId(f.folderLink) || parseFolderId(f.policyLink));
+        const unlinked = folders.length - linked.length;
+        if (!token || linked.length === 0) {
+          set({ bulkAuditStatus: null });
+          return { audited: 0, skipped: 0, unlinked };
+        }
+
+        // Decide which folders changed by comparing each folder's newest file
+        // modifiedTime against what we recorded at its last audit.
+        const newestOf = async (f: (typeof linked)[number]): Promise<string | undefined> => {
+          let newest: string | undefined;
+          for (const fid of [parseFolderId(f.policyLink), parseFolderId(f.folderLink)]) {
+            if (!fid) continue;
+            try {
+              const files = await listFolderFilesRecursive(fid, token);
+              for (const file of files) {
+                if (file.modifiedTime && (!newest || file.modifiedTime > newest)) newest = file.modifiedTime;
+              }
+            } catch {
+              // a folder we can't list is treated as "changed" so it re-audits
+              return new Date().toISOString();
+            }
+          }
+          return newest;
+        };
+
+        const toAudit: typeof linked = [];
+        let skipped = 0;
+        for (let i = 0; i < linked.length; i++) {
+          const f = linked[i];
+          set({ bulkAuditStatus: `Checking ${i + 1}/${linked.length} for changes: ${f.subCriterionId}` });
+          // Never audited before, or no recorded baseline → always audit.
+          if (!f.lastAuditAt || !f.lastAuditNewestModified) {
+            toAudit.push(f);
+            continue;
+          }
+          const newest = await newestOf(f);
+          if (newest && newest > f.lastAuditNewestModified) toAudit.push(f);
+          else skipped += 1;
+        }
+
+        // Read school-wide Additional-info once, same as auditAllFolders.
+        let sharedContext = "";
+        const addId = parseFolderId(get().additionalInfo.link);
+        if (addId) {
+          try {
+            sharedContext = await readFolderPlainText(addId, token);
+          } catch {
+            sharedContext = "";
+          }
+        }
+        for (let i = 0; i < toAudit.length; i++) {
+          const f = toAudit[i];
+          set({ bulkAuditStatus: `Auditing changed ${i + 1}/${toAudit.length}: ${f.subCriterionId} ${f.folderName}` });
+          await get().auditFolderContents(f.id, sharedContext);
+        }
+        set({ bulkAuditStatus: null });
+        return { audited: toAudit.length, skipped, unlinked };
       },
 
       setAdditionalInfoLink: (link) => set((s) => ({ additionalInfo: { ...s.additionalInfo, link } })),

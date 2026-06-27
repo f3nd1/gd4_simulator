@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { Card, inputStyle, filterSelectStyle } from "../components/ui/Card";
@@ -11,6 +12,8 @@ export function AFIClosure() {
   const closures = useWorkspaceStore((s) => s.closures);
   const setClosureField = useWorkspaceStore((s) => s.setClosureField);
   const runClosureAI = useWorkspaceStore((s) => s.runClosureAI);
+  const draftClosureActions = useWorkspaceStore((s) => s.draftClosureActions);
+  const aiEnabled = useAISettingsStore((s) => s.enabled && !!s.apiKey);
   const setClosureHuman = useWorkspaceStore((s) => s.setClosureHuman);
   const busy = useWorkspaceStore((s) => s.busy);
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
@@ -109,6 +112,16 @@ export function AFIClosure() {
                   </label>
                 ))}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {aiEnabled && (
+                    <button
+                      onClick={() => draftClosureActions(f.id, f.issue, f.gd4ItemId)}
+                      disabled={busy === "clxdraft" + f.id}
+                      title="AI drafts root cause + corrective + preventive action for you to edit. Won't overwrite fields you've already filled."
+                      style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #c9a24a", background: "#fbf3df", color: "#7a5c12" }}
+                    >
+                      {busy === "clxdraft" + f.id ? "Drafting…" : "Suggest actions (AI)"}
+                    </button>
+                  )}
                   <button
                     onClick={() => runClosureAI(f.id)}
                     disabled={busy === "clx" + f.id}

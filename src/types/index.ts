@@ -293,6 +293,10 @@ export type EvidenceFolder = {
   // offline keyword fallback (false), and the reason a live call fell back.
   lastAuditLive?: boolean;
   lastAuditError?: string;
+  // Most-recent file modifiedTime (from Drive) seen at the last audit. Used by
+  // "Re-audit only changed folders" to skip folders whose newest file has not
+  // changed since this audit ran.
+  lastAuditNewestModified?: string;
 };
 
 export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation";

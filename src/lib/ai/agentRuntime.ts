@@ -129,6 +129,26 @@ export async function runLiveClosureReview(
   };
 }
 
+// Automation: drafts a root cause + corrective + preventive action for a
+// finding so the auditor starts from a first draft instead of a blank form.
+// These are SUGGESTIONS to edit, never a closure — the prompt is explicit that
+// they are proposals and the Closure Reviewer still requires real evidence to
+// actually clear the finding.
+export async function runLiveClosureDraft(
+  finding: { issue: string; gd4ItemId: string },
+  settings: AISettings
+): Promise<{ root: string; corr: string; prev: string }> {
+  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding, propose a likely root cause, a corrective action (fixes this specific gap now), and a preventive action (stops it recurring). Be concrete and specific to the finding; these are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.`;
+  const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}`;
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
+  const parsed = parseJSONObject(content);
+  return {
+    root: (parsed.root as string) || "",
+    corr: (parsed.corr as string) || "",
+    prev: (parsed.prev as string) || "",
+  };
+}
+
 // Drafts evidence metadata from a pasted link for the Sub-Criterion
 // Checklist's "AI fill from link" button. The model is given only the link
 // string and the checklist line text — never the document itself, which
