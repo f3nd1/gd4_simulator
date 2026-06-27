@@ -24,6 +24,7 @@ import { Finalisation } from "./pages/Finalisation";
 import { ExportCentre } from "./pages/ExportCentre";
 import { Settings } from "./pages/Settings";
 import { SchoolContext } from "./pages/SchoolContext";
+import { FinalReport } from "./pages/FinalReport";
 
 export default function App() {
   return (
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/re-audit" element={<ReAudit />} />
           {/* Version History merged into Draft Workspace; keep the old path working. */}
           <Route path="/version-history" element={<Navigate to="/draft-workspace" replace />} />
+          <Route path="/final-report" element={<FinalReport />} />
           <Route path="/management-review" element={<ManagementReview />} />
           <Route path="/finalisation" element={<Finalisation />} />
           <Route path="/export" element={<ExportCentre />} />

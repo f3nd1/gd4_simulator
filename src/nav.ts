@@ -72,6 +72,7 @@ export const NAV: NavGroup[] = [
     step: 6,
     hint: "Wrap up: management sign-off, final checks, then export the audit pack.",
     items: [
+      { path: "/final-report", label: "Final Report", hint: "Overall + per-item banding, strengths, AFIs and how to reach a higher band" },
       { path: "/management-review", label: "Management Review", hint: "Leadership decisions needed before closeout" },
       { path: "/finalisation", label: "Finalisation Checklist", hint: "Final checks before locking the audit" },
       { path: "/export", label: "Export Centre", hint: "Export the finished audit pack" },
