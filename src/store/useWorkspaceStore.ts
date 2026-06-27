@@ -854,6 +854,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const auditedLine = entry?.specific.find((l) => l.draftFinding?.savedFindingId === afiId);
           const apsr = auditedLine ? lineApsr(auditedLine) : undefined;
           const draft = await runLiveClosureDraft({ issue, gd4ItemId }, settings, { standard, apsr: apsr ? apsrReason(apsr) : undefined });
+          // Record this AI run so every AI use shows in the AI Review Log.
+          get().pushAIReviewLog({
+            agent: "Closure Drafter",
+            reviewType: "Closure",
+            subjectId: gd4ItemId,
+            verdict: "Actions drafted",
+            confidence: "Medium",
+            keyConcerns: ["Root cause, corrective and preventive actions drafted for review"],
+            recommendedAction: "Review and edit the drafted actions, then link closure evidence.",
+            live: true,
+            generatedContent: `ROOT CAUSE:\n${draft.root}\n\nCORRECTIVE:\n${draft.corr}\n\nPREVENTIVE:\n${draft.prev}`,
+            usage: draft.usage,
+          });
           set((s) => {
             const c = s.closures[afiId] || {};
             return {
@@ -1124,6 +1137,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // photos can't turn one "Run audit" click into dozens of API calls.
         const MAX_IMAGES = 10;
         let imagesDescribed = 0;
+        // Tokens spent on the audit's helper AI calls (image descriptions and
+        // document condensing) — folded into the audit's total so the log
+        // reflects ALL AI used by this run, not just the verdict call.
+        let auxUsage: AIUsage | undefined;
 
         const scanned: string[] = [];
         const skipped: string[] = []; // recognized type, but no text path for it (e.g. video)
@@ -1160,7 +1177,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (IMAGE_MIME_TYPES.has(file.mimeType) && canDescribeImages && imagesDescribed < MAX_IMAGES) {
               imagesDescribed++;
               const dataUrl = await exportFileImageDataUrl(file, token);
-              const description = await describeImage(dataUrl, utilitySettings);
+              const description = await describeImage(dataUrl, utilitySettings, { onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
               scanned.push(file.path);
               pushPart(file.path, description, file.bucket, "image");
               continue;
@@ -1209,7 +1226,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           for (const p of parts) {
             if (p.body.length > budget) {
               try {
-                p.body = await summariseText(p.heading, p.body, utilitySettings, budget);
+                p.body = await summariseText(p.heading, p.body, utilitySettings, budget, { onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
                 condensed++;
               } catch {
                 p.body = p.body.slice(0, budget);
@@ -1406,7 +1423,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (folderWarnings.length > 0) lineParts.push(`⚠ Possible mis-filed documents (${folderWarnings.length}): ${folderWarnings.join(" | ")}`);
         for (const w of setupWarnings) lineParts.push(`⚠ ${w}`);
         const summary = lineParts.join("\n");
-        finish(summary, live, liveError, auditUsage);
+        // Total = verdict call(s) + image-description + document-condense calls.
+        finish(summary, live, liveError, addUsage(auditUsage, auxUsage));
 
         // Post-audit multi-agent pipeline — fires asynchronously so the audit
         // result appears immediately and the finding enrichment arrives seconds

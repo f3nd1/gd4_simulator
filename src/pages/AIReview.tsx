@@ -8,6 +8,23 @@ function verdictTone(v: string) {
   return v === "Acceptable" ? "good" : v === "Partial" || v === "At risk" ? "medium" : v === "Pass" ? "good" : "critical";
 }
 
+// Maps the internal review type to the app module/page the AI was used from,
+// so the log reads in the user's terms ("Evidence Folder") rather than an
+// internal category ("Evidence").
+const MODULE_LABEL: Record<string, string> = {
+  Evidence: "Evidence Folder",
+  Scoring: "Evidence Intelligence",
+  Checklist: "Sub-Criterion Checklist",
+  Closure: "Quality Action / AFI",
+  Finding: "Findings",
+  Interview: "Interview",
+  Finalisation: "Finalisation",
+  CrossCriterion: "Final Report",
+};
+function moduleLabel(t: string): string {
+  return MODULE_LABEL[t] || t;
+}
+
 // Rough USD price per 1,000,000 tokens (input / output), matched by model-name
 // prefix. These are ESTIMATES for a ballpark spend figure — adjust here if
 // OpenAI's pricing changes. Order matters: more specific patterns first.
@@ -154,9 +171,9 @@ export function AIReview() {
             <option value="">All agents</option>
             {agentOptions.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
-          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ ...inputStyle, width: 140, padding: "5px 6px" }}>
-            <option value="">All types</option>
-            {typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ ...inputStyle, width: 180, padding: "5px 6px" }}>
+            <option value="">All modules</option>
+            {typeOptions.map((t) => <option key={t} value={t}>{moduleLabel(t)}</option>)}
           </select>
           <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)} style={{ ...inputStyle, width: 130, padding: "5px 6px" }}>
             <option value="">Live + simulated</option>
@@ -180,7 +197,7 @@ export function AIReview() {
 
       <table>
         <thead>
-          <tr><th>Agent</th><th>Type</th><th>Subject</th><th>Verdict</th><th>Model</th><th>Tokens</th><th>When</th></tr>
+          <tr><th>Agent</th><th>Module</th><th>Subject</th><th>Verdict</th><th>Model</th><th>Tokens</th><th>When</th></tr>
         </thead>
         <tbody>
           {visible.map((e) => {
@@ -192,7 +209,7 @@ export function AIReview() {
                     <b>{e.agent}</b>
                     {!e.live && <div style={{ fontSize: 10, color: e.liveError ? "#b23121" : "#9ca3af" }}>{e.liveError ? "live call failed — simulated" : "simulated"}</div>}
                   </td>
-                  <td>{e.reviewType}</td>
+                  <td style={{ fontSize: 12 }}>{moduleLabel(e.reviewType)}</td>
                   <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>
                     {e.subjectId}
                     {e.runId && <div style={{ fontSize: 10, color: "#64748b" }} title="Audit run id — matches the Evidence Folder result, checklist evidence and journal entry from this run.">{e.runId}</div>}

@@ -133,7 +133,7 @@ function parseJSONArray(text: string): unknown[] {
 // (per the "reuse existing AI service layer" decision) to decompose a GD4
 // item's Describe/Show points and Notes into atomic, testable checklist
 // statements for the Sub-Criterion Checklist module's "AI first pass".
-export async function runLiveChecklistGeneration(req: GD4Requirement, settings: AISettings): Promise<{ text: string; clause: string }[]> {
+export async function runLiveChecklistGeneration(req: GD4Requirement, settings: AISettings, onUsage?: (u: AIUsage) => void): Promise<{ text: string; clause: string }[]> {
   const system = `You are a GD4 internal audit checklist assistant. Decompose the given GD4 item's Describe/Show points and Notes into a JSON array of atomic, testable checklist statements an auditor can mark Met, Partial, Not met or Not Applicable against real evidence. Each statement must be specific and independently verifiable, and must cite the GD4 item id as its clause. Generate statements that test all four APSR dimensions — at least one line each for: (A) whether the documented approach/policy is specific and sustainable, (P) whether there are records proving implementation, (S) whether outcomes are measured and demonstrate the process works, and (R) whether the approach and processes are formally reviewed for improvement. Respond with JSON only: an array of objects {"text": string, "clause": string}, nothing else.${skills(apsrRubricSkill, sgPeiContextSkill)}`;
   const user = `GD4 item ${req.id} — ${req.requirement}\nDescribe/Show:\n${req.describeShow.map((d, i) => `${i + 1}. ${d}`).join("\n")}${
     req.notes.length ? `\nNotes:\n${req.notes.map((n, i) => `${i + 1}. ${n}`).join("\n")}` : ""
@@ -141,7 +141,7 @@ export async function runLiveChecklistGeneration(req: GD4Requirement, settings: 
 
   // Higher temperature for generation (diverse, natural-sounding lines) vs 0.2
   // for analysis (deterministic verdicts).
-  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.7 });
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.7, onUsage });
   const arr = parseJSONArray(content);
   return arr
     .filter((x): x is { text: string; clause?: string } => !!x && typeof x === "object" && typeof (x as { text?: unknown }).text === "string")
@@ -220,11 +220,12 @@ export async function runLiveEvidenceFill(
   link: string,
   lineText: string,
   settings: AISettings
-): Promise<Omit<EvidenceFillDraft, "live"> & { live: true }> {
+): Promise<Omit<EvidenceFillDraft, "live"> & { live: true; usage?: AIUsage }> {
   const system = `You are an evidence intake assistant for an EduTrust GD4 internal audit. You are given only a document link/filename and the checklist line it is meant to support — you cannot open or read the document, so never assume or invent its content. Suggest plausible metadata from the link/filename alone, and draft a short auditor note (1-2 sentences) that explicitly tells the human auditor what they still need to verify themselves. Respond with JSON only: {"title": string, "type": "Policy/Procedure" | "Record/Log" | "System screenshot" | "Minutes" | "Survey/Feedback" | "Other", "date": string (YYYY-MM-DD, guess if unknown), "sufficiency": "Present" | "Weak" | "Missing", "auditorNote": string}.`;
   const user = `Evidence link: ${link}\nChecklist line this evidence is meant to support: ${lineText}`;
 
-  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
+  let usage: AIUsage | undefined;
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { onUsage: (u) => { usage = u; } });
   const parsed = parseJSONObject(content);
 
   return {
@@ -234,6 +235,7 @@ export async function runLiveEvidenceFill(
     sufficiency: (parsed.sufficiency as EvidenceFillDraft["sufficiency"]) || "Present",
     auditorNote: (parsed.auditorNote as string) || `Verify this evidence actually demonstrates: "${lineText}".`,
     live: true,
+    usage,
   };
 }
 
@@ -392,6 +394,7 @@ export async function runLiveCrossCriterionAnalysis(
   systemicIssues: string[];
   starPath: string;
   immediateActions: string[];
+  usage?: AIUsage;
 }> {
   const system = `You are a senior EduTrust strategic consultant reviewing a complete internal audit result for a Singapore PEI. Analyse the criterion bands, open findings, and audit journal to produce: (1) top 3 strategic priorities (most impactful gaps to address first), (2) systemic issues (cross-cutting root causes that appear in multiple criteria), (3) a concrete path to 4-Year (Star) — what specifically needs to change, (4) the single most urgent immediate action. Be specific to the GD4 standard, cite criterion and sub-criterion numbers. Do not soften or hedge. Respond with JSON only: {"priorities": string[], "systemicIssues": string[], "starPath": string, "immediateActions": string[]}.${skills(bandCalibrationSkill, sgPeiContextSkill, consultantInsightsSkill, riskRemediationSkill, externalAuditorSkill)}`;
 
@@ -414,7 +417,8 @@ export async function runLiveCrossCriterionAnalysis(
 
   const user = `Criterion bands:\n${criterionBandLines}\n\nOverall score: ${input.totalScore}/1000 — Award: ${input.award}\nOpen findings by category: ${catSummary || "none"} (total ${input.findings.length})\n\nTop Category A+B findings:\n${topFindings || "(none)"}\n\nAudit journal (latest entries):\n${journalBlock}`;
 
-  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
+  let usage: AIUsage | undefined;
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { onUsage: (u) => { usage = u; } });
   const parsed = parseJSONObject(content, ["priorities", "systemicIssues", "starPath", "immediateActions"]);
 
   const toStrArr = (v: unknown): string[] =>
@@ -425,6 +429,7 @@ export async function runLiveCrossCriterionAnalysis(
     systemicIssues: toStrArr(parsed.systemicIssues),
     starPath: typeof parsed.starPath === "string" ? parsed.starPath : "",
     immediateActions: toStrArr(parsed.immediateActions),
+    usage,
   };
 }
 

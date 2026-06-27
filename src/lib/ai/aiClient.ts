@@ -160,7 +160,7 @@ export async function chatComplete(
 // Separate from chatComplete because image evidence (scanned forms, photos
 // of signed documents, etc.) needs a vision-capable multimodal request and a
 // free-text reply, not the JSON-verdict shape every other caller here wants.
-export async function describeImage(imageDataUrl: string, settings: AISettings): Promise<string> {
+export async function describeImage(imageDataUrl: string, settings: AISettings, opts?: { onUsage?: (u: AIUsage) => void }): Promise<string> {
   if (!settings.enabled) throw new AIClientError("AI integration is disabled in Settings.");
   if (!settings.apiKey) throw new AIClientError("No OpenAI API key configured in Settings.");
 
@@ -201,6 +201,14 @@ export async function describeImage(imageDataUrl: string, settings: AISettings):
   const data = await res.json();
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new AIClientError("OpenAI response did not contain a message.");
+  if (opts?.onUsage && data?.usage) {
+    opts.onUsage({
+      model: typeof data.model === "string" ? data.model : model,
+      promptTokens: Number(data.usage.prompt_tokens) || 0,
+      completionTokens: Number(data.usage.completion_tokens) || 0,
+      totalTokens: Number(data.usage.total_tokens) || 0,
+    });
+  }
   return content;
 }
 
@@ -208,7 +216,7 @@ export async function describeImage(imageDataUrl: string, settings: AISettings):
 // big folder can be audited in full instead of being silently truncated.
 // Keeps concrete specifics — dates, names, approvals, figures, the presence of
 // records/implementation — which is exactly what the audit judges on.
-export async function summariseText(label: string, text: string, settings: AISettings, maxChars = 1500): Promise<string> {
+export async function summariseText(label: string, text: string, settings: AISettings, maxChars = 1500, opts?: { onUsage?: (u: AIUsage) => void }): Promise<string> {
   if (!settings.enabled || !settings.apiKey) return text.slice(0, maxChars);
   const model = settings.model || DEFAULT_MODEL;
   const body: Record<string, unknown> = {
@@ -232,5 +240,13 @@ export async function summariseText(label: string, text: string, settings: AISet
   if (!res.ok) return text.slice(0, maxChars); // best-effort: fall back to truncation
   const data = await res.json();
   const out = data?.choices?.[0]?.message?.content;
+  if (opts?.onUsage && data?.usage) {
+    opts.onUsage({
+      model: typeof data.model === "string" ? data.model : model,
+      promptTokens: Number(data.usage.prompt_tokens) || 0,
+      completionTokens: Number(data.usage.completion_tokens) || 0,
+      totalTokens: Number(data.usage.total_tokens) || 0,
+    });
+  }
   return typeof out === "string" ? out.slice(0, maxChars) : text.slice(0, maxChars);
 }

@@ -16,7 +16,7 @@ import { buildDraftFinding, lineSufficiency, lineApsr } from "../lib/checklistBa
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill } from "../lib/ai/agentRuntime";
-import { effectiveSettings } from "../lib/ai/aiClient";
+import { effectiveSettings, type AIUsage } from "../lib/ai/aiClient";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useWorkspaceStore, composeSchoolContext } from "./useWorkspaceStore";
 
@@ -128,10 +128,11 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         let raw: { text: string; clause: string }[];
         let live = false;
         let liveError: string | undefined;
+        let genUsage: AIUsage | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(useWorkspaceStore.getState().schoolContext) });
-            raw = await runLiveChecklistGeneration(req, settings);
+            raw = await runLiveChecklistGeneration(req, settings, (u) => { genUsage = u; });
             if (!raw.length) raw = simulateChecklistGeneration(req);
             else live = true;
           } catch (err) {
@@ -163,6 +164,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           live,
           liveError,
           generatedContent: lines.map((l) => `[${l.clause || "—"}] ${l.text}`).join("\n"),
+          usage: genUsage,
         });
         set((s) => ({
           ...mapEntry(s, itemId, (e) => ({ ...e, pendingGenerated: lines, generatedLive: live, generatedAt: new Date().toLocaleString() })),
@@ -243,6 +245,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           live: draft.live,
           liveError,
           generatedContent: `Title: ${draft.title}\nType: ${draft.type}\nDate: ${draft.date}\nSufficiency: ${draft.sufficiency}\nAuditor note: ${draft.auditorNote}`,
+          usage: (draft as { usage?: AIUsage }).usage,
         });
         set({ busy: null });
         return draft;

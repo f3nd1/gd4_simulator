@@ -29,6 +29,7 @@ export function Dashboard() {
   const evidenceAuditReport = useWorkspaceStore((s) => s.evidenceAuditReport);
   const auditJournal = useWorkspaceStore((s) => s.auditJournal);
   const schoolContext = useWorkspaceStore((s) => s.schoolContext);
+  const pushAIReviewLog = useWorkspaceStore((s) => s.pushAIReviewLog);
   const foldersWithLink = useWorkspaceStore((s) => s.folders.filter((f) => (f.folderLink && f.folderLink.trim()) || (f.policyLink && f.policyLink.trim())).length);
   const navigate = useNavigate();
   const scored = useScored();
@@ -88,6 +89,19 @@ export function Dashboard() {
         settings
       );
       setAnalysisResult(result);
+      // Record this AI run in the shared AI Review Log so every AI use is tracked.
+      pushAIReviewLog({
+        agent: "Strategic Consultant",
+        reviewType: "CrossCriterion",
+        subjectId: "All criteria",
+        verdict: `${result.priorities.length} priorit${result.priorities.length === 1 ? "y" : "ies"}, ${result.systemicIssues.length} systemic issue(s)`,
+        confidence: "Medium",
+        keyConcerns: result.systemicIssues.length ? result.systemicIssues : result.priorities,
+        recommendedAction: result.immediateActions[0] || "Review the strategic priorities below.",
+        live: true,
+        generatedContent: `PRIORITIES:\n${result.priorities.join("\n")}\n\nSYSTEMIC ISSUES:\n${result.systemicIssues.join("\n")}\n\nPATH TO STAR:\n${result.starPath}\n\nIMMEDIATE ACTIONS:\n${result.immediateActions.join("\n")}`,
+        usage: result.usage,
+      });
       setTimeout(() => analysisRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
     } catch (err) {
       setAnalysisError(err instanceof AIClientError ? err.message : err instanceof Error ? err.message : String(err));
