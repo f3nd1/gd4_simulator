@@ -347,6 +347,67 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
   return { verdicts, parseWarnings, truncationNote };
 }
 
+// Cross-criterion strategic analysis: synthesises criterion bands, open
+// findings, and the audit journal into strategic priorities, systemic issues,
+// a path to 4-Year Star, and immediate actions. This is the only AI function
+// that looks across ALL criteria at once — every other function is per-item.
+export async function runLiveCrossCriterionAnalysis(
+  input: {
+    journal: string;
+    findings: Array<{
+      gd4ItemId: string;
+      issue: string;
+      observation?: string;
+      effect?: string;
+      dimension?: string;
+      riskCategory?: string;
+    }>;
+    criterionBands: Array<{ id: string; title: string; band: number }>;
+    totalScore: number;
+    award: string;
+  },
+  settings: AISettings
+): Promise<{
+  priorities: string[];
+  systemicIssues: string[];
+  starPath: string;
+  immediateActions: string[];
+}> {
+  const system = `You are a senior EduTrust strategic consultant reviewing a complete internal audit result for a Singapore PEI. Analyse the criterion bands, open findings, and audit journal to produce: (1) top 3 strategic priorities (most impactful gaps to address first), (2) systemic issues (cross-cutting root causes that appear in multiple criteria), (3) a concrete path to 4-Year (Star) — what specifically needs to change, (4) the single most urgent immediate action. Be specific to the GD4 standard, cite criterion and sub-criterion numbers. Do not soften or hedge. Respond with JSON only: {"priorities": string[], "systemicIssues": string[], "starPath": string, "immediateActions": string[]}.${skills(bandCalibrationSkill, sgPeiContextSkill, consultantInsightsSkill, riskRemediationSkill, externalAuditorSkill)}`;
+
+  const criterionBandLines = input.criterionBands.map((c) => `C${c.id} Band ${c.band} — ${c.title}`).join("\n");
+
+  const catCounts: Record<string, number> = { A: 0, B: 0, C: 0, D: 0 };
+  for (const f of input.findings) if (f.riskCategory && f.riskCategory in catCounts) catCounts[f.riskCategory]++;
+  const catSummary = Object.entries(catCounts)
+    .filter(([, n]) => n > 0)
+    .map(([c, n]) => `Cat ${c}: ${n}`)
+    .join(", ");
+
+  const topFindings = input.findings
+    .filter((f) => f.riskCategory === "A" || f.riskCategory === "B")
+    .slice(0, 5)
+    .map((f) => `[${f.gd4ItemId}${f.riskCategory ? ` Cat${f.riskCategory}` : ""}] ${f.issue}${f.observation ? ` — ${f.observation.slice(0, 200)}` : ""}${f.effect ? ` Effect: ${f.effect.slice(0, 200)}` : ""}`)
+    .join("\n");
+
+  const journalBlock = input.journal ? input.journal.slice(0, 3000) : "(no audit journal entries)";
+
+  const user = `Criterion bands:\n${criterionBandLines}\n\nOverall score: ${input.totalScore}/1000 — Award: ${input.award}\nOpen findings by category: ${catSummary || "none"} (total ${input.findings.length})\n\nTop Category A+B findings:\n${topFindings || "(none)"}\n\nAudit journal (latest entries):\n${journalBlock}`;
+
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings);
+  const parsed = parseJSONObject(content, ["priorities", "systemicIssues", "starPath", "immediateActions"]);
+
+  const toStrArr = (v: unknown): string[] =>
+    Array.isArray(v) ? (v as unknown[]).filter((x): x is string => typeof x === "string") : typeof v === "string" ? [v] : [];
+
+  return {
+    priorities: toStrArr(parsed.priorities),
+    systemicIssues: toStrArr(parsed.systemicIssues),
+    starPath: typeof parsed.starPath === "string" ? parsed.starPath : "",
+    immediateActions: toStrArr(parsed.immediateActions),
+  };
+}
+
 // Drafts the three structured body sections of a finding — Observation,
 // Criteria, Effect — using the finding-specificity skill so the AI writes
 // with the required specificity: WHO, WHAT, WHEN, HOW MANY, GD4 clause, and

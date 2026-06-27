@@ -31,6 +31,7 @@ export function FinalReport() {
   const a = useMemo(() => buildAnalytics(scored, entries, findings, folders, closures), [scored, entries, findings, folders, closures]);
 
   const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [aiCriterionNarratives, setAiCriterionNarratives] = useState<Record<string, string> | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
@@ -40,21 +41,47 @@ export function FinalReport() {
     try {
       const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(schoolContext) });
       const sys =
-        "You are writing the executive summary of a GD4 internal audit readiness report for a private education institution. Be concise, specific and honest — do not soften gaps. Respond with JSON only: {\"summary\": string} of 4-6 sentences covering overall readiness, the strongest areas, the most important areas for improvement, and the single highest-priority action to raise the band.";
+        "You are writing the executive summary of a GD4 internal audit readiness report for a Singapore PEI. Be concise, specific and honest — do not soften gaps. Respond with JSON only: {\"summary\": string, \"criterionNarratives\": Record<string, string>}. The summary should be 4-6 sentences covering: overall readiness, highest-risk regulatory findings (Category A), strongest criteria, most critical gap to close, and whether 4-Year (Star) is realistically attainable from the current position. For criterionNarratives, write one specific sentence per criterion (C1–C7) stating its band, what's strong, and what the key gap is.";
+
+      // Build richer user prompt with Category A/B findings
+      const catAFindings = findings
+        .filter((f) => (f as { riskCategory?: string }).riskCategory === "A")
+        .slice(0, 5)
+        .map((f) => `[${f.gd4ItemId}] ${f.issue}${f.effect ? ` — ${f.effect.slice(0, 150)}` : ""}`)
+        .join("; ");
+      const catBFindings = findings
+        .filter((f) => (f as { riskCategory?: string }).riskCategory === "B")
+        .slice(0, 3)
+        .map((f) => `[${f.gd4ItemId}] ${f.issue}${f.effect ? ` — ${f.effect.slice(0, 150)}` : ""}`)
+        .join("; ");
+      const belowBand3Items = report.items.filter((i) => i.band < 3).map((i) => `${i.id} (Band ${i.band})`).join(", ");
+
       const user = `Overall score ${report.overall.total}/1000, award "${report.overall.award}", score gate ${
         report.overall.gatePass ? "met" : `NOT met (${report.overall.gateFail.join(", ")})`
-      }. Per-criterion bands: ${report.crits.map((c) => `C${c.id} Band ${c.band}`).join(", ")}. Items below Band 3: ${
-        report.items.filter((i) => i.band < 3).map((i) => i.id).join(", ") || "none"
-      }. Open AFIs: ${report.overall.openAFIs}. Representative gaps: ${report.items.flatMap((i) => i.gaps).slice(0, 12).join("; ") || "none recorded"}.`;
+      }.\nPer-criterion bands: ${report.crits.map((c) => `C${c.id} Band ${c.band} — ${c.title}`).join("; ")}.\nItems below Band 3: ${belowBand3Items || "none"}.\nOpen AFIs: ${report.overall.openAFIs}.\nCategory A findings (regulatory breach): ${catAFindings || "none"}.\nCategory B findings (Star-disqualifying): ${catBFindings || "none"}.`;
+
       const content = await chatComplete([{ role: "system", content: sys }, { role: "user", content: user }], settings);
       let text = content;
+      let narratives: Record<string, string> | null = null;
       try {
         const parsed = JSON.parse(content);
         if (parsed && typeof parsed.summary === "string") text = parsed.summary;
+        if (parsed && parsed.criterionNarratives && typeof parsed.criterionNarratives === "object") {
+          narratives = parsed.criterionNarratives as Record<string, string>;
+        }
       } catch {
-        /* keep raw */
+        // Try extracting JSON object from response
+        const match = content.match(/\{[\s\S]*\}/);
+        if (match) {
+          try {
+            const parsed = JSON.parse(match[0]);
+            if (parsed?.summary) text = parsed.summary;
+            if (parsed?.criterionNarratives) narratives = parsed.criterionNarratives;
+          } catch { /* keep raw */ }
+        }
       }
       setAiSummary(text);
+      setAiCriterionNarratives(narratives);
     } catch (err) {
       setAiError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -106,6 +133,27 @@ export function FinalReport() {
         <Card>
           <h3 style={{ marginTop: 0, fontSize: 14 }}>Executive summary (AI)</h3>
           <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{aiSummary}</p>
+          {aiCriterionNarratives && Object.keys(aiCriterionNarratives).length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 8 }}>Criterion-by-criterion breakdown (AI)</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 8 }}>
+                {report.crits.map((c) => {
+                  const key = `C${c.id}`;
+                  const narrative = aiCriterionNarratives[key] || aiCriterionNarratives[c.id] || aiCriterionNarratives[String(c.id)];
+                  if (!narrative) return null;
+                  return (
+                    <div key={c.id} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px", background: "#f8fafc" }}>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                        <Pill s={c.band >= 4 ? "good" : c.band === 3 ? "medium" : "critical"}>Band {c.band}</Pill>
+                        <span style={{ fontSize: 11.5, fontWeight: 700 }}>C{c.id} {c.title}</span>
+                      </div>
+                      <p style={{ margin: 0, fontSize: 12.5, color: "#374151", lineHeight: 1.5 }}>{narrative}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </Card>
       )}
 

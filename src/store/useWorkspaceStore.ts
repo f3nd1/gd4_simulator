@@ -677,8 +677,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const memory = useAgentMemoryStore.getState().memory[agentId] || [];
             const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
             verdict = await runLiveItemReview(agent, item, ev, settings, memory);
-            useAgentMemoryStore.getState().addMemory(agentId, { role: "user", content: `Reviewed item ${itemId}.`, createdAt: new Date().toISOString() });
-            useAgentMemoryStore.getState().addMemory(agentId, { role: "assistant", content: verdict.justification, createdAt: new Date().toISOString() });
+            const bandLabels = ["", "Band 1 — no system", "Band 2 — awareness", "Band 3 — systematic", "Band 4 — integrated", "Band 5 — excellent"];
+            const bandLabel = bandLabels[item.band] || `Band ${item.band}`;
+            useAgentMemoryStore.getState().addMemory(agentId, { role: "user", content: `GD4 ${itemId}: requesting review. Evidence score ${item.eff}/100, band ${item.band}.`, createdAt: new Date().toISOString() });
+            useAgentMemoryStore.getState().addMemory(agentId, { role: "assistant", content: `GD4 ${itemId} reviewed: Band ${verdict.band} (${bandLabel}). ${verdict.justification} Recommendation: ${verdict.higherBand}`, createdAt: new Date().toISOString() });
           } catch (err) {
             liveError = err instanceof Error ? err.message : String(err);
             verdict = simulateItemReview(agent, item, ev);

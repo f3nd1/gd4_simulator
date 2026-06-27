@@ -165,6 +165,12 @@ export type Finding = {
   // checklist line / folder audit (undefined on a plain manual finding).
   source?: "Audit" | "Checklist" | "Manual" | "Seed";
   dimension?: FindingDimension;
+  // Risk category: A = regulatory breach (SSG mandatory requirement, can
+  // trigger enforcement), B = Star-disqualifying (Criterion 7 or
+  // gate-sensitive, blocks 4-Year Star), C = band-limiting (caps the band but
+  // not a compliance breach), D = enhancement (improvement opportunity,
+  // not blocking).
+  riskCategory?: "A" | "B" | "C" | "D";
   clause?: string;
   // Structured finding body — populated automatically on audit-raised findings
   // and via AI draft / manual entry on the Findings form.
@@ -248,6 +254,8 @@ export type DraftFindingInfo = {
   corrective?: string;
   preventive?: string;
   dimension?: FindingDimension;
+  // Risk category — same meaning as on Finding.
+  riskCategory?: "A" | "B" | "C" | "D";
 };
 
 export type GenericChecklistLine = {
@@ -352,7 +360,7 @@ export type EvidenceFolder = {
   lastAuditNewestModified?: string;
 };
 
-export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation";
+export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation" | "Finding" | "CrossCriterion";
 
 export type AIReviewLogEntry = {
   id: string;

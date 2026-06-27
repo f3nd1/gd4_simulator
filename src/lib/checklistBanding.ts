@@ -207,6 +207,19 @@ export function findingDimension(line: SpecificChecklistLine): FindingDimension 
   return "Evidence";
 }
 
+// Classifies a finding's risk category based on the GD4 requirement and the
+// APSR dimension that fell short. A = regulatory breach (SSG mandatory
+// student-protection items), B = Star-disqualifying (Criterion 7 or
+// gate-sensitive), C = band-limiting gap.
+export function computeRiskCategory(req: GD4Requirement, _dim: FindingDimension): "A" | "B" | "C" | "D" {
+  // A: SSG mandatory student protection items — breach may trigger enforcement
+  if (["4.1", "4.2", "4.4"].includes(req.subCriterionId)) return "A";
+  // B: Criterion 7 (330/1000 points) or gate-sensitive items — blocks Star
+  if (req.criterion === "7" || req.gateSensitive) return "B";
+  // C: everything else (band-limiting gap)
+  return "C";
+}
+
 export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLine): DraftFindingInfo {
   const sufficiency = lineSufficiency(line);
   const analysis = buildFindingAnalysis(req, line);
@@ -252,5 +265,6 @@ export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLi
     corrective: analysis.corrective,
     preventive: analysis.preventive,
     dimension: dim,
+    riskCategory: computeRiskCategory(req, dim),
   };
 }

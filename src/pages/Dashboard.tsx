@@ -1,15 +1,18 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
+import { useAISettingsStore } from "../store/useAISettingsStore";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { Bar } from "../components/ui/Bar";
 import { GOLD, INK, TONE } from "../lib/theme";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { NAV } from "../nav";
+import { runLiveCrossCriterionAnalysis, AIClientError } from "../lib/ai/agentRuntime";
+import { effectiveSettings } from "../lib/ai/aiClient";
 
 export function Dashboard() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -22,6 +25,8 @@ export function Dashboard() {
   const bulkAuditStatus = useWorkspaceStore((s) => s.bulkAuditStatus);
   const runEvidenceAudit = useWorkspaceStore((s) => s.runEvidenceAudit);
   const evidenceAuditReport = useWorkspaceStore((s) => s.evidenceAuditReport);
+  const auditJournal = useWorkspaceStore((s) => s.auditJournal);
+  const schoolContext = useWorkspaceStore((s) => s.schoolContext);
   const foldersWithLink = useWorkspaceStore((s) => s.folders.filter((f) => (f.folderLink && f.folderLink.trim()) || (f.policyLink && f.policyLink.trim())).length);
   const navigate = useNavigate();
   const scored = useScored();
@@ -29,6 +34,65 @@ export function Dashboard() {
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
   const folders = useWorkspaceStore((s) => s.folders);
   const reportRef = useRef<HTMLDivElement | null>(null);
+  const aiSettings = useAISettingsStore();
+  const aiEnabled = aiSettings.enabled && !!aiSettings.apiKey;
+
+  type AnalysisResult = {
+    priorities: string[];
+    systemicIssues: string[];
+    starPath: string;
+    immediateActions: string[];
+  };
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const analysisRef = useRef<HTMLDivElement | null>(null);
+
+  async function runStrategicAnalysis() {
+    setAnalysisBusy(true);
+    setAnalysisError(null);
+    try {
+      const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(schoolContext) });
+      // Group by criterion, take minimum band per criterion
+      const criterionMap: Record<string, { title: string; minBand: number }> = {};
+      for (const item of scored.items) {
+        const critId = item.id.split(".")[0];
+        const existing = criterionMap[critId];
+        if (!existing || item.band < existing.minBand) {
+          criterionMap[critId] = { title: item.id, minBand: item.band };
+        }
+      }
+      // Use GD4_CRITERIA titles if available — import from data
+      const criterionBands = Object.entries(criterionMap).map(([id, v]) => ({
+        id,
+        title: v.title,
+        band: v.minBand,
+      }));
+      const result = await runLiveCrossCriterionAnalysis(
+        {
+          journal: auditJournal,
+          findings: findings.map((f) => ({
+            gd4ItemId: f.gd4ItemId,
+            issue: f.issue,
+            observation: f.observation,
+            effect: f.effect,
+            dimension: f.dimension,
+            riskCategory: f.riskCategory,
+          })),
+          criterionBands,
+          totalScore: scored.total,
+          award: scored.award,
+        },
+        settings
+      );
+      setAnalysisResult(result);
+      setTimeout(() => analysisRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+    } catch (err) {
+      setAnalysisError(err instanceof AIClientError ? err.message : err instanceof Error ? err.message : String(err));
+    } finally {
+      setAnalysisBusy(false);
+    }
+  }
 
   // The report renders below the score header, so on a tall page a click on
   // the button could otherwise look like nothing happened — scroll it into
@@ -144,9 +208,57 @@ export function Dashboard() {
           >
             Raise findings from gaps
           </button>
+          {aiEnabled && (
+            <button
+              disabled={analysisBusy || (findings.length === 0 && !auditJournal)}
+              title="Synthesises criterion bands, findings, and the audit journal into strategic priorities, systemic issues, a path to Star, and the single most urgent action."
+              onClick={runStrategicAnalysis}
+              style={{ cursor: analysisBusy ? "default" : "pointer", border: "1px solid #3a4660", background: "transparent", color: "#c4b5fd", fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12, opacity: findings.length === 0 && !auditJournal ? 0.5 : 1 }}
+            >
+              {analysisBusy ? "Analysing…" : "Strategic AI analysis"}
+            </button>
+          )}
         </div>
         {bulkAuditStatus && <div style={{ fontSize: 11.5, color: "#aeb8c7", marginTop: 8 }}>{bulkAuditStatus}</div>}
+        {analysisError && <div style={{ fontSize: 11.5, color: "#f4b3aa", marginTop: 8 }}>Strategic analysis failed: {analysisError}</div>}
       </Card>
+
+      {analysisResult && (
+        <Card style={{ gridColumn: "1 / -1" }}>
+          <div ref={analysisRef} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
+            <h3 style={{ margin: 0, fontSize: 14 }}>Strategic analysis (AI)</h3>
+            <button onClick={() => setAnalysisResult(null)} style={{ cursor: "pointer", border: "none", background: "transparent", color: "#6b7280", fontSize: 12 }}>Clear</button>
+          </div>
+          {analysisResult.priorities.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Top 3 priorities</div>
+              <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12.5, color: "#374151" }}>
+                {analysisResult.priorities.map((p, i) => <li key={i} style={{ marginBottom: 4, lineHeight: 1.5 }}>{p}</li>)}
+              </ol>
+            </div>
+          )}
+          {analysisResult.systemicIssues.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#b45309", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Systemic issues</div>
+              <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12.5, color: "#374151" }}>
+                {analysisResult.systemicIssues.map((s, i) => <li key={i} style={{ marginBottom: 4, lineHeight: 1.5 }}>{s}</li>)}
+              </ul>
+            </div>
+          )}
+          {analysisResult.starPath && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Path to Star (4-Year)</div>
+              <p style={{ margin: 0, fontSize: 12.5, color: "#374151", lineHeight: 1.6 }}>{analysisResult.starPath}</p>
+            </div>
+          )}
+          {analysisResult.immediateActions.length > 0 && (
+            <div style={{ background: "#fef3c7", border: "1px solid #d97706", borderRadius: 8, padding: "8px 12px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Immediate action</div>
+              {analysisResult.immediateActions.map((a, i) => <div key={i} style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5 }}>{a}</div>)}
+            </div>
+          )}
+        </Card>
+      )}
 
       {evidenceAuditReport && (
         <Card style={{ gridColumn: "1 / -1" }}>

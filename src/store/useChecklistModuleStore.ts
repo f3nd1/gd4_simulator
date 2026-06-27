@@ -310,6 +310,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           // without re-deriving it.
           source: "Checklist",
           dimension: draft.dimension,
+          riskCategory: draft.riskCategory,
           clause: draft.clause,
           observation: draft.observation,
           criteria: draft.criteria,

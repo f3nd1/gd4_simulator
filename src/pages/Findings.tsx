@@ -11,11 +11,13 @@ import { GOLD, INK } from "../lib/theme";
 import type { Finding, FindingType, Severity, FindingDimension } from "../types";
 import { runLiveFindingObservation, AIClientError } from "../lib/ai/agentRuntime";
 import { effectiveSettings } from "../lib/ai/aiClient";
+import { lineApsr, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
 
 const TYPES: (FindingType | "All")[] = ["All", "AFI", "Improvement Action", "Observation", "Quality Action", "Critical Readiness Risk"];
 const SEVERITIES: (Severity | "All")[] = ["All", "Critical", "High", "Medium", "Low"];
 const RAISABLE_TYPES: FindingType[] = ["AFI", "Improvement Action", "Observation", "Quality Action", "Critical Readiness Risk"];
 const DIMENSIONS: (FindingDimension | "All")[] = ["All", "Procedure", "Evidence", "Outcomes", "Review", "Unverified"];
+const RISK_CATS: ("A" | "B" | "C" | "D" | "All")[] = ["All", "A", "B", "C", "D"];
 
 function severityTone(sev: Severity) {
   return sev === "Critical" || sev === "High" ? "critical" : sev === "Medium" ? "medium" : "neutral";
@@ -31,6 +33,14 @@ function dimensionLabel(d: FindingDimension): string {
   return d === "Procedure" ? "Procedure (policy)" : d === "Evidence" ? "Evidence (implementation)" : d;
 }
 
+function riskCatTone(c: "A" | "B" | "C" | "D"): string {
+  return c === "A" ? "critical" : c === "B" ? "high" : c === "C" ? "medium" : "progress";
+}
+
+function riskCatLabel(c: "A" | "B" | "C" | "D"): string {
+  return c === "A" ? "Cat A — Regulatory" : c === "B" ? "Cat B — Star risk" : c === "C" ? "Cat C — Band cap" : "Cat D — Enhance";
+}
+
 const EMPTY_FORM = {
   gd4ItemId: GD4_REQUIREMENTS[0]?.id || "",
   issue: "",
@@ -42,6 +52,8 @@ const EMPTY_FORM = {
   owner: "",
   dueDate: "",
   repeatFinding: false,
+  dimension: "" as FindingDimension | "",
+  riskCategory: "" as "A" | "B" | "C" | "D" | "",
 };
 
 export function Findings() {
@@ -57,6 +69,7 @@ export function Findings() {
   const [critFilter, setCritFilter] = useState<string>("All");
   const [subCritFilter, setSubCritFilter] = useState<string>("All");
   const [dimFilter, setDimFilter] = useState<FindingDimension | "All">("All");
+  const [riskCatFilter, setRiskCatFilter] = useState<"A" | "B" | "C" | "D" | "All">("All");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -65,12 +78,20 @@ export function Findings() {
   const [draftError, setDraftError] = useState<string | null>(null);
   const aiSettings = useAISettingsStore((s) => s);
   const aiEnabled = aiSettings.enabled && !!aiSettings.apiKey;
+  const pushAIReviewLog = useWorkspaceStore((s) => s.pushAIReviewLog);
 
   // Counts by dimension across the whole register, so the procedure-vs-evidence
   // split is visible at a glance above the table.
   const dimCounts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const f of allFindings) if (f.dimension) c[f.dimension] = (c[f.dimension] || 0) + 1;
+    return c;
+  }, [allFindings]);
+
+  // Counts by risk category across the whole register.
+  const riskCatCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const f of allFindings) if (f.riskCategory) c[f.riskCategory] = (c[f.riskCategory] || 0) + 1;
     return c;
   }, [allFindings]);
 
@@ -85,13 +106,43 @@ export function Findings() {
     setDraftError(null);
     setDraftBusy(true);
     try {
-      const result = await runLiveFindingObservation(
-        req,
-        { text: req.requirement, status: "Not met" },
-        "Procedure",
-        undefined,
-        effectiveSettings(aiSettings, { purpose: "analysis" })
-      );
+      // Use real checklist data if available — find the worst Not-met line.
+      const entries = useChecklistModuleStore.getState().entries;
+      const entry = entries[form.gd4ItemId];
+      let lineArg: { text: string; status: string };
+      let dimensionArg: string;
+      let apsrArg: ReturnType<typeof lineApsr> | undefined;
+
+      if (entry && entry.specific.length > 0) {
+        const notMetLines = entry.specific.filter((l) => l.status === "Not met");
+        // Prefer a line that has APSR data attached
+        const worst =
+          notMetLines.find((l) => lineApsr(l) !== undefined) ||
+          notMetLines[0] ||
+          entry.specific[0];
+        lineArg = { text: worst.text, status: worst.status };
+        dimensionArg = findingDimension(worst);
+        apsrArg = lineApsr(worst);
+      } else {
+        // No checklist data — fall back to generic requirement text
+        lineArg = { text: req.requirement, status: "Not met" };
+        dimensionArg = form.dimension || "Procedure";
+        apsrArg = undefined;
+      }
+
+      const settings = effectiveSettings(aiSettings, { purpose: "analysis" });
+      const result = await runLiveFindingObservation(req, lineArg, dimensionArg, apsrArg, settings);
+      pushAIReviewLog({
+        agent: "Finding Body Drafter",
+        reviewType: "Finding",
+        subjectId: req.id,
+        verdict: "Draft",
+        confidence: "Medium",
+        keyConcerns: [dimensionArg],
+        recommendedAction: "Review and edit the drafted finding body before saving",
+        live: settings.enabled,
+        generatedContent: `OBSERVATION:\n${result.observation}\n\nCRITERIA:\n${result.criteria}\n\nEFFECT:\n${result.effect}`,
+      });
       setForm((f) => ({
         ...f,
         observation: result.observation,
@@ -104,6 +155,20 @@ export function Findings() {
     } finally {
       setDraftBusy(false);
     }
+  }
+
+  function handleGd4ItemChange(newItemId: string) {
+    const req = GD4_REQUIREMENTS.find((r) => r.id === newItemId);
+    // Auto-compute riskCategory from the requirement
+    const newRiskCategory: "A" | "B" | "C" | "D" | "" = req
+      ? computeRiskCategory(req, "Evidence")
+      : "";
+    setForm((f) => ({
+      ...f,
+      gd4ItemId: newItemId,
+      dimension: "",
+      riskCategory: newRiskCategory,
+    }));
   }
 
   function submitFinding() {
@@ -125,6 +190,8 @@ export function Findings() {
       managementDecisionNeeded: form.severity === "Critical" || form.severity === "High",
       status: "Open",
       source: "Manual",
+      dimension: form.dimension || undefined,
+      riskCategory: (form.riskCategory as "A" | "B" | "C" | "D") || undefined,
     };
     addCustomFinding(finding);
     setForm(EMPTY_FORM);
@@ -136,6 +203,7 @@ export function Findings() {
     if (typeFilter !== "All" && f.type !== typeFilter) return false;
     if (sevFilter !== "All" && f.severity !== sevFilter) return false;
     if (dimFilter !== "All" && f.dimension !== dimFilter) return false;
+    if (riskCatFilter !== "All" && f.riskCategory !== riskCatFilter) return false;
     const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
     if (critFilter !== "All" && req?.criterion !== critFilter) return false;
     if (subCritFilter !== "All" && req?.subCriterionId !== subCritFilter) return false;
@@ -171,7 +239,7 @@ export function Findings() {
 
       {/* Procedure-vs-evidence breakdown — answers "what kind of gaps do I have". */}
       {Object.keys(dimCounts).length > 0 && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
           <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>By dimension</span>
           {(["Procedure", "Evidence", "Outcomes", "Review", "Unverified"] as FindingDimension[]).filter((d) => dimCounts[d]).map((d) => (
             <button
@@ -185,6 +253,24 @@ export function Findings() {
           ))}
         </div>
       )}
+
+      {/* Risk category breakdown. */}
+      {Object.keys(riskCatCounts).length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>By risk category</span>
+          {(["A", "B", "C", "D"] as const).filter((c) => riskCatCounts[c]).map((c) => (
+            <button
+              key={c}
+              onClick={() => setRiskCatFilter((cur) => (cur === c ? "All" : c))}
+              title={`Filter to ${riskCatLabel(c)} findings`}
+              style={{ cursor: "pointer", border: riskCatFilter === c ? "1px solid #1f2937" : "1px solid transparent", background: "transparent", borderRadius: 999, padding: 0 }}
+            >
+              <Pill s={riskCatTone(c) as Parameters<typeof Pill>[0]["s"]}>{riskCatLabel(c)}: {riskCatCounts[c]}</Pill>
+            </button>
+          ))}
+        </div>
+      )}
+
       {genNote && <div style={{ fontSize: 12, color: "#15803d", marginBottom: 10 }}>{genNote}</div>}
 
       {showForm && (
@@ -192,7 +278,7 @@ export function Findings() {
           <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
             <label style={{ display: "block" }}>
               <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>GD4 item</span>
-              <select value={form.gd4ItemId} onChange={(e) => setForm({ ...form, gd4ItemId: e.target.value })} style={{ ...inputStyle, marginTop: 3 }}>
+              <select value={form.gd4ItemId} onChange={(e) => handleGd4ItemChange(e.target.value)} style={{ ...inputStyle, marginTop: 3 }}>
                 {GD4_REQUIREMENTS.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.id} — {r.requirement.slice(0, 60)}
@@ -210,6 +296,16 @@ export function Findings() {
               <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Severity</span>
               <select value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value as Severity })} style={{ ...inputStyle, marginTop: 3 }}>
                 {(["Critical", "High", "Medium", "Low"] as Severity[]).map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </label>
+            <label style={{ display: "block" }}>
+              <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Risk category</span>
+              <select value={form.riskCategory} onChange={(e) => setForm({ ...form, riskCategory: e.target.value as "A" | "B" | "C" | "D" | "" })} style={{ ...inputStyle, marginTop: 3 }}>
+                <option value="">— not classified —</option>
+                <option value="A">A — Regulatory breach (SSG mandatory)</option>
+                <option value="B">B — Star-disqualifying (Criterion 7 / gate-sensitive)</option>
+                <option value="C">C — Band-limiting</option>
+                <option value="D">D — Enhancement opportunity</option>
               </select>
             </label>
             <label style={{ display: "block" }}>
@@ -276,7 +372,7 @@ export function Findings() {
               <button
                 onClick={draftObservation}
                 disabled={draftBusy || !form.gd4ItemId}
-                title="AI drafts Observation, Criteria and Effect from the selected GD4 item. Uses [placeholders] where you need to fill in specific names, dates, and counts."
+                title="AI drafts Observation, Criteria and Effect from the selected GD4 item's real checklist APSR data. Uses [placeholders] where you need to fill in specific names, dates, and counts."
                 style={{ cursor: "pointer", border: "1px solid #c9a24a", background: "#fbf3df", color: "#7a5c12", fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
               >
                 {draftBusy ? "Drafting…" : "AI draft finding body"}
@@ -314,6 +410,13 @@ export function Findings() {
         <select value={dimFilter} onChange={(e) => setDimFilter(e.target.value as FindingDimension | "All")} style={filterSelectStyle}>
           {DIMENSIONS.map((d) => <option key={d} value={d}>{d === "All" ? "All dimensions" : dimensionLabel(d)}</option>)}
         </select>
+        <select value={riskCatFilter} onChange={(e) => setRiskCatFilter(e.target.value as "A" | "B" | "C" | "D" | "All")} style={filterSelectStyle}>
+          {RISK_CATS.map((c) => (
+            <option key={c} value={c}>
+              {c === "All" ? "All risk categories" : `Cat ${c} — ${c === "A" ? "Regulatory" : c === "B" ? "Star risk" : c === "C" ? "Band cap" : "Enhancement"}`}
+            </option>
+          ))}
+        </select>
         <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as FindingType | "All")} style={filterSelectStyle}>
           {TYPES.map((t) => <option key={t}>{t}</option>)}
         </select>
@@ -323,7 +426,7 @@ export function Findings() {
       </div>
       <table>
         <thead>
-          <tr><th /><th>ID</th><th>GD4 item</th><th>Issue</th><th>Dimension</th><th>Severity</th><th>Owner</th><th>Status</th></tr>
+          <tr><th /><th>ID</th><th>GD4 item</th><th>Issue</th><th>Dimension</th><th>Risk</th><th>Severity</th><th>Owner</th><th>Status</th></tr>
         </thead>
         <tbody>
           {rows.map((f) => {
@@ -338,13 +441,14 @@ export function Findings() {
                   <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5, color: "#6b7280" }}>{f.gd4ItemId}</td>
                   <td style={{ fontSize: 12.5 }}>{f.issue}</td>
                   <td>{f.dimension ? <Pill s={dimensionTone(f.dimension)}>{dimensionLabel(f.dimension)}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
+                  <td>{f.riskCategory ? <Pill s={riskCatTone(f.riskCategory) as Parameters<typeof Pill>[0]["s"]}>{riskCatLabel(f.riskCategory)}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
                   <td><Pill s={severityTone(f.severity)}>{f.severity}</Pill></td>
                   <td>{f.owner}</td>
                   <td><Pill s={closed ? "good" : "critical"}>{closed ? "Closed" : "Open"}</Pill></td>
                 </tr>
                 {open && hasDetail && (
                   <tr>
-                    <td colSpan={8} style={{ background: "#f8fafc", padding: "10px 14px" }}>
+                    <td colSpan={9} style={{ background: "#f8fafc", padding: "10px 14px" }}>
                       <FindingDetail finding={f} />
                     </td>
                   </tr>
@@ -354,7 +458,7 @@ export function Findings() {
           })}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={8} style={{ padding: "18px 14px", color: "#6b7280", fontSize: 12.5 }}>
+              <td colSpan={9} style={{ padding: "18px 14px", color: "#6b7280", fontSize: 12.5 }}>
                 No findings to show. Run a folder audit (Evidence Folder page) — findings are raised automatically from the gaps — or click <b>Generate from gaps</b> above to create them from the current Sub-Criterion Checklist.
               </td>
             </tr>
@@ -390,6 +494,7 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
           {f.clause && <span style={{ fontFamily: "ui-monospace,monospace", marginLeft: 8 }}>{f.clause}</span>}
           {f.source && <Pill s="neutral">{f.source}</Pill>}
           {f.dimension && <span style={{ marginLeft: 4 }}><Pill s={dimensionTone(f.dimension)}>{dimensionLabel(f.dimension)}</Pill></span>}
+          {f.riskCategory && <span style={{ marginLeft: 4 }}><Pill s={riskCatTone(f.riskCategory) as Parameters<typeof Pill>[0]["s"]}>{riskCatLabel(f.riskCategory)}</Pill></span>}
         </div>
       )}
       <Section label="Observation — what was found (WHO · WHAT · WHEN · HOW MANY)" text={f.observation} />
