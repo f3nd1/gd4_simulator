@@ -197,7 +197,7 @@ export function AIReview() {
 
       <table>
         <thead>
-          <tr><th>Agent</th><th>Module</th><th>Subject</th><th>Verdict</th><th>Model</th><th>Tokens</th><th>When</th></tr>
+          <tr><th>Agent</th><th>Module</th><th>Subject</th><th>Summary</th><th>Model</th><th>Tokens</th><th>When</th></tr>
         </thead>
         <tbody>
           {visible.map((e) => {
