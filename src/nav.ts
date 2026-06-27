@@ -12,6 +12,7 @@ export const NAV: NavGroup[] = [
     items: [
       { path: "/", label: "Dashboard", hint: "Overall readiness, score and the getting-started guide" },
       { path: "/analytics", label: "Data Dashboard", hint: "Charts across scores, bands, gates, findings and progress" },
+      { path: "/help", label: "Help & Guide", hint: "What every page is and how to use it" },
       { path: "/draft-workspace", label: "Draft Workspace", hint: "Save/restore versions of the whole workspace" },
     ],
   },

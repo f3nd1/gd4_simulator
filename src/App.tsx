@@ -26,6 +26,7 @@ import { Settings } from "./pages/Settings";
 import { SchoolContext } from "./pages/SchoolContext";
 import { FinalReport } from "./pages/FinalReport";
 import { Analytics } from "./pages/Analytics";
+import { Help } from "./pages/Help";
 
 export default function App() {
   return (
@@ -34,6 +35,7 @@ export default function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/help" element={<Help />} />
           <Route path="/school-context" element={<SchoolContext />} />
           <Route path="/draft-workspace" element={<DraftWorkspace />} />
           <Route path="/audit-cycle" element={<AuditCycle />} />
