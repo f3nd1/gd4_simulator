@@ -62,6 +62,12 @@ Validate GD4 data integrity (35 items, flatAuditPoints consistency): `npm run va
      - `spreadsheet-evidence.md` — Excel/CSV evidence assessment (row coverage, structure)
      - `scanned-document-evidence.md` — scanned PDF detection and audit cues
      - `evidence-retrieval.md` — per-dimension chunk retrieval strategy
+     - `regulatory-references.md` — exact SSG/CPE/PDPA/Companies Act provisions per criterion so findings cite the regulation, not just the GD4 item number
+     - `root-cause-methodology.md` — 5-Why discipline, symptom→immediate cause→root cause hierarchy, corrective vs preventive distinction
+     - `interview-and-fieldwork.md` — oral-assertion vs evidence distinction, fieldwork probing questions per APSR dimension, flags for post-audit documentation and key-person dependencies
+     - `sample-testing-methodology.md` — minimum sample sizes, selection strategies, rate-based observation language, response-rate thresholds for survey/outcome data
+     - `evidence-timeliness.md` — date-audit rules: documents created close to audit deadline, coverage-period gaps, cycle-coverage requirements for trend data
+     - `benchmarking-and-good-practice.md` — concrete Band 2–5 descriptions with criterion-specific examples of what Band 4–5 looks like so recommendations are targets, not platitudes
    - **Criterion-specific domain expertise** (`src/data/skills/criterion-{1..7}-*.md` + `domainExpertise.ts`): seven specialist auditor skill files, one per GD4 criterion (C1 corporate governance/finance, C2 HR/marketing/data, C3 agent due-diligence, C4 student-protection/fee-safeguarding, C5 pedagogy/assessment QA, C6 QMS/continual-improvement, C7 performance measurement/data-integrity). `domainExpertise.ts` exposes `criterionIdOf()`, `domainExpertiseFor()` and `domainExpertiseLabelFor()` (maps any item/sub-criterion/criterion id → its criterion number → skill/label). The folder audit (`runLiveFolderAuditBatch`, via `FolderAuditOpts.criterionId`) and the grouped finding writer inject the matching skill as a dedicated prompt block (not capped by `SKILL_CAP`) so the audit and findings reason like a domain specialist. The active "Specialist lens" label is shown in the live audit progress and the audit-run modal.
 
 6. **Evidence folders** (`src/pages/EvidenceFolder.tsx`):
