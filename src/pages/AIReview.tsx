@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import type { AIReviewLogEntry } from "../types";
 import { Card, inputStyle } from "../components/ui/Card";
@@ -69,6 +69,8 @@ export function AIReview() {
   const [typeFilter, setTypeFilter] = useState("");
   const [searchFilter, setSearchFilter] = useState("");
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "tokens">("newest");
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
   // Date scope (yyyy-mm-dd; empty = open-ended). Applies to BOTH the cost
   // calculator and the rows, so a period's spend can be totalled.
   const [fromDate, setFromDate] = useState("");
@@ -119,6 +121,12 @@ export function AIReview() {
     else sorted.sort((a, b) => (sortBy === "newest" ? b.createdAt.localeCompare(a.createdAt) : a.createdAt.localeCompare(b.createdAt)));
     return sorted;
   }, [dateScoped, agentFilter, typeFilter, searchFilter, sortBy]);
+
+  // Reset to page 0 whenever the filtered/sorted set changes.
+  useEffect(() => { setPage(0); }, [agentFilter, typeFilter, searchFilter, sortBy, fromDate, toDate]);
+
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const pageRows = visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const stats = useMemo(() => {
     const total = dateScoped.length;
@@ -265,7 +273,7 @@ export function AIReview() {
               Clear
             </button>
           )}
-          <span style={{ fontSize: 11.5, color: "#94a3b8", marginLeft: "auto" }}>Showing {visible.length} of {log.length}</span>
+          <span style={{ fontSize: 11.5, color: "#94a3b8", marginLeft: "auto" }}>{visible.length} result{visible.length === 1 ? "" : "s"} of {log.length} total</span>
         </div>
       )}
 
@@ -274,7 +282,7 @@ export function AIReview() {
           <tr><th>Agent</th><th>Module</th><th>Subject</th><th>Summary</th><th>Model</th><th>Tokens</th><th>When</th></tr>
         </thead>
         <tbody>
-          {visible.map((e) => {
+          {pageRows.map((e) => {
             const open = expanded === e.id;
             return (
               <Fragment key={e.id}>
@@ -316,6 +324,43 @@ export function AIReview() {
           })}
         </tbody>
       </table>
+
+      {totalPages > 1 && (
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
+          <button
+            disabled={page === 0}
+            onClick={() => setPage(0)}
+            style={{ cursor: page === 0 ? "not-allowed" : "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "5px 9px", color: page === 0 ? "#cbd5e1" : "#374151" }}
+          >
+            ««
+          </button>
+          <button
+            disabled={page === 0}
+            onClick={() => setPage((p) => p - 1)}
+            style={{ cursor: page === 0 ? "not-allowed" : "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "5px 9px", color: page === 0 ? "#cbd5e1" : "#374151" }}
+          >
+            ‹ Prev
+          </button>
+          <span style={{ fontSize: 12, color: "#6b7280", padding: "0 4px" }}>
+            Page {page + 1} of {totalPages}
+            <span style={{ color: "#9ca3af", marginLeft: 6 }}>({page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, visible.length)} of {visible.length})</span>
+          </span>
+          <button
+            disabled={page >= totalPages - 1}
+            onClick={() => setPage((p) => p + 1)}
+            style={{ cursor: page >= totalPages - 1 ? "not-allowed" : "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "5px 9px", color: page >= totalPages - 1 ? "#cbd5e1" : "#374151" }}
+          >
+            Next ›
+          </button>
+          <button
+            disabled={page >= totalPages - 1}
+            onClick={() => setPage(totalPages - 1)}
+            style={{ cursor: page >= totalPages - 1 ? "not-allowed" : "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "5px 9px", color: page >= totalPages - 1 ? "#cbd5e1" : "#374151" }}
+          >
+            »»
+          </button>
+        </div>
+      )}
     </Card>
   );
 }
