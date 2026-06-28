@@ -12,7 +12,7 @@
 // LLM-backed agent would be asked to do; they are reproduced as comments so
 // a future swap-in to a real model call has the exact wording to use.
 
-import type { AgentDefinition, Finding, GD4Requirement, ItemEvidence, SpecificChecklistLine, ApsrBreakdown } from "../../types";
+import type { AgentDefinition, Finding, GD4Requirement, ItemEvidence, SpecificChecklistLine, ApsrBreakdown, GeneratedChecklistLine } from "../../types";
 import { aiScore } from "../scoring";
 import { FINDINGS } from "../../data/findings";
 
@@ -98,11 +98,11 @@ export function simulateClosure(closure: { root?: string; corr?: string; prev?: 
 }
 
 // Deterministic offline fallback for the Sub-Criterion Checklist module's
-// "AI first pass" button: decomposes an item's real Describe/Show bullets
-// (and Notes) into atomic, citable checklist statements. Semicolon-joined
-// sub-clauses within a single bullet are split into separate lines so each
-// line is independently testable, mirroring how the seeded items in
-// data/checklistSeed.ts were hand-decomposed from the same source text.
+// "AI first pass" button: decomposes an item's real Describe/Show bullets,
+// Expected Evidence items, and auditable Notes into atomic, citable checklist
+// statements. Semicolon-joined sub-clauses within a single Describe/Show
+// bullet are split into separate lines so each is independently testable.
+// Every line is traced back to its exact official GD4 source point.
 function splitAtomic(text: string): string[] {
   return text
     .split(/;\s+/)
@@ -110,19 +110,81 @@ function splitAtomic(text: string): string[] {
     .filter(Boolean);
 }
 
-export function simulateChecklistGeneration(req: GD4Requirement): { text: string; clause: string }[] {
-  const lines: { text: string; clause: string }[] = [];
+// Maps Describe/Show text to the rubric dimension most likely to apply.
+function classifyDescribeShowApsr(text: string): GeneratedChecklistLine["apsrDimension"] {
+  if (/\breview\b|evaluat|improv|continual|effectiveness|revisit/i.test(text)) return "Review";
+  if (/\boutcome|\bresult|achiev|measur|\bkpi\b|\btarget\b|\btrend\b|performance data|statistic|\bratio\b|\brate\b/i.test(text)) return "Systems & Outcomes";
+  if (/\brecord\b|\blog\b|\bimplement|\bdeploy|\btrack\b|\bconduct\b|\bmonitor\b|\bexecute\b|\baction\b|\bregister\b|\bform\b|\bmaintain\b|\battendance\b/i.test(text)) return "Processes";
+  return "Approach";
+}
+
+// Maps an Expected Evidence item description to the APSR dimension.
+function classifyEvidenceApsr(text: string): GeneratedChecklistLine["apsrDimension"] {
+  if (/review record|review process|review result|review log/i.test(text)) return "Review";
+  if (/\boutcome|\bresult|\banalysis|\bachiev|performance|trend|\bkpi\b|statistic/i.test(text)) return "Systems & Outcomes";
+  if (/\bpolic|\bprocedure|\bdocumentation|\bmanual\b|\bframework\b|\bplan\b|\btemplate\b|\bguideline/i.test(text)) return "Approach";
+  return "Processes";
+}
+
+// Returns true when a Note text contains a prescriptive requirement that an
+// auditor could verify against evidence (as opposed to clarifying definitions).
+function isAuditableNote(note: string): boolean {
+  return /\bshall\b|\bmust\b|\bshould\b|are required|is required|must not|minimum|at least/i.test(note);
+}
+
+export function simulateChecklistGeneration(req: GD4Requirement): GeneratedChecklistLine[] {
+  const lines: GeneratedChecklistLine[] = [];
+
+  // One line per Describe/Show bullet (or per atomic sub-clause within a bullet).
   req.describeShow.forEach((bullet, i) => {
     const parts = splitAtomic(bullet);
     parts.forEach((part, j) => {
       const text = part.charAt(0).toUpperCase() + part.slice(1);
       const clause = `GD4 ${req.id} · Describe/Show ${i + 1}${parts.length > 1 ? "." + (j + 1) : ""}`;
-      lines.push({ text: text.endsWith(".") ? text : `${text}.`, clause });
+      lines.push({
+        text: text.endsWith(".") ? text : `${text}.`,
+        clause,
+        sourceType: "describeShow",
+        sourceIndex: i,
+        sourceText: bullet,
+        apsrDimension: classifyDescribeShowApsr(bullet),
+      });
     });
   });
-  req.notes.forEach((note, i) => {
-    lines.push({ text: note, clause: `GD4 ${req.id} · Notes ${i + 1}` });
+
+  // One line per Expected Evidence item so the auditor knows exactly what
+  // records SSG expects to see. Separate from Describe/Show — evidence items
+  // are what should exist, not what the PEI should do.
+  req.expectedEvidence.forEach((ev, i) => {
+    const lower = ev.toLowerCase();
+    const verb = lower.includes("record") || lower.includes("log") || lower.includes("minutes") ? "are maintained" : "is available";
+    const subject = ev.charAt(0).toLowerCase() + ev.slice(1);
+    lines.push({
+      text: `Confirm that ${subject} ${verb} and accessible for audit.`,
+      clause: `GD4 ${req.id} · Expected Evidence ${i + 1}`,
+      sourceType: "expectedEvidence",
+      sourceIndex: i,
+      sourceText: ev,
+      apsrDimension: classifyEvidenceApsr(ev),
+    });
   });
+
+  // Notes that contain prescriptive requirements ("shall", "must", etc.)
+  // are turned into their own testable lines; clarifying-definition notes
+  // (which explain terms) are excluded as they have no auditable action.
+  req.notes.forEach((note, i) => {
+    if (isAuditableNote(note)) {
+      lines.push({
+        text: note.endsWith(".") ? note : `${note}.`,
+        clause: `GD4 ${req.id} · Notes ${i + 1}`,
+        sourceType: "note",
+        sourceIndex: i,
+        sourceText: note,
+        apsrDimension: classifyDescribeShowApsr(note),
+      });
+    }
+  });
+
   return lines;
 }
 

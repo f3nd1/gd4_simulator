@@ -271,6 +271,20 @@ export type GenericChecklistLine = {
   status: GenericLineStatus;
 };
 
+// Which official GD4 field a generated line traces back to.
+export type ChecklistSourceType = "requirement" | "intent" | "describeShow" | "note" | "expectedEvidence";
+
+// Structured output from runLiveChecklistGeneration / simulateChecklistGeneration:
+// every line carries full provenance so it can be validated, displayed, and traced.
+export type GeneratedChecklistLine = {
+  text: string;
+  clause: string;
+  sourceType: ChecklistSourceType;
+  sourceIndex: number | null;
+  sourceText: string;
+  apsrDimension: "Approach" | "Processes" | "Systems & Outcomes" | "Review";
+};
+
 export type SpecificChecklistLine = {
   id: string;
   text: string;
@@ -281,6 +295,12 @@ export type SpecificChecklistLine = {
   sampling?: SamplingInfo;
   draftFinding?: DraftFindingInfo;
   generatedBy: "seed" | "ai" | "manual";
+  // Traceability — present on AI-generated and deterministic-fallback lines,
+  // absent on seed/manual lines.
+  sourceType?: ChecklistSourceType;
+  sourceIndex?: number | null;
+  sourceText?: string;
+  apsrDimension?: "Approach" | "Processes" | "Systems & Outcomes" | "Review";
 };
 
 // Keyed by GD4 item id (the 35 testable requirements) rather than the 24

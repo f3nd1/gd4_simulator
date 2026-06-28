@@ -15,10 +15,20 @@ import type {
   FindingDimension,
   GenericChecklistLine,
   SpecificChecklistLine,
+  ChecklistSourceType,
   SpecificLineStatus,
   EvidenceSufficiency,
   SubChecklistEvidenceItem,
 } from "../types";
+
+// Formats the short "GD4 source: …" label for a generated line's provenance.
+function sourceLabel(sourceType: ChecklistSourceType, sourceIndex: number | null | undefined): string {
+  if (sourceType === "describeShow") return `Describe/Show ${(sourceIndex ?? 0) + 1}`;
+  if (sourceType === "note") return `Note ${(sourceIndex ?? 0) + 1}`;
+  if (sourceType === "expectedEvidence") return `Expected Evidence ${(sourceIndex ?? 0) + 1}`;
+  if (sourceType === "intent") return "Intent";
+  return "Requirement";
+}
 
 const GENERIC_OPTIONS: GenericChecklistLine["status"][] = ["Not Started", "Met", "Partial", "Not met"];
 const SPECIFIC_OPTIONS: SpecificLineStatus[] = ["Not Started", "Met", "Partial", "Not met", "Not Applicable"];
@@ -457,21 +467,30 @@ export function SubCriterionChecklist() {
                 Review AI-generated lines {entry?.generatedLive === false || entry?.generatedLive === undefined ? "(simulated)" : "(live)"} before confirming
               </div>
               {pending.map((l) => (
-                <div key={l.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 5 }}>
-                  <input
-                    value={l.text}
-                    onChange={(e) => updatePendingLine(selectedId, l.id, { text: e.target.value })}
-                    style={{ ...inputStyle, flex: 1, padding: "4px 6px" }}
-                  />
-                  <input
-                    value={l.clause || ""}
-                    onChange={(e) => updatePendingLine(selectedId, l.id, { clause: e.target.value })}
-                    style={{ ...inputStyle, width: 140, padding: "4px 6px" }}
-                  />
-                  {l.afiTag && <Pill s="critical">AFI {l.afiTag}</Pill>}
-                  <button onClick={() => removePendingLine(selectedId, l.id)} style={{ cursor: "pointer", fontSize: 11, color: "#b23121", border: "none", background: "transparent" }}>
-                    Remove
-                  </button>
+                <div key={l.id} style={{ marginBottom: 6 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input
+                      value={l.text}
+                      onChange={(e) => updatePendingLine(selectedId, l.id, { text: e.target.value })}
+                      style={{ ...inputStyle, flex: 1, padding: "4px 6px" }}
+                    />
+                    <input
+                      value={l.clause || ""}
+                      onChange={(e) => updatePendingLine(selectedId, l.id, { clause: e.target.value })}
+                      style={{ ...inputStyle, width: 140, padding: "4px 6px" }}
+                    />
+                    {l.afiTag && <Pill s="critical">AFI {l.afiTag}</Pill>}
+                    <button onClick={() => removePendingLine(selectedId, l.id)} style={{ cursor: "pointer", fontSize: 11, color: "#b23121", border: "none", background: "transparent" }}>
+                      Remove
+                    </button>
+                  </div>
+                  {l.sourceType && (
+                    <div style={{ fontSize: 10, color: "#78716c", marginTop: 2, paddingLeft: 2 }}>
+                      GD4 source: {sourceLabel(l.sourceType, l.sourceIndex)}
+                      {l.apsrDimension && <span style={{ marginLeft: 8, color: "#9ca3af" }}>APSR: {l.apsrDimension}</span>}
+                      {l.sourceText && <span style={{ marginLeft: 8, color: "#b0ada8", fontStyle: "italic" }} title={l.sourceText}>"{l.sourceText.slice(0, 80)}{l.sourceText.length > 80 ? "…" : ""}"</span>}
+                    </div>
+                  )}
                 </div>
               ))}
               <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
@@ -519,6 +538,14 @@ export function SubCriterionChecklist() {
                   {l.afiTag && <Pill s="critical">AFI {l.afiTag}</Pill>}
                   <span style={{ fontSize: 12 }}>{l.text}</span>
                   {l.clause && <span style={{ fontSize: 10.5, color: "#94a3b8", fontFamily: "ui-monospace,monospace" }}>{l.clause}</span>}
+                  {l.sourceType && l.generatedBy === "ai" && (
+                    <span
+                      style={{ fontSize: 10, color: "#a8a29e", cursor: l.sourceText ? "help" : "default" }}
+                      title={l.sourceText ? `Source: "${l.sourceText}"` : undefined}
+                    >
+                      GD4: {sourceLabel(l.sourceType, l.sourceIndex)}{l.apsrDimension ? ` · ${l.apsrDimension}` : ""}
+                    </span>
+                  )}
                   <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
                     <select
                       value={l.status}

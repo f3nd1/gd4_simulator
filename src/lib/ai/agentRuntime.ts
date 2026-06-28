@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine } from "../../types";
 import { chatComplete, AIClientError, addUsage, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
@@ -135,23 +135,105 @@ function parseJSONArray(text: string): unknown[] {
   return tryArr(text) ?? (extractFirstJSONArray(text) ? tryArr(extractFirstJSONArray(text)!) : null) ?? [];
 }
 
-// Reuses the same chatComplete client as the rest of the app's AI features
-// (per the "reuse existing AI service layer" decision) to decompose a GD4
-// item's Describe/Show points and Notes into atomic, testable checklist
-// statements for the Sub-Criterion Checklist module's "AI first pass".
-export async function runLiveChecklistGeneration(req: GD4Requirement, settings: AISettings, onUsage?: (u: AIUsage) => void): Promise<{ text: string; clause: string }[]> {
-  const system = `You are a GD4 internal audit checklist assistant. Decompose the given GD4 item's Describe/Show points and Notes into a JSON array of atomic, testable checklist statements an auditor can mark Met, Partial, Not met or Not Applicable against real evidence. Each statement must be specific and independently verifiable, and must cite the GD4 item id as its clause. Generate statements that test all four APSR dimensions — at least one line each for: (A) whether the documented approach/policy is specific and sustainable, (P) whether there are records proving implementation, (S) whether outcomes are measured and demonstrate the process works, and (R) whether the approach and processes are formally reviewed for improvement. Respond with JSON only: {"lines": [{"text": string, "clause": string}]}, nothing else.${skills(apsrRubricSkill, sgPeiContextSkill)}`;
-  const user = `GD4 item ${req.id} — ${req.requirement}\nDescribe/Show:\n${req.describeShow.map((d, i) => `${i + 1}. ${d}`).join("\n")}${
-    req.notes.length ? `\nNotes:\n${req.notes.map((n, i) => `${i + 1}. ${n}`).join("\n")}` : ""
-  }`;
+// Result type for runLiveChecklistGeneration — valid lines plus a count of
+// any AI-proposed lines that were rejected for lacking source traceability.
+export type ChecklistGenerationResult = {
+  lines: GeneratedChecklistLine[];
+  rejectedCount: number;
+  rejectedIdeas?: { text: string; reason: string }[];
+};
 
-  // Higher temperature for generation (diverse, natural-sounding lines) vs 0.2
-  // for analysis (deterministic verdicts).
-  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.7, onUsage });
-  const arr = parseJSONArray(content);
-  return arr
-    .filter((x): x is { text: string; clause?: string } => !!x && typeof x === "object" && typeof (x as { text?: unknown }).text === "string")
-    .map((x) => ({ text: (x as { text: string }).text, clause: (x as { clause?: string }).clause || `GD4 ${req.id}` }));
+// Converts a GD4 item's official text into traceable, testable checklist lines.
+// The prompt is strict: the model must not invent requirements beyond the
+// official Describe/Show, Notes and Expected Evidence supplied; every line must
+// cite its exact GD4 source point so it can be displayed and validated.
+// Lines returned by the model without a sourceText are rejected automatically
+// (counted in rejectedCount) so invented lines never reach the checklist.
+export async function runLiveChecklistGeneration(
+  req: GD4Requirement,
+  settings: AISettings,
+  onUsage?: (u: AIUsage) => void
+): Promise<ChecklistGenerationResult> {
+  const VALID_SOURCE_TYPES: GeneratedChecklistLine["sourceType"][] = ["describeShow", "note", "expectedEvidence", "requirement", "intent"];
+  const VALID_APSR: GeneratedChecklistLine["apsrDimension"][] = ["Approach", "Processes", "Systems & Outcomes", "Review"];
+
+  const system = `You are converting official GD4 EduTrust item text into traceable, testable audit checklist lines. You are NOT creating a new audit checklist from scratch. Every line you generate MUST be directly supported by one official source point (a Describe/Show bullet, a Note, or an Expected Evidence item) that is explicitly provided to you in the prompt. If you cannot point to the exact source text, do not create the line.
+
+STRICT RULES — violations cause your output to be discarded:
+1. Do NOT invent requirements that do not appear in the official GD4 text provided.
+2. Do NOT add generic internal-audit checks (e.g. "check if the process is effective").
+3. Do NOT add "good practice" items unless those exact words appear in the official GD4 wording.
+4. Do NOT infer extra requirements from PEI context or your general knowledge.
+5. Use the official GD4 wording as closely as possible — preferred forms: "Verify that the institution has [GD4 wording]." / "Check records showing [official Describe/Show requirement]." / "Confirm evidence of [official Expected Evidence item]."
+6. Avoid creating multiple nearly-identical lines for the same source point; each line must test a genuinely distinct aspect.
+7. For each line, the sourceText field must contain a verbatim excerpt from the source point it comes from. An empty sourceText invalidates the line.
+
+APSR dimension classification:
+- Approach: documented policy, procedure, plan, framework, method, responsibility, workflow
+- Processes: implementation records, logs, forms, screenshots, registers, actual use of the process
+- Systems & Outcomes: results, KPIs, trends, targets, outcomes, performance data, analysis
+- Review: review records, minutes, evaluation, improvement actions, effectiveness review
+
+Also list any ideas you considered and rejected in rejectedIdeas with the reason.
+
+Respond with JSON only (no preamble):
+{"lines": [{"text": string, "clause": string, "sourceType": "describeShow"|"note"|"expectedEvidence", "sourceIndex": number, "sourceText": string, "apsrDimension": "Approach"|"Processes"|"Systems & Outcomes"|"Review"}], "rejectedIdeas": [{"text": string, "reason": string}]}${skills(apsrRubricSkill, sgPeiContextSkill)}`;
+
+  const user = `GD4 item ${req.id} — ${req.requirement}
+
+Intent: ${req.intent}
+
+Describe/Show (each bullet is a separate auditable requirement):
+${req.describeShow.map((d, i) => `DS${i + 1}. ${d}`).join("\n")}
+
+Expected Evidence (what records/documents SSG expects to see):
+${req.expectedEvidence.length ? req.expectedEvidence.map((e, i) => `EE${i + 1}. ${e}`).join("\n") : "(none listed)"}${
+    req.notes.length
+      ? `\n\nNotes (official GD4 clarifications and prescriptive requirements):\n${req.notes.map((n, i) => `N${i + 1}. ${n}`).join("\n")}`
+      : ""
+  }${req.gateSensitive ? "\n\nNote: This item is gate-sensitive — a minimum Band 3 average applies to this sub-criterion under the official GD4 standard. Lines must be especially precise and unambiguous." : ""}`;
+
+  const content = await chatComplete(
+    [{ role: "system", content: system }, { role: "user", content: user }],
+    settings,
+    { temperature: 0.3, onUsage }
+  );
+
+  const parsed = parseJSONObject(content);
+  const rawLines = Array.isArray(parsed.lines) ? (parsed.lines as unknown[]) : [];
+  const rawRejected = Array.isArray(parsed.rejectedIdeas) ? (parsed.rejectedIdeas as unknown[]) : [];
+
+  const lines: GeneratedChecklistLine[] = [];
+  rawLines.forEach((x) => {
+    if (!x || typeof x !== "object") return;
+    const r = x as Record<string, unknown>;
+    const text = typeof r.text === "string" ? r.text.trim() : "";
+    const sourceText = typeof r.sourceText === "string" ? r.sourceText.trim() : "";
+    const sourceType = VALID_SOURCE_TYPES.includes(r.sourceType as GeneratedChecklistLine["sourceType"])
+      ? (r.sourceType as GeneratedChecklistLine["sourceType"])
+      : null;
+    const apsrDimension = VALID_APSR.includes(r.apsrDimension as GeneratedChecklistLine["apsrDimension"])
+      ? (r.apsrDimension as GeneratedChecklistLine["apsrDimension"])
+      : null;
+    // Reject any line the model produced without a valid sourceText, sourceType or apsrDimension —
+    // these are the hallmarks of an invented line rather than a traceable one.
+    if (!text || !sourceText || !sourceType || !apsrDimension) return;
+    lines.push({
+      text: text.endsWith(".") ? text : `${text}.`,
+      clause: typeof r.clause === "string" && r.clause ? r.clause : `GD4 ${req.id}`,
+      sourceType,
+      sourceIndex: typeof r.sourceIndex === "number" ? r.sourceIndex : null,
+      sourceText,
+      apsrDimension,
+    });
+  });
+
+  const rejectedCount = rawLines.length - lines.length;
+  const rejectedIdeas = rawRejected
+    .filter((r): r is Record<string, string> => !!r && typeof r === "object" && typeof (r as Record<string, unknown>).text === "string")
+    .map((r) => ({ text: r.text, reason: r.reason || "Not directly supported by official GD4 wording" }));
+
+  return { lines, rejectedCount, rejectedIdeas };
 }
 
 export async function runLiveClosureReview(

@@ -4,6 +4,7 @@ import { workspaceStorage } from "./supabaseStorage";
 import type {
   SubCriterionChecklistEntry,
   GenericChecklistLine,
+  GeneratedChecklistLine,
   SpecificChecklistLine,
   SpecificLineStatus,
   SubChecklistEvidenceItem,
@@ -133,14 +134,17 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         set({ busy: itemId });
         const req = GD4_REQUIREMENTS.find((r) => r.id === itemId)!;
         const aiSettings = useAISettingsStore.getState();
-        let raw: { text: string; clause: string }[];
+        let raw: GeneratedChecklistLine[];
+        let rejectedCount = 0;
         let live = false;
         let liveError: string | undefined;
         let genUsage: AIUsage | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(useWorkspaceStore.getState().schoolContext) });
-            raw = await runLiveChecklistGeneration(req, settings, (u) => { genUsage = u; });
+            const result = await runLiveChecklistGeneration(req, settings, (u) => { genUsage = u; });
+            raw = result.lines;
+            rejectedCount = result.rejectedCount;
             if (!raw.length) raw = simulateChecklistGeneration(req);
             else live = true;
           } catch (err) {
@@ -154,6 +158,10 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           id: `${itemId}-AI${Date.now()}-${i}`,
           text: r.text,
           clause: r.clause,
+          sourceType: r.sourceType,
+          sourceIndex: r.sourceIndex,
+          sourceText: r.sourceText,
+          apsrDimension: r.apsrDimension,
           status: "Not Started" as const,
           evidence: [],
           generatedBy: "ai" as const,
@@ -161,13 +169,19 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         lines = applyAfiOverlay(itemId, lines, useWorkspaceStore.getState().customFindings);
         // Log into the shared AI review log so the AI Agent Review screen truly
         // reflects every AI run, including checklist line generation.
+        const rejectionNote = rejectedCount > 0
+          ? `${rejectedCount} AI-proposed line(s) were rejected — they lacked a traceable official GD4 source and were not added.`
+          : undefined;
         useWorkspaceStore.getState().pushAIReviewLog({
           agent: "Checklist Generator",
           reviewType: "Checklist",
           subjectId: itemId,
           verdict: `${lines.length} line${lines.length === 1 ? "" : "s"} drafted`,
           confidence: "Medium",
-          keyConcerns: [`Proposed ${lines.length} specific testable line(s) for ${itemId}; pending reviewer confirmation.`],
+          keyConcerns: [
+            `Proposed ${lines.length} specific testable line(s) for ${itemId}; pending reviewer confirmation.`,
+            ...(rejectionNote ? [rejectionNote] : []),
+          ],
           recommendedAction: "Review, edit and confirm the generated lines before they count toward the band.",
           live,
           liveError,
