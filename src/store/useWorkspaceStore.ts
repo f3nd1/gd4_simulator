@@ -322,6 +322,9 @@ export type WorkspaceState = {
 
   addCustomFinding: (f: Finding) => void;
   updateCustomFinding: (id: string, patch: Partial<Finding>) => void;
+  removeCustomFinding: (id: string) => void;
+
+  clearReviewerOverride: (itemId: string) => void;
 
   // Lets other stores (e.g. the checklist module) record an AI run in the
   // shared review log without duplicating the id/timestamp boilerplate.
@@ -1836,6 +1839,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       updateCustomFinding: (id, patch) =>
         set((s) => ({ customFindings: s.customFindings.map((f) => (f.id === id ? { ...f, ...patch } : f)) })),
+
+      removeCustomFinding: (id) => {
+        // Remove the finding and its closure entry, then unblock any checklist
+        // line that was locked to this finding so it can be re-raised later.
+        set((s) => {
+          const { [id]: _dropped, ...remainingClosures } = s.closures;
+          return { customFindings: s.customFindings.filter((f) => f.id !== id), closures: remainingClosures };
+        });
+        useChecklistModuleStore.getState().clearSavedFindingId(id);
+      },
+
+      clearReviewerOverride: (itemId) =>
+        set((s) => {
+          const { [itemId]: _r, ...reviewer } = s.reviewer;
+          const { [itemId]: _j, ...justify } = s.justify;
+          const { [itemId]: _c, ...confirmed } = s.confirmed;
+          return { reviewer, justify, confirmed };
+        }),
 
       pushAIReviewLog: (entry) =>
         set((s) => {

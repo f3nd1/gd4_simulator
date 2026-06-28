@@ -17,6 +17,7 @@ const RULES: [string, string][] = [
 export function HumanReview() {
   const reviewer = useWorkspaceStore((s) => s.reviewer);
   const justify = useWorkspaceStore((s) => s.justify);
+  const clearReviewerOverride = useWorkspaceStore((s) => s.clearReviewerOverride);
   const scored = useScored();
 
   const overrides = scored.items.filter((it) => {
@@ -65,6 +66,13 @@ export function HumanReview() {
                 <span style={{ fontSize: 12, color: "#6b7280", marginLeft: "auto" }}>
                   AI {it.ais} → Reviewer {revVal} {it.conf != null && <>· Confirmed {it.conf}</>}
                 </span>
+                <button
+                  onClick={() => clearReviewerOverride(it.id)}
+                  title="Reset reviewer score and justification back to the AI value"
+                  style={{ fontSize: 11, color: "#94a3b8", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}
+                >
+                  Reset override
+                </button>
               </div>
               <div style={{ marginTop: 5, fontSize: 12.5 }}>
                 {j ? (

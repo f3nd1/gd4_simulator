@@ -15,6 +15,7 @@ export function AFIClosure() {
   const draftClosureActions = useWorkspaceStore((s) => s.draftClosureActions);
   const aiEnabled = useAISettingsStore((s) => s.enabled && !!s.apiKey);
   const setClosureHuman = useWorkspaceStore((s) => s.setClosureHuman);
+  const removeCustomFinding = useWorkspaceStore((s) => s.removeCustomFinding);
   const busy = useWorkspaceStore((s) => s.busy);
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
   const scored = useScored();
@@ -23,6 +24,7 @@ export function AFIClosure() {
   const [critFilter, setCritFilter] = useState<string>("All");
   const [subCritFilter, setSubCritFilter] = useState<string>("All");
   const [draftErrors, setDraftErrors] = useState<Record<string, string>>({});
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const subCritOptions = useMemo(
     () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter)),
@@ -162,6 +164,15 @@ export function AFIClosure() {
                   </button>
                   {c.human !== "Accepted" && !c.evid?.trim() && (
                     <span style={{ fontSize: 11, color: "#94a3b8", alignSelf: "center" }}>Evidence link required to close</span>
+                  )}
+                  <span style={{ flex: 1 }} />
+                  {confirmDeleteId === f.id ? (
+                    <>
+                      <button onClick={() => { removeCustomFinding(f.id); setConfirmDeleteId(null); setSelFinding(null); }} style={{ fontSize: 11, color: "#fff", background: "#ef4444", border: "none", borderRadius: 4, padding: "2px 7px", cursor: "pointer", marginRight: 4 }}>Delete</button>
+                      <button onClick={() => setConfirmDeleteId(null)} style={{ fontSize: 11, color: "#6b7280", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}>Cancel</button>
+                    </>
+                  ) : (
+                    <button onClick={() => setConfirmDeleteId(f.id)} style={{ fontSize: 11, color: "#94a3b8", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}>Remove finding</button>
                   )}
                 </div>
                 {c.ai && (

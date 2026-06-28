@@ -60,6 +60,7 @@ export function Findings() {
   const cycle = useWorkspaceStore((s) => s.cycle);
   const closures = useWorkspaceStore((s) => s.closures);
   const addCustomFinding = useWorkspaceStore((s) => s.addCustomFinding);
+  const removeCustomFinding = useWorkspaceStore((s) => s.removeCustomFinding);
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
   const raiseAllUnmetFindings = useChecklistModuleStore((s) => s.raiseAllUnmetFindings);
   const scored = useScored();
@@ -73,6 +74,7 @@ export function Findings() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [genNote, setGenNote] = useState<string | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -471,7 +473,7 @@ export function Findings() {
       </div>
       <table>
         <thead>
-          <tr><th /><th>ID</th><th>GD4 item</th><th>Issue</th><th>Dimension</th><th>Risk</th><th>Severity</th><th>Owner</th><th>Status</th></tr>
+          <tr><th /><th>ID</th><th>GD4 item</th><th>Issue</th><th>Dimension</th><th>Risk</th><th>Severity</th><th>Owner</th><th>Status</th><th /></tr>
         </thead>
         <tbody>
           {rows.map((f) => {
@@ -480,7 +482,7 @@ export function Findings() {
             const hasDetail = !!(f.rootCause || f.corrective || f.preventive || f.apsr);
             return (
               <Fragment key={f.id}>
-                <tr className="rowh" style={{ cursor: hasDetail ? "pointer" : "default" }} onClick={() => hasDetail && setExpandedId(open ? null : f.id)}>
+                <tr className="rowh" style={{ cursor: hasDetail ? "pointer" : "default" }} onClick={() => { hasDetail && setExpandedId(open ? null : f.id); setConfirmDeleteId(null); }}>
                   <td style={{ width: 18, color: "#94a3b8", textAlign: "center" }}>{hasDetail ? (open ? "▾" : "▸") : ""}</td>
                   <td>
                     <b style={{ color: "#ce9e5d" }}>{f.id}</b>
@@ -493,6 +495,16 @@ export function Findings() {
                   <td><Pill s={severityTone(f.severity)}>{f.severity}</Pill></td>
                   <td>{f.owner}</td>
                   <td><Pill s={closed ? "good" : "critical"}>{closed ? "Closed" : "Open"}</Pill></td>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                    {confirmDeleteId === f.id ? (
+                      <>
+                        <button onClick={() => { removeCustomFinding(f.id); setConfirmDeleteId(null); setExpandedId(null); }} style={{ fontSize: 11, color: "#fff", background: "#ef4444", border: "none", borderRadius: 4, padding: "2px 7px", cursor: "pointer", marginRight: 4 }}>Delete</button>
+                        <button onClick={() => setConfirmDeleteId(null)} style={{ fontSize: 11, color: "#6b7280", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}>Cancel</button>
+                      </>
+                    ) : (
+                      <button onClick={() => setConfirmDeleteId(f.id)} style={{ fontSize: 11, color: "#94a3b8", background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px" }} title="Remove finding">✕</button>
+                    )}
+                  </td>
                 </tr>
                 {open && hasDetail && (
                   <tr>

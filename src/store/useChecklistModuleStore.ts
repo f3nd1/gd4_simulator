@@ -79,6 +79,9 @@ export type ChecklistModuleState = {
   // (the "capped" case). Skips lines that already produced a finding. Returns
   // the number of NEW findings raised so the caller can confirm to the user.
   raiseAllUnmetFindings: (auditRunId?: string) => number;
+  // Called when a finding is deleted — clears the savedFindingId lock on any
+  // checklist line that pointed to it, so the line can be re-raised later.
+  clearSavedFindingId: (findingId: string) => void;
 };
 
 function mapEntry(
@@ -361,6 +364,20 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         }
         return raised;
       },
+
+      clearSavedFindingId: (findingId) =>
+        set((s) => {
+          const entries = { ...s.entries };
+          for (const itemId of Object.keys(entries)) {
+            const specific = entries[itemId].specific.map((l) =>
+              l.draftFinding?.savedFindingId === findingId
+                ? { ...l, draftFinding: { ...l.draftFinding, savedFindingId: undefined } }
+                : l
+            );
+            if (specific !== entries[itemId].specific) entries[itemId] = { ...entries[itemId], specific };
+          }
+          return { entries };
+        }),
     }),
     { name: "ucc-gd4-checklist:v2", storage: workspaceStorage }
   )
