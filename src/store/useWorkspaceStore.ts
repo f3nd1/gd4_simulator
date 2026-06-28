@@ -22,6 +22,9 @@ import type {
   ApsrBreakdown,
   AuditProgressState,
   AuditFileRecord,
+  AuditScope,
+  AuditRunRecord,
+  AuditAISummaryLine,
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
@@ -243,6 +246,17 @@ export type WorkspaceState = {
   // per-batch so the UI can show a polished step indicator. Cleared by the
   // user (clearAuditProgress) so the result panel stays visible after completion.
   auditProgress: AuditProgressState | null;
+  // Which folders to include in the next audit run.
+  auditScope: AuditScope;
+  setAuditScope: (scope: AuditScope) => void;
+  // Completed/failed/cancelled audit run records, keyed by folderId.
+  // Max 5 runs kept per folder; oldest dropped when the list is full.
+  auditRunHistory: Record<string, AuditRunRecord[]>;
+  // Most recent completed/failed run per folderId, for quick "View last run" access.
+  lastAuditRuns: Record<string, AuditRunRecord>;
+  // Extracted-text cache keyed by "fileId:modifiedTime". Allows unchanged Drive
+  // files to skip the download step on repeat audits.
+  fileTextCache: Record<string, { text: string | null; charCount: number; fileKind: string; pdfQuality?: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" } }>;
   // Persisted "Recheck all evidence" report so it survives navigation and
   // page refreshes. null means the report hasn't been run yet this session.
   evidenceAuditReport: { flags: EvidenceAuditFlag[]; generatedAt: string } | null;
@@ -515,6 +529,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       busy: null,
       auditRunToken: 0,
       auditProgress: null,
+      auditScope: "both" as AuditScope,
+      auditRunHistory: {},
+      lastAuditRuns: {},
+      fileTextCache: {},
       bulkAuditStatus: null,
       additionalInfo: { link: "" },
       schoolContext: { text: "", link: "" },
@@ -524,6 +542,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       activeAuditorId: null,
 
       setActiveAuditor: (id) => set({ activeAuditorId: id }),
+      setAuditScope: (scope) => set({ auditScope: scope }),
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
@@ -1007,6 +1026,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // while the AI call is in flight, this value will no longer match
         // get().auditRunToken and the results will be discarded without writing.
         const capturedToken = get().auditRunToken;
+        const scope = get().auditScope;
 
         // Emits a progress update so the UI step-indicator and progress bar
         // reflect the current stage in real time. Merges into the existing
@@ -1207,6 +1227,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // decide policy-vs-evidence (the previous behaviour). Same-link already
         // tagged "auto" above.
         if (!policyId && !sameLink) for (const f of taggedFiles) f.bucket = "auto";
+
+        // Apply audit scope filter — must happen after bucket assignment so
+        // the policy/evidence classification is already set on each file.
+        if (scope !== "both") {
+          const isPolicy = (f: TaggedFile) =>
+            f.bucket === "policy" || (f.bucket === "auto" && classifyFileBucket(f.path) === "policy");
+          const keep = scope === "policy" ? isPolicy : (f: TaggedFile) => !isPolicy(f);
+          const removedCount = taggedFiles.filter((f) => !keep(f)).length;
+          taggedFiles.splice(0, taggedFiles.length, ...taggedFiles.filter(keep));
+          if (removedCount > 0)
+            setupWarnings.push(`Scope "${scope === "policy" ? "Policy only" : "Evidence only"}" — ${removedCount} file${removedCount === 1 ? "" : "s"} from the other folder excluded from this run.`);
+        }
+
         if (taggedFiles.length === 0) {
           auditHadError = true;
           if (listErrors.length) {
@@ -1319,6 +1352,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           bucket: file.bucket,
           readStatus: "found" as const,
           auditStatus: "pending" as const,
+          driveFileId: file.id,
+          driveModifiedTime: file.modifiedTime,
         }));
         const connectedFolderNames = [policyId ? "Policy & Procedure" : null, evidenceId ? "Actual Evidence" : null].filter(Boolean) as string[];
         setProgress("reading", {
@@ -1331,6 +1366,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           status: "running",
           canCancel: true,
           lastHeartbeatAt: Date.now(),
+          scope,
         });
         for (let fi = 0; fi < taggedFiles.length; fi++) {
           const file = taggedFiles[fi];
@@ -1362,6 +1398,32 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             lastHeartbeatAt: Date.now(),
             canSkipCurrentFile: true,
           });
+
+          // File caching: if we have previously extracted text for this exact
+          // file+version, reuse it and skip the Drive download entirely.
+          const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
+          const cachedEntry = get().fileTextCache[cacheKey];
+          if (cachedEntry) {
+            fileRecords[fi] = {
+              ...fileRecords[fi],
+              readStatus: "read",
+              charCount: cachedEntry.charCount,
+              processingMode: "reused",
+              ...(cachedEntry.pdfQuality ? {
+                suspectedScannedPdf: cachedEntry.pdfQuality.suspectedScannedPdf,
+                extractedTextQuality: cachedEntry.pdfQuality.extractedTextQuality,
+              } : {}),
+            };
+            if (cachedEntry.text !== null) {
+              pushPart(file.path, cachedEntry.text, file.bucket, cachedEntry.fileKind, fi);
+              scanned.push(file.path);
+            } else {
+              skipped.push(file.path);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped" };
+            }
+            setProgress("reading", { filesTotal, filesRead: fi + 1, filesSkipped: skipped.length, filesFound: [...fileRecords], lastHeartbeatAt: Date.now() });
+            continue;
+          }
 
           // Per-file abort: allows skipCurrentFile() and cancelBusy() to break
           // out of the current Drive download or AI description call immediately.
@@ -1423,16 +1485,30 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
           // Apply the successful read result.
           switch (fileResult.kind) {
-            case "text":
+            case "text": {
               scanned.push(file.path);
               pushPart(file.path, fileResult.text, file.bucket, fileKind(file.mimeType), fi);
               fileRecords[fi] = {
                 ...fileRecords[fi],
                 readStatus: "read",
                 charCount: fileResult.text.length,
+                processingMode: "new",
                 ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}),
               };
+              // Cache the extracted text so repeat audits can skip re-downloading unchanged files.
+              set((st) => ({
+                fileTextCache: {
+                  ...st.fileTextCache,
+                  [cacheKey]: {
+                    text: fileResult.text,
+                    charCount: fileResult.text.length,
+                    fileKind: fileKind(file.mimeType),
+                    ...(fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}),
+                  },
+                },
+              }));
               break;
+            }
             case "image":
               scanned.push(file.path);
               pushPart(file.path, fileResult.description, file.bucket, "image", fi);
@@ -1537,6 +1613,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let parseWarnings: string[] = [];
         let folderWarnings: string[] = [];
         let auditUsage: AIUsage | undefined;
+        let verdictLines: AuditAISummaryLine[] = [];
         let timedOutCount = 0;
         const batchTotal = Math.ceil(lines.length / 4); // AUDIT_BATCH_SIZE = 4
         if (aiSettings.enabled && aiSettings.apiKey) {
@@ -1711,13 +1788,47 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
           }
         }
+        const lineTextById = new Map(lines.map((l) => [l.id, l.text]));
+
+        // Build per-line AI verdict summary for CSV export and the "Ask AI" step detail.
+        verdictLines = verdicts.map((v) => {
+          const allChunkIds: string[] = v.apsr ? [
+            ...(v.apsr.approach.sourceChunkIds ?? []),
+            ...(v.apsr.processes.sourceChunkIds ?? []),
+            ...(v.apsr.systemsOutcomes.sourceChunkIds ?? []),
+            ...(v.apsr.review.sourceChunkIds ?? []),
+          ] : [];
+          const uniqueChunkIds = [...new Set(allChunkIds)];
+          const citedFileNames = uniqueChunkIds.map((cid) => {
+            const chunk = evidenceChunks.find((c) => c.chunkId === cid);
+            return chunk?.fileName ?? cid;
+          });
+          return {
+            lineId: v.lineId,
+            lineText: lineTextById.get(v.lineId) ?? v.lineId,
+            result: v.status as "Met" | "Partial" | "Not met",
+            approachStatus: v.apsr?.approach.status ?? "Not evident",
+            processesStatus: v.apsr?.processes.status ?? "Not evident",
+            systemsOutcomesStatus: v.apsr?.systemsOutcomes.status ?? "Not evident",
+            reviewStatus: v.apsr?.review.status ?? "Not evident",
+            citedChunkIds: uniqueChunkIds,
+            citedFileNames,
+            overallReason: v.reason ?? undefined,
+            warning: undefined,
+          } satisfies AuditAISummaryLine;
+        });
+
         setProgress("saving", {
           filesFound: [...fileRecords],
           stageDetail: `Saving ${verdicts.length} verdict${verdicts.length === 1 ? "" : "s"}…`,
           linesAssessed: verdicts.length,
           findingsDetected: notMetCount,
+          verdictLines,
+          chunksCount: evidenceChunks.length,
+          aiModel: auditUsage?.model,
+          scope,
+          folderWarnings: folderWarnings.length > 0 ? folderWarnings : undefined,
         });
-        const lineTextById = new Map(lines.map((l) => [l.id, l.text]));
         try {
           const checklist = useChecklistModuleStore.getState();
           for (const v of verdicts) {
@@ -1850,6 +1961,36 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Pass analysis and utility usage separately so the log can price each
         // model at its own rate rather than applying the analysis rate to all.
         finish(summary, live, liveError, auditUsage, auxUsage);
+
+        // Persist completed/failed run record so the user can reopen it and export CSVs.
+        const runRecord: AuditRunRecord = {
+          runId,
+          folderId: id,
+          subCriterionId: folder.subCriterionId,
+          subCriterionTitle: folder.folderName,
+          scope,
+          status: auditHadError ? "failed" : "completed",
+          startedAt: new Date(auditStartedAt).toISOString(),
+          endedAt: new Date().toISOString(),
+          auditorName,
+          auditLive: live,
+          aiModel: auditUsage?.model,
+          fileLedger: [...fileRecords],
+          aiSummary: verdictLines,
+          linesAssessed: verdicts.length,
+          findingsDetected: notMetCount,
+          batchCount: batchTotal,
+          chunkCount: evidenceChunks.length,
+          errorMessage: liveError,
+          folderWarnings: folderWarnings.length > 0 ? folderWarnings : undefined,
+        };
+        set((st) => {
+          const prev = st.auditRunHistory[id] ?? [];
+          return {
+            auditRunHistory: { ...st.auditRunHistory, [id]: [runRecord, ...prev].slice(0, 5) },
+            lastAuditRuns: { ...st.lastAuditRuns, [id]: runRecord },
+          };
+        });
 
         // Post-audit multi-agent pipeline — fires asynchronously so the audit
         // result appears immediately and the finding enrichment arrives seconds

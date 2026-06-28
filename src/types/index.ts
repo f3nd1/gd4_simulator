@@ -440,6 +440,12 @@ export type AuditFileRecord = {
   citedByLineIds?: string[];
   // Which APSR dimensions cited this file
   usedForDimensions?: { approach: boolean; processes: boolean; systemsOutcomes: boolean; review: boolean };
+  // Drive file ID and last-modified timestamp — used to detect unchanged files
+  // and reuse previously extracted text on repeat audits.
+  driveFileId?: string;
+  driveModifiedTime?: string;
+  // Whether this file was newly read, re-read after a change, or reused from cache.
+  processingMode?: "new" | "changed" | "reused";
 };
 
 // A discrete chunk of evidence extracted from one file, assigned a stable ID
@@ -511,6 +517,61 @@ export type AuditProgressState = {
   startedAt?: number;
   // Human-readable reason the audit was cancelled, if applicable.
   cancelReason?: string;
+  // Which folders were in scope for this audit.
+  scope?: AuditScope;
+  // Analysis model used (available after first AI batch completes).
+  aiModel?: string;
+  // Total evidence chunks assembled for the AI call.
+  chunksCount?: number;
+  // Per-line AI verdict summary — populated after the AI audit stage completes.
+  verdictLines?: AuditAISummaryLine[];
+  // Folder-level warnings returned by the AI (e.g. mis-filed documents).
+  folderWarnings?: string[];
+};
+
+// Which source folders the audit reads.
+export type AuditScope = "both" | "policy" | "evidence";
+
+// One checklist line's AI verdict, stored in an AuditRunRecord for post-run
+// inspection and CSV export.
+export type AuditAISummaryLine = {
+  lineId: string;
+  lineText: string;
+  sourceRef?: string;
+  result: "Met" | "Partial" | "Not met";
+  approachStatus: string;
+  processesStatus: string;
+  systemsOutcomesStatus: string;
+  reviewStatus: string;
+  citedChunkIds: string[];
+  citedFileNames: string[];
+  overallReason?: string;
+  warning?: string;
+};
+
+// Persisted record of a completed, failed, or cancelled audit run — stored in
+// the workspace so the user can reopen and inspect it after the modal closes,
+// and so the CSV export functions have a self-contained data source.
+export type AuditRunRecord = {
+  runId: string;
+  folderId: string;
+  subCriterionId: string;
+  subCriterionTitle: string;
+  scope: AuditScope;
+  status: "completed" | "failed" | "cancelled";
+  startedAt: string;    // ISO 8601
+  endedAt: string;      // ISO 8601
+  auditorName?: string;
+  auditLive: boolean;
+  aiModel?: string;
+  fileLedger: AuditFileRecord[];
+  aiSummary: AuditAISummaryLine[];
+  linesAssessed: number;
+  findingsDetected: number;
+  batchCount: number;
+  chunkCount: number;
+  errorMessage?: string;
+  folderWarnings?: string[];
 };
 
 export type AIReviewLogEntry = {
