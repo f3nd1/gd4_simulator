@@ -75,6 +75,7 @@ export type GD4Requirement = {
   expectedEvidence: string[];
   bandDescriptors: Record<string, string>;
   scoringNotes?: string;
+  flatAuditPoints?: FlatAuditPoint[];
 };
 
 export type SourceSystem = "SMS" | "ERPNext" | "Google Drive" | "Helpdesk" | "LMS" | "Manual";
@@ -274,6 +275,21 @@ export type GenericChecklistLine = {
 // Which official GD4 field a generated line traces back to.
 export type ChecklistSourceType = "requirement" | "intent" | "describeShow" | "note" | "expectedEvidence";
 
+// A single testable audit point derived from the official GD4 requirement text.
+// Flat points may come from a top-level Describe/Show bullet, a lettered
+// sub-item within one, an Expected Evidence item, or a prescriptive Note.
+// The ref uses the pattern "itemId.DS{n}" / "itemId.DS{n}.{letter}" / "itemId.EE{n}" / "itemId.N{n}".
+export type FlatAuditPoint = {
+  ref: string;
+  gd4ItemId: string;
+  sourceType: "describeShow" | "note" | "expectedEvidence";
+  text: string;
+  parentText?: string;
+  sourceText: string;
+  apsrHint?: "Approach" | "Processes" | "Systems & Outcomes" | "Review";
+  originalIndex: number | null;
+};
+
 // Structured output from runLiveChecklistGeneration / simulateChecklistGeneration:
 // every line carries full provenance so it can be validated, displayed, and traced.
 export type GeneratedChecklistLine = {
@@ -283,6 +299,7 @@ export type GeneratedChecklistLine = {
   sourceIndex: number | null;
   sourceText: string;
   apsrDimension: "Approach" | "Processes" | "Systems & Outcomes" | "Review";
+  sourceRef?: string;
 };
 
 export type SpecificChecklistLine = {
@@ -301,6 +318,7 @@ export type SpecificChecklistLine = {
   sourceIndex?: number | null;
   sourceText?: string;
   apsrDimension?: "Approach" | "Processes" | "Systems & Outcomes" | "Review";
+  sourceRef?: string;
 };
 
 // Keyed by GD4 item id (the 35 testable requirements) rather than the 24

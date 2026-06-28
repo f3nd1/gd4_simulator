@@ -133,6 +133,51 @@ function isAuditableNote(note: string): boolean {
 }
 
 export function simulateChecklistGeneration(req: GD4Requirement): GeneratedChecklistLine[] {
+  // Prefer the structured flatAuditPoints (available on real GD4 requirements).
+  // Fall back to the original flat-array logic for test fixtures that omit it.
+  if (req.flatAuditPoints && req.flatAuditPoints.length > 0) {
+    return simulateFromFlatAuditPoints(req);
+  }
+  return simulateFromFlatArrays(req);
+}
+
+function simulateFromFlatAuditPoints(req: GD4Requirement): GeneratedChecklistLine[] {
+  const lines: GeneratedChecklistLine[] = [];
+  for (const point of req.flatAuditPoints!) {
+    if (point.sourceType === "note" && !isAuditableNote(point.text)) continue;
+    const dim =
+      point.apsrHint ??
+      (point.sourceType === "expectedEvidence"
+        ? classifyEvidenceApsr(point.text)
+        : classifyDescribeShowApsr(point.text));
+    let text: string;
+    if (point.sourceType === "expectedEvidence") {
+      const lower = point.text.toLowerCase();
+      const verb =
+        lower.includes("record") || lower.includes("log") || lower.includes("minutes")
+          ? "are maintained"
+          : "is available";
+      const subject = point.text.charAt(0).toLowerCase() + point.text.slice(1);
+      text = `Confirm that ${subject} ${verb} and accessible for audit.`;
+    } else {
+      const raw = point.text;
+      text = raw.charAt(0).toUpperCase() + raw.slice(1);
+      if (!text.endsWith(".")) text += ".";
+    }
+    lines.push({
+      text,
+      clause: `GD4 ${point.ref}`,
+      sourceType: point.sourceType,
+      sourceIndex: point.originalIndex,
+      sourceText: point.sourceText,
+      apsrDimension: dim,
+      sourceRef: point.ref,
+    });
+  }
+  return lines;
+}
+
+function simulateFromFlatArrays(req: GD4Requirement): GeneratedChecklistLine[] {
   const lines: GeneratedChecklistLine[] = [];
 
   // One line per Describe/Show bullet (or per atomic sub-clause within a bullet).
@@ -152,9 +197,6 @@ export function simulateChecklistGeneration(req: GD4Requirement): GeneratedCheck
     });
   });
 
-  // One line per Expected Evidence item so the auditor knows exactly what
-  // records SSG expects to see. Separate from Describe/Show — evidence items
-  // are what should exist, not what the PEI should do.
   req.expectedEvidence.forEach((ev, i) => {
     const lower = ev.toLowerCase();
     const verb = lower.includes("record") || lower.includes("log") || lower.includes("minutes") ? "are maintained" : "is available";
@@ -169,9 +211,6 @@ export function simulateChecklistGeneration(req: GD4Requirement): GeneratedCheck
     });
   });
 
-  // Notes that contain prescriptive requirements ("shall", "must", etc.)
-  // are turned into their own testable lines; clarifying-definition notes
-  // (which explain terms) are excluded as they have no auditable action.
   req.notes.forEach((note, i) => {
     if (isAuditableNote(note)) {
       lines.push({

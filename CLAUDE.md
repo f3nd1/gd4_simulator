@@ -14,6 +14,8 @@ npx tsc -b           # type-check only, no emit
 
 Run a single test file: `npx vitest run src/lib/__tests__/scoring.test.ts`
 
+Validate GD4 data integrity (35 items, flatAuditPoints consistency): `npm run validate:gd4`
+
 ## Architecture
 
 **Stack**: React 19 + Zustand 5 + Vite + TypeScript + HashRouter (`#/` paths). No server — pure client SPA.
@@ -22,7 +24,7 @@ Run a single test file: `npx vitest run src/lib/__tests__/scoring.test.ts`
 
 ### Key data flow
 
-1. **GD4 requirements** live in `src/data/gd4Requirements.ts` — `GD4_REQUIREMENTS[]`, `GD4_CRITERIA[]`, `GENERAL_SUPPORTING_DOCS`. The 24 sub-criteria are the backbone every other module refers to by `itemNumber` (e.g. `"1.1"`).
+1. **GD4 requirements** live in `src/data/gd4Requirements.ts` — `GD4_REQUIREMENTS[]`, `GD4_CRITERIA[]`, `GENERAL_SUPPORTING_DOCS`. The 24 sub-criteria are the backbone every other module refers to by `itemNumber` (e.g. `"1.1"`). Each `GD4Requirement` now carries a `flatAuditPoints: FlatAuditPoint[]` array automatically derived from the official text: Describe/Show bullets that contain a ": sub1; sub2; sub3" list pattern are split into lettered children (refs like `"6.2.1.DS1.a"`); simple bullets produce one point each (e.g. `"1.1.1.DS2"`). Run `npm run validate:gd4` to verify data integrity (21 checks).
 
 2. **Scoring pipeline** (`src/lib/scoring.ts`):
    - `aiScore(ev)` → weighted APSR sum → `getBand(score)` → `Band` (1–5)

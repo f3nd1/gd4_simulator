@@ -162,6 +162,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           sourceIndex: r.sourceIndex,
           sourceText: r.sourceText,
           apsrDimension: r.apsrDimension,
+          sourceRef: r.sourceRef,
           status: "Not Started" as const,
           evidence: [],
           generatedBy: "ai" as const,

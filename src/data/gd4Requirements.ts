@@ -1,4 +1,4 @@
-import type { GD4Requirement, GD4SubCriterion } from "../types";
+import type { GD4Requirement, GD4SubCriterion, FlatAuditPoint } from "../types";
 
 // Source of truth: EduTrust Guidance Document Version 4 (SkillsFuture
 // Singapore, January 2025) — sections "Scoring and Banding System" and
@@ -540,6 +540,110 @@ const RAW_ITEMS: RawItem[] = [
   },
 ];
 
+// ── FlatAuditPoint derivation ────────────────────────────────────────────────
+//
+// Splits a Describe/Show bullet into a parent phrase and lettered children
+// when the text contains ": " followed by at least two semicolon-separated
+// sub-clauses — the standard GD4 list pattern (e.g. "covering: A; B; C").
+// Parentheses depth is tracked so semicolons inside parenthetical phrases
+// (nested sub-clauses) are not treated as separators.
+
+function splitBySemicolon(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth--;
+    else if (c === ";" && depth === 0) {
+      const trimmed = current.trim();
+      if (trimmed) parts.push(trimmed);
+      current = "";
+      if (i + 1 < text.length && text[i + 1] === " ") i++;
+      continue;
+    }
+    current += c;
+  }
+  const last = current.trim();
+  if (last) parts.push(last);
+  return parts.filter(Boolean);
+}
+
+type StructuredDS =
+  | { parent: string; children: { letter: string; text: string }[] }
+  | { parent: string; children?: undefined };
+
+function tryStructureDS(ds: string): StructuredDS {
+  const colonIdx = ds.indexOf(": ");
+  if (colonIdx === -1) return { parent: ds };
+  const parent = ds.slice(0, colonIdx + 1);
+  const afterColon = ds.slice(colonIdx + 2).trim();
+  const parts = splitBySemicolon(afterColon);
+  if (parts.length < 2) return { parent: ds };
+  return {
+    parent,
+    children: parts.map((part, j) => ({
+      letter: String.fromCharCode(97 + j),
+      text: part.charAt(0).toUpperCase() + part.slice(1),
+    })),
+  };
+}
+
+function deriveItemFlatAuditPoints(raw: RawItem): FlatAuditPoint[] {
+  const points: FlatAuditPoint[] = [];
+
+  raw.describeShow.forEach((ds, i) => {
+    const structured = tryStructureDS(ds);
+    if (structured.children) {
+      structured.children.forEach(({ letter, text }) => {
+        points.push({
+          ref: `${raw.id}.DS${i + 1}.${letter}`,
+          gd4ItemId: raw.id,
+          sourceType: "describeShow",
+          text,
+          parentText: structured.parent,
+          sourceText: text,
+          originalIndex: null,
+        });
+      });
+    } else {
+      points.push({
+        ref: `${raw.id}.DS${i + 1}`,
+        gd4ItemId: raw.id,
+        sourceType: "describeShow",
+        text: ds,
+        sourceText: ds,
+        originalIndex: i,
+      });
+    }
+  });
+
+  raw.expectedEvidence.forEach((ev, i) => {
+    points.push({
+      ref: `${raw.id}.EE${i + 1}`,
+      gd4ItemId: raw.id,
+      sourceType: "expectedEvidence",
+      text: ev,
+      sourceText: ev,
+      originalIndex: i,
+    });
+  });
+
+  (raw.notes ?? []).forEach((note, i) => {
+    points.push({
+      ref: `${raw.id}.N${i + 1}`,
+      gd4ItemId: raw.id,
+      sourceType: "note",
+      text: note,
+      sourceText: note,
+      originalIndex: i,
+    });
+  });
+
+  return points;
+}
+
 // Official EduTrust scoring rubric (GD4 section 23) — identical four-dimension,
 // five-band table applies across all items; reproduced verbatim.
 export const RUBRIC_BAND_DESCRIPTORS: Record<string, Record<string, string>> = {
@@ -629,5 +733,6 @@ export const GD4_REQUIREMENTS: GD4Requirement[] = RAW_ITEMS.map((raw) => {
     expectedEvidence: raw.expectedEvidence,
     bandDescriptors: bandDescriptorsFor(raw),
     scoringNotes: gateSensitive ? "Gate-sensitive: official GD4 section 20 requires an average minimum of Band 3 in this sub-criterion/criterion." : undefined,
+    flatAuditPoints: deriveItemFlatAuditPoints(raw),
   };
 });

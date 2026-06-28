@@ -21,8 +21,10 @@ import type {
   SubChecklistEvidenceItem,
 } from "../types";
 
-// Formats the short "GD4 source: …" label for a generated line's provenance.
-function sourceLabel(sourceType: ChecklistSourceType, sourceIndex: number | null | undefined): string {
+// Formats the short provenance label for a generated line.
+// Prefers the structured sourceRef (e.g. "6.2.1.DS1.a") over the legacy index-based label.
+function sourceLabel(sourceType: ChecklistSourceType, sourceIndex: number | null | undefined, sourceRef?: string): string {
+  if (sourceRef) return sourceRef;
   if (sourceType === "describeShow") return `Describe/Show ${(sourceIndex ?? 0) + 1}`;
   if (sourceType === "note") return `Note ${(sourceIndex ?? 0) + 1}`;
   if (sourceType === "expectedEvidence") return `Expected Evidence ${(sourceIndex ?? 0) + 1}`;
@@ -486,7 +488,7 @@ export function SubCriterionChecklist() {
                   </div>
                   {l.sourceType && (
                     <div style={{ fontSize: 10, color: "#78716c", marginTop: 2, paddingLeft: 2 }}>
-                      GD4 source: {sourceLabel(l.sourceType, l.sourceIndex)}
+                      GD4 source: {sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined)}
                       {l.apsrDimension && <span style={{ marginLeft: 8, color: "#9ca3af" }}>APSR: {l.apsrDimension}</span>}
                       {l.sourceText && <span style={{ marginLeft: 8, color: "#b0ada8", fontStyle: "italic" }} title={l.sourceText}>"{l.sourceText.slice(0, 80)}{l.sourceText.length > 80 ? "…" : ""}"</span>}
                     </div>
@@ -543,7 +545,7 @@ export function SubCriterionChecklist() {
                       style={{ fontSize: 10, color: "#a8a29e", cursor: l.sourceText ? "help" : "default" }}
                       title={l.sourceText ? `Source: "${l.sourceText}"` : undefined}
                     >
-                      GD4: {sourceLabel(l.sourceType, l.sourceIndex)}{l.apsrDimension ? ` · ${l.apsrDimension}` : ""}
+                      GD4: {sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined)}{l.apsrDimension ? ` · ${l.apsrDimension}` : ""}
                     </span>
                   )}
                   <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>

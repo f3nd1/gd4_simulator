@@ -157,16 +157,16 @@ export async function runLiveChecklistGeneration(
   const VALID_SOURCE_TYPES: GeneratedChecklistLine["sourceType"][] = ["describeShow", "note", "expectedEvidence", "requirement", "intent"];
   const VALID_APSR: GeneratedChecklistLine["apsrDimension"][] = ["Approach", "Processes", "Systems & Outcomes", "Review"];
 
-  const system = `You are converting official GD4 EduTrust item text into traceable, testable audit checklist lines. You are NOT creating a new audit checklist from scratch. Every line you generate MUST be directly supported by one official source point (a Describe/Show bullet, a Note, or an Expected Evidence item) that is explicitly provided to you in the prompt. If you cannot point to the exact source text, do not create the line.
+  const system = `You are converting official GD4 EduTrust item text into traceable, testable audit checklist lines. You are NOT creating a new audit checklist from scratch. Every line you generate MUST be directly supported by one official source point provided in the prompt, identified by its ref (e.g. "1.1.1.DS1.a"). If you cannot point to the exact source point, do not create the line.
 
 STRICT RULES — violations cause your output to be discarded:
-1. Do NOT invent requirements that do not appear in the official GD4 text provided.
+1. Do NOT invent requirements that do not appear in the official source points provided.
 2. Do NOT add generic internal-audit checks (e.g. "check if the process is effective").
 3. Do NOT add "good practice" items unless those exact words appear in the official GD4 wording.
 4. Do NOT infer extra requirements from PEI context or your general knowledge.
-5. Use the official GD4 wording as closely as possible — preferred forms: "Verify that the institution has [GD4 wording]." / "Check records showing [official Describe/Show requirement]." / "Confirm evidence of [official Expected Evidence item]."
-6. Avoid creating multiple nearly-identical lines for the same source point; each line must test a genuinely distinct aspect.
-7. For each line, the sourceText field must contain a verbatim excerpt from the source point it comes from. An empty sourceText invalidates the line.
+5. Rewrite each source point as a clear, unambiguous audit instruction — preferred forms: "Verify that the institution has [GD4 wording]." / "Check records showing [official requirement]." / "Confirm evidence of [expected evidence item]."
+6. Avoid creating multiple nearly-identical lines for the same source point; one clear line per source point.
+7. The sourceRef must be the exact ref string from the source point (e.g. "1.1.1.DS1.a"). The sourceText must contain verbatim text from that source point. Empty sourceText or sourceRef invalidates the line.
 
 APSR dimension classification:
 - Approach: documented policy, procedure, plan, framework, method, responsibility, workflow
@@ -177,21 +177,37 @@ APSR dimension classification:
 Also list any ideas you considered and rejected in rejectedIdeas with the reason.
 
 Respond with JSON only (no preamble):
-{"lines": [{"text": string, "clause": string, "sourceType": "describeShow"|"note"|"expectedEvidence", "sourceIndex": number, "sourceText": string, "apsrDimension": "Approach"|"Processes"|"Systems & Outcomes"|"Review"}], "rejectedIdeas": [{"text": string, "reason": string}]}${skills(apsrRubricSkill, sgPeiContextSkill)}`;
+{"lines": [{"text": string, "clause": string, "sourceRef": string, "sourceType": "describeShow"|"note"|"expectedEvidence", "sourceText": string, "apsrDimension": "Approach"|"Processes"|"Systems & Outcomes"|"Review"}], "rejectedIdeas": [{"text": string, "reason": string}]}${skills(apsrRubricSkill, sgPeiContextSkill)}`;
+
+  // Build the source points list. Use flatAuditPoints when available so the AI
+  // sees the same granular sub-items that the offline fallback uses; otherwise
+  // fall back to the flat DS/EE/Notes arrays.
+  const sourceBlock =
+    req.flatAuditPoints && req.flatAuditPoints.length > 0
+      ? req.flatAuditPoints
+          .map((p) => {
+            const prefix =
+              p.sourceType === "describeShow"
+                ? "DS"
+                : p.sourceType === "expectedEvidence"
+                  ? "EE"
+                  : "N";
+            const label = p.parentText ? `${p.parentText} → ${p.text}` : p.text;
+            return `${prefix}:${p.ref}. ${label}`;
+          })
+          .join("\n")
+      : [
+          ...req.describeShow.map((d, i) => `DS:${req.id}.DS${i + 1}. ${d}`),
+          ...req.expectedEvidence.map((e, i) => `EE:${req.id}.EE${i + 1}. ${e}`),
+          ...req.notes.map((n, i) => `N:${req.id}.N${i + 1}. ${n}`),
+        ].join("\n");
 
   const user = `GD4 item ${req.id} — ${req.requirement}
 
 Intent: ${req.intent}
 
-Describe/Show (each bullet is a separate auditable requirement):
-${req.describeShow.map((d, i) => `DS${i + 1}. ${d}`).join("\n")}
-
-Expected Evidence (what records/documents SSG expects to see):
-${req.expectedEvidence.length ? req.expectedEvidence.map((e, i) => `EE${i + 1}. ${e}`).join("\n") : "(none listed)"}${
-    req.notes.length
-      ? `\n\nNotes (official GD4 clarifications and prescriptive requirements):\n${req.notes.map((n, i) => `N${i + 1}. ${n}`).join("\n")}`
-      : ""
-  }${req.gateSensitive ? "\n\nNote: This item is gate-sensitive — a minimum Band 3 average applies to this sub-criterion under the official GD4 standard. Lines must be especially precise and unambiguous." : ""}`;
+Official source points (each line = one auditable requirement; ref = official GD4 reference):
+${sourceBlock}${req.gateSensitive ? "\n\nNote: This item is gate-sensitive — a minimum Band 3 average applies to this sub-criterion under the official GD4 standard. Lines must be especially precise and unambiguous." : ""}`;
 
   const content = await chatComplete(
     [{ role: "system", content: system }, { role: "user", content: user }],
@@ -215,16 +231,28 @@ ${req.expectedEvidence.length ? req.expectedEvidence.map((e, i) => `EE${i + 1}. 
     const apsrDimension = VALID_APSR.includes(r.apsrDimension as GeneratedChecklistLine["apsrDimension"])
       ? (r.apsrDimension as GeneratedChecklistLine["apsrDimension"])
       : null;
-    // Reject any line the model produced without a valid sourceText, sourceType or apsrDimension —
-    // these are the hallmarks of an invented line rather than a traceable one.
-    if (!text || !sourceText || !sourceType || !apsrDimension) return;
+    const sourceRef = typeof r.sourceRef === "string" ? r.sourceRef.trim() : "";
+    // Reject any line the model produced without a valid sourceText, sourceType, sourceRef or apsrDimension.
+    if (!text || !sourceText || !sourceType || !apsrDimension || !sourceRef) return;
+    // Derive originalIndex from sourceRef (e.g. "1.1.1.DS2" → index 1; sub-items "1.1.1.DS1.a" → null)
+    const dsSimple = /\.DS(\d+)$/.exec(sourceRef);
+    const eeSimple = /\.EE(\d+)$/.exec(sourceRef);
+    const nSimple = /\.N(\d+)$/.exec(sourceRef);
+    const derivedIndex = dsSimple
+      ? parseInt(dsSimple[1], 10) - 1
+      : eeSimple
+        ? parseInt(eeSimple[1], 10) - 1
+        : nSimple
+          ? parseInt(nSimple[1], 10) - 1
+          : null;
     lines.push({
       text: text.endsWith(".") ? text : `${text}.`,
-      clause: typeof r.clause === "string" && r.clause ? r.clause : `GD4 ${req.id}`,
+      clause: typeof r.clause === "string" && r.clause ? r.clause : `GD4 ${sourceRef}`,
       sourceType,
-      sourceIndex: typeof r.sourceIndex === "number" ? r.sourceIndex : null,
+      sourceIndex: derivedIndex,
       sourceText,
       apsrDimension,
+      sourceRef,
     });
   });
 
