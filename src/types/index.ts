@@ -397,8 +397,14 @@ export type AuditProgressState = {
   stageDetail?: string;
   filesRead?: number;
   filesTotal?: number;
+  filesSkipped?: number;       // accumulated skip count (unreadable file types)
+  currentFileName?: string;    // just the filename, set while reading each file
+  currentFileBucket?: "policy" | "evidence"; // which source folder the file came from
+  currentFileAction?: string;  // e.g. "Extracting PDF text", "Describing image with AI"
   batchCurrent?: number;
   batchTotal?: number;
+  linesAssessed?: number;      // total checklist lines that received a verdict
+  findingsDetected?: number;   // lines with status "Not met" (potential issues)
   // Set when the condensing step runs (not always needed — only for large folders).
   condensingTriggered?: boolean;
   // Non-null when stage === "error".

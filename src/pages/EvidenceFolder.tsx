@@ -9,19 +9,44 @@ const SUMMARY_CAP = 320; // chars shown before the audit summary collapses
 
 // ── Audit Progress Modal ────────────────────────────────────────────────────
 
-const STAGE_LABELS: Record<AuditProgressState["stage"], string> = {
-  listing: "Connecting to Drive",
-  reading: "Reading files",
-  condensing: "Condensing documents",
-  auditing: "Running AI audit",
-  saving: "Saving verdicts",
-  complete: "Audit complete",
-  error: "Error",
-};
+const MODAL_KEYFRAMES = `
+@keyframes audit-pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(59,130,246,0.45); }
+  70%  { box-shadow: 0 0 0 8px rgba(59,130,246,0); }
+  100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); }
+}
+@keyframes audit-shimmer {
+  0%   { background-position: -300% 0; }
+  100% { background-position: 300% 0; }
+}
+@keyframes audit-done-pop {
+  0%   { transform: scale(0.7); opacity: 0; }
+  60%  { transform: scale(1.15); }
+  100% { transform: scale(1); opacity: 1; }
+}
+`;
 
-const STAGE_ORDER: AuditProgressState["stage"][] = [
-  "listing", "reading", "auditing", "saving", "complete",
-];
+// Visual steps (condensing is folded into "Read files" visually)
+const VISUAL_STEPS = [
+  { emoji: "🔌", label: "Connect" },
+  { emoji: "📂", label: "Read files" },
+  { emoji: "🤖", label: "AI audit" },
+  { emoji: "💾", label: "Save" },
+  { emoji: "✅", label: "Complete" },
+] as const;
+
+// Map audit stage → which visual step (0-based) it belongs to
+function stageToVisualStep(stage: AuditProgressState["stage"]): number {
+  switch (stage) {
+    case "listing":   return 0;
+    case "reading":
+    case "condensing": return 1;
+    case "auditing":  return 2;
+    case "saving":    return 3;
+    case "complete":  return 4;
+    case "error":     return -1;
+  }
+}
 
 function stageProgress(p: AuditProgressState): number {
   switch (p.stage) {
@@ -43,53 +68,250 @@ function stageProgress(p: AuditProgressState): number {
   }
 }
 
+// Tiny animated dots component for "live" feel on active lines
+function Dots() {
+  const [n, setN] = useState(1);
+  useEffect(() => {
+    const t = setInterval(() => setN((d) => (d % 3) + 1), 500);
+    return () => clearInterval(t);
+  }, []);
+  return <span style={{ color: "#93c5fd", letterSpacing: 2 }}>{"•".repeat(n)}</span>;
+}
+
+// Detail panel — shows context-appropriate info for each stage
+function ProgressDetail({ p }: { p: AuditProgressState }) {
+  const rowStyle: React.CSSProperties = { display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 5 };
+  const labelStyle: React.CSSProperties = { fontSize: 11, color: "#6b7280", minWidth: 90, flexShrink: 0, paddingTop: 1 };
+  const valueStyle: React.CSSProperties = { fontSize: 12.5, color: "#1e293b", fontWeight: 500, wordBreak: "break-word" };
+  const mutedStyle: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+
+  if (p.stage === "listing") return (
+    <div>
+      <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
+        Connecting to Google Drive and listing all files in the folder<Dots />
+      </div>
+      <div style={mutedStyle}>Folder: <b>{p.folderName}</b> · sub-criterion {p.subCriterionId}</div>
+    </div>
+  );
+
+  if (p.stage === "reading") {
+    const read = p.filesRead ?? 0;
+    const total = p.filesTotal ?? 0;
+    const skipped = p.filesSkipped ?? 0;
+    return (
+      <div>
+        <div style={{ fontSize: 13, color: "#374151", marginBottom: 8 }}>
+          📂 Reading file {read + 1} of {total}<Dots />
+        </div>
+        {p.currentFileName && (
+          <div style={rowStyle}>
+            <span style={labelStyle}>Current file</span>
+            <span style={{ ...valueStyle, fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>{p.currentFileName}</span>
+          </div>
+        )}
+        {p.currentFileBucket && (
+          <div style={rowStyle}>
+            <span style={labelStyle}>Source</span>
+            <span style={{ ...valueStyle, color: p.currentFileBucket === "policy" ? "#1d4ed8" : "#15803d" }}>
+              {p.currentFileBucket === "policy" ? "Policy & Procedure folder" : "Actual Evidence folder"}
+            </span>
+          </div>
+        )}
+        {p.currentFileAction && (
+          <div style={rowStyle}>
+            <span style={labelStyle}>Action</span>
+            <span style={valueStyle}>{p.currentFileAction}</span>
+          </div>
+        )}
+        <div style={{ marginTop: 8, padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#475569", display: "flex", gap: 12 }}>
+          <span><b>{read}</b> file{read !== 1 ? "s" : ""} processed</span>
+          {skipped > 0 && <span style={{ color: "#94a3b8" }}><b>{skipped}</b> skipped</span>}
+        </div>
+      </div>
+    );
+  }
+
+  if (p.stage === "condensing") return (
+    <div>
+      <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
+        📋 Condensing large documents to fit AI input limits<Dots />
+      </div>
+      <div style={mutedStyle}>
+        The total document text exceeds the AI's context limit. The system is summarising each large file with a fast AI model so that nothing important is left out of the audit. This usually takes 10–20 seconds.
+      </div>
+    </div>
+  );
+
+  if (p.stage === "auditing") {
+    const batch = p.batchCurrent ?? 0;
+    const total = p.batchTotal ?? 1;
+    const isStrict = p.stageDetail?.includes("strict") || p.stageDetail?.includes("challenge");
+    return (
+      <div>
+        <div style={{ fontSize: 13, color: "#374151", marginBottom: 8 }}>
+          🤖 {isStrict ? "Running strict challenge pass" : `AI audit — batch ${batch} of ${total}`}<Dots />
+        </div>
+        <div style={rowStyle}>
+          <span style={labelStyle}>Action</span>
+          <span style={valueStyle}>{isStrict ? "Re-checking every Met/Partial verdict against the evidence standard" : "Judging each checklist line against the GD4 standard and your evidence"}</span>
+        </div>
+        {p.filesTotal != null && (
+          <div style={{ marginTop: 8, padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#475569", display: "flex", gap: 12 }}>
+            <span><b>{p.filesTotal}</b> file{p.filesTotal !== 1 ? "s" : ""} in scope</span>
+            {total > 1 && <span><b>{batch}</b> of <b>{total}</b> batches done</span>}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (p.stage === "saving") {
+    const lines = p.linesAssessed ?? 0;
+    const issues = p.findingsDetected ?? 0;
+    return (
+      <div>
+        <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
+          💾 Saving verdicts to the checklist<Dots />
+        </div>
+        <div style={{ marginTop: 4, padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#475569", display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <span><b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed</span>
+          {issues > 0 && <span style={{ color: "#b45309" }}><b>{issues}</b> potential issue{issues !== 1 ? "s" : ""} detected</span>}
+        </div>
+        <div style={{ ...mutedStyle, marginTop: 6 }}>Results will appear in the Sub-Criterion Checklist when this step completes.</div>
+      </div>
+    );
+  }
+
+  if (p.stage === "complete") {
+    const lines = p.linesAssessed ?? 0;
+    const issues = p.findingsDetected ?? 0;
+    return (
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#15803d", marginBottom: 8 }}>
+          Audit finished successfully!
+        </div>
+        <div style={{ padding: "8px 12px", background: "#f0fdf4", borderRadius: 8, fontSize: 12.5, color: "#166534", display: "flex", gap: 16, flexWrap: "wrap" }}>
+          {lines > 0 && <span>✓ <b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed</span>}
+          {issues > 0 ? (
+            <span>⚠ <b>{issues}</b> potential issue{issues !== 1 ? "s" : ""} flagged</span>
+          ) : lines > 0 ? (
+            <span>✓ No issues flagged</span>
+          ) : null}
+        </div>
+        <div style={{ ...mutedStyle, marginTop: 6 }}>Check the Sub-Criterion Checklist to review verdicts and evidence.</div>
+      </div>
+    );
+  }
+
+  if (p.stage === "error") return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#b23121", marginBottom: 6 }}>Something went wrong:</div>
+      <div style={{ fontSize: 12.5, color: "#7f1d1d", background: "#fef2f2", borderRadius: 8, padding: "8px 12px", lineHeight: 1.6 }}>
+        {p.errorMessage || "An unexpected error occurred."}
+      </div>
+      <div style={{ ...mutedStyle, marginTop: 6 }}>Any verdicts saved before this error were kept. Fix the issue above and run the audit again.</div>
+    </div>
+  );
+
+  return null;
+}
+
 function AuditProgressModal({ progress, onClose }: { progress: AuditProgressState; onClose: () => void }) {
   const pct = stageProgress(progress);
   const isError = progress.stage === "error";
   const isDone = progress.stage === "complete";
+  const currentStep = stageToVisualStep(progress.stage);
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#0005", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: "#fff", borderRadius: 14, padding: "26px 30px", width: 400, boxShadow: "0 8px 40px #0003" }}>
-        <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
-          <b style={{ flex: 1, fontSize: 14 }}>Running folder audit</b>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+      <style>{MODAL_KEYFRAMES}</style>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "28px 28px 24px", width: "100%", maxWidth: 520, boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 20 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Running folder audit</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+              {progress.folderName}
+              {progress.overallTotal && progress.overallCurrent != null && (
+                <span style={{ marginLeft: 8, background: "#f1f5f9", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>
+                  Folder {progress.overallCurrent} of {progress.overallTotal}
+                </span>
+              )}
+            </div>
+          </div>
           {(isDone || isError) && (
-            <button onClick={onClose} style={{ cursor: "pointer", border: "none", background: "transparent", fontSize: 18, color: "#6b7280", lineHeight: 1, padding: 0 }}>×</button>
+            <button onClick={onClose} style={{ cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#94a3b8", lineHeight: 1, padding: "0 0 0 8px", marginTop: -2 }}>×</button>
           )}
         </div>
-        <div style={{ background: "#f1f5f9", borderRadius: 8, height: 10, overflow: "hidden", marginBottom: 14 }}>
-          <div style={{ width: `${pct}%`, height: "100%", background: isError ? "#ef4444" : "#3b82f6", transition: "width 0.4s" }} />
-        </div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-          {STAGE_ORDER.map((s) => {
-            const idx = STAGE_ORDER.indexOf(progress.stage);
-            const myIdx = STAGE_ORDER.indexOf(s);
-            const done = myIdx < idx || (isDone && myIdx <= idx);
-            const active = s === progress.stage && !isDone;
+
+        {/* Horizontal step flow */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18, padding: "0 4px" }}>
+          {VISUAL_STEPS.map((step, i) => {
+            const status: "done" | "active" | "future" | "error" =
+              isError && i === currentStep ? "error" :
+              isDone ? "done" :
+              i < currentStep ? "done" :
+              i === currentStep ? "active" : "future";
             return (
-              <span key={s} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 12, background: done ? "#dcfce7" : active ? "#dbeafe" : "#f1f5f9", color: done ? "#15803d" : active ? "#1d4ed8" : "#94a3b8", fontWeight: active ? 700 : 400 }}>
-                {active && !isDone ? "⏳ " : done ? "✓ " : ""}{STAGE_LABELS[s]}
-              </span>
+              <Fragment key={i}>
+                {/* Step bubble */}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, minWidth: 60 }}>
+                  <div style={{
+                    width: 42, height: 42, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
+                    background:
+                      status === "done" ? "#dcfce7" :
+                      status === "active" ? "#2563eb" :
+                      status === "error" ? "#fee2e2" : "#f1f5f9",
+                    color:
+                      status === "done" ? "#15803d" :
+                      status === "active" ? "#fff" :
+                      status === "error" ? "#b23121" : "#cbd5e1",
+                    transition: "background 0.4s, color 0.4s",
+                    animation: status === "active" ? "audit-pulse-ring 2s ease-in-out infinite" : "none",
+                    boxShadow: status === "active" ? "0 0 0 3px rgba(219,234,254,0.8)" : "none",
+                  }}>
+                    {status === "done" ? "✓" : step.emoji}
+                  </div>
+                  <span style={{
+                    fontSize: 10.5, textAlign: "center", lineHeight: 1.2, fontWeight: status === "active" ? 700 : 400,
+                    color: status === "active" ? "#2563eb" : status === "done" ? "#16a34a" : "#94a3b8",
+                  }}>{step.label}</span>
+                </div>
+                {/* Arrow connector */}
+                {i < VISUAL_STEPS.length - 1 && (
+                  <div style={{ color: i < currentStep ? "#86efac" : "#e2e8f0", fontSize: 18, padding: "0 2px", marginBottom: 18, flexShrink: 0 }}>→</div>
+                )}
+              </Fragment>
             );
           })}
         </div>
-        <div style={{ fontSize: 12.5, color: isError ? "#b23121" : "#475569", lineHeight: 1.5 }}>
-          {isError ? (
-            <>{progress.errorMessage}<br /><span style={{ color: "#6b7280", fontSize: 11 }}>Any results before the error were saved. Check console for details.</span></>
-          ) : (
-            <>
-              {progress.stage === "reading" && progress.filesTotal != null && (
-                <><b>{progress.filesRead ?? 0}</b> of <b>{progress.filesTotal}</b> files read<br /></>
-              )}
-              {progress.stage === "auditing" && progress.batchTotal != null && (
-                <><b>Batch {progress.batchCurrent ?? 0}</b> of <b>{progress.batchTotal}</b><br /></>
-              )}
-              {progress.stageDetail && <span style={{ color: "#6b7280" }}>{progress.stageDetail}</span>}
-            </>
-          )}
+
+        {/* Progress bar */}
+        <div style={{ background: "#f1f5f9", borderRadius: 6, height: 6, overflow: "hidden", marginBottom: 18 }}>
+          <div style={{
+            height: "100%",
+            width: `${pct}%`,
+            borderRadius: 6,
+            background: isError ? "#ef4444" : isDone ? "#22c55e" : "linear-gradient(90deg, #3b82f6 0%, #60a5fa 50%, #93c5fd 100%)",
+            backgroundSize: "200% 100%",
+            transition: "width 0.5s ease",
+            animation: !isDone && !isError ? "audit-shimmer 2s linear infinite" : "none",
+          }} />
         </div>
+
+        {/* Detail section */}
+        <div style={{ background: "#f8fafc", borderRadius: 10, padding: "14px 16px", minHeight: 90 }}>
+          <ProgressDetail p={progress} />
+        </div>
+
+        {/* Done / error button */}
         {(isDone || isError) && (
-          <button onClick={onClose} style={{ marginTop: 14, cursor: "pointer", width: "100%", padding: "8px", borderRadius: 8, border: "none", background: isError ? "#fee2e2" : "#dcfce7", color: isError ? "#b23121" : "#15803d", fontWeight: 700, fontSize: 13 }}>
-            {isError ? "Dismiss" : "Done"}
+          <button
+            onClick={onClose}
+            style={{ marginTop: 16, cursor: "pointer", width: "100%", padding: "10px", borderRadius: 10, border: "none", background: isError ? "#fee2e2" : "#dcfce7", color: isError ? "#b23121" : "#15803d", fontWeight: 700, fontSize: 13 }}
+          >
+            {isError ? "Dismiss" : "View results →"}
           </button>
         )}
       </div>

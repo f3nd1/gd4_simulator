@@ -1221,10 +1221,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           else evidenceCount++;
         };
         const filesTotal = taggedFiles.length;
-        setProgress("reading", { filesTotal, filesRead: 0, stageDetail: `Reading file 1 of ${filesTotal}…` });
+        setProgress("reading", { filesTotal, filesRead: 0, filesSkipped: 0, stageDetail: `Reading file 1 of ${filesTotal}…` });
         for (let fi = 0; fi < taggedFiles.length; fi++) {
           const file = taggedFiles[fi];
-          setProgress("reading", { filesTotal, filesRead: fi, stageDetail: `Reading file ${fi + 1} of ${filesTotal}: ${file.path.split("/").pop() || file.path}` });
+          const fileActionHint =
+            file.mimeType === "application/pdf" ? "Extracting PDF text" :
+            file.mimeType.includes("wordprocessingml") ? "Extracting Word document" :
+            file.mimeType.includes("google-apps.document") ? "Fetching Google Doc" :
+            file.mimeType.includes("google-apps.spreadsheet") || file.mimeType === "text/csv" ? "Reading spreadsheet" :
+            file.mimeType.includes("google-apps.presentation") ? "Reading presentation" :
+            file.mimeType.startsWith("image/") ? "Describing image with AI" :
+            "Reading document";
+          const resolvedBucket: AuditProgressState["currentFileBucket"] =
+            file.bucket === "policy" ? "policy" :
+            file.bucket === "evidence" ? "evidence" :
+            file.bucket === "auto" ? (classifyFileBucket(file.path) === "policy" ? "policy" : "evidence") :
+            undefined;
+          setProgress("reading", {
+            filesTotal,
+            filesRead: fi,
+            filesSkipped: skipped.length,
+            currentFileName: file.path.split("/").pop() || file.path,
+            currentFileBucket: resolvedBucket,
+            currentFileAction: fileActionHint,
+            stageDetail: `Reading file ${fi + 1} of ${filesTotal}: ${file.path.split("/").pop() || file.path}`,
+          });
           try {
             const text = await exportFileText(file, token);
             if (text !== null) {
@@ -1412,7 +1433,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Guarded so an unexpected throw while writing verdicts can't strand
         // `busy` (which would leave this row's button stuck on "Auditing…"
         // forever) — finish() below always runs and clears it.
-        setProgress("saving", { stageDetail: `Saving ${verdicts.length} verdict${verdicts.length === 1 ? "" : "s"}…` });
+        const notMetCount = verdicts.filter((v) => v.status === "Not met").length;
+        setProgress("saving", {
+          stageDetail: `Saving ${verdicts.length} verdict${verdicts.length === 1 ? "" : "s"}…`,
+          linesAssessed: verdicts.length,
+          findingsDetected: notMetCount,
+        });
         const lineTextById = new Map(lines.map((l) => [l.id, l.text]));
         try {
           const checklist = useChecklistModuleStore.getState();
