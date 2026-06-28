@@ -21,6 +21,7 @@ import type {
   DriveAccessStatus,
   ApsrBreakdown,
   AuditProgressState,
+  AuditFileRecord,
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
@@ -986,18 +987,30 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const capturedToken = get().auditRunToken;
 
         // Emits a progress update so the UI step-indicator and progress bar
-        // reflect the current stage in real time.
+        // reflect the current stage in real time. Merges into the existing
+        // auditProgress so persistent fields (filesFound, connectInfo, etc.)
+        // survive stage transitions without needing to be re-emitted each time.
         const setProgress = (stage: AuditProgressState["stage"], extra?: Partial<AuditProgressState>) => {
-          set({
-            auditProgress: {
-              folderId: id,
-              folderName: folder.folderName,
-              subCriterionId: folder.subCriterionId,
-              stage,
-              overallCurrent: overallProgress?.current,
-              overallTotal: overallProgress?.total,
-              ...extra,
-            },
+          set((st) => {
+            const prev = st.auditProgress?.folderId === id ? st.auditProgress : {};
+            return {
+              auditProgress: {
+                ...prev,
+                folderId: id,
+                folderName: folder.folderName,
+                subCriterionId: folder.subCriterionId,
+                overallCurrent: overallProgress?.current,
+                overallTotal: overallProgress?.total,
+                stage,
+                // Reset per-file transient fields so they don't bleed across stages.
+                currentFileName: undefined,
+                currentFileBucket: undefined,
+                currentFileAction: undefined,
+                stageDetail: undefined,
+                errorMessage: undefined,
+                ...extra,
+              } as AuditProgressState,
+            };
           });
         };
         // Track whether this run ended in error so finish() can set the right
@@ -1212,7 +1225,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Each chunk keeps its heading (path + file type) so the AI knows a
         // photo from a policy PDF, and its body separately so a big folder can
         // be summarised rather than silently truncated.
-        type Part = { heading: string; body: string; isPolicy: boolean };
+        type Part = { heading: string; body: string; isPolicy: boolean; fileIndex: number };
         const parts: Part[] = [];
         let policyCount = 0;
         let evidenceCount = 0;
@@ -1224,14 +1237,32 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             : mime.includes("google-apps.presentation") ? "Google Slides"
             : mime.startsWith("image/") ? "image"
             : "text";
-        const pushPart = (path: string, body: string, bucket: TaggedFile["bucket"], kind: string) => {
+        const pushPart = (path: string, body: string, bucket: TaggedFile["bucket"], kind: string, fileIndex: number) => {
           const isPolicy = bucket === "policy" || (bucket === "auto" && classifyFileBucket(path) === "policy");
-          parts.push({ heading: `--- ${path} [${kind}] ---`, body, isPolicy });
+          parts.push({ heading: `--- ${path} [${kind}] ---`, body, isPolicy, fileIndex });
           if (isPolicy) policyCount++;
           else evidenceCount++;
         };
         const filesTotal = taggedFiles.length;
-        setProgress("reading", { filesTotal, filesRead: 0, filesSkipped: 0, stageDetail: `Reading file 1 of ${filesTotal}…` });
+        // Build initial file record list for the progress modal; status updated per-file during read.
+        const fileRecords: AuditFileRecord[] = taggedFiles.map((file) => ({
+          path: file.path,
+          name: file.path.split("/").pop() || file.path,
+          mimeType: file.mimeType,
+          fileKind: fileKind(file.mimeType),
+          bucket: file.bucket,
+          readStatus: "found" as const,
+          auditStatus: "pending" as const,
+        }));
+        const connectedFolderNames = [policyId ? "Policy & Procedure" : null, evidenceId ? "Actual Evidence" : null].filter(Boolean) as string[];
+        setProgress("reading", {
+          filesTotal,
+          filesRead: 0,
+          filesSkipped: 0,
+          filesFound: [...fileRecords],
+          connectInfo: { foldersLinked: connectedFolderNames.length, folderNames: connectedFolderNames },
+          stageDetail: `Reading file 1 of ${filesTotal}…`,
+        });
         for (let fi = 0; fi < taggedFiles.length; fi++) {
           const file = taggedFiles[fi];
           const fileActionHint =
@@ -1247,10 +1278,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             file.bucket === "evidence" ? "evidence" :
             file.bucket === "auto" ? (classifyFileBucket(file.path) === "policy" ? "policy" : "evidence") :
             undefined;
+          fileRecords[fi] = { ...fileRecords[fi], readStatus: "reading" };
           setProgress("reading", {
             filesTotal,
             filesRead: fi,
             filesSkipped: skipped.length,
+            filesFound: [...fileRecords],
             currentFileName: file.path.split("/").pop() || file.path,
             currentFileBucket: resolvedBucket,
             currentFileAction: fileActionHint,
@@ -1260,7 +1293,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const text = await exportFileText(file, token);
             if (text !== null) {
               scanned.push(file.path);
-              pushPart(file.path, text, file.bucket, fileKind(file.mimeType));
+              pushPart(file.path, text, file.bucket, fileKind(file.mimeType), fi);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: text.length };
               continue;
             }
             if (IMAGE_MIME_TYPES.has(file.mimeType) && canDescribeImages && imagesDescribed < MAX_IMAGES) {
@@ -1268,16 +1302,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const dataUrl = await exportFileImageDataUrl(file, token);
               const description = await describeImage(dataUrl, utilitySettings, { onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
               scanned.push(file.path);
-              pushPart(file.path, description, file.bucket, "image");
+              pushPart(file.path, description, file.bucket, "image", fi);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: description.length };
               continue;
             }
             skipped.push(file.path);
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped" };
           } catch (err) {
             // Don't bury the cause — a PDF/.docx that throws here is a read
             // failure (worker missing, corrupt file, permission), NOT an
             // unsupported type, and the user needs to see which so they
             // don't go hunting for the wrong fix.
-            failed.push({ path: file.path, reason: err instanceof Error ? err.message : String(err) });
+            const failReason = err instanceof Error ? err.message : String(err);
+            failed.push({ path: file.path, reason: failReason });
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "failed", failReason };
           }
         }
 
@@ -1327,13 +1365,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const budget = Math.max(500, Math.floor(bodyBudgetTotal / parts.length));
           const toCondense = parts.filter((p) => p.body.length > budget);
           if (toCondense.length > 0) {
-            setProgress("condensing", { condensingTriggered: true, stageDetail: `Condensing ${toCondense.length} large document${toCondense.length === 1 ? "" : "s"}…` });
+            setProgress("condensing", { condensingTriggered: true, filesFound: [...fileRecords], stageDetail: `Condensing ${toCondense.length} large document${toCondense.length === 1 ? "" : "s"}…` });
           }
           for (const p of parts) {
             if (p.body.length > budget) {
               try {
                 p.body = await summariseText(p.heading, p.body, utilitySettings, budget, { onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
                 condensed++;
+                fileRecords[p.fileIndex] = { ...fileRecords[p.fileIndex], readStatus: "condensed" };
               } catch {
                 p.body = p.body.slice(0, budget);
               }
@@ -1373,7 +1412,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let timedOutCount = 0;
         const batchTotal = Math.ceil(lines.length / 4); // AUDIT_BATCH_SIZE = 4
         if (aiSettings.enabled && aiSettings.apiKey) {
-          setProgress("auditing", { batchCurrent: 0, batchTotal, stageDetail: "Starting AI audit…" });
+          setProgress("auditing", { batchCurrent: 0, batchTotal, auditLive: true, filesFound: [...fileRecords], stageDetail: "Starting AI audit…" });
           try {
             const result = await runLiveFolderAudit(lines, docText, analysisSettings, {
               strictness,
@@ -1461,7 +1500,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // `busy` (which would leave this row's button stuck on "Auditing…"
         // forever) — finish() below always runs and clears it.
         const notMetCount = verdicts.filter((v) => v.status === "Not met").length;
+        // Mark all successfully-read files as audited so the modal file list
+        // shows "🤖 Audited" after the AI call completes.
+        for (const rec of fileRecords) {
+          if (rec.readStatus === "read" || rec.readStatus === "condensed") {
+            rec.auditStatus = "audited";
+          }
+        }
         setProgress("saving", {
+          filesFound: [...fileRecords],
           stageDetail: `Saving ${verdicts.length} verdict${verdicts.length === 1 ? "" : "s"}…`,
           linesAssessed: verdicts.length,
           findingsDetected: notMetCount,

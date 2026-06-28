@@ -377,6 +377,20 @@ export type EvidenceFolder = {
 
 export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation" | "Finding" | "CrossCriterion";
 
+// Per-file record built during a folder audit — emitted to the progress modal
+// so users can see exactly which files were read and what happened to each one.
+export type AuditFileRecord = {
+  path: string;
+  name: string;
+  mimeType: string;
+  fileKind: string;
+  bucket: "policy" | "evidence" | "auto";
+  readStatus: "found" | "reading" | "read" | "condensed" | "skipped" | "failed";
+  auditStatus: "pending" | "audited";
+  charCount?: number;
+  failReason?: string;
+};
+
 // Live progress state emitted during an Evidence Folder audit. Updated
 // frequently (per-file, per-batch) so the UI can show a polished step
 // indicator and progress bar rather than a plain "Auditing…" label.
@@ -412,6 +426,12 @@ export type AuditProgressState = {
   // Populated during "Audit All" so the modal can show "3 of 24".
   overallCurrent?: number;
   overallTotal?: number;
+  // Full per-file list built after listing and updated during reading.
+  filesFound?: AuditFileRecord[];
+  // Drive connection info set when folder listing completes.
+  connectInfo?: { foldersLinked: number; folderNames: string[] };
+  // Whether the AI audit used a live model (true) or offline fallback (false).
+  auditLive?: boolean;
 };
 
 export type AIReviewLogEntry = {

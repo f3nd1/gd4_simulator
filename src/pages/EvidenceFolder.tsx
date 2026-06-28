@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import type { AuditProgressState, FolderStatus } from "../types";
+import type { AuditFileRecord, AuditProgressState, FolderStatus } from "../types";
 
 const SUMMARY_CAP = 320; // chars shown before the audit summary collapses
 
@@ -19,11 +19,6 @@ const MODAL_KEYFRAMES = `
   0%   { background-position: -300% 0; }
   100% { background-position: 300% 0; }
 }
-@keyframes audit-done-pop {
-  0%   { transform: scale(0.7); opacity: 0; }
-  60%  { transform: scale(1.15); }
-  100% { transform: scale(1); opacity: 1; }
-}
 `;
 
 // Visual steps (condensing is folded into "Read files" visually)
@@ -38,13 +33,13 @@ const VISUAL_STEPS = [
 // Map audit stage → which visual step (0-based) it belongs to
 function stageToVisualStep(stage: AuditProgressState["stage"]): number {
   switch (stage) {
-    case "listing":   return 0;
+    case "listing":    return 0;
     case "reading":
     case "condensing": return 1;
-    case "auditing":  return 2;
-    case "saving":    return 3;
-    case "complete":  return 4;
-    case "error":     return -1;
+    case "auditing":   return 2;
+    case "saving":     return 3;
+    case "complete":   return 4;
+    case "error":      return -1;
   }
 }
 
@@ -64,11 +59,10 @@ function stageProgress(p: AuditProgressState): number {
     }
     case "saving": return 88;
     case "complete": return 100;
-    case "error": return 100;
+    case "error":   return 100;
   }
 }
 
-// Tiny animated dots component for "live" feel on active lines
 function Dots() {
   const [n, setN] = useState(1);
   useEffect(() => {
@@ -78,142 +72,204 @@ function Dots() {
   return <span style={{ color: "#93c5fd", letterSpacing: 2 }}>{"•".repeat(n)}</span>;
 }
 
-// Detail panel — shows context-appropriate info for each stage
-function ProgressDetail({ p }: { p: AuditProgressState }) {
-  const rowStyle: React.CSSProperties = { display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 5 };
-  const labelStyle: React.CSSProperties = { fontSize: 11, color: "#6b7280", minWidth: 90, flexShrink: 0, paddingTop: 1 };
-  const valueStyle: React.CSSProperties = { fontSize: 12.5, color: "#1e293b", fontWeight: 500, wordBreak: "break-word" };
-  const mutedStyle: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+// ── Per-step detail panels ─────────────────────────────────────────────────
 
-  if (p.stage === "listing") return (
-    <div>
-      <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
-        Connecting to Google Drive and listing all files in the folder<Dots />
-      </div>
-      <div style={mutedStyle}>Folder: <b>{p.folderName}</b> · sub-criterion {p.subCriterionId}</div>
-    </div>
-  );
-
-  if (p.stage === "reading") {
-    const read = p.filesRead ?? 0;
-    const total = p.filesTotal ?? 0;
-    const skipped = p.filesSkipped ?? 0;
-    return (
-      <div>
-        <div style={{ fontSize: 13, color: "#374151", marginBottom: 8 }}>
-          📂 Reading file {read + 1} of {total}<Dots />
-        </div>
-        {p.currentFileName && (
-          <div style={rowStyle}>
-            <span style={labelStyle}>Current file</span>
-            <span style={{ ...valueStyle, fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>{p.currentFileName}</span>
-          </div>
-        )}
-        {p.currentFileBucket && (
-          <div style={rowStyle}>
-            <span style={labelStyle}>Source</span>
-            <span style={{ ...valueStyle, color: p.currentFileBucket === "policy" ? "#1d4ed8" : "#15803d" }}>
-              {p.currentFileBucket === "policy" ? "Policy & Procedure folder" : "Actual Evidence folder"}
-            </span>
-          </div>
-        )}
-        {p.currentFileAction && (
-          <div style={rowStyle}>
-            <span style={labelStyle}>Action</span>
-            <span style={valueStyle}>{p.currentFileAction}</span>
-          </div>
-        )}
-        <div style={{ marginTop: 8, padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#475569", display: "flex", gap: 12 }}>
-          <span><b>{read}</b> file{read !== 1 ? "s" : ""} processed</span>
-          {skipped > 0 && <span style={{ color: "#94a3b8" }}><b>{skipped}</b> skipped</span>}
-        </div>
-      </div>
-    );
-  }
-
-  if (p.stage === "condensing") return (
-    <div>
-      <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
-        📋 Condensing large documents to fit AI input limits<Dots />
-      </div>
-      <div style={mutedStyle}>
-        The total document text exceeds the AI's context limit. The system is summarising each large file with a fast AI model so that nothing important is left out of the audit. This usually takes 10–20 seconds.
-      </div>
-    </div>
-  );
-
-  if (p.stage === "auditing") {
-    const batch = p.batchCurrent ?? 0;
-    const total = p.batchTotal ?? 1;
-    const isStrict = p.stageDetail?.includes("strict") || p.stageDetail?.includes("challenge");
-    return (
-      <div>
-        <div style={{ fontSize: 13, color: "#374151", marginBottom: 8 }}>
-          🤖 {isStrict ? "Running strict challenge pass" : `AI audit — batch ${batch} of ${total}`}<Dots />
-        </div>
-        <div style={rowStyle}>
-          <span style={labelStyle}>Action</span>
-          <span style={valueStyle}>{isStrict ? "Re-checking every Met/Partial verdict against the evidence standard" : "Judging each checklist line against the GD4 standard and your evidence"}</span>
-        </div>
-        {p.filesTotal != null && (
-          <div style={{ marginTop: 8, padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#475569", display: "flex", gap: 12 }}>
-            <span><b>{p.filesTotal}</b> file{p.filesTotal !== 1 ? "s" : ""} in scope</span>
-            {total > 1 && <span><b>{batch}</b> of <b>{total}</b> batches done</span>}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (p.stage === "saving") {
-    const lines = p.linesAssessed ?? 0;
-    const issues = p.findingsDetected ?? 0;
+function ConnectDetail({ p, isActive }: { p: AuditProgressState; isActive: boolean }) {
+  const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+  if (isActive) {
     return (
       <div>
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
-          💾 Saving verdicts to the checklist<Dots />
+          Connecting to Google Drive and listing files<Dots />
         </div>
-        <div style={{ marginTop: 4, padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#475569", display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <span><b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed</span>
-          {issues > 0 && <span style={{ color: "#b45309" }}><b>{issues}</b> potential issue{issues !== 1 ? "s" : ""} detected</span>}
-        </div>
-        <div style={{ ...mutedStyle, marginTop: 6 }}>Results will appear in the Sub-Criterion Checklist when this step completes.</div>
+        <div style={muted}>Folder: <b>{p.folderName}</b> · sub-criterion {p.subCriterionId}</div>
       </div>
     );
   }
+  const info = p.connectInfo;
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: "#15803d", marginBottom: 6 }}>✓ Connected to Google Drive</div>
+      {info?.folderNames.map((n) => (
+        <div key={n} style={{ fontSize: 11.5, color: "#374151", marginBottom: 2 }}>
+          📁 {n}
+        </div>
+      ))}
+      {p.filesTotal != null && (
+        <div style={{ ...muted, marginTop: 4 }}>{p.filesTotal} file{p.filesTotal !== 1 ? "s" : ""} found</div>
+      )}
+    </div>
+  );
+}
 
-  if (p.stage === "complete") {
-    const lines = p.linesAssessed ?? 0;
-    const issues = p.findingsDetected ?? 0;
+function FileStatusBadge({ file }: { file: AuditFileRecord }) {
+  const badge =
+    file.auditStatus === "audited"  ? { label: "🤖 Audited",   color: "#1e40af", bg: "#eff6ff" } :
+    file.readStatus === "reading"   ? { label: "⏳ Reading…",  color: "#b45309", bg: "#fffbeb" } :
+    file.readStatus === "read"      ? { label: "✅ Read",       color: "#15803d", bg: "#f0fdf4" } :
+    file.readStatus === "condensed" ? { label: "📋 Condensed", color: "#7c3aed", bg: "#faf5ff" } :
+    file.readStatus === "skipped"   ? { label: "⚠ Skipped",   color: "#9ca3af", bg: "#f9fafb" } :
+    file.readStatus === "failed"    ? { label: "❌ Failed",    color: "#b91c1c", bg: "#fef2f2" } :
+                                      { label: "• Found",      color: "#9ca3af", bg: "#f9fafb" };
+  return (
+    <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 4, background: badge.bg, color: badge.color, fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>
+      {badge.label}
+    </span>
+  );
+}
+
+function ReadFilesDetail({ p, isActive }: { p: AuditProgressState; isActive: boolean }) {
+  const files = p.filesFound ?? [];
+  const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+
+  if (files.length === 0) {
+    return isActive
+      ? <div style={{ fontSize: 13, color: "#374151" }}>Preparing to read files<Dots /></div>
+      : <div style={muted}>No file records available.</div>;
+  }
+
+  const totalRead = files.filter((f) => f.readStatus === "read" || f.readStatus === "condensed").length;
+  const totalSkipped = files.filter((f) => f.readStatus === "skipped").length;
+  const totalFailed = files.filter((f) => f.readStatus === "failed").length;
+
+  return (
+    <div>
+      {isActive && p.currentFileName && (
+        <div style={{ fontSize: 12, color: "#374151", marginBottom: 8 }}>
+          📂 Reading: <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{p.currentFileName}</span>
+          {p.currentFileAction && <span style={{ color: "#64748b", marginLeft: 6 }}>— {p.currentFileAction}</span>}
+          <Dots />
+        </div>
+      )}
+      <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6, background: "#fff" }}>
+        {files.map((file) => {
+          const bucketLabel = file.bucket === "policy" ? "Policy" : "Evidence";
+          const bucketColor = file.bucket === "policy" ? "#1d4ed8" : "#15803d";
+          return (
+            <div key={file.path} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderBottom: "1px solid #f1f5f9", fontSize: 11 }}>
+              <span style={{ fontSize: 9.5, color: bucketColor, background: bucketColor + "18", borderRadius: 3, padding: "1px 4px", flexShrink: 0 }}>{bucketLabel}</span>
+              <span style={{ flex: 1, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.path}>{file.name}</span>
+              <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.fileKind}</span>
+              {file.charCount != null && <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.charCount.toLocaleString()}c</span>}
+              <FileStatusBadge file={file} />
+              {file.failReason && <span style={{ fontSize: 9.5, color: "#b91c1c", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.failReason}>{file.failReason}</span>}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ ...muted, marginTop: 5, display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <span><b>{files.length}</b> files found</span>
+        {totalRead > 0 && <span style={{ color: "#15803d" }}><b>{totalRead}</b> read</span>}
+        {totalSkipped > 0 && <span><b>{totalSkipped}</b> skipped</span>}
+        {totalFailed > 0 && <span style={{ color: "#b91c1c" }}><b>{totalFailed}</b> failed</span>}
+      </div>
+    </div>
+  );
+}
+
+function AuditStepDetail({ p, isActive }: { p: AuditProgressState; isActive: boolean }) {
+  const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+  const batch = p.batchCurrent ?? 0;
+  const total = p.batchTotal ?? 1;
+  const isStrict = p.stageDetail?.includes("strict") || p.stageDetail?.includes("challenge");
+  if (isActive) {
     return (
       <div>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#15803d", marginBottom: 8 }}>
-          Audit finished successfully!
+        <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
+          🤖 {isStrict ? "Running strict challenge pass" : `AI audit — batch ${batch} of ${total}`}<Dots />
         </div>
-        <div style={{ padding: "8px 12px", background: "#f0fdf4", borderRadius: 8, fontSize: 12.5, color: "#166534", display: "flex", gap: 16, flexWrap: "wrap" }}>
-          {lines > 0 && <span>✓ <b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed</span>}
-          {issues > 0 ? (
-            <span>⚠ <b>{issues}</b> potential issue{issues !== 1 ? "s" : ""} flagged</span>
-          ) : lines > 0 ? (
-            <span>✓ No issues flagged</span>
-          ) : null}
+        <div style={{ ...muted, marginBottom: 4 }}>
+          {isStrict ? "Re-checking every Met/Partial verdict against the evidence standard" : "Judging each checklist line against the GD4 standard and your evidence"}
         </div>
-        <div style={{ ...mutedStyle, marginTop: 6 }}>Check the Sub-Criterion Checklist to review verdicts and evidence.</div>
+        <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {p.filesTotal != null && <span><b>{p.filesTotal}</b> file{p.filesTotal !== 1 ? "s" : ""} in scope</span>}
+          {total > 1 && <span>Batch <b>{batch}</b> of <b>{total}</b></span>}
+          <span>{p.auditLive ? "Live AI" : "Offline estimate"}</span>
+        </div>
       </div>
     );
   }
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: "#15803d", marginBottom: 4 }}>✓ AI audit complete</div>
+      <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {p.filesTotal != null && <span><b>{p.filesTotal}</b> files analysed</span>}
+        {total > 1 && <span><b>{total}</b> batch{total !== 1 ? "es" : ""}</span>}
+        <span>{p.auditLive ? "Live AI" : "Offline estimate"}</span>
+      </div>
+    </div>
+  );
+}
 
-  if (p.stage === "error") return (
+function SaveStepDetail({ p, isActive }: { p: AuditProgressState; isActive: boolean }) {
+  const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+  const lines = p.linesAssessed ?? 0;
+  const issues = p.findingsDetected ?? 0;
+  if (isActive) {
+    return (
+      <div>
+        <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>💾 Saving verdicts to the checklist<Dots /></div>
+        <div style={{ ...muted, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {lines > 0 && <span><b>{lines}</b> line{lines !== 1 ? "s" : ""} assessed</span>}
+          {issues > 0 && <span style={{ color: "#b45309" }}><b>{issues}</b> issue{issues !== 1 ? "s" : ""} detected</span>}
+        </div>
+        <div style={{ ...muted, marginTop: 4 }}>Results will appear in the Sub-Criterion Checklist when this step completes.</div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: "#15803d", marginBottom: 4 }}>✓ Verdicts saved</div>
+      <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {lines > 0 && <span><b>{lines}</b> checklist line{lines !== 1 ? "s" : ""}</span>}
+        {issues > 0 ? <span style={{ color: "#b45309" }}><b>{issues}</b> potential issue{issues !== 1 ? "s" : ""}</span> : lines > 0 ? <span style={{ color: "#15803d" }}>No issues flagged</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function CompleteDetail({ p }: { p: AuditProgressState }) {
+  const lines = p.linesAssessed ?? 0;
+  const issues = p.findingsDetected ?? 0;
+  const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+  return (
+    <div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: "#15803d", marginBottom: 8 }}>Audit finished successfully!</div>
+      <div style={{ padding: "8px 12px", background: "#f0fdf4", borderRadius: 8, fontSize: 12.5, color: "#166534", display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 6 }}>
+        {lines > 0 && <span>✓ <b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed</span>}
+        {issues > 0 ? <span>⚠ <b>{issues}</b> potential issue{issues !== 1 ? "s" : ""} flagged</span> : lines > 0 ? <span>✓ No issues flagged</span> : null}
+      </div>
+      <div style={muted}>Check the Sub-Criterion Checklist to review verdicts and evidence.</div>
+    </div>
+  );
+}
+
+function ErrorDetail({ p }: { p: AuditProgressState }) {
+  const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+  return (
     <div>
       <div style={{ fontSize: 13, fontWeight: 600, color: "#b23121", marginBottom: 6 }}>Something went wrong:</div>
       <div style={{ fontSize: 12.5, color: "#7f1d1d", background: "#fef2f2", borderRadius: 8, padding: "8px 12px", lineHeight: 1.6 }}>
         {p.errorMessage || "An unexpected error occurred."}
       </div>
-      <div style={{ ...mutedStyle, marginTop: 6 }}>Any verdicts saved before this error were kept. Fix the issue above and run the audit again.</div>
+      <div style={{ ...muted, marginTop: 6 }}>Any verdicts saved before this error were kept. Fix the issue above and run the audit again.</div>
     </div>
   );
+}
 
-  return null;
+function StepDetail({ step, p }: { step: number; p: AuditProgressState }) {
+  const currentStep = stageToVisualStep(p.stage);
+  const isActive = step === currentStep;
+  const isError = p.stage === "error";
+  if (isError && step === currentStep) return <ErrorDetail p={p} />;
+  switch (step) {
+    case 0: return <ConnectDetail p={p} isActive={isActive} />;
+    case 1: return <ReadFilesDetail p={p} isActive={isActive} />;
+    case 2: return <AuditStepDetail p={p} isActive={isActive} />;
+    case 3: return <SaveStepDetail p={p} isActive={isActive} />;
+    case 4: return <CompleteDetail p={p} />;
+    default: return null;
+  }
 }
 
 function AuditProgressModal({ progress, onClose }: { progress: AuditProgressState; onClose: () => void }) {
@@ -222,10 +278,23 @@ function AuditProgressModal({ progress, onClose }: { progress: AuditProgressStat
   const isDone = progress.stage === "complete";
   const currentStep = stageToVisualStep(progress.stage);
 
+  // selectedStep: null = auto-follow active step; number = user has pinned a step
+  const [selectedStep, setSelectedStep] = useState<number | null>(null);
+  // Auto-advance: when currentStep moves forward and user hasn't pinned, follow it
+  const prevCurrentStep = useRef(currentStep);
+  useEffect(() => {
+    if (prevCurrentStep.current !== currentStep) {
+      prevCurrentStep.current = currentStep;
+      setSelectedStep(null); // clear pin, follow new active step
+    }
+  }, [currentStep]);
+
+  const displayStep = selectedStep ?? currentStep;
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
       <style>{MODAL_KEYFRAMES}</style>
-      <div style={{ background: "#fff", borderRadius: 16, padding: "28px 28px 24px", width: "100%", maxWidth: 520, boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "28px 28px 24px", width: "100%", maxWidth: 560, boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 20 }}>
@@ -245,7 +314,7 @@ function AuditProgressModal({ progress, onClose }: { progress: AuditProgressStat
           )}
         </div>
 
-        {/* Horizontal step flow */}
+        {/* Horizontal step flow — completed and active steps are clickable */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18, padding: "0 4px" }}>
           {VISUAL_STEPS.map((step, i) => {
             const status: "done" | "active" | "future" | "error" =
@@ -253,10 +322,15 @@ function AuditProgressModal({ progress, onClose }: { progress: AuditProgressStat
               isDone ? "done" :
               i < currentStep ? "done" :
               i === currentStep ? "active" : "future";
+            const isClickable = status !== "future";
+            const isSelected = i === displayStep;
             return (
               <Fragment key={i}>
-                {/* Step bubble */}
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, minWidth: 60 }}>
+                <div
+                  style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, minWidth: 60, cursor: isClickable ? "pointer" : "default" }}
+                  onClick={() => { if (isClickable) setSelectedStep(i === selectedStep ? null : i); }}
+                  title={isClickable ? `View ${step.label} details` : undefined}
+                >
                   <div style={{
                     width: 42, height: 42, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
                     background:
@@ -269,16 +343,17 @@ function AuditProgressModal({ progress, onClose }: { progress: AuditProgressStat
                       status === "error" ? "#b23121" : "#cbd5e1",
                     transition: "background 0.4s, color 0.4s",
                     animation: status === "active" ? "audit-pulse-ring 2s ease-in-out infinite" : "none",
-                    boxShadow: status === "active" ? "0 0 0 3px rgba(219,234,254,0.8)" : "none",
+                    outline: isSelected ? "2px solid #3b82f6" : "none",
+                    outlineOffset: 3,
                   }}>
                     {status === "done" ? "✓" : step.emoji}
                   </div>
                   <span style={{
-                    fontSize: 10.5, textAlign: "center", lineHeight: 1.2, fontWeight: status === "active" ? 700 : 400,
-                    color: status === "active" ? "#2563eb" : status === "done" ? "#16a34a" : "#94a3b8",
+                    fontSize: 10.5, textAlign: "center", lineHeight: 1.2,
+                    fontWeight: isSelected ? 700 : status === "active" ? 600 : 400,
+                    color: isSelected ? "#2563eb" : status === "active" ? "#2563eb" : status === "done" ? "#16a34a" : "#94a3b8",
                   }}>{step.label}</span>
                 </div>
-                {/* Arrow connector */}
                 {i < VISUAL_STEPS.length - 1 && (
                   <div style={{ color: i < currentStep ? "#86efac" : "#e2e8f0", fontSize: 18, padding: "0 2px", marginBottom: 18, flexShrink: 0 }}>→</div>
                 )}
@@ -300,9 +375,14 @@ function AuditProgressModal({ progress, onClose }: { progress: AuditProgressStat
           }} />
         </div>
 
-        {/* Detail section */}
-        <div style={{ background: "#f8fafc", borderRadius: 10, padding: "14px 16px", minHeight: 90 }}>
-          <ProgressDetail p={progress} />
+        {/* Per-step detail panel */}
+        <div style={{ background: "#f8fafc", borderRadius: 10, padding: "14px 16px", minHeight: 80 }}>
+          {selectedStep !== null && selectedStep !== currentStep && (
+            <div style={{ fontSize: 10.5, color: "#94a3b8", marginBottom: 6 }}>
+              {VISUAL_STEPS[selectedStep].emoji} {VISUAL_STEPS[selectedStep].label} — click the active step to return to live view
+            </div>
+          )}
+          <StepDetail step={displayStep} p={progress} />
         </div>
 
         {/* Done / error button */}
