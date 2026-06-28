@@ -164,7 +164,7 @@ export type Finding = {
   status: FindingStatus;
   // Provenance + detailed report, populated when a finding is raised from a
   // checklist line / folder audit (undefined on a plain manual finding).
-  source?: "Audit" | "Checklist" | "Manual" | "Seed";
+  source?: "Audit" | "Checklist" | "Manual" | "Seed" | "ai_audit";
   auditRunId?: string;  // e.g. "AR-6.3-3YVF" — set when auto-raised from a folder audit run
   dimension?: FindingDimension;
   // Risk category: A = regulatory breach (SSG mandatory requirement, can
@@ -183,6 +183,14 @@ export type Finding = {
   corrective?: string;
   preventive?: string;
   apsr?: ApsrBreakdown;
+  // Traceability to the checklist lines that generated this finding via the
+  // grouped-finding path (absent on single-line / manual findings).
+  linkedChecklistLineIds?: string[];
+  linkedSourceRefs?: string[];
+  linkedSourceTexts?: string[];
+  evidenceStatusSummary?: string;
+  groupedFindingId?: string;
+  createdFromAuditRunId?: string;
 };
 
 // Two-layer sub-criterion checklist module: a generic 4-line maturity check
@@ -263,6 +271,56 @@ export type DraftFindingInfo = {
   // Risk category — same meaning as on Finding.
   riskCategory?: "A" | "B" | "C" | "D";
   auditRunId?: string;
+};
+
+// A set of related failing checklist lines from one GD4 item, grouped by
+// the type of gap they share. Produced by findingGrouper.ts and consumed by
+// useFindingDraftStore.ts. Not persisted directly — reconstructed each run.
+export type ChecklistLineGroup = {
+  gd4ItemId: string;
+  subCriterionId: string;
+  gapType:
+    | "Documentation/Approach"
+    | "Implementation/Process"
+    | "Outcome/Data"
+    | "Review/ContinualImprovement"
+    | "EvidenceTraceability";
+  primaryApsrDimension: "Approach" | "Processes" | "Systems & Outcomes" | "Review";
+  lines: SpecificChecklistLine[];
+  sourceRefs: string[];
+  sourceTexts: string[];
+  severity: Severity;
+  riskCategory: "A" | "B" | "C" | "D";
+};
+
+export type FindingDraftStatus = "pending" | "writing" | "draft" | "confirmed" | "error";
+
+// A grouped finding draft in the pipeline before it is confirmed into the
+// formal findings register. Persisted only to localStorage (not Supabase).
+export type GroupedFindingDraft = {
+  id: string;
+  gd4ItemId: string;
+  subCriterionId: string;
+  auditRunId?: string;
+  group: ChecklistLineGroup;
+  status: FindingDraftStatus;
+  errorMessage?: string;
+  savedFindingId?: string;
+  title?: string;
+  observation?: string;
+  criteria?: string;
+  effect?: string;
+  rootCause?: string;
+  corrective?: string;
+  preventive?: string;
+  apsrBullets?: {
+    approach: string[];
+    processes: string[];
+    systemsOutcomes: string[];
+    review: string[];
+  };
+  evidenceStatusSummary?: string;
+  live?: boolean;
 };
 
 export type GenericChecklistLine = {

@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useFindingDraftStore } from "../store/useFindingDraftStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { useAISettingsStore } from "../store/useAISettingsStore";
@@ -8,7 +9,7 @@ import { Card, filterSelectStyle, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { GOLD, INK } from "../lib/theme";
-import type { Finding, FindingType, Severity, FindingDimension } from "../types";
+import type { Finding, FindingType, Severity, FindingDimension, GroupedFindingDraft } from "../types";
 import { runLiveFindingObservation, AIClientError } from "../lib/ai/agentRuntime";
 import { effectiveSettings } from "../lib/ai/aiClient";
 import { lineApsr, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
@@ -218,6 +219,34 @@ export function Findings() {
     setGenNote(n > 0 ? `Raised ${n} new finding${n === 1 ? "" : "s"} from audit/checklist gaps.` : "No new gaps to raise — every unmet line already has a finding.");
   }
 
+  const draftStore = useFindingDraftStore();
+  const allDraftsBySubCrit = draftStore.draftsBySubCriterion;
+  const draftStoreBusy = draftStore.busy;
+  const [groupGenNote, setGroupGenNote] = useState<string | null>(null);
+  const [expandedDraftId, setExpandedDraftId] = useState<string | null>(null);
+
+  // Flatten all drafts that are not yet confirmed for the "Grouped findings" section.
+  const pendingGroupedDrafts = useMemo(() => {
+    const out: GroupedFindingDraft[] = [];
+    for (const arr of Object.values(allDraftsBySubCrit)) {
+      for (const d of arr) {
+        if (d.status !== "confirmed") out.push(d);
+      }
+    }
+    return out;
+  }, [allDraftsBySubCrit]);
+
+  async function generateGroupedFindings() {
+    setGroupGenNote(null);
+    const aiOn = aiSettings.enabled && !!aiSettings.apiKey;
+    const result = await draftStore.generateFindingsFromChecklist({ live: aiOn });
+    if (result.created > 0) {
+      setGroupGenNote(`Created ${result.created} grouped draft${result.created !== 1 ? "s" : ""}${result.skipped > 0 ? `, skipped ${result.skipped} already covered` : ""}.`);
+    } else {
+      setGroupGenNote(result.skipped > 0 ? `All ${result.skipped} groups already have findings — nothing new to create.` : "No failing checklist lines found — run a folder audit or mark lines in the Sub-Criterion Checklist.");
+    }
+  }
+
   const openFindings = allFindings.filter((f) => (closures[f.id]?.human || "") !== "Accepted");
   // 90-day roadmap: group open findings by urgency into three monthly buckets.
   // Cat A (regulatory breach) + Critical severity = Month 1 — must fix now.
@@ -263,6 +292,69 @@ export function Findings() {
         </div>
       </Card>
     )}
+    <Card style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Grouped findings from checklist</h3>
+        <span style={{ fontSize: 12, color: "#6b7280" }}>
+          {pendingGroupedDrafts.length > 0 ? `${pendingGroupedDrafts.length} draft${pendingGroupedDrafts.length !== 1 ? "s" : ""} awaiting review` : "No pending drafts"}
+        </span>
+        <button
+          onClick={generateGroupedFindings}
+          disabled={draftStoreBusy}
+          title="Analyse all failing checklist lines and group them into logical finding drafts. Related gaps (same GD4 source ref + same APSR dimension) are consolidated into one finding."
+          style={{ marginLeft: "auto", cursor: draftStoreBusy ? "not-allowed" : "pointer", border: "1px solid #818cf8", background: "#eef2ff", color: "#3730a3", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12, opacity: draftStoreBusy ? 0.6 : 1 }}
+        >
+          {draftStoreBusy ? "Generating…" : pendingGroupedDrafts.length > 0 ? "Regenerate drafts" : "Generate grouped findings"}
+        </button>
+      </div>
+      <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0, marginBottom: groupGenNote ? 6 : 10 }}>
+        Consolidates failing checklist lines into grouped finding drafts (same GD4 source-ref parent + same APSR dimension → one finding). Review, edit, then confirm each draft to add it to the register.
+      </p>
+      {groupGenNote && <div style={{ fontSize: 12, color: "#15803d", marginBottom: 10 }}>{groupGenNote}</div>}
+
+      {pendingGroupedDrafts.length === 0 && !draftStoreBusy && (
+        <div style={{ fontSize: 12.5, color: "#94a3b8", padding: "10px 0" }}>
+          No pending drafts. Click <b>Generate grouped findings</b> to analyse failing checklist lines.
+        </div>
+      )}
+
+      {pendingGroupedDrafts.map((draft) => {
+        const isExpanded = expandedDraftId === draft.id;
+        const statusColor = draft.status === "draft" ? "#15803d" : draft.status === "writing" ? "#b45309" : draft.status === "error" ? "#b91c1c" : "#6b7280";
+        const statusLabel = draft.status === "draft" ? "Draft ready" : draft.status === "writing" ? "Writing…" : draft.status === "error" ? "Error" : draft.status;
+        return (
+          <div key={draft.id} style={{ border: "1px solid #e2e8f0", borderRadius: 8, marginBottom: 8, background: "#fff" }}>
+            <div
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", cursor: "pointer", flexWrap: "wrap" }}
+              onClick={() => setExpandedDraftId(isExpanded ? null : draft.id)}
+            >
+              <span style={{ color: "#94a3b8", fontSize: 12 }}>{isExpanded ? "▾" : "▸"}</span>
+              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#6b7280" }}>{draft.gd4ItemId}</span>
+              <Pill s={draft.group.severity === "High" ? "critical" : "medium"}>{draft.group.severity}</Pill>
+              <span style={{ fontSize: 12.5, fontWeight: 600, flex: 1 }}>{draft.title ?? `${draft.group.gapType} gap`}</span>
+              <span style={{ fontSize: 11, color: statusColor, fontWeight: 600 }}>{statusLabel}</span>
+              {draft.live && <Pill s="good">AI</Pill>}
+              <span style={{ fontSize: 11, color: "#94a3b8" }}>{draft.group.lines.length} line{draft.group.lines.length !== 1 ? "s" : ""}</span>
+            </div>
+            {isExpanded && (
+              <GroupedDraftDetail
+                draft={draft}
+                onConfirm={() => {
+                  draftStore.confirmGroupedDraft(draft.subCriterionId, draft.id);
+                  setExpandedDraftId(null);
+                }}
+                onDiscard={() => {
+                  draftStore.discardDraft(draft.subCriterionId, draft.id);
+                  if (expandedDraftId === draft.id) setExpandedDraftId(null);
+                }}
+                onUpdate={(patch) => draftStore.updateDraftField(draft.subCriterionId, draft.id, patch)}
+              />
+            )}
+          </div>
+        );
+      })}
+    </Card>
+
     <Card>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Findings register</h3>
@@ -534,6 +626,130 @@ export function Findings() {
   );
 }
 
+type DraftPatch = Partial<Pick<GroupedFindingDraft, "title" | "observation" | "criteria" | "effect" | "rootCause" | "corrective" | "preventive" | "apsrBullets">>;
+
+function GroupedDraftDetail({
+  draft,
+  onConfirm,
+  onDiscard,
+  onUpdate,
+}: {
+  draft: GroupedFindingDraft;
+  onConfirm: () => void;
+  onDiscard: () => void;
+  onUpdate: (patch: DraftPatch) => void;
+}) {
+  const TextSection = ({ label, field }: { label: string; field: keyof DraftPatch }) => {
+    const val = (draft[field as keyof GroupedFindingDraft] as string) ?? "";
+    return (
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>{label}</div>
+        <textarea
+          value={val}
+          onChange={(e) => onUpdate({ [field]: e.target.value } as DraftPatch)}
+          rows={3}
+          style={{ ...inputStyle, marginTop: 3, resize: "vertical", fontSize: 12 }}
+        />
+      </div>
+    );
+  };
+
+  const dim = draft.group.primaryApsrDimension;
+  const bullets = draft.apsrBullets;
+  const refList = draft.group.sourceRefs.join(", ") || "—";
+
+  return (
+    <div style={{ padding: "10px 14px", borderTop: "1px solid #f1f5f9" }}>
+      {draft.status === "error" && (
+        <div style={{ color: "#b91c1c", fontSize: 12, marginBottom: 8 }}>Error: {draft.errorMessage ?? "Unknown error"}</div>
+      )}
+      {draft.status === "writing" && (
+        <div style={{ color: "#b45309", fontSize: 12, marginBottom: 8 }}>Writing draft… please wait.</div>
+      )}
+
+      {draft.status === "draft" && (
+        <>
+          <div style={{ display: "grid", gap: 6, gridTemplateColumns: "1fr 1fr", marginBottom: 8 }}>
+            <div>
+              <span style={{ fontSize: 11, color: "#6b7280" }}>Gap type: </span>
+              <b style={{ fontSize: 12 }}>{draft.group.gapType}</b>
+            </div>
+            <div>
+              <span style={{ fontSize: 11, color: "#6b7280" }}>APSR dimension: </span>
+              <b style={{ fontSize: 12 }}>{dim}</b>
+            </div>
+            <div>
+              <span style={{ fontSize: 11, color: "#6b7280" }}>GD4 refs: </span>
+              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{refList}</span>
+            </div>
+            <div>
+              <span style={{ fontSize: 11, color: "#6b7280" }}>Evidence: </span>
+              <span style={{ fontSize: 11 }}>{draft.evidenceStatusSummary}</span>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>Title (issue)</div>
+            <input
+              value={draft.title ?? ""}
+              onChange={(e) => onUpdate({ title: e.target.value })}
+              style={{ ...inputStyle, marginTop: 3, fontSize: 12 }}
+            />
+          </div>
+          <TextSection label="Observation — what was found (WHO · WHAT · WHEN · HOW MANY)" field="observation" />
+          <TextSection label="Criteria — what GD4 requires" field="criteria" />
+          <TextSection label="Effect — regulatory / band consequence" field="effect" />
+          <TextSection label="Root cause" field="rootCause" />
+          <TextSection label="Corrective action" field="corrective" />
+          <TextSection label="Preventive action" field="preventive" />
+
+          {bullets && (
+            <div style={{ marginTop: 8, marginBottom: 8 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>APSR breakdown bullets</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 6 }}>
+                {(["approach", "processes", "systemsOutcomes", "review"] as const).map((key) => (
+                  <div key={key} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 9px", background: "#fafafa" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 3, textTransform: "capitalize" }}>{key === "systemsOutcomes" ? "Systems & Outcomes" : key}</div>
+                    {(bullets[key] ?? []).map((b, i) => (
+                      <div key={i} style={{ fontSize: 11, color: "#475569", lineHeight: 1.4, marginBottom: 2 }}>• {b}</div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <button
+              onClick={onConfirm}
+              style={{ cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "7px 14px", borderRadius: 8, fontSize: 12.5 }}
+            >
+              Confirm → add to register
+            </button>
+            <button
+              onClick={onDiscard}
+              style={{ cursor: "pointer", border: "1px solid #fca5a5", background: "#fff1f2", color: "#b91c1c", fontWeight: 600, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
+            >
+              Discard draft
+            </button>
+          </div>
+
+          <div style={{ marginTop: 8, borderTop: "1px solid #f1f5f9", paddingTop: 8 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", marginBottom: 4 }}>Contributing checklist lines</div>
+            {draft.group.lines.map((l) => (
+              <div key={l.id} style={{ fontSize: 11.5, color: "#475569", marginBottom: 3, display: "flex", gap: 6, alignItems: "flex-start" }}>
+                <Pill s={l.status === "Not met" ? "critical" : l.status === "Partial" ? "medium" : "neutral"}>{l.status}</Pill>
+                <span>{l.text}</span>
+                {l.sourceRef && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#94a3b8" }}>{l.sourceRef}</span>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // The expandable per-finding report: the detailed root-cause / corrective /
 // preventive analysis plus the APSR rubric breakdown the audit produced, so the
 // "why" behind each finding is visible here, not just on the closure screen.
@@ -568,6 +784,15 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
       <Section label="Root cause" text={f.rootCause} />
       <Section label="Corrective action (fix it now)" text={f.corrective} />
       <Section label="Preventive action (stop recurrence)" text={f.preventive} />
+      {(f.linkedSourceRefs?.length || f.evidenceStatusSummary || f.createdFromAuditRunId) && (
+        <div style={{ marginTop: 6, borderTop: "1px solid #e2e8f0", paddingTop: 8 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Traceability</div>
+          {f.linkedSourceRefs?.length ? <div style={{ fontSize: 11.5, color: "#475569" }}>GD4 refs: {f.linkedSourceRefs.join(", ")}</div> : null}
+          {f.evidenceStatusSummary ? <div style={{ fontSize: 11.5, color: "#475569", marginTop: 2 }}>{f.evidenceStatusSummary}</div> : null}
+          {f.createdFromAuditRunId ? <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2, fontFamily: "ui-monospace,monospace" }}>Audit run: {f.createdFromAuditRunId}</div> : null}
+          {f.linkedChecklistLineIds?.length ? <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{f.linkedChecklistLineIds.length} linked checklist line{f.linkedChecklistLineIds.length !== 1 ? "s" : ""}</div> : null}
+        </div>
+      )}
       {apsr && (
         <div style={{ marginTop: 6 }}>
           <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>APSR rubric breakdown</div>
@@ -580,7 +805,13 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
             ] as const).map(([label, leg]) => (
               <div key={label} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 9px", background: "#fff" }}>
                 <div style={{ fontSize: 11, fontWeight: 700 }}>{label}: {leg.status}</div>
-                {leg.note && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>{leg.note}</div>}
+                {leg.note && (
+                  leg.note.includes("\n")
+                    ? <ul style={{ margin: "2px 0 0 14px", padding: 0, fontSize: 11, color: "#6b7280", lineHeight: 1.45 }}>
+                        {leg.note.split("\n").filter(Boolean).map((b, i) => <li key={i}>{b}</li>)}
+                      </ul>
+                    : <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>{leg.note}</div>
+                )}
               </div>
             ))}
           </div>

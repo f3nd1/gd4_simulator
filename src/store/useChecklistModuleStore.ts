@@ -88,6 +88,10 @@ export type ChecklistModuleState = {
   // Called when a finding is deleted — clears the savedFindingId lock on any
   // checklist line that pointed to it, so the line can be re-raised later.
   clearSavedFindingId: (findingId: string) => void;
+  // Stamps a savedFindingId on a specific line directly by ID — used by
+  // useFindingDraftStore when a grouped draft is confirmed into the findings
+  // register, so each contributing line is marked as already-saved.
+  setLineSavedFindingId: (itemId: string, lineId: string, findingId: string) => void;
 };
 
 function mapEntry(
@@ -412,6 +416,19 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           }
           return { entries };
         }),
+
+      setLineSavedFindingId: (itemId, lineId, findingId) =>
+        set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({
+          ...l,
+          draftFinding: {
+            gd4ItemId: itemId,
+            issue: "",
+            severity: "Medium" as const,
+            suggestedAction: "",
+            ...(l.draftFinding ?? {}),
+            savedFindingId: findingId,
+          },
+        })))),
     }),
     { name: "ucc-gd4-checklist:v2", storage: workspaceStorage }
   )
