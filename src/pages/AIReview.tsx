@@ -46,14 +46,29 @@ function rateFor(model?: string) {
   return PRICING.find((p) => p.match.test(model)) ?? DEFAULT_RATE;
 }
 
-// Estimated USD cost of one logged run from its token counts.
+// Estimated USD cost of one logged run. Analysis tokens are priced at the
+// analysis model's rate; auxiliary (utility) tokens at the utility model's
+// rate. For older log entries that only have a combined totalTokens (no split),
+// we fall back to the analysis-model rate across the total — which was the old
+// (slightly wrong) behaviour, preserved for backward compatibility.
 function costOf(e: AIReviewLogEntry): number {
   const r = rateFor(e.model);
   const pt = e.promptTokens || 0;
   const ct = e.completionTokens || 0;
-  // If only a total is known, assume a typical ~75% prompt / 25% completion split.
-  if (!pt && !ct && e.totalTokens) return (e.totalTokens * 0.75 * r.in + e.totalTokens * 0.25 * r.out) / 1e6;
-  return (pt * r.in + ct * r.out) / 1e6;
+  const analysisCost = pt || ct
+    ? (pt * r.in + ct * r.out) / 1e6
+    : e.totalTokens && !e.auxTotalTokens
+      ? (e.totalTokens * 0.75 * r.in + e.totalTokens * 0.25 * r.out) / 1e6
+      : 0;
+  const ar = rateFor(e.auxModel);
+  const apt = e.auxPromptTokens || 0;
+  const act = e.auxCompletionTokens || 0;
+  const auxCost = apt || act
+    ? (apt * ar.in + act * ar.out) / 1e6
+    : e.auxTotalTokens
+      ? (e.auxTotalTokens * 0.75 * ar.in + e.auxTotalTokens * 0.25 * ar.out) / 1e6
+      : 0;
+  return analysisCost + auxCost;
 }
 
 function fmtUSD(n: number): string {
@@ -137,22 +152,36 @@ export function AIReview() {
       byAgent[e.agent] = (byAgent[e.agent] || 0) + 1;
     });
     // Token + cost roll-up across every run that reported usage. byModel keeps a
-    // per-model breakdown so the calculator shows which model drove the spend.
+    // per-model breakdown, splitting analysis and utility model tokens so each
+    // is priced at its own rate.
     let totalTokens = 0;
     let totalCost = 0;
     let trackedRuns = 0;
     const byModel: Record<string, { tokens: number; cost: number; runs: number }> = {};
+    const addModelRow = (model: string | undefined, tok: number, cost: number, countRun: boolean) => {
+      const key = model || "unknown";
+      byModel[key] = byModel[key] || { tokens: 0, cost: 0, runs: 0 };
+      byModel[key].tokens += tok;
+      byModel[key].cost += cost;
+      if (countRun) byModel[key].runs += 1;
+    };
     dateScoped.forEach((e) => {
       if (!e.totalTokens) return;
       trackedRuns += 1;
       totalTokens += e.totalTokens;
       const cost = costOf(e);
       totalCost += cost;
-      const key = e.model || "unknown";
-      byModel[key] = byModel[key] || { tokens: 0, cost: 0, runs: 0 };
-      byModel[key].tokens += e.totalTokens;
-      byModel[key].cost += cost;
-      byModel[key].runs += 1;
+      // For entries with a split, add analysis and utility separately.
+      if (e.auxTotalTokens) {
+        const analysisTok = (e.promptTokens || 0) + (e.completionTokens || 0) || (e.totalTokens - e.auxTotalTokens);
+        const analysisCost = (() => { const r = rateFor(e.model); const pt = e.promptTokens || 0; const ct = e.completionTokens || 0; return pt || ct ? (pt * r.in + ct * r.out) / 1e6 : (analysisTok * 0.75 * r.in + analysisTok * 0.25 * r.out) / 1e6; })();
+        const auxTok = e.auxTotalTokens;
+        const auxCost = cost - analysisCost;
+        addModelRow(e.model, analysisTok, analysisCost, true);
+        addModelRow(e.auxModel, auxTok, auxCost, false);
+      } else {
+        addModelRow(e.model, e.totalTokens, cost, true);
+      }
     });
     return { total, live, simulated: total - live, failed, byAgent, totalTokens, totalCost, trackedRuns, byModel };
   }, [dateScoped]);
@@ -298,7 +327,7 @@ export function AIReview() {
                   </td>
                   <td title={e.verdict}><Pill s={verdictTone(e.verdict)}>{e.verdict.length > 40 ? e.verdict.slice(0, 40) + "…" : e.verdict}</Pill></td>
                   <td style={{ fontSize: 11, color: e.model ? "#334155" : "#9ca3af", whiteSpace: "nowrap" }}>{e.model || (e.live ? "live" : "offline")}</td>
-                  <td style={{ fontSize: 11, color: "#334155", whiteSpace: "nowrap" }} title={e.totalTokens ? `${e.promptTokens ?? "?"} prompt + ${e.completionTokens ?? "?"} completion ≈ ${fmtUSD(costOf(e))}` : undefined}>
+                  <td style={{ fontSize: 11, color: "#334155", whiteSpace: "nowrap" }} title={e.totalTokens ? (e.auxTotalTokens ? `Analysis (${e.model || "?"}): ${(e.promptTokens || 0) + (e.completionTokens || 0) || "?"} tok\nUtility (${e.auxModel || "?"}): ${e.auxTotalTokens} tok\nTotal: ${e.totalTokens} tok ≈ ${fmtUSD(costOf(e))}` : `${e.promptTokens ?? "?"} prompt + ${e.completionTokens ?? "?"} completion ≈ ${fmtUSD(costOf(e))}`) : undefined}>
                     {e.totalTokens ? `${e.totalTokens.toLocaleString()}${costOf(e) ? ` · ${fmtUSD(costOf(e))}` : ""}` : "—"}
                   </td>
                   <td style={{ fontSize: 11.5, color: "#9ca3af" }}>{new Date(e.createdAt).toLocaleString()}</td>

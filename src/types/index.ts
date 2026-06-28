@@ -395,13 +395,19 @@ export type AIReviewLogEntry = {
   // Short audit-run id shared with the folder result, checklist evidence and
   // journal entry from the same run, so a log row can be traced back to source.
   runId?: string;
-  // Model + token usage for live runs (undefined for offline/simulated runs),
-  // so the AI Review Log can show which model ran, how many tokens it used, and
-  // a rough cost estimate.
+  // Primary (analysis) model usage — the verdict / reasoning call.
   model?: string;
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  // Auxiliary (utility) model usage — image descriptions and document condensing
+  // calls that run separately from the main verdict. Stored separately so the
+  // cost calculator can use each model's actual price, not the analysis rate for
+  // everything.
+  auxModel?: string;
+  auxPromptTokens?: number;
+  auxCompletionTokens?: number;
+  auxTotalTokens?: number;
 };
 
 export type ManagementReviewItem = {

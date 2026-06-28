@@ -986,7 +986,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const auditorStrictness = actingAuditor ? strictnessFromScore(actingAuditor.strictness) : undefined;
         const auditorLabel = actingAuditor ? `${auditorName} (strictness: ${auditorStrictness})` : auditorName;
 
-        const finish = (summary: string, live: boolean, liveError?: string, usage?: AIUsage) => {
+        const finish = (summary: string, live: boolean, liveError?: string, usage?: AIUsage, auxUsage?: AIUsage) => {
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
             auditCycleId: s.cycle.id,
@@ -1002,10 +1002,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             generatedContent: summary,
             createdAt: new Date().toISOString(),
             runId,
+            // Analysis model (verdict call)
             model: usage?.model,
             promptTokens: usage?.promptTokens,
             completionTokens: usage?.completionTokens,
-            totalTokens: usage?.totalTokens,
+            totalTokens: (usage?.totalTokens || 0) + (auxUsage?.totalTokens || 0) || undefined,
+            // Utility model (image + condense calls) — stored separately so the
+            // AI Review Log can price each model at its own rate.
+            auxModel: auxUsage?.model,
+            auxPromptTokens: auxUsage?.promptTokens,
+            auxCompletionTokens: auxUsage?.completionTokens,
+            auxTotalTokens: auxUsage?.totalTokens,
           };
           set((st) => ({
             folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel } : f)),
@@ -1423,8 +1430,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (folderWarnings.length > 0) lineParts.push(`⚠ Possible mis-filed documents (${folderWarnings.length}): ${folderWarnings.join(" | ")}`);
         for (const w of setupWarnings) lineParts.push(`⚠ ${w}`);
         const summary = lineParts.join("\n");
-        // Total = verdict call(s) + image-description + document-condense calls.
-        finish(summary, live, liveError, addUsage(auditUsage, auxUsage));
+        // Pass analysis and utility usage separately so the log can price each
+        // model at its own rate rather than applying the analysis rate to all.
+        finish(summary, live, liveError, auditUsage, auxUsage);
 
         // Post-audit multi-agent pipeline — fires asynchronously so the audit
         // result appears immediately and the finding enrichment arrives seconds
