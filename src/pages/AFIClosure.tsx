@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useScored } from "../hooks/useScored";
@@ -40,6 +41,14 @@ export function AFIClosure() {
 
   return (
     <Card>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+        <Link to="/findings" style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
+          ← Findings register
+        </Link>
+        <Link to="/sub-checklist" style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #e2e8f0", borderRadius: 6, background: "#f8fafc" }}>
+          ← Sub-Criterion Checklist
+        </Link>
+      </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Quality Action / AFI closure</h3>
         <span style={{ fontSize: 12, color: "#6b7280" }}>
@@ -98,6 +107,16 @@ export function AFIClosure() {
             </button>
             {open && (
               <div style={{ padding: "0 14px 14px", background: "#fbfcfe" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, paddingTop: 10, borderTop: "1px solid #f1f5f9", flexWrap: "wrap" }}>
+                  <Link to={`/findings?item=${f.gd4ItemId}`} style={{ fontSize: 11.5, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
+                    ← View in Findings
+                  </Link>
+                  {f.linkedChecklistLineIds?.length ? (
+                    <Link to={`/sub-checklist?item=${f.gd4ItemId}`} style={{ fontSize: 11.5, color: "#6b7280", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #e2e8f0", borderRadius: 6, background: "#f8fafc" }}>
+                      ← Checklist ({f.gd4ItemId})
+                    </Link>
+                  ) : null}
+                </div>
                 {([
                   ["root", "Root cause (yours)"],
                   ["corr", "Corrective action"],
