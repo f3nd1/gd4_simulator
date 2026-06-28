@@ -104,6 +104,8 @@ function ConnectDetail({ p, isActive }: { p: AuditProgressState; isActive: boole
 
 function FileStatusBadge({ file }: { file: AuditFileRecord }) {
   const badge =
+    file.auditStatus === "cited"    ? { label: "📎 Cited",     color: "#0369a1", bg: "#e0f2fe" } :
+    file.auditStatus === "not_used" ? { label: "— Not used",   color: "#6b7280", bg: "#f3f4f6" } :
     file.auditStatus === "audited"  ? { label: "🤖 Audited",   color: "#1e40af", bg: "#eff6ff" } :
     file.readStatus === "reading"   ? { label: "⏳ Reading…",  color: "#b45309", bg: "#fffbeb" } :
     file.readStatus === "read"      ? { label: "✅ Read",       color: "#15803d", bg: "#f0fdf4" } :
@@ -114,6 +116,27 @@ function FileStatusBadge({ file }: { file: AuditFileRecord }) {
   return (
     <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 4, background: badge.bg, color: badge.color, fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>
       {badge.label}
+    </span>
+  );
+}
+
+// Dimension icons: shows which APSR dimensions this file was cited for
+function DimIcons({ file }: { file: AuditFileRecord }) {
+  const dims = file.usedForDimensions;
+  if (!dims) return null;
+  const items: { label: string; active: boolean }[] = [
+    { label: "A", active: dims.approach },
+    { label: "P", active: dims.processes },
+    { label: "S", active: dims.systemsOutcomes },
+    { label: "R", active: dims.review },
+  ];
+  return (
+    <span style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+      {items.map((d) => (
+        <span key={d.label} style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: d.active ? "#dbeafe" : "#f1f5f9", color: d.active ? "#1d4ed8" : "#94a3b8", fontWeight: d.active ? 700 : 400 }}>
+          {d.label}
+        </span>
+      ))}
     </span>
   );
 }
@@ -131,6 +154,8 @@ function ReadFilesDetail({ p, isActive }: { p: AuditProgressState; isActive: boo
   const totalRead = files.filter((f) => f.readStatus === "read" || f.readStatus === "condensed").length;
   const totalSkipped = files.filter((f) => f.readStatus === "skipped").length;
   const totalFailed = files.filter((f) => f.readStatus === "failed").length;
+  const totalCited = files.filter((f) => f.auditStatus === "cited").length;
+  const totalNotUsed = files.filter((f) => f.auditStatus === "not_used").length;
 
   return (
     <div>
@@ -151,8 +176,16 @@ function ReadFilesDetail({ p, isActive }: { p: AuditProgressState; isActive: boo
               <span style={{ flex: 1, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.path}>{file.name}</span>
               <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.fileKind}</span>
               {file.charCount != null && <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.charCount.toLocaleString()}c</span>}
+              {file.suspectedScannedPdf && (
+                <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#fef3c7", color: "#92400e", fontWeight: 600, flexShrink: 0 }} title="Suspected scanned PDF — little extractable text">Scan?</span>
+              )}
+              {file.extractedTextQuality && file.extractedTextQuality !== "high" && !file.suspectedScannedPdf && (
+                <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#f1f5f9", color: "#64748b", flexShrink: 0 }}>{file.extractedTextQuality}</span>
+              )}
+              <DimIcons file={file} />
               <FileStatusBadge file={file} />
               {file.failReason && <span style={{ fontSize: 9.5, color: "#b91c1c", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.failReason}>{file.failReason}</span>}
+              {file.skipReason && file.readStatus === "skipped" && <span style={{ fontSize: 9.5, color: "#9ca3af", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.skipReason}>{file.skipReason}</span>}
             </div>
           );
         })}
@@ -160,6 +193,8 @@ function ReadFilesDetail({ p, isActive }: { p: AuditProgressState; isActive: boo
       <div style={{ ...muted, marginTop: 5, display: "flex", gap: 10, flexWrap: "wrap" }}>
         <span><b>{files.length}</b> files found</span>
         {totalRead > 0 && <span style={{ color: "#15803d" }}><b>{totalRead}</b> read</span>}
+        {totalCited > 0 && <span style={{ color: "#0369a1" }}><b>{totalCited}</b> cited</span>}
+        {totalNotUsed > 0 && <span style={{ color: "#6b7280" }}><b>{totalNotUsed}</b> not used</span>}
         {totalSkipped > 0 && <span><b>{totalSkipped}</b> skipped</span>}
         {totalFailed > 0 && <span style={{ color: "#b91c1c" }}><b>{totalFailed}</b> failed</span>}
       </div>
@@ -232,6 +267,16 @@ function CompleteDetail({ p }: { p: AuditProgressState }) {
   const lines = p.linesAssessed ?? 0;
   const issues = p.findingsDetected ?? 0;
   const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+
+  // File summary stats
+  const files = p.filesFound ?? [];
+  const totalFound = files.length;
+  const totalRead = files.filter((f) => f.readStatus === "read" || f.readStatus === "condensed").length;
+  const totalSkipped = files.filter((f) => f.readStatus === "skipped").length;
+  const totalFailed = files.filter((f) => f.readStatus === "failed").length;
+  const totalCited = files.filter((f) => f.auditStatus === "cited").length;
+  const totalNotUsed = files.filter((f) => f.auditStatus === "not_used").length;
+
   return (
     <div>
       <div style={{ fontSize: 14, fontWeight: 700, color: "#15803d", marginBottom: 8 }}>Audit finished successfully!</div>
@@ -239,6 +284,16 @@ function CompleteDetail({ p }: { p: AuditProgressState }) {
         {lines > 0 && <span>✓ <b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed</span>}
         {issues > 0 ? <span>⚠ <b>{issues}</b> potential issue{issues !== 1 ? "s" : ""} flagged</span> : lines > 0 ? <span>✓ No issues flagged</span> : null}
       </div>
+      {totalFound > 0 && (
+        <div style={{ padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#374151", display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+          <span><b>{totalFound}</b> files found</span>
+          {totalRead > 0 && <span style={{ color: "#15803d" }}><b>{totalRead}</b> read</span>}
+          {totalCited > 0 && <span style={{ color: "#0369a1" }}><b>{totalCited}</b> cited by AI</span>}
+          {totalNotUsed > 0 && <span style={{ color: "#6b7280" }}><b>{totalNotUsed}</b> not used</span>}
+          {totalSkipped > 0 && <span><b>{totalSkipped}</b> skipped</span>}
+          {totalFailed > 0 && <span style={{ color: "#b91c1c" }}><b>{totalFailed}</b> failed</span>}
+        </div>
+      )}
       <div style={muted}>Check the Sub-Criterion Checklist to review verdicts and evidence.</div>
     </div>
   );

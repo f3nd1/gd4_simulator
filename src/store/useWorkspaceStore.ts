@@ -37,7 +37,8 @@ import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
-import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError } from "../lib/drive/driveClient";
+import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
+import type { EvidenceChunk } from "../types";
 import { describeImage, summariseText, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
@@ -1233,13 +1234,47 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           mime === "application/pdf" ? "PDF"
             : mime.includes("wordprocessingml") ? "Word"
             : mime.includes("google-apps.document") ? "Google Doc"
-            : mime.includes("google-apps.spreadsheet") || mime === "text/csv" ? "spreadsheet/CSV"
+            : mime.includes("google-apps.spreadsheet") ? "Google Sheet"
+            : mime === XLSX_MIME ? "Excel"
+            : mime === XLS_MIME ? "Excel"
+            : mime === "text/csv" ? "CSV"
             : mime.includes("google-apps.presentation") ? "Google Slides"
             : mime.startsWith("image/") ? "image"
             : "text";
+        // Evidence chunks are built here and used to:
+        // 1. Prefix each document in the docText with a chunk ID so the AI can cite sources
+        // 2. Map AI-cited chunk IDs back to file records after verdicts return
+        const evidenceChunks: EvidenceChunk[] = [];
+        let chunkCounter = 0;
+        const inferEvidenceType = (kind: string, bucket: "policy" | "evidence", body: string): EvidenceChunk["evidenceType"] => {
+          if (bucket === "policy") return "Policy/Procedure";
+          const bodyLower = body.toLowerCase();
+          if (kind === "Excel" || kind === "CSV" || kind === "Google Sheet") return "Implementation Record";
+          const isOutcome = /outcome|result|trend|survey|feedback|kpi|dashboard|satisfaction/.test(bodyLower);
+          const isReview = /review|minute|meeting|decision|improvement|action item|follow.up/.test(bodyLower);
+          if (isOutcome) return "Outcome Data";
+          if (isReview) return "Review Evidence";
+          return "Other";
+        };
         const pushPart = (path: string, body: string, bucket: TaggedFile["bucket"], kind: string, fileIndex: number) => {
           const isPolicy = bucket === "policy" || (bucket === "auto" && classifyFileBucket(path) === "policy");
-          parts.push({ heading: `--- ${path} [${kind}] ---`, body, isPolicy, fileIndex });
+          const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
+          const resolvedBucket: "policy" | "evidence" = isPolicy ? "policy" : "evidence";
+          const chunk: EvidenceChunk = {
+            chunkId,
+            filePath: path,
+            fileName: path.split("/").pop() || path,
+            bucket: resolvedBucket,
+            fileKind: kind,
+            text: body,
+            charCount: body.length,
+            evidenceType: inferEvidenceType(kind, resolvedBucket, body),
+          };
+          evidenceChunks.push(chunk);
+          // Record the chunk ID on the file record so citations can be traced back
+          const existing = fileRecords[fileIndex];
+          fileRecords[fileIndex] = { ...existing, chunkIds: [...(existing.chunkIds || []), chunkId] };
+          parts.push({ heading: `[CHUNK:${chunkId}] --- ${path} [${kind}] ---`, body, isPolicy, fileIndex });
           if (isPolicy) policyCount++;
           else evidenceCount++;
         };
@@ -1293,8 +1328,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const text = await exportFileText(file, token);
             if (text !== null) {
               scanned.push(file.path);
+              // For PDFs: classify text quality and flag suspected scans
+              let pdfQuality: ReturnType<typeof classifyPdfTextQuality> | undefined;
+              if (file.mimeType === "application/pdf") {
+                pdfQuality = classifyPdfTextQuality(text);
+              }
               pushPart(file.path, text, file.bucket, fileKind(file.mimeType), fi);
-              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: text.length };
+              fileRecords[fi] = {
+                ...fileRecords[fi],
+                readStatus: "read",
+                charCount: text.length,
+                ...(pdfQuality ? { suspectedScannedPdf: pdfQuality.suspectedScannedPdf, extractedTextQuality: pdfQuality.extractedTextQuality } : {}),
+              };
               continue;
             }
             if (IMAGE_MIME_TYPES.has(file.mimeType) && canDescribeImages && imagesDescribed < MAX_IMAGES) {
@@ -1499,12 +1544,88 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Guarded so an unexpected throw while writing verdicts can't strand
         // `busy` (which would leave this row's button stuck on "Auditing…"
         // forever) — finish() below always runs and clears it.
+
+        // Citation-gap downgrade: for each positive dimension that has no
+        // sourceChunkIds, downgrade to "Not evident" and record a warning.
+        // Only fires when live AI is used (offline fallback never returns chunk IDs).
+        if (live) {
+          const CITATION_DOWNGRADE_NOTE = "Downgraded: no source chunks cited to support this claim.";
+          for (const v of verdicts) {
+            if (!v.apsr) continue;
+            const apsr = v.apsr;
+            // Approach
+            if ((apsr.approach.status === "Meeting" || apsr.approach.status === "Beginning") &&
+                (!apsr.approach.sourceChunkIds || apsr.approach.sourceChunkIds.length === 0)) {
+              apsr.approach = { ...apsr.approach, status: "Not evident", note: (apsr.approach.note ? apsr.approach.note + " " : "") + CITATION_DOWNGRADE_NOTE };
+              parseWarnings.push(`Line ${v.lineId} — approach downgraded (no source chunks cited)`);
+            }
+            // Processes
+            if ((apsr.processes.status === "Deployed" || apsr.processes.status === "Weak") &&
+                (!apsr.processes.sourceChunkIds || apsr.processes.sourceChunkIds.length === 0)) {
+              apsr.processes = { ...apsr.processes, status: "Not evident", note: (apsr.processes.note ? apsr.processes.note + " " : "") + CITATION_DOWNGRADE_NOTE };
+              parseWarnings.push(`Line ${v.lineId} — processes downgraded (no source chunks cited)`);
+            }
+            // Systems & Outcomes
+            if ((apsr.systemsOutcomes.status === "Evident" || apsr.systemsOutcomes.status === "Limited") &&
+                (!apsr.systemsOutcomes.sourceChunkIds || apsr.systemsOutcomes.sourceChunkIds.length === 0)) {
+              apsr.systemsOutcomes = { ...apsr.systemsOutcomes, status: "Not evident", note: (apsr.systemsOutcomes.note ? apsr.systemsOutcomes.note + " " : "") + CITATION_DOWNGRADE_NOTE };
+              parseWarnings.push(`Line ${v.lineId} — systemsOutcomes downgraded (no source chunks cited)`);
+            }
+            // Review
+            if (apsr.review.status === "Evident" &&
+                (!apsr.review.sourceChunkIds || apsr.review.sourceChunkIds.length === 0)) {
+              apsr.review = { ...apsr.review, status: "Not evident", note: (apsr.review.note ? apsr.review.note + " " : "") + CITATION_DOWNGRADE_NOTE };
+              parseWarnings.push(`Line ${v.lineId} — review downgraded (no source chunks cited)`);
+            }
+          }
+        }
+
+        // Build a map from chunkId to file index for citation tracking
+        const chunkToFileIndex = new Map<string, number>();
+        for (const chunk of evidenceChunks) {
+          const fileIdx = fileRecords.findIndex((r) => r.path === chunk.filePath);
+          if (fileIdx >= 0) chunkToFileIndex.set(chunk.chunkId, fileIdx);
+        }
+
         const notMetCount = verdicts.filter((v) => v.status === "Not met").length;
-        // Mark all successfully-read files as audited so the modal file list
-        // shows "🤖 Audited" after the AI call completes.
+
+        // Map AI citations back to file records:
+        // - Files cited by at least one verdict dimension → "cited"
+        // - Files that were read but not cited → "not_used"
         for (const rec of fileRecords) {
           if (rec.readStatus === "read" || rec.readStatus === "condensed") {
-            rec.auditStatus = "audited";
+            rec.auditStatus = "not_used"; // default; overridden below if cited
+          }
+        }
+
+        // Process each verdict to map sourceChunkIds → file records
+        for (const v of verdicts) {
+          if (!v.apsr) continue;
+          const dimMap: Array<[keyof typeof v.apsr, "approach" | "processes" | "systemsOutcomes" | "review"]> = [
+            ["approach", "approach"],
+            ["processes", "processes"],
+            ["systemsOutcomes", "systemsOutcomes"],
+            ["review", "review"],
+          ];
+          for (const [dimKey] of dimMap) {
+            const dim = v.apsr[dimKey];
+            if (!dim.sourceChunkIds) continue;
+            for (const chunkId of dim.sourceChunkIds) {
+              const fileIdx = chunkToFileIndex.get(chunkId);
+              if (fileIdx === undefined) continue;
+              const rec = fileRecords[fileIdx];
+              fileRecords[fileIdx] = {
+                ...rec,
+                auditStatus: "cited",
+                citedByLineIds: [...new Set([...(rec.citedByLineIds || []), v.lineId])],
+                usedForDimensions: {
+                  approach: (rec.usedForDimensions?.approach ?? false) || dimKey === "approach",
+                  processes: (rec.usedForDimensions?.processes ?? false) || dimKey === "processes",
+                  systemsOutcomes: (rec.usedForDimensions?.systemsOutcomes ?? false) || dimKey === "systemsOutcomes",
+                  review: (rec.usedForDimensions?.review ?? false) || dimKey === "review",
+                },
+              };
+            }
           }
         }
         setProgress("saving", {

@@ -19,11 +19,23 @@ import "./pdfCompat";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import PdfjsWorker from "./pdfWorker?worker";
 import mammoth from "mammoth";
+import * as XLSX from "xlsx";
+// Import pure text utilities for use within this module, and re-export so
+// callers don't need to import from textUtils directly.
+import { classifyPdfTextQuality as _classifyPdfTextQuality, extractSpreadsheetText as _extractSpreadsheetText } from "./textUtils";
+export { classifyPdfTextQuality, extractSpreadsheetText } from "./textUtils";
+const classifyPdfTextQuality = _classifyPdfTextQuality;
+const extractSpreadsheetText = _extractSpreadsheetText;
 
 pdfjsLib.GlobalWorkerOptions.workerPort = new PdfjsWorker();
 
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const GSI_SRC = "https://accounts.google.com/gsi/client";
+
+// MIME types for Excel files — exported so useWorkspaceStore can use them
+// for the fileKind classifier without duplicating the string literals.
+export const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+export const XLS_MIME = "application/vnd.ms-excel";
 
 declare global {
   interface Window {
@@ -243,6 +255,15 @@ export async function exportFileText(file: DriveFile, accessToken: string): Prom
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
     const { value } = await mammoth.extractRawText({ arrayBuffer: await res.arrayBuffer() });
     return value;
+  }
+  // Excel/XLSX support — reads raw bytes and extracts structured spreadsheet text
+  // so the AI auditor can see column headers, row data, and sheet names rather
+  // than a flattened anonymous text blob.
+  if (file.mimeType === XLSX_MIME || file.mimeType === XLS_MIME) {
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
+    const buffer = await res.arrayBuffer();
+    const wb = XLSX.read(buffer, { type: "array" });
+    return extractSpreadsheetText(wb, file.name);
   }
   return null;
 }

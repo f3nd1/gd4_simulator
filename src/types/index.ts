@@ -204,10 +204,10 @@ export type EvidenceSufficiency = "Present" | "Weak" | "Missing";
 // ROOT CAUSE (which APSR dimension fell short) rather than just "not met".
 // Status words echo the rubric band descriptors (Not evident → Excellent).
 export type ApsrBreakdown = {
-  approach: { status: "Meeting" | "Beginning" | "Not evident"; note: string };
-  processes: { status: "Deployed" | "Weak" | "Not evident"; note: string };
-  systemsOutcomes: { status: "Evident" | "Limited" | "Not evident"; note: string };
-  review: { status: "Evident" | "Not evident"; note: string };
+  approach: { status: "Meeting" | "Beginning" | "Not evident"; note: string; sourceChunkIds?: string[] };
+  processes: { status: "Deployed" | "Weak" | "Not evident"; note: string; sourceChunkIds?: string[] };
+  systemsOutcomes: { status: "Evident" | "Limited" | "Not evident"; note: string; sourceChunkIds?: string[] };
+  review: { status: "Evident" | "Not evident"; note: string; sourceChunkIds?: string[] };
 };
 
 export type SubChecklistEvidenceItem = {
@@ -386,9 +386,38 @@ export type AuditFileRecord = {
   fileKind: string;
   bucket: "policy" | "evidence" | "auto";
   readStatus: "found" | "reading" | "read" | "condensed" | "skipped" | "failed";
-  auditStatus: "pending" | "audited";
+  auditStatus: "pending" | "audited" | "cited" | "not_used";
   charCount?: number;
   failReason?: string;
+  // Scanned PDF detection
+  suspectedScannedPdf?: boolean;
+  extractedTextQuality?: "none" | "low" | "medium" | "high";
+  // Condensed document summary size
+  summaryCharCount?: number;
+  // Reason for skipping (type unsupported, image cap reached, etc.)
+  skipReason?: string;
+  // Chunk IDs assigned to this file's content in the evidence chunk array
+  chunkIds?: string[];
+  // Line IDs whose AI verdict cited a chunk from this file
+  citedByLineIds?: string[];
+  // Which APSR dimensions cited this file
+  usedForDimensions?: { approach: boolean; processes: boolean; systemsOutcomes: boolean; review: boolean };
+};
+
+// A discrete chunk of evidence extracted from one file, assigned a stable ID
+// so the AI can cite specific sources and the audit trail can map citations
+// back to the exact file and location that supported each verdict.
+export type EvidenceChunk = {
+  chunkId: string;       // e.g. "C001"
+  filePath: string;
+  fileName: string;
+  bucket: "policy" | "evidence";
+  fileKind: string;
+  sheetName?: string;    // for spreadsheets
+  rowRange?: string;     // e.g. "rows 1–50"
+  text: string;
+  charCount: number;
+  evidenceType: "Policy/Procedure" | "Implementation Record" | "Outcome Data" | "Review Evidence" | "Other";
 };
 
 // Live progress state emitted during an Evidence Folder audit. Updated

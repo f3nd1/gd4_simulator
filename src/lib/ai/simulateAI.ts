@@ -206,7 +206,7 @@ function guessDate(filename: string): string {
 // each line Met/Partial/Not met by simple keyword overlap. Offline fallback
 // only — mirrors every other simulate* function's role as the no-network
 // stand-in for the live OpenAI call in agentRuntime.ts.
-export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial" | "Not met"; reason: string; sources?: string[]; apsr?: ApsrBreakdown };
+export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial" | "Not met"; reason: string; sources?: string[]; apsr?: ApsrBreakdown; overallReason?: string };
 
 // Derives the overall Met/Partial/Not met from an APSR breakdown with Approach
 // hard-gating: a "Beginning" or "Not evident" Approach (the documented policy &

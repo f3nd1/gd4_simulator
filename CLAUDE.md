@@ -48,8 +48,18 @@ Run a single test file: `npx vitest run src/lib/__tests__/scoring.test.ts`
 
 5. **AI layer** (`src/lib/ai/`):
    - `aiClient.ts` — `fetchWithTimeout()` (90s AbortController), `callAI()`, `summariseText()`.
-   - `agentRuntime.ts` — `runLiveFolderAudit()`, `FOLDER_DOC_CAP = 48000` (shared with store).
-   - `simulateAI.ts` — offline fallback keyword-matcher used when no OpenAI key.
+   - `agentRuntime.ts` — `runLiveFolderAudit()`, `FOLDER_DOC_CAP = 48000` (shared with store). Imports 8 skill files (see below) and passes them to the system prompt via `skills()`. Each APSR dimension in the JSON response now includes `sourceChunkIds: string[]`. `runCitationVerifier()` is a second-pass Strict-mode function that re-checks whether the cited chunk IDs actually support the claimed verdict.
+   - `simulateAI.ts` — offline fallback keyword-matcher used when no OpenAI key. `FolderAuditLineVerdict` includes an optional `overallReason` field.
+   - Skills (`src/data/skills/`): 8 skill files injected into the system prompt via `skills(...)` (capped to 3000 chars total):
+     - `apsr-rubric.md` — APSR rubric definitions
+     - `evidence-standards.md` — evidence quality standards
+     - `external-auditor.md` — auditor persona
+     - `finding-specificity.md` — AFI writing guidelines
+     - `evidence-ledger.md` — file lifecycle states (found→reading→read→cited/not_used/skipped/failed)
+     - `source-citation-verification.md` — per-dimension citation rules and downgrade logic
+     - `spreadsheet-evidence.md` — Excel/CSV evidence assessment (row coverage, structure)
+     - `scanned-document-evidence.md` — scanned PDF detection and audit cues
+     - `evidence-retrieval.md` — per-dimension chunk retrieval strategy
 
 6. **Evidence folders** (`src/pages/EvidenceFolder.tsx`):
    - Each sub-criterion has one Drive folder link. Convention: organise into two subfolders — `1. Policy & Procedure` and `2. Actual Evidence`. The audit classifies files by path prefix.
@@ -60,9 +70,19 @@ Run a single test file: `npx vitest run src/lib/__tests__/scoring.test.ts`
 
 Core types: `GD4Requirement`, `AuditCycle`, `Finding` (with `source?`, `dimension?`, `clause?`, `rootCause?`, `corrective?`, `preventive?`), `FindingDimension`, `SubCriterionChecklistEntry`, `SpecificChecklistLine`, `GenericChecklistLine`, `SubChecklistEvidenceItem`, `ApsrBreakdown`, `DraftFindingInfo`, `ChecklistOverride`.
 
+`AuditFileRecord` extended fields: `suspectedScannedPdf?`, `extractedTextQuality?` (`"none"|"low"|"medium"|"high"`), `summaryCharCount?`, `skipReason?`, `chunkIds?`, `citedByLineIds?`, `usedForDimensions?`. `auditStatus` now includes `"cited"` and `"not_used"` in addition to `"pending"` and `"audited"`.
+
+`ApsrBreakdown` dimensions each carry `sourceChunkIds?: string[]` — the chunk IDs the AI cited as evidence for that dimension's verdict.
+
+`EvidenceChunk` — represents a single piece of evidence passed to the AI: `{ chunkId, filePath, fileName, bucket, fileKind, sheetName?, rowRange?, text, charCount, evidenceType }`. Chunks are assigned sequential IDs (`C001`, `C002`, …) before the AI call; after verdicts return, `sourceChunkIds` are mapped back to `AuditFileRecord` entries to mark files as `cited` or `not_used`.
+
+Citation-gap downgrade (code-level, no AI call): any APSR dimension that returns a positive status (`"Meeting"` or `"Beginning"`) with no `sourceChunkIds` (absent or empty array) is downgraded to `"Not evident"` with a note appended.
+
 ### Tests (`src/lib/__tests__/`, `src/lib/ai/__tests__/`)
 
-Vitest. 6 test files covering: `scoring.ts`, `checklistBanding.ts`, checklist→scoring integration, AFI overlay, APSR logic, finding analysis. Run `npm test` to execute all.
+Vitest. 8 test files covering: `scoring.ts`, `checklistBanding.ts`, checklist→scoring integration, AFI overlay, APSR logic, finding analysis, evidence ledger (PDF quality classification, chunk ID format, citation downgrade logic, spreadsheet extraction, skill file keyword verification), and Excel extraction edge cases (multi-sheet, 200-row cap, blank row filtering). Run `npm test` to execute all.
+
+Note: test files must import `classifyPdfTextQuality` and `extractSpreadsheetText` from `src/lib/drive/textUtils` (not `driveClient`) — `driveClient` instantiates a pdfjs Worker at module load time, which is unavailable in Node/Vitest.
 
 ### Routing
 

@@ -18,6 +18,12 @@ import externalAuditorSkill from "../../data/skills/external-auditor.md?raw";
 import consultantInsightsSkill from "../../data/skills/consultant-insights.md?raw";
 import riskRemediationSkill from "../../data/skills/risk-and-remediation.md?raw";
 import findingSpecificitySkill from "../../data/skills/finding-specificity.md?raw";
+import evidenceLedgerSkill from "../../data/skills/evidence-ledger.md?raw";
+import sourceCitationSkill from "../../data/skills/source-citation-verification.md?raw";
+import spreadsheetEvidenceSkill from "../../data/skills/spreadsheet-evidence.md?raw";
+import scannedDocumentSkill from "../../data/skills/scanned-document-evidence.md?raw";
+import evidenceRetrievalSkill from "../../data/skills/evidence-retrieval.md?raw";
+import type { EvidenceChunk } from "../../types";
 
 // Injects one or more skill documents into the system prompt, capped so a
 // large skill file can't dominate the token budget. Skills are domain-expert
@@ -330,17 +336,17 @@ async function runLiveFolderAuditBatch(
   // that order. The overall Met/Partial/Not met is NOT decided by the model — it
   // is derived in code by deriveApsrStatus (Approach hard-gates), the same way
   // the score/band are never left to the model alone.
-  const base = `You are a GD4 internal auditor applying the official EduTrust Scoring Rubric, which assesses four dimensions — Approach, Processes, Systems & Outcomes, Review (APSR). You are given the official GD4 requirement, the institution's documents split into a "=== POLICY & PROCEDURE ===" section and an "=== ACTUAL EVIDENCE ===" section (each chunk headed by its file path and type), and checklist statements. Assess each statement on the four rubric dimensions IN ORDER, using ONLY the text given and never assuming content that isn't there:
+  const base = `You are a GD4 internal auditor applying the official EduTrust Scoring Rubric, which assesses four dimensions — Approach, Processes, Systems & Outcomes, Review (APSR). You are given the official GD4 requirement, the institution's documents split into a "=== POLICY & PROCEDURE ===" section and an "=== ACTUAL EVIDENCE ===" section (each chunk headed by a chunk ID and its file path and type, e.g. "[CHUNK:C001] --- path [kind] ---"), and checklist statements. Assess each statement on the four rubric dimensions IN ORDER, using ONLY the text given and never assuming content that isn't there:
 1. APPROACH (documented policies and procedures — the methods, tools and techniques used to meet the requirement). Read the POLICY & PROCEDURE text against the requirement WORD BY WORD. approach.status: "Meeting" only if the documented approach is specific, complete against the requirement AND sustainable (states who does what, when and how, repeatable year on year); "Beginning" if it is vague, boilerplate, copy-paste, not specific to this institution, or not sustainable; "Not evident" if no documented approach addresses it. Be critical — comment in approach.note on why it is or isn't sustainable / too generic.
 2. PROCESSES (actual implementation of those policies and procedures). Using ONLY the ACTUAL EVIDENCE text, processes.status: "Deployed" if records show it implemented and managed, "Weak" if deployment is weak/partial, "Not evident" if there is no implementation evidence (a documented approach on paper is NOT implementation).
 3. SYSTEMS & OUTCOMES (the desired outcomes derived from that implementation). systemsOutcomes.status: "Evident" if the desired outcomes/results are actually produced, "Limited" if outcomes are limited, "Not evident" if none.
 4. REVIEW (evaluation of the appropriateness, relevance and effectiveness of the approach and process for continual improvement). review.status: "Evident" if there is a real review with improvement action, "Not evident" otherwise.
 Each "note" must be a critical AUDITOR ANALYSIS, not a description or summary of the document. Never merely restate what the document contains. For approach.note: judge HOW WELL the documented approach meets THIS requirement — name specifically which Describe/Show expectations it covers and which it omits or addresses only weakly, say whether it is genuinely specific to this institution or boilerplate/generic, whether it is sustainable (repeatable, with named owners and timing) or ad hoc, and end with ONE concrete improvement the institution should make. For processes/systemsOutcomes/review notes: state what evidence WOULD prove the dimension and what is actually missing, not a paraphrase of any text found. A note that only describes the document's contents is a failure — write the auditor's judgement of its adequacy and gaps.
-For every non-empty claim cite the specific source file(s) (by their "--- path ---" heading) in "sources". Cross-check file types: if a file in the POLICY & PROCEDURE section looks like an operational record, log, attendance sheet, minutes or filled-in form (not a policy/SOP/procedure/plan/framework), or a file in the ACTUAL EVIDENCE section looks like a pure undated policy document with no implementation records, add a one-sentence warning per problematic file to "folderWarnings" (e.g. "Policy folder: 'HR_Attendance_Log_Jan.xlsx' appears to be an attendance record, not a procedure — move to Actual Evidence").${STRICTNESS_CLAUSE[strictness] || ""}${skills(apsrRubricSkill, evidenceStandardsSkill, findingWritingSkill, findingSpecificitySkill, sgPeiContextSkill)}`;
+For EVERY non-empty positive claim (i.e. status is not "Not evident"), cite the specific chunk ID(s) from the document headers (e.g. "C001", "C002") in "sourceChunkIds" on that dimension. If no chunk directly supports a positive status, leave sourceChunkIds as an empty array — do NOT invent chunk IDs. Also populate the top-level "sources" array with file paths for backward compatibility. Cross-check file types: if a file in the POLICY & PROCEDURE section looks like an operational record, log, attendance sheet, minutes or filled-in form (not a policy/SOP/procedure/plan/framework), or a file in the ACTUAL EVIDENCE section looks like a pure undated policy document with no implementation records, add a one-sentence warning per problematic file to "folderWarnings" (e.g. "Policy folder: 'HR_Attendance_Log_Jan.xlsx' appears to be an attendance record, not a procedure — move to Actual Evidence").${STRICTNESS_CLAUSE[strictness] || ""}${skills(apsrRubricSkill, evidenceStandardsSkill, externalAuditorSkill, evidenceLedgerSkill, sourceCitationSkill, spreadsheetEvidenceSkill, scannedDocumentSkill, evidenceRetrievalSkill, findingSpecificitySkill)}`;
   const challengeRule = opts.challenge
     ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote approach.status from "Meeting" to "Beginning" unless the documented approach is genuinely specific and sustainable, and demote processes.status unless implementation is explicitly evidenced.`
     : "";
-  const system = `${base}${challengeRule} Each "note" must be 2–3 targeted sentences: name the specific file, record, role, or procedure gap you found; state precisely what is missing and what the institution must do to fix it; include dates, counts, or named roles where visible in the documents. Write as an auditor's direct assessment — never merely describe or summarise the document's contents. Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string}, "review": {"status": "Evident"|"Not evident", "note": string}, "sources": string[]}], "folderWarnings": ["optional one-sentence warnings about mis-filed documents"]}.`;
+  const system = `${base}${challengeRule} Each "note" must be 2–3 targeted sentences: name the specific file, record, role, or procedure gap you found; state precisely what is missing and what the institution must do to fix it; include dates, counts, or named roles where visible in the documents. Write as an auditor's direct assessment — never merely describe or summarise the document's contents. Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string, "sourceChunkIds": string[]}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string, "sourceChunkIds": string[]}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string, "sourceChunkIds": string[]}, "review": {"status": "Evident"|"Not evident", "note": string, "sourceChunkIds": string[]}, "overallReason": string, "sources": string[]}], "folderWarnings": ["optional one-sentence warnings about mis-filed documents"]}.`;
 
   const DOC_CAP = BATCH_DOC_CAP;
   const truncated = docText.length > DOC_CAP;
@@ -372,8 +378,8 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
     ? (parsedTop.folderWarnings as unknown[]).filter((s): s is string => typeof s === "string")
     : [];
 
-  type RawLeg = { status?: unknown; note?: unknown };
-  type RawLine = { lineId: string; approach?: RawLeg; processes?: RawLeg; systemsOutcomes?: RawLeg; review?: RawLeg; sources?: unknown };
+  type RawLeg = { status?: unknown; note?: unknown; sourceChunkIds?: unknown };
+  type RawLine = { lineId: string; approach?: RawLeg; processes?: RawLeg; systemsOutcomes?: RawLeg; review?: RawLeg; sources?: unknown; overallReason?: unknown };
   const byId = new Map(
     arr
       .filter((x): x is RawLine => !!x && typeof x === "object" && typeof (x as { lineId?: unknown }).lineId === "string")
@@ -383,12 +389,16 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
   // Coerce each dimension into the typed APSR shape, defaulting to the WORST
   // value so a missing/garbled dimension never accidentally credits the line.
   // Track any dimension that fell back so the caller can log a warning.
+  // Also extracts sourceChunkIds — the chunk IDs the model cited for each dimension.
   const parseWarnings: string[] = [];
-  const leg = <T extends string>(raw: RawLeg | undefined, allowed: readonly T[], fallback: T, dimName: string, lineId: string): { status: T; note: string } => {
+  const leg = <T extends string>(raw: RawLeg | undefined, allowed: readonly T[], fallback: T, dimName: string, lineId: string): { status: T; note: string; sourceChunkIds?: string[] } => {
     const s = raw?.status;
     const ok = (allowed as readonly string[]).includes(s as string);
     if (!ok) parseWarnings.push(`Line ${lineId} — ${dimName} status "${String(s)}" not in allowed set; defaulted to "${fallback}"`);
-    return { status: ok ? (s as T) : fallback, note: typeof raw?.note === "string" ? raw.note : "" };
+    const sourceChunkIds = Array.isArray(raw?.sourceChunkIds)
+      ? (raw!.sourceChunkIds as unknown[]).filter((id): id is string => typeof id === "string")
+      : [];
+    return { status: ok ? (s as T) : fallback, note: typeof raw?.note === "string" ? raw.note : "", sourceChunkIds };
   };
 
   const verdicts = lines.map((l) => {
@@ -402,7 +412,8 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
     const status = deriveApsrStatus(apsr);
     const sources = Array.isArray(v?.sources) ? (v!.sources as unknown[]).filter((s): s is string => typeof s === "string") : undefined;
     const reason = v ? apsrReason(apsr) : "The model did not return a verdict for this line; treated as unmet pending re-run.";
-    return { lineId: l.id, status, reason, sources, apsr };
+    const overallReason = typeof v?.overallReason === "string" ? v.overallReason : undefined;
+    return { lineId: l.id, status, reason, sources, apsr, overallReason };
   });
 
   return { verdicts, parseWarnings, truncationNote, folderWarnings, usage };
@@ -635,6 +646,52 @@ Dimension (APSR leg that fell short): ${dimension}`;
     observation: (parsed.observation as string) || `${line.text} — status: ${line.status}. [Auditor: add WHO, WHAT, WHEN, and HOW MANY specifics here.]`,
     criteria: (parsed.criteria as string) || `GD4 ${req.id} requires: ${req.requirement}`,
     effect: (parsed.effect as string) || `This gap must be resolved before the EduTrust assessment. See the dimension (${dimension}) for the applicable band ceiling.`,
+    usage,
+  };
+}
+
+// Citation verifier: a second-pass AI call that re-examines the AI-returned
+// verdict for a single checklist line, focusing on whether the cited chunks
+// actually support each positive dimension claim. Stricter than the first pass —
+// it will downgrade positive dimensions when the cited evidence is insufficient.
+// Only called in Strict mode from useWorkspaceStore.ts to avoid doubling costs
+// for every audit run.
+export async function runCitationVerifier(
+  line: { id: string; text: string },
+  verdict: FolderAuditLineVerdict,
+  citedChunks: EvidenceChunk[],
+  settings: AISettings
+): Promise<{ verified: boolean; unsupportedClaims: string[]; recommendedDowngrade: "none" | "Partial" | "Not met"; reason: string; usage?: AIUsage }> {
+  const chunkBlock = citedChunks.length > 0
+    ? citedChunks.map((c) => `[${c.chunkId}] (${c.evidenceType}, ${c.bucket}, ${c.fileKind})\n${c.text.slice(0, 800)}`).join("\n\n---\n\n")
+    : "(no chunks cited — all dimensions lack source evidence)";
+
+  const apsrSummary = verdict.apsr
+    ? [
+        `Approach: ${verdict.apsr.approach.status} (chunks: ${verdict.apsr.approach.sourceChunkIds?.join(", ") || "none"})`,
+        `Processes: ${verdict.apsr.processes.status} (chunks: ${verdict.apsr.processes.sourceChunkIds?.join(", ") || "none"})`,
+        `Systems & Outcomes: ${verdict.apsr.systemsOutcomes.status} (chunks: ${verdict.apsr.systemsOutcomes.sourceChunkIds?.join(", ") || "none"})`,
+        `Review: ${verdict.apsr.review.status} (chunks: ${verdict.apsr.review.sourceChunkIds?.join(", ") || "none"})`,
+      ].join("\n")
+    : "No APSR breakdown available.";
+
+  const system = `You are a strict citation verifier for a GD4 EduTrust audit. You are given a checklist line, the AI's verdict, and the exact chunk texts that were cited as evidence. Your job is to verify whether each cited chunk actually supports its dimension claim. Be strict: a policy chunk does NOT prove implementation; implementation records do NOT prove outcomes; meeting minutes saying only "discussed" do NOT prove review. For each positive dimension, read the cited chunks and decide whether the evidence genuinely supports the claim. Respond with JSON only: {"verified": boolean, "unsupportedClaims": string[], "recommendedDowngrade": "none"|"Partial"|"Not met", "reason": string}.${skills(sourceCitationSkill, evidenceStandardsSkill, externalAuditorSkill, spreadsheetEvidenceSkill, scannedDocumentSkill, apsrRubricSkill)}`;
+
+  const user = `Checklist line [${line.id}]: "${line.text}"\n\nAI verdict:\n${apsrSummary}\nOverall: ${verdict.status}\n\nCited chunks:\n${chunkBlock}`;
+
+  let usage: AIUsage | undefined;
+  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { onUsage: (u) => { usage = u; } });
+  const parsed = parseJSONObject(content, ["verified", "recommendedDowngrade", "reason"]);
+
+  return {
+    verified: parsed.verified === true,
+    unsupportedClaims: Array.isArray(parsed.unsupportedClaims)
+      ? (parsed.unsupportedClaims as unknown[]).filter((s): s is string => typeof s === "string")
+      : [],
+    recommendedDowngrade: (["none", "Partial", "Not met"] as const).includes(parsed.recommendedDowngrade as "none" | "Partial" | "Not met")
+      ? (parsed.recommendedDowngrade as "none" | "Partial" | "Not met")
+      : "none",
+    reason: (parsed.reason as string) || "",
     usage,
   };
 }
