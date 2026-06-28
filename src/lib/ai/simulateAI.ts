@@ -236,9 +236,6 @@ export function apsrReason(p: ApsrBreakdown): string {
 // its own is NOT evidence), so the note never reads as if a policy proved
 // implementation.
 export function apsrAuditNote(p: ApsrBreakdown): string {
-  // Lead with the overall verdict and the ONE binding reason, so the note and
-  // the line's status dropdown visibly agree (e.g. "policy is fine, but no
-  // evidence" makes a "Not met" status make sense at a glance).
   const status = deriveApsrStatus(p);
   let why: string;
   if (p.approach.status !== "Meeting")
@@ -249,35 +246,37 @@ export function apsrAuditNote(p: ApsrBreakdown): string {
     why = "policy, implementation, outcomes and review are all evidenced";
   else
     why = "it is implemented, but the outcomes and/or a review for continual improvement are not yet evidenced";
-  const parts: string[] = [`VERDICT: ${status} — ${why}.`];
+  const parts: string[] = [`VERDICT\n${status} — ${why}.`];
 
   // POLICY (Approach)
   if (p.approach.status === "Meeting")
-    parts.push(`POLICY: The documented approach covers this requirement.${p.approach.note ? ` ${p.approach.note}` : ""}`);
+    parts.push(`POLICY\nThe documented approach covers this requirement.${p.approach.note ? ` ${p.approach.note}` : ""}`);
   else if (p.approach.status === "Beginning")
-    parts.push(`POLICY: A documented approach exists but is incomplete or too generic for this requirement.${p.approach.note ? ` ${p.approach.note}` : ""} Make the policy specific and sustainable (who does what, when, repeatable year on year).`);
+    parts.push(`POLICY\nA documented approach exists but is incomplete or too generic for this requirement.${p.approach.note ? ` ${p.approach.note}` : ""} Make the policy specific and sustainable (who does what, when, repeatable year on year).`);
   else
-    parts.push(`POLICY: No documented approach was found that addresses this requirement — add the policy/procedure for it.`);
+    parts.push(`POLICY\nNo documented approach was found that addresses this requirement — add the policy/procedure for it.`);
 
   // EVIDENCE (Processes)
   if (p.processes.status === "Deployed")
-    parts.push(`EVIDENCE: Implementation records were found.${p.processes.note ? ` ${p.processes.note}` : ""}`);
+    parts.push(`EVIDENCE\nImplementation records were found.${p.processes.note ? ` ${p.processes.note}` : ""}`);
   else if (p.processes.status === "Weak")
-    parts.push(`EVIDENCE: Implementation records are weak or partial.${p.processes.note ? ` ${p.processes.note}` : ""} Add dated records (logs, registers, minutes, screenshots) showing it is actually done.`);
+    parts.push(`EVIDENCE\nImplementation records are weak or partial.${p.processes.note ? ` ${p.processes.note}` : ""} Add dated records (logs, registers, minutes, screenshots) showing it is actually done.`);
   else
-    parts.push(`EVIDENCE: No implementation records were found in the Actual Evidence folder — a documented policy alone is not evidence. Submit dated records showing this is carried out in practice.`);
+    parts.push(`EVIDENCE\nNo implementation records were found in the Actual Evidence folder — a documented policy alone is not evidence. Submit dated records showing this is carried out in practice.`);
 
-  // OUTCOMES (Systems & Outcomes) — only worth a line when something exists
-  if (p.systemsOutcomes.status !== "Not evident")
-    parts.push(`OUTCOMES: ${p.systemsOutcomes.status}.${p.systemsOutcomes.note ? ` ${p.systemsOutcomes.note}` : ""}`);
+  // OUTCOMES (Systems & Outcomes) — always shown so the section is never silently absent
+  if (p.systemsOutcomes.status === "Not evident")
+    parts.push(`OUTCOMES\nNo outcome data or results were found.${p.systemsOutcomes.note ? ` ${p.systemsOutcomes.note}` : ""} Provide measurable results or improvement data to demonstrate this is producing the intended effect.`);
+  else
+    parts.push(`OUTCOMES\n${p.systemsOutcomes.status}.${p.systemsOutcomes.note ? ` ${p.systemsOutcomes.note}` : ""}`);
 
   // REVIEW
   if (p.review.status === "Evident")
-    parts.push(`REVIEW: A review for continual improvement was evident.${p.review.note ? ` ${p.review.note}` : ""}`);
+    parts.push(`REVIEW\nA review for continual improvement was evident.${p.review.note ? ` ${p.review.note}` : ""}`);
   else
-    parts.push(`REVIEW: No formal review for continual improvement was found.`);
+    parts.push(`REVIEW\nNo formal review for continual improvement was found.${p.review.note ? ` ${p.review.note}` : ""}`);
 
-  return parts.join(" ");
+  return parts.join("\n\n");
 }
 
 const STOPWORDS = new Set(["which", "where", "their", "there", "every", "shall", "should", "these", "those", "about", "within"]);

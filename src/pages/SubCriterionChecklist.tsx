@@ -494,11 +494,11 @@ export function SubCriterionChecklist() {
                               <tr>
                                 <td colSpan={8} style={{ paddingTop: 0, paddingBottom: 8 }}>
                                   <textarea
-                                    rows={2}
+                                    rows={ev.auditorNote && ev.auditorNote.includes("\n") ? 8 : 2}
                                     placeholder="Auditor note — justify the sufficiency verdict, note strengths/weaknesses/gaps, suggest how to close…"
                                     value={ev.auditorNote || ""}
                                     onChange={(e) => updateEvidence(selectedId, l.id, ev.id, { auditorNote: e.target.value })}
-                                    style={{ ...inputStyle, width: "100%", resize: "vertical", fontSize: 11.5 }}
+                                    style={{ ...inputStyle, width: "100%", resize: "vertical", fontSize: 11.5, whiteSpace: "pre-wrap" }}
                                   />
                                 </td>
                               </tr>

@@ -1422,8 +1422,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // run produced this" trailer so the row is traceable and honest
             // about whether real evidence was actually submitted.
             const baseNote = v.apsr ? apsrAuditNote(v.apsr) : v.reason;
-            const sourceSuffix = v.sources && v.sources.length ? ` (source: ${v.sources.join("; ")})` : "";
-            const provenance = ` — auto-filled by AI audit ${runId} on behalf of ${auditorName} (${live ? "Evidence Intake Assistant, live" : "offline keyword estimate"}); ${auditorName === "Unassigned (no auditor set up)" ? "set up an auditor and " : ""}review before relying on it.`;
+            const sourceLines = [
+              `SOURCE TRACE`,
+              v.sources && v.sources.length ? `File(s): ${v.sources.join("; ")}` : "File(s): not cited by model",
+              `Run: ${runId} (${live ? "live AI" : "offline estimate"})`,
+              `Auditor: ${auditorName}`,
+              auditorName === "Unassigned (no auditor set up)" ? "Set up an auditor and review before relying on this verdict." : "Review before relying on this verdict.",
+            ];
             checklist.addEvidence(itemId, v.lineId, {
               title: `Drive audit ${runId} — ${folder.folderName}`,
               type: evidenceTypeFromApsr(v.apsr, lineTextById.get(v.lineId) || ""),
@@ -1433,7 +1438,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               approved: false,
               reviewed: false,
               sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
-              auditorNote: `${baseNote}${sourceSuffix}${provenance}`,
+              auditorNote: `${baseNote}\n\n${sourceLines.join("\n")}`,
               // Persist the structured APSR so a finding raised from this line
               // can explain which rubric dimension (Approach/Processes/Systems &
               // Outcomes/Review) fell short.
