@@ -1001,6 +1001,8 @@ export function EvidenceFolder() {
   const checkFolderAccess   = useWorkspaceStore((s) => s.checkFolderAccess);
   const auditFolderContents = useWorkspaceStore((s) => s.auditFolderContents);
   const cancelBusy          = useWorkspaceStore((s) => s.cancelBusy);
+  const clearFileTextCache  = useWorkspaceStore((s) => s.clearFileTextCache);
+  const fileTextCacheSize   = useWorkspaceStore((s) => Object.keys(s.fileTextCache).length);
   const skipCurrentFile     = useWorkspaceStore((s) => s.skipCurrentFile);
   const busy                = useWorkspaceStore((s) => s.busy);
   const additionalInfo      = useWorkspaceStore((s) => s.additionalInfo);
@@ -1109,6 +1111,17 @@ export function EvidenceFolder() {
             Use the scope selector to audit only Policy or only Evidence files. Files are cached — unchanged Drive files are reused on repeat audits.
             "View last run" reopens the read-only audit record with full file ledger and AI summary CSVs.
           </p>
+          {fileTextCacheSize > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "6px 10px", background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 7 }}>
+              <span style={{ fontSize: 12, color: "#6d28d9" }}>♻ {fileTextCacheSize} file{fileTextCacheSize !== 1 ? "s" : ""} cached from previous audits</span>
+              <button
+                onClick={() => { if (confirm("Clear the file text cache? The next audit will re-download all files from Drive.")) clearFileTextCache(); }}
+                style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", borderRadius: 5, fontSize: 11, padding: "2px 8px", color: "#7c3aed" }}
+              >
+                Clear cache
+              </button>
+            </div>
+          )}
           <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", background: "#f8fafc", marginBottom: 10, fontSize: 12 }}>
             <b style={{ fontSize: 11.5, color: "#475569" }}>Link two folders per sub-criterion:</b>
             <ol style={{ margin: "4px 0 4px", paddingLeft: 18, color: "#475569" }}>

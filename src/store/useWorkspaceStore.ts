@@ -265,6 +265,10 @@ export type WorkspaceState = {
   // Clears a stranded busy/bulk state so a button stuck on "Auditing…" can be
   // released. Also aborts the currently reading file so the loop exits promptly.
   cancelBusy: () => void;
+  // Clears the extracted-text cache so the next audit re-downloads all files
+  // from Drive. Use when files have been updated but Drive modifiedTime hasn't
+  // changed (e.g. in-place Google Docs edits that don't bump the timestamp).
+  clearFileTextCache: () => void;
   // Skips the file currently being read — aborts its Drive download and/or AI
   // description call and moves the loop to the next file. No-op if not reading.
   skipCurrentFile: () => void;
@@ -553,6 +557,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         _currentFileAbort = null;
         set((s) => ({ busy: null, bulkAuditStatus: null, auditRunToken: s.auditRunToken + 1 }));
       },
+
+      clearFileTextCache: () => set({ fileTextCache: {} }),
       skipCurrentFile: () => {
         // Abort only the current file — loop continues to the next one.
         _currentFileAbort?.();
