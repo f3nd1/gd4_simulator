@@ -25,7 +25,7 @@ const MODAL_KEYFRAMES = `
 const VISUAL_STEPS = [
   { emoji: "🔌", label: "Connect" },
   { emoji: "📂", label: "Read files" },
-  { emoji: "🤖", label: "AI audit" },
+  { emoji: "🤖", label: "Ask AI" },
   { emoji: "💾", label: "Save" },
   { emoji: "✅", label: "Complete" },
 ] as const;
@@ -80,7 +80,7 @@ function ConnectDetail({ p, isActive }: { p: AuditProgressState; isActive: boole
     return (
       <div>
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
-          Connecting to Google Drive and listing files<Dots />
+          Connecting to your Google Drive evidence folder<Dots />
         </div>
         <div style={muted}>Folder: <b>{p.folderName}</b> · sub-criterion {p.subCriterionId}</div>
       </div>
@@ -176,10 +176,10 @@ function AuditStepDetail({ p, isActive }: { p: AuditProgressState; isActive: boo
     return (
       <div>
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
-          🤖 {isStrict ? "Running strict challenge pass" : `AI audit — batch ${batch} of ${total}`}<Dots />
+          🤖 {isStrict ? "Running strict challenge pass" : `Asking AI to assess your evidence — batch ${batch} of ${total}`}<Dots />
         </div>
         <div style={{ ...muted, marginBottom: 4 }}>
-          {isStrict ? "Re-checking every Met/Partial verdict against the evidence standard" : "Judging each checklist line against the GD4 standard and your evidence"}
+          {isStrict ? "Re-checking every Met/Partial verdict: is this truly implemented with records, or just a policy on paper?" : "Comparing your evidence files against each GD4 checklist requirement and writing verdicts"}
         </div>
         <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 10, flexWrap: "wrap" }}>
           {p.filesTotal != null && <span><b>{p.filesTotal}</b> file{p.filesTotal !== 1 ? "s" : ""} in scope</span>}
@@ -208,12 +208,12 @@ function SaveStepDetail({ p, isActive }: { p: AuditProgressState; isActive: bool
   if (isActive) {
     return (
       <div>
-        <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>💾 Saving verdicts to the checklist<Dots /></div>
+        <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>💾 Saving AI verdicts to your checklist<Dots /></div>
         <div style={{ ...muted, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {lines > 0 && <span><b>{lines}</b> line{lines !== 1 ? "s" : ""} assessed</span>}
-          {issues > 0 && <span style={{ color: "#b45309" }}><b>{issues}</b> issue{issues !== 1 ? "s" : ""} detected</span>}
+          {lines > 0 && <span><b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed</span>}
+          {issues > 0 && <span style={{ color: "#b45309" }}><b>{issues}</b> potential gap{issues !== 1 ? "s" : ""} flagged</span>}
         </div>
-        <div style={{ ...muted, marginTop: 4 }}>Results will appear in the Sub-Criterion Checklist when this step completes.</div>
+        <div style={{ ...muted, marginTop: 4 }}>Verdicts will appear in the Sub-Criterion Checklist once this step completes.</div>
       </div>
     );
   }
@@ -245,14 +245,45 @@ function CompleteDetail({ p }: { p: AuditProgressState }) {
 }
 
 function ErrorDetail({ p }: { p: AuditProgressState }) {
-  const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+  const filesFound = p.filesFound?.length ?? 0;
+  const filesRead = p.filesRead ?? 0;
+  const linesAssessed = p.linesAssessed ?? 0;
+  const partialSaved = linesAssessed > 0;
+
+  // Detect which step failed from what was completed before the error
+  let failedStep: string;
+  let guidance: string;
+  if (filesFound === 0 && filesRead === 0) {
+    failedStep = "Connecting to Google Drive";
+    guidance = "Check that your Google Drive is still connected (Settings → Google Drive) and that the folder link is correct. If the folder is in a Shared Drive, make sure your Google account has at least Viewer access.";
+  } else if (filesRead === 0 || (p.filesTotal != null && filesRead < p.filesTotal)) {
+    failedStep = "Reading evidence files";
+    guidance = "One or more files could not be read. Password-protected PDFs and unsupported file types are skipped automatically — this error usually means a network issue or an unusually large file. Try running the audit again; the folder will be re-scanned from the beginning.";
+  } else {
+    failedStep = "Asking AI to assess";
+    guidance = "The AI call timed out or was rejected. Check your OpenAI key in Settings → AI Settings (key must start with 'sk-'). If the folder has more than 15–20 files, try reducing it to the most relevant ones — smaller folders complete faster and are less likely to time out.";
+  }
+
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: "#b23121", marginBottom: 6 }}>Something went wrong:</div>
-      <div style={{ fontSize: 12.5, color: "#7f1d1d", background: "#fef2f2", borderRadius: 8, padding: "8px 12px", lineHeight: 1.6 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#b23121", marginBottom: 6 }}>
+        Audit stopped — error during: <span style={{ fontWeight: 400, fontStyle: "italic" }}>{failedStep}</span>
+      </div>
+      <div style={{ fontSize: 12.5, color: "#7f1d1d", background: "#fef2f2", borderRadius: 8, padding: "8px 12px", lineHeight: 1.6, marginBottom: 8 }}>
         {p.errorMessage || "An unexpected error occurred."}
       </div>
-      <div style={{ ...muted, marginTop: 6 }}>Any verdicts saved before this error were kept. Fix the issue above and run the audit again.</div>
+      {partialSaved ? (
+        <div style={{ fontSize: 12, color: "#15803d", background: "#f0fdf4", borderRadius: 8, padding: "6px 10px", marginBottom: 8 }}>
+          ✓ <b>{linesAssessed}</b> checklist verdict{linesAssessed !== 1 ? "s" : ""} were saved before the error — those results are kept in the checklist.
+        </div>
+      ) : (
+        <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 8 }}>
+          No checklist verdicts were saved — you can safely run the audit again once the issue is fixed.
+        </div>
+      )}
+      <div style={{ fontSize: 11.5, color: "#374151" }}>
+        <b>What to do:</b> {guidance}
+      </div>
     </div>
   );
 }

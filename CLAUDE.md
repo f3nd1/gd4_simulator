@@ -70,7 +70,7 @@ HashRouter — all routes under `#/`. Route list in `src/App.tsx`; nav labels/hi
 
 ### Persistence & security
 
-- Supabase URL + anon key come from `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` (`.env.local`, never committed).
+- Supabase URL + publishable key come from `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` (`.env.local`, never committed).
 - No service-role key anywhere in the client bundle.
 - Drive OAuth token excluded from Zustand `partialize` — never written to storage.
 - Writes are debounced ~600ms; `beforeunload` flushes the pending write.

@@ -6,11 +6,13 @@ import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildGenericLines } from "../data/checklistSeed";
-import { computeBand, lineSufficiency, buildDraftFinding } from "../lib/checklistBanding";
+import { computeBand, lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, BLUE, INK, TONE, bandTone } from "../lib/theme";
 import type {
+  GD4Requirement,
+  FindingDimension,
   GenericChecklistLine,
   SpecificChecklistLine,
   SpecificLineStatus,
@@ -58,6 +60,112 @@ const emptyEvidenceDraft = (): Omit<SubChecklistEvidenceItem, "id"> => ({
   sufficiency: "Present",
   auditorNote: "",
 });
+
+// APSR dimension metadata — four evidence types every GD4 audit needs
+const APSR_DIMS: { id: FindingDimension; gId: "G1" | "G2" | "G3" | "G4"; userLabel: string; desc: string }[] = [
+  { id: "Procedure", gId: "G1", userLabel: "Policy & Procedure", desc: "Documented approach in the PPD" },
+  { id: "Evidence",  gId: "G2", userLabel: "Implementation records", desc: "Evidence the procedure is deployed" },
+  { id: "Outcomes",  gId: "G3", userLabel: "Outcome & trend data", desc: "Data showing desired results" },
+  { id: "Review",    gId: "G4", userLabel: "Review & improvement", desc: "Periodic review feeding improvements" },
+];
+
+function EvidenceGapPanel({ generic, specific, req }: {
+  generic: GenericChecklistLine[];
+  specific: SpecificChecklistLine[];
+  req: GD4Requirement;
+}) {
+  const hasData = specific.length > 0 || generic.some((g) => g.status !== "Not Started");
+  if (!hasData) return null;
+
+  // Tally gap counts per APSR dimension from active specific lines
+  const activeLines = specific.filter((l) => l.status !== "Not Applicable" && l.status !== "Not Started");
+  const dimNotMet: Partial<Record<FindingDimension, number>> = {};
+  const dimPartial: Partial<Record<FindingDimension, number>> = {};
+
+  for (const l of activeLines) {
+    const suff = lineSufficiency(l);
+    if (l.status === "Not met" || suff === "Missing") {
+      const d = findingDimension(l);
+      dimNotMet[d] = (dimNotMet[d] ?? 0) + 1;
+    } else if (l.status === "Partial" || suff === "Weak") {
+      const d = findingDimension(l);
+      dimPartial[d] = (dimPartial[d] ?? 0) + 1;
+    }
+  }
+
+  const dims = APSR_DIMS.map((d) => {
+    const genericStatus = generic.find((g) => g.id === d.gId)?.status ?? "Not Started";
+    const notMet = dimNotMet[d.id] ?? 0;
+    const partial = dimPartial[d.id] ?? 0;
+    const isCritical = genericStatus === "Not met" || notMet > 0;
+    const isWeak = !isCritical && (genericStatus === "Partial" || partial > 0);
+    const isGood = !isCritical && !isWeak && genericStatus === "Met";
+    const bg = isCritical ? "#fef2f2" : isWeak ? "#fffbeb" : isGood ? "#f0fdf4" : "#f8fafc";
+    const fg = isCritical ? "#b91c1c" : isWeak ? "#b45309" : isGood ? "#15803d" : "#64748b";
+    const icon = isCritical ? "✗" : isWeak ? "~" : isGood ? "✓" : "–";
+    return { ...d, genericStatus, notMet, partial, isCritical, isGood, isWeak, bg, fg, icon };
+  });
+
+  // Likely finding type
+  const riskCat = computeRiskCategory(req, "Evidence");
+  const totalNotMet = activeLines.filter((l) => l.status === "Not met" || lineSufficiency(l) === "Missing").length;
+  const totalPartial = activeLines.filter((l) => l.status === "Partial" || (l.status === "Met" && lineSufficiency(l) === "Weak")).length;
+
+  type FindingInfo = { type: string; color: string; bg: string; desc: string };
+  let finding: FindingInfo | null = null;
+  if (totalNotMet > 0) {
+    if (riskCat === "A") {
+      finding = { type: "Major NC", color: "#b91c1c", bg: "#fef2f2", desc: `Student-protection item — ${totalNotMet} unmet requirement${totalNotMet > 1 ? "s" : ""}` };
+    } else if (riskCat === "B") {
+      finding = { type: "Minor NC", color: "#b45309", bg: "#fffbeb", desc: `Gate-sensitive — unresolved gaps will block the Star award` };
+    } else {
+      finding = { type: "AFI", color: "#7c3aed", bg: "#faf5ff", desc: `${totalNotMet} gap${totalNotMet > 1 ? "s" : ""} need corrective action` };
+    }
+  } else if (totalPartial > 0) {
+    finding = { type: "Observation", color: "#475569", bg: "#f1f5f9", desc: `${totalPartial} partially-met line${totalPartial > 1 ? "s" : ""} — monitor and strengthen` };
+  }
+
+  return (
+    <Card>
+      <h3 style={{ marginTop: 0, fontSize: 14 }}>Evidence gap summary</h3>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 10 }}>
+        {dims.map((d) => (
+          <div key={d.id} style={{ background: d.bg, borderRadius: 8, padding: "8px 10px" }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: d.fg, marginBottom: 3 }}>
+              {d.icon} {d.userLabel}
+            </div>
+            <div style={{ fontSize: 10.5, color: "#64748b", marginBottom: 4 }}>{d.desc}</div>
+            <div style={{ fontSize: 11, color: d.fg, fontWeight: 600 }}>
+              Maturity: {d.genericStatus}
+            </div>
+            {(d.notMet > 0 || d.partial > 0) && (
+              <div style={{ fontSize: 10, color: d.fg, marginTop: 2 }}>
+                {d.notMet > 0 && <span>{d.notMet} not met</span>}
+                {d.notMet > 0 && d.partial > 0 && " · "}
+                {d.partial > 0 && <span>{d.partial} partial</span>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {finding ? (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "7px 10px", background: finding.bg, borderRadius: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: finding.color, padding: "2px 8px", background: "rgba(255,255,255,0.75)", borderRadius: 6, flexShrink: 0 }}>
+            Likely: {finding.type}
+          </span>
+          <span style={{ fontSize: 11.5, color: "#374151" }}>{finding.desc}</span>
+        </div>
+      ) : (
+        activeLines.length > 0 && (
+          <div style={{ fontSize: 12, color: "#15803d" }}>✓ No gaps detected — all active lines are met with present evidence.</div>
+        )
+      )}
+      <p style={{ fontSize: 10.5, color: "#94a3b8", margin: "8px 0 0" }}>
+        Maturity from Layer 1 (G1–G4) · gap counts from Layer 2 specific lines · internal simulation only.
+      </p>
+    </Card>
+  );
+}
 
 export function SubCriterionChecklist() {
   const entries = useChecklistModuleStore((s) => s.entries);
@@ -622,6 +730,8 @@ export function SubCriterionChecklist() {
             <p style={{ fontSize: 12, color: "#94a3b8" }}>No specific lines yet — run "AI first pass" or add one manually.</p>
           )}
         </Card>
+
+        <EvidenceGapPanel generic={generic} specific={specific} req={req} />
 
         <Card>
           <h3 style={{ marginTop: 0, fontSize: 14 }}>Band result</h3>
