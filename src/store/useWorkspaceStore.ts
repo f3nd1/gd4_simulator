@@ -33,7 +33,7 @@ import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { simulateItemReview, simulateClosure, simulateFolderAudit, type FolderAuditLineVerdict } from "../lib/ai/simulateAI";
+import { simulateItemReview, simulateClosure, simulateFolderAudit, deriveApsrStatus, type FolderAuditLineVerdict } from "../lib/ai/simulateAI";
 import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
@@ -42,7 +42,7 @@ import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
 import type { EvidenceChunk } from "../types";
-import { describeImage, summariseText, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
+import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 
@@ -1323,25 +1323,36 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (isReview) return "Review Evidence";
           return "Other";
         };
+        // Maximum chars per individual part/chunk. Files larger than this are
+        // split into multiple parts (each with its own chunk ID) so no text is
+        // lost. Kept well below BATCH_DOC_CAP so a single chunk never exceeds
+        // one document window on its own.
+        const MAX_PART_CHARS = 18_000;
         const pushPart = (path: string, body: string, bucket: TaggedFile["bucket"], kind: string, fileIndex: number) => {
           const isPolicy = bucket === "policy" || (bucket === "auto" && classifyFileBucket(path) === "policy");
-          const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
           const resolvedBucket: "policy" | "evidence" = isPolicy ? "policy" : "evidence";
-          const chunk: EvidenceChunk = {
-            chunkId,
-            filePath: path,
-            fileName: path.split("/").pop() || path,
-            bucket: resolvedBucket,
-            fileKind: kind,
-            text: body,
-            charCount: body.length,
-            evidenceType: inferEvidenceType(kind, resolvedBucket, body),
-          };
-          evidenceChunks.push(chunk);
-          // Record the chunk ID on the file record so citations can be traced back
-          const existing = fileRecords[fileIndex];
-          fileRecords[fileIndex] = { ...existing, chunkIds: [...(existing.chunkIds || []), chunkId] };
-          parts.push({ heading: `[CHUNK:${chunkId}] --- ${path} [${kind}] ---`, body, isPolicy, fileIndex });
+          // Split large files into sub-chunks so no text is ever summarised or dropped.
+          const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
+          for (let pi = 0; pi < totalParts; pi++) {
+            const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+            const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
+            const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
+            const chunk: EvidenceChunk = {
+              chunkId,
+              filePath: path,
+              fileName: path.split("/").pop() || path,
+              bucket: resolvedBucket,
+              fileKind: kind,
+              text: chunkBody,
+              charCount: chunkBody.length,
+              evidenceType: inferEvidenceType(kind, resolvedBucket, chunkBody),
+            };
+            evidenceChunks.push(chunk);
+            // Record chunk ID on file record so citations can be traced back
+            const existing = fileRecords[fileIndex];
+            fileRecords[fileIndex] = { ...existing, chunkIds: [...(existing.chunkIds || []), chunkId] };
+            parts.push({ heading: `[CHUNK:${chunkId}] --- ${path}${partLabel} [${kind}] ---`, body: chunkBody, isPolicy, fileIndex });
+          }
           if (isPolicy) policyCount++;
           else evidenceCount++;
         };
@@ -1566,41 +1577,45 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ? `=== PRIOR AUDIT FINDINGS (other sub-criteria already audited in this workspace — use for cross-criterion pattern awareness; judge THIS sub-criterion on its own evidence) ===\n${priorJournal.slice(-JOURNAL_AI_CAP)}`
           : "";
 
-        let condensed = 0;
-        const headingOverhead = parts.reduce((n, p) => n + p.heading.length + 2, 0);
-        const fixedOverhead = headingOverhead + (resolvedContext?.length || 0) + journalBlock.length + 300; // 300 ≈ section markers
-        const bodyBudgetTotal = Math.max(4000, FOLDER_DOC_CAP - fixedOverhead);
-        const rawTotal = parts.reduce((n, p) => n + p.body.length, 0);
-        if (rawTotal > bodyBudgetTotal && aiSettings.enabled && aiSettings.apiKey && parts.length) {
-          const budget = Math.max(500, Math.floor(bodyBudgetTotal / parts.length));
-          const toCondense = parts.filter((p) => p.body.length > budget);
-          if (toCondense.length > 0) {
-            setProgress("condensing", { condensingTriggered: true, filesFound: [...fileRecords], stageDetail: `Condensing ${toCondense.length} large document${toCondense.length === 1 ? "" : "s"}…` });
-          }
-          for (const p of parts) {
-            if (p.body.length > budget) {
-              try {
-                p.body = await summariseText(p.heading, p.body, utilitySettings, budget, { onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
-                condensed++;
-                fileRecords[p.fileIndex] = { ...fileRecords[p.fileIndex], readStatus: "condensed" };
-              } catch {
-                p.body = p.body.slice(0, budget);
-              }
-            }
-          }
-        }
-
-        const sectionText = (isPolicy: boolean) => parts.filter((p) => p.isPolicy === isPolicy).map((p) => `${p.heading}\n${p.body}`).join("\n\n");
-        const policyText = sectionText(true);
-        const evidenceText = sectionText(false);
-        const docText = [
+        // Build document windows instead of condensing. Each window contains
+        // a subset of parts that fits within BATCH_DOC_CAP chars so no file
+        // is ever summarised or dropped — the audit just runs more passes.
+        // Parts are kept in order (policy first, evidence second) so each
+        // window has the correct POLICY / ACTUAL EVIDENCE sections.
+        const fixedPrefix = [
           journalBlock,
           resolvedContext ? `=== SCHOOL-WIDE CONTEXT (general supporting documents — background only, not primary evidence for this sub-criterion) ===\n${resolvedContext}` : "",
-          policyText ? `=== POLICY & PROCEDURE ===\n${policyText}` : "",
-          evidenceText ? `=== ACTUAL EVIDENCE ===\n${evidenceText}` : "",
-        ]
-          .filter(Boolean)
-          .join("\n\n");
+        ].filter(Boolean).join("\n\n");
+        const fixedPrefixLen = fixedPrefix.length + (fixedPrefix ? 2 : 0);
+
+        // Build windows: pack parts greedily by size so each window fits.
+        const WINDOW_BODY_CAP = FOLDER_DOC_CAP - fixedPrefixLen - 200; // 200 ≈ section markers
+        const docWindows: string[] = [];
+        let winParts: typeof parts = [];
+        let winSize = 0;
+        const flushWindow = () => {
+          if (winParts.length === 0) return;
+          const winPolicyText = winParts.filter((p) => p.isPolicy).map((p) => `${p.heading}\n${p.body}`).join("\n\n");
+          const winEvidText  = winParts.filter((p) => !p.isPolicy).map((p) => `${p.heading}\n${p.body}`).join("\n\n");
+          const win = [
+            fixedPrefix,
+            winPolicyText ? `=== POLICY & PROCEDURE ===\n${winPolicyText}` : "",
+            winEvidText   ? `=== ACTUAL EVIDENCE ===\n${winEvidText}`       : "",
+          ].filter(Boolean).join("\n\n");
+          docWindows.push(win);
+          winParts = [];
+          winSize = 0;
+        };
+        for (const p of parts) {
+          const partSize = p.heading.length + p.body.length + 2;
+          if (winParts.length > 0 && winSize + partSize > WINDOW_BODY_CAP) flushWindow();
+          winParts.push(p);
+          winSize += partSize;
+        }
+        flushWindow();
+        // Fallback: if no parts at all, one empty window so the AI still runs
+        // and returns "Not evident" for all lines (consistent with prior behaviour).
+        if (docWindows.length === 0) docWindows.push(fixedPrefix || "");
 
         // The official GD4 standard for this sub-criterion, so the AI judges
         // each line against what is actually required, not just its wording.
@@ -1611,6 +1626,41 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // The acting auditor's own strictness drives the audit; only when no
         // auditor exists do we fall back to the global AI strictness setting.
         const strictness = auditorStrictness || useScoringConfigStore.getState().aiStrictness;
+        // Merges verdicts from multiple document windows per checklist line.
+        // Takes the best APSR status across all windows (most favourable) and
+        // unions sourceChunkIds + sources. Notes from different windows are
+        // concatenated so the auditor sees analysis from every document pass.
+        const mergeWindowVerdicts = (allWindows: ReturnType<typeof simulateFolderAudit>[]): ReturnType<typeof simulateFolderAudit> => {
+          const byId = new Map<string, ReturnType<typeof simulateFolderAudit>[number]>();
+          for (const window of allWindows) {
+            for (const v of window) {
+              const ex = byId.get(v.lineId);
+              if (!ex) { byId.set(v.lineId, { ...v, apsr: v.apsr ? { ...v.apsr, approach: { ...v.apsr.approach }, processes: { ...v.apsr.processes }, systemsOutcomes: { ...v.apsr.systemsOutcomes }, review: { ...v.apsr.review } } : undefined }); continue; }
+              if (!v.apsr || !ex.apsr) { byId.set(v.lineId, ex); continue; }
+              const bestLeg = <T extends string>(a: { status: T; note: string; sourceChunkIds?: string[] }, b: { status: T; note: string; sourceChunkIds?: string[] }, order: T[]) => {
+                const ai = order.indexOf(a.status), bi = order.indexOf(b.status);
+                const winner = ai <= bi ? a : b, loser = ai <= bi ? b : a;
+                const note = winner.note && loser.note && winner.note !== loser.note ? `${winner.note} | ${loser.note}` : winner.note || loser.note;
+                return { status: winner.status, note, sourceChunkIds: [...new Set([...(a.sourceChunkIds ?? []), ...(b.sourceChunkIds ?? [])])] };
+              };
+              const merged = {
+                ...ex,
+                apsr: {
+                  approach:       bestLeg(ex.apsr.approach,       v.apsr.approach,       ["Meeting", "Beginning", "Not evident"] as const),
+                  processes:      bestLeg(ex.apsr.processes,      v.apsr.processes,      ["Deployed", "Weak", "Not evident"] as const),
+                  systemsOutcomes:bestLeg(ex.apsr.systemsOutcomes,v.apsr.systemsOutcomes,["Evident", "Limited", "Not evident"] as const),
+                  review:         bestLeg(ex.apsr.review,         v.apsr.review,         ["Evident", "Not evident"] as const),
+                },
+                sources: [...new Set([...(ex.sources ?? []), ...(v.sources ?? [])])],
+              };
+              merged.status = deriveApsrStatus(merged.apsr);
+              merged.reason = apsrReason(merged.apsr);
+              byId.set(v.lineId, merged);
+            }
+          }
+          return Array.from(byId.values());
+        };
+
         let verdicts: ReturnType<typeof simulateFolderAudit>;
         let live = false;
         let liveError: string | undefined;
@@ -1621,42 +1671,52 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let auditUsage: AIUsage | undefined;
         let verdictLines: AuditAISummaryLine[] = [];
         let timedOutCount = 0;
-        const batchTotal = Math.ceil(lines.length / 4); // AUDIT_BATCH_SIZE = 4
+        const windowCount = docWindows.length;
+        const batchTotal = Math.ceil(lines.length / 4) * windowCount; // AUDIT_BATCH_SIZE = 4
         if (aiSettings.enabled && aiSettings.apiKey) {
-          setProgress("auditing", { batchCurrent: 0, batchTotal, auditLive: true, filesFound: [...fileRecords], stageDetail: "Starting AI audit…" });
+          setProgress("auditing", { batchCurrent: 0, batchTotal, auditLive: true, filesFound: [...fileRecords], stageDetail: windowCount > 1 ? `Starting AI audit (${windowCount} document windows)…` : "Starting AI audit…" });
           try {
-            const result = await runLiveFolderAudit(lines, docText, analysisSettings, {
-              strictness,
-              standard,
-              criterionId: folder.subCriterionId,
-              onBatchProgress: (current, total) => {
-                setProgress("auditing", {
-                  batchCurrent: current,
-                  batchTotal: total,
-                  stageDetail: total > 1 ? `AI audit batch ${current} of ${total}…` : "Running AI audit…",
-                });
-              },
-            });
-            verdicts = result.verdicts;
-            truncationNote = result.truncationNote;
-            parseWarnings = result.parseWarnings;
-            folderWarnings = result.folderWarnings;
-            auditUsage = result.usage;
-            timedOutCount = result.timedOutLineIds?.length ?? 0;
+            // Run one full audit per document window, then merge best-of across windows.
+            let globalBatchDone = 0;
+            const windowResults = await Promise.all(
+              docWindows.map((docWindow, wi) =>
+                runLiveFolderAudit(lines, docWindow, analysisSettings, {
+                  strictness,
+                  standard,
+                  criterionId: folder.subCriterionId,
+                  onBatchProgress: (current, total) => {
+                    globalBatchDone++;
+                    setProgress("auditing", {
+                      batchCurrent: globalBatchDone,
+                      batchTotal,
+                      stageDetail: windowCount > 1
+                        ? `AI audit window ${wi + 1}/${windowCount}, batch ${current}/${total}…`
+                        : total > 1 ? `AI audit batch ${current} of ${total}…` : "Running AI audit…",
+                    });
+                  },
+                })
+              )
+            );
+            verdicts = mergeWindowVerdicts(windowResults.map((r) => r.verdicts));
+            truncationNote = windowResults.find((r) => r.truncationNote)?.truncationNote;
+            parseWarnings = windowResults.flatMap((r) => r.parseWarnings);
+            folderWarnings = [...new Set(windowResults.flatMap((r) => r.folderWarnings))];
+            auditUsage = windowResults.reduce<AIUsage | undefined>((acc, r) => addUsage(acc, r.usage), undefined);
+            const timedOutIds = [...new Set(windowResults.flatMap((r) => r.timedOutLineIds ?? []))];
+            timedOutCount = timedOutIds.length;
             if (timedOutCount > 0) {
               folderWarnings = [
                 ...folderWarnings,
-                `${timedOutCount} checklist line${timedOutCount === 1 ? "" : "s"} could not be audited — the AI call timed out after retrying. Those lines show "Not met" as a placeholder. Re-run the audit to try them again, or reduce folder size.`,
+                `${timedOutCount} checklist line${timedOutCount === 1 ? "" : "s"} could not be audited — the AI call timed out after retrying. Those lines show "Not met" as a placeholder. Re-run the audit to try them again.`,
               ];
             }
-            // Strict mode runs a second "challenge" pass that re-examines every
-            // Met/Partial and downgrades any not fully and explicitly evidenced.
+            // Strict mode: challenge pass runs against the first (largest) window.
             if (strictness === "Strict") {
               const toChallenge = verdicts.filter((v) => v.status !== "Not met").map((v) => ({ lineId: v.lineId, status: v.status }));
               if (toChallenge.length) {
                 setProgress("auditing", { stageDetail: "Running strict challenge pass…" });
                 try {
-                  const r2 = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard, criterionId: folder.subCriterionId, challenge: toChallenge });
+                  const r2 = await runLiveFolderAudit(lines, docWindows[0], analysisSettings, { strictness, standard, criterionId: folder.subCriterionId, challenge: toChallenge });
                   verdicts = r2.verdicts;
                   parseWarnings = [...parseWarnings, ...r2.parseWarnings];
                   folderWarnings = [...new Set([...folderWarnings, ...r2.folderWarnings])];
@@ -1666,7 +1726,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   }
                   challenged = true;
                 } catch {
-                  // keep first-pass verdicts if the challenge call fails
+                  // keep multi-window merged verdicts if challenge call fails
                 }
               }
             }
@@ -1688,7 +1748,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             return;
           }
         } else {
-          verdicts = simulateFolderAudit(lines, docText);
+          verdicts = simulateFolderAudit(lines, docWindows[0] ?? "");
         }
 
         // Cancel guard: if the user clicked "Cancel" while the AI call was in
@@ -1956,7 +2016,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // 3. Method.
         lineParts.push(
           live
-            ? `Method: EduTrust APSR rubric vs the GD4 standard — Approach (documented policy) gates the result, then Processes (implementation), Systems & Outcomes, Review.${condensed ? ` ${condensed} large document${condensed === 1 ? "" : "s"} condensed so the whole folder was read.` : ""}${challenged ? " A strict second-pass challenge was applied." : ""}`
+            ? `Method: EduTrust APSR rubric vs the GD4 standard — Approach (documented policy) gates the result, then Processes (implementation), Systems & Outcomes, Review.${windowCount > 1 ? ` ${windowCount} document windows used — all files read in full with no condensing.` : ""}${challenged ? " A strict second-pass challenge was applied." : ""}`
             : "Method: offline keyword estimate — AI was not used (check AI Settings)."
         );
         // 4. Warnings, each on its own line so they stand out.
