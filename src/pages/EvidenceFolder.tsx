@@ -287,7 +287,7 @@ function FileLedger({
       {/* File list */}
       <div
         style={{
-          maxHeight: expanded ? 480 : 240,
+          maxHeight: expanded ? 560 : 320,
           overflowY: "auto",
           border: "1px solid #e2e8f0",
           borderRadius: 6,
@@ -688,7 +688,7 @@ function AuditProgressModal({
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
       <style>{MODAL_KEYFRAMES}</style>
-      <div style={{ background: "#fff", borderRadius: 16, padding: "28px 28px 24px", width: "100%", maxWidth: 600, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", maxHeight: "90vh", overflowY: "auto" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "28px 28px 24px", width: "100%", maxWidth: 860, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", maxHeight: "92vh", overflowY: "auto" }}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 20 }}>
@@ -851,7 +851,7 @@ function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => v
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
-      <div style={{ background: "#fff", borderRadius: 16, padding: "24px 24px 20px", width: "100%", maxWidth: 640, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "24px 24px 20px", width: "100%", maxWidth: 860, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 16 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
