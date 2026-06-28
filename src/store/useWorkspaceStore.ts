@@ -1336,8 +1336,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let parseWarnings: string[] = [];
         let folderWarnings: string[] = [];
         let auditUsage: AIUsage | undefined;
+        let timedOutCount = 0;
+        const batchTotal = Math.ceil(lines.length / 4); // AUDIT_BATCH_SIZE = 4
         if (aiSettings.enabled && aiSettings.apiKey) {
-          setProgress("auditing", { batchCurrent: 0, batchTotal: Math.ceil(lines.length / 8), stageDetail: "Starting AI audit…" });
+          setProgress("auditing", { batchCurrent: 0, batchTotal, stageDetail: "Starting AI audit…" });
           try {
             const result = await runLiveFolderAudit(lines, docText, analysisSettings, {
               strictness,
@@ -1355,6 +1357,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             parseWarnings = result.parseWarnings;
             folderWarnings = result.folderWarnings;
             auditUsage = result.usage;
+            timedOutCount = result.timedOutLineIds?.length ?? 0;
+            if (timedOutCount > 0) {
+              folderWarnings = [
+                ...folderWarnings,
+                `${timedOutCount} checklist line${timedOutCount === 1 ? "" : "s"} could not be audited — the AI call timed out after retrying. Those lines show "Not met" as a placeholder. Re-run the audit to try them again, or reduce folder size.`,
+              ];
+            }
             // Strict mode runs a second "challenge" pass that re-examines every
             // Met/Partial and downgrades any not fully and explicitly evidenced.
             if (strictness === "Strict") {
@@ -1367,6 +1376,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   parseWarnings = [...parseWarnings, ...r2.parseWarnings];
                   folderWarnings = [...new Set([...folderWarnings, ...r2.folderWarnings])];
                   auditUsage = addUsage(auditUsage, r2.usage);
+                  if (r2.timedOutLineIds?.length) {
+                    folderWarnings = [...new Set([...folderWarnings, `${r2.timedOutLineIds.length} line(s) timed out in the strict challenge pass — first-pass verdicts kept for those lines.`])];
+                  }
                   challenged = true;
                 } catch {
                   // keep first-pass verdicts if the challenge call fails

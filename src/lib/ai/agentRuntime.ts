@@ -272,20 +272,34 @@ export type FolderAuditOpts = {
 // SAME budget — otherwise the store could condense to just over this and the
 // audit would re-truncate (and show an alarming "files may be missing" note)
 // even though every document was already read and summarised. ~32k chars is
-// ≈8k tokens: smaller prompt → faster response, lower timeout risk for large
-// folders, while still covering more content than any single policy document.
+// Store-level condensing budget (chars). The store pre-condenses documents to
+// fit the whole folder into this limit before calling runLiveFolderAudit.
 export const FOLDER_DOC_CAP = 32000;
 
-// Per-batch timeout: each individual OpenAI call in a folder audit gets 120 s
-// (up from the global 90 s default). With batching, the TOTAL elapsed time is
-// ~20-30 s (batches run in parallel), so the per-batch ceiling can be generous
-// without making the overall audit feel slow.
-const AUDIT_BATCH_TIMEOUT_MS = 120_000;
+// Per-batch document budget (chars). Each individual OpenAI call sees at most
+// this many chars of docText — deliberately smaller than FOLDER_DOC_CAP so the
+// total input context (system prompt ~5k tokens + doc ~5k tokens) stays under
+// ~12k tokens per call, keeping TTFT fast and output generation well within the
+// timeout ceiling. The store-level condensing means the first 20k chars of a
+// well-condensed docText already covers the key content of all documents.
+const BATCH_DOC_CAP = 20_000;
 
-// Maximum checklist lines per audit call. 8 lines → ~1,600 output tokens →
-// finishes in ~15-25 s. A 30-line audit splits into 4 parallel batches, all
-// completing before the 120 s per-batch ceiling is reached.
-const AUDIT_BATCH_SIZE = 8;
+// Per-batch timeout. With 4 lines × 4 dims × ≤25-word notes ≈ 400 output
+// tokens, a standard model finishes in ~15–40 s. 90 s leaves a generous buffer
+// while still being short enough for the 1-retry strategy to recover transient
+// slowdowns within a tolerable wall-clock window.
+const AUDIT_BATCH_TIMEOUT_MS = 90_000;
+
+// Retry once on timeout or 5xx before giving up on a batch. A single retry
+// with a short backoff handles transient API slowdowns without hanging the
+// audit for several minutes.
+const AUDIT_BATCH_MAX_RETRIES = 1;
+const AUDIT_BATCH_RETRY_DELAY_MS = 6_000;
+
+// Maximum checklist lines per audit call. 4 lines × 4 APSR dims × ≤25-word
+// notes ≈ 400 output tokens → finishes in 15–40 s per call. A 30-line audit
+// becomes 8 parallel batches; all complete well within the 90 s ceiling.
+const AUDIT_BATCH_SIZE = 4;
 
 export type FolderAuditResult = {
   verdicts: FolderAuditLineVerdict[];
@@ -296,6 +310,9 @@ export type FolderAuditResult = {
   folderWarnings: string[];
   // Model + token usage for this audit (undefined offline).
   usage?: AIUsage;
+  // Line ids for which AI calls timed out after retries. Those lines receive
+  // placeholder "Not met" verdicts and should be re-audited.
+  timedOutLineIds?: string[];
 };
 
 // One chatComplete call for a single batch of lines against the same docText.
@@ -323,12 +340,12 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
   const challengeRule = opts.challenge
     ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote approach.status from "Meeting" to "Beginning" unless the documented approach is genuinely specific and sustainable, and demote processes.status unless implementation is explicitly evidenced.`
     : "";
-  const system = `${base}${challengeRule} Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string}, "review": {"status": "Evident"|"Not evident", "note": string}, "sources": string[]}], "folderWarnings": ["optional one-sentence warnings about mis-filed documents"]}.`;
+  const system = `${base}${challengeRule} Keep each "note" to 1–2 sentences, maximum 30 words — direct auditor language, state the specific gap or evidence, no summaries or preamble. Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string}, "review": {"status": "Evident"|"Not evident", "note": string}, "sources": string[]}], "folderWarnings": ["optional one-sentence warnings about mis-filed documents"]}.`;
 
-  const DOC_CAP = FOLDER_DOC_CAP;
+  const DOC_CAP = BATCH_DOC_CAP;
   const truncated = docText.length > DOC_CAP;
   const truncationNote = truncated
-    ? `Some document text exceeded the ${DOC_CAP.toLocaleString()}-character audit limit even after condensing, so the last ${(docText.length - DOC_CAP).toLocaleString()} characters were not read. Split this sub-criterion's evidence into smaller folders, or remove duplicates, then re-run.`
+    ? `Document text (${docText.length.toLocaleString()} chars) exceeds the ${DOC_CAP.toLocaleString()}-char per-call limit; last ${(docText.length - DOC_CAP).toLocaleString()} chars were not sent to the AI. The store-level condensing budget is ${FOLDER_DOC_CAP.toLocaleString()} chars — if docText is still larger, split this folder or remove duplicates and re-run.`
     : undefined;
   const truncationHint = truncated
     ? ` (NOTE: only the first ${DOC_CAP.toLocaleString()} of ${docText.length.toLocaleString()} characters are included below — some content is missing)`
@@ -391,24 +408,65 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
   return { verdicts, parseWarnings, truncationNote, folderWarnings, usage };
 }
 
+// Outcome type for runBatchWithRetry — either a successful result or a record
+// of which lines failed so placeholders can be inserted without losing the
+// verdicts from all the OTHER batches that succeeded.
+type BatchOutcome =
+  | { ok: true; result: FolderAuditResult; batchLines: { id: string; text: string }[] }
+  | { ok: false; batchLines: { id: string; text: string }[]; error: string };
+
+// Runs a single batch with up to AUDIT_BATCH_MAX_RETRIES retries on timeout or
+// transient server errors. Auth/bad-request errors are not retried (permanent).
+// Returns a BatchOutcome rather than throwing so the caller can collect partial
+// results from the other concurrent batches.
+async function runBatchWithRetry(
+  batchLines: { id: string; text: string }[],
+  docText: string,
+  settings: AISettings,
+  batchOpts: FolderAuditOpts
+): Promise<BatchOutcome> {
+  let lastError = "";
+  for (let attempt = 0; attempt <= AUDIT_BATCH_MAX_RETRIES; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, AUDIT_BATCH_RETRY_DELAY_MS));
+    try {
+      const result = await runLiveFolderAuditBatch(batchLines, docText, settings, batchOpts);
+      return { ok: true, result, batchLines };
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      // Only retry transient failures. Auth / bad-request are permanent.
+      const retryable =
+        err instanceof AIClientError &&
+        (lastError.includes("timed out") || /50[0-9]/.test(lastError));
+      if (!retryable || attempt >= AUDIT_BATCH_MAX_RETRIES) break;
+    }
+  }
+  return { ok: false, batchLines, error: lastError };
+}
+
+// Placeholder verdicts inserted for lines whose batch exhausted retries so the
+// rest of the audit result is not discarded. These are clearly marked and show
+// "Not met" conservatively — the auditor is prompted to re-run.
+function placeholderVerdicts(batchLines: { id: string; text: string }[]): FolderAuditLineVerdict[] {
+  return batchLines.map((l) => ({
+    lineId: l.id,
+    status: "Not met" as const,
+    reason: "AI audit timed out for this line — result unavailable. Re-run the audit to try again.",
+    sources: [],
+    apsr: {
+      approach: { status: "Not evident" as const, note: "Audit timed out — no verdict available. Re-run the audit." },
+      processes: { status: "Not evident" as const, note: "" },
+      systemsOutcomes: { status: "Not evident" as const, note: "" },
+      review: { status: "Not evident" as const, note: "" },
+    },
+  }));
+}
+
 export async function runLiveFolderAudit(
   lines: { id: string; text: string }[],
   docText: string,
   settings: AISettings,
   opts: FolderAuditOpts = {}
 ): Promise<FolderAuditResult> {
-  // Small audit (≤ AUDIT_BATCH_SIZE lines): single call — no overhead.
-  if (lines.length <= AUDIT_BATCH_SIZE) {
-    opts.onBatchProgress?.(0, 1);
-    const result = await runLiveFolderAuditBatch(lines, docText, settings, opts);
-    opts.onBatchProgress?.(1, 1);
-    return result;
-  }
-
-  // Large audit: split lines into batches and run them all in parallel.
-  // Each batch has a small output (~8 verdicts ≈ 1,600 tokens) so it finishes
-  // well within AUDIT_BATCH_TIMEOUT_MS. Total elapsed ≈ time of one batch
-  // rather than N × one batch.
   const batches: { id: string; text: string }[][] = [];
   for (let i = 0; i < lines.length; i += AUDIT_BATCH_SIZE) {
     batches.push(lines.slice(i, i + AUDIT_BATCH_SIZE));
@@ -417,7 +475,19 @@ export async function runLiveFolderAudit(
   opts.onBatchProgress?.(0, batches.length);
   let completed = 0;
 
-  const results = await Promise.all(
+  // Single batch: propagate errors to the store's existing catch block.
+  // Retry still applies via runBatchWithRetry.
+  if (batches.length === 1) {
+    const outcome = await runBatchWithRetry(lines, docText, settings, opts);
+    opts.onBatchProgress?.(1, 1);
+    if (!outcome.ok) throw new AIClientError(outcome.error);
+    return outcome.result;
+  }
+
+  // Multi-batch: run all in parallel, but resilient — a single timeout does
+  // NOT cancel sibling batches. Each failed batch gets placeholder verdicts so
+  // the completed work from other batches is not discarded.
+  const outcomes = await Promise.all(
     batches.map(async (batchLines) => {
       // For the challenge pass, only surface prior verdicts that belong to the
       // lines in THIS batch — sending irrelevant verdicts wastes tokens and
@@ -426,22 +496,30 @@ export async function runLiveFolderAudit(
       const batchOpts: FolderAuditOpts = opts.challenge
         ? { ...opts, challenge: opts.challenge.filter((c) => batchLineIds.has(c.lineId)) }
         : opts;
-      const result = await runLiveFolderAuditBatch(batchLines, docText, settings, batchOpts);
+      const outcome = await runBatchWithRetry(batchLines, docText, settings, batchOpts);
       opts.onBatchProgress?.(++completed, batches.length);
-      return result;
+      return outcome;
     })
   );
+
+  const succeeded = outcomes.filter((o): o is BatchOutcome & { ok: true } => o.ok);
+  const failed = outcomes.filter((o): o is BatchOutcome & { ok: false } => !o.ok);
+  const timedOutLineIds = failed.flatMap((o) => o.batchLines.map((l) => l.id));
 
   // Merge: verdicts and warnings flatten; truncationNote is shared (all batches
   // see the same docText, so truncation either fires in all or none);
   // folderWarnings deduplicated because every batch sees the same documents and
   // would emit the same mis-filing warning independently; usage summed.
   return {
-    verdicts: results.flatMap((r) => r.verdicts),
-    parseWarnings: results.flatMap((r) => r.parseWarnings),
-    truncationNote: results.find((r) => r.truncationNote)?.truncationNote,
-    folderWarnings: [...new Set(results.flatMap((r) => r.folderWarnings))],
-    usage: results.reduce<AIUsage | undefined>((acc, r) => addUsage(acc, r.usage), undefined),
+    verdicts: [
+      ...succeeded.flatMap((o) => o.result.verdicts),
+      ...failed.flatMap((o) => placeholderVerdicts(o.batchLines)),
+    ],
+    parseWarnings: succeeded.flatMap((o) => o.result.parseWarnings),
+    truncationNote: succeeded.find((o) => o.result.truncationNote)?.result.truncationNote,
+    folderWarnings: [...new Set(succeeded.flatMap((o) => o.result.folderWarnings))],
+    usage: succeeded.reduce<AIUsage | undefined>((acc, o) => addUsage(acc, o.result.usage), undefined),
+    timedOutLineIds: timedOutLineIds.length ? timedOutLineIds : undefined,
   };
 }
 
