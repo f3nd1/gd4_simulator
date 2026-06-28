@@ -273,6 +273,17 @@ export type FolderAuditOpts = {
 // folders, while still covering more content than any single policy document.
 export const FOLDER_DOC_CAP = 32000;
 
+// Per-batch timeout: each individual OpenAI call in a folder audit gets 120 s
+// (up from the global 90 s default). With batching, the TOTAL elapsed time is
+// ~20-30 s (batches run in parallel), so the per-batch ceiling can be generous
+// without making the overall audit feel slow.
+const AUDIT_BATCH_TIMEOUT_MS = 120_000;
+
+// Maximum checklist lines per audit call. 8 lines → ~1,600 output tokens →
+// finishes in ~15-25 s. A 30-line audit splits into 4 parallel batches, all
+// completing before the 120 s per-batch ceiling is reached.
+const AUDIT_BATCH_SIZE = 8;
+
 export type FolderAuditResult = {
   verdicts: FolderAuditLineVerdict[];
   parseWarnings: string[];
@@ -284,11 +295,14 @@ export type FolderAuditResult = {
   usage?: AIUsage;
 };
 
-export async function runLiveFolderAudit(
+// One chatComplete call for a single batch of lines against the same docText.
+// Shared prompt construction (system + user) is identical across batches so
+// the model sees the same documents for every line it assesses.
+async function runLiveFolderAuditBatch(
   lines: { id: string; text: string }[],
   docText: string,
   settings: AISettings,
-  opts: FolderAuditOpts = {}
+  opts: FolderAuditOpts
 ): Promise<FolderAuditResult> {
   const strictness = opts.strictness || "Standard";
   // APSR assessment using the official EduTrust Scoring Rubric dimensions
@@ -324,7 +338,11 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
     .join("\n")}`;
 
   let usage: AIUsage | undefined;
-  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { onUsage: (u) => { usage = addUsage(usage, u); } });
+  const content = await chatComplete(
+    [{ role: "system", content: system }, { role: "user", content: user }],
+    settings,
+    { onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS },
+  );
   const arr = parseJSONArray(content);
   // Extract optional folderWarnings from the same response object (backward
   // compatible — older/simpler model responses that return a plain array won't
@@ -368,6 +386,52 @@ For every non-empty claim cite the specific source file(s) (by their "--- path -
   });
 
   return { verdicts, parseWarnings, truncationNote, folderWarnings, usage };
+}
+
+export async function runLiveFolderAudit(
+  lines: { id: string; text: string }[],
+  docText: string,
+  settings: AISettings,
+  opts: FolderAuditOpts = {}
+): Promise<FolderAuditResult> {
+  // Small audit (≤ AUDIT_BATCH_SIZE lines): single call — no overhead.
+  if (lines.length <= AUDIT_BATCH_SIZE) {
+    return runLiveFolderAuditBatch(lines, docText, settings, opts);
+  }
+
+  // Large audit: split lines into batches and run them all in parallel.
+  // Each batch has a small output (~8 verdicts ≈ 1,600 tokens) so it finishes
+  // well within AUDIT_BATCH_TIMEOUT_MS. Total elapsed ≈ time of one batch
+  // rather than N × one batch.
+  const batches: { id: string; text: string }[][] = [];
+  for (let i = 0; i < lines.length; i += AUDIT_BATCH_SIZE) {
+    batches.push(lines.slice(i, i + AUDIT_BATCH_SIZE));
+  }
+
+  const results = await Promise.all(
+    batches.map((batchLines) => {
+      // For the challenge pass, only surface prior verdicts that belong to the
+      // lines in THIS batch — sending irrelevant verdicts wastes tokens and
+      // confuses the model about which lines it should re-examine.
+      const batchLineIds = new Set(batchLines.map((l) => l.id));
+      const batchOpts: FolderAuditOpts = opts.challenge
+        ? { ...opts, challenge: opts.challenge.filter((c) => batchLineIds.has(c.lineId)) }
+        : opts;
+      return runLiveFolderAuditBatch(batchLines, docText, settings, batchOpts);
+    })
+  );
+
+  // Merge: verdicts and warnings flatten; truncationNote is shared (all batches
+  // see the same docText, so truncation either fires in all or none);
+  // folderWarnings deduplicated because every batch sees the same documents and
+  // would emit the same mis-filing warning independently; usage summed.
+  return {
+    verdicts: results.flatMap((r) => r.verdicts),
+    parseWarnings: results.flatMap((r) => r.parseWarnings),
+    truncationNote: results.find((r) => r.truncationNote)?.truncationNote,
+    folderWarnings: [...new Set(results.flatMap((r) => r.folderWarnings))],
+    usage: results.reduce<AIUsage | undefined>((acc, r) => addUsage(acc, r.usage), undefined),
+  };
 }
 
 // Cross-criterion strategic analysis: synthesises criterion bands, open

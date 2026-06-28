@@ -98,10 +98,10 @@ export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs
 // Retries a fetch for 429 (rate-limit) and 5xx (transient server errors) with
 // exponential backoff. Returns the final Response even on exhaustion so the
 // caller can surface the status; only throws on network-level errors.
-async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 3): Promise<Response> {
+async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 3, timeoutMs?: number): Promise<Response> {
   let delay = 2000;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const res = await fetchWithTimeout(url, init);
+    const res = await fetchWithTimeout(url, init, timeoutMs);
     // Success, or a definitive client error (bad request / auth) — stop immediately.
     if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) return res;
     if (attempt < maxAttempts - 1) {
@@ -140,7 +140,7 @@ export async function listModels(apiKey: string): Promise<string[]> {
 export async function chatComplete(
   messages: AIChatMessage[],
   settings: AISettings,
-  opts?: { temperature?: number; onUsage?: (u: AIUsage) => void }
+  opts?: { temperature?: number; onUsage?: (u: AIUsage) => void; timeoutMs?: number }
 ): Promise<string> {
   if (!settings.enabled) throw new AIClientError("AI integration is disabled in Settings.");
   if (!settings.apiKey) throw new AIClientError("No OpenAI API key configured in Settings.");
@@ -161,7 +161,7 @@ export async function chatComplete(
       Authorization: `Bearer ${settings.apiKey}`,
     },
     body: JSON.stringify(body),
-  });
+  }, 3, opts?.timeoutMs);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
