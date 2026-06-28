@@ -522,17 +522,54 @@ export type EvidenceChunk = {
   evidenceType: "Policy/Procedure" | "Implementation Record" | "Outcome Data" | "Review Evidence" | "Other";
 };
 
+// --- Staged audit coverage matrices ---
+// Each stage of the new staged folder audit produces a coverage matrix:
+// Stage 2 → policyCoverageMatrix, Stage 3 → evidenceCoverageMatrix,
+// Stage 4 → outcomeReviewMatrix. Each row maps to one FlatAuditPoint.ref.
+
+export type StagedCoverageStatus = "Yes" | "Partial" | "No";
+
+export type PolicyCoverageRow = {
+  ref: string;
+  pointText: string;
+  covered: StagedCoverageStatus;
+  note: string;
+  chunkIds: string[];
+};
+
+export type EvidenceCoverageRow = {
+  ref: string;
+  pointText: string;
+  covered: StagedCoverageStatus;
+  note: string;
+  chunkIds: string[];
+};
+
+export type OutcomeReviewRow = {
+  ref: string;
+  pointText: string;
+  outcomeEvident: boolean;
+  reviewEvident: boolean;
+  note: string;
+  chunkIds: string[];
+};
+
 // Live progress state emitted during an Evidence Folder audit. Updated
 // frequently (per-file, per-batch) so the UI can show a polished step
 // indicator and progress bar rather than a plain "Auditing…" label.
 export type AuditProgressStage =
-  | "listing"     // listing Drive folder contents
-  | "reading"     // extracting text / describing images
-  | "condensing"  // summarising large documents with the utility model
-  | "auditing"    // running AI verdict batches
-  | "saving"      // writing verdicts to the checklist store
-  | "complete"    // all done — results written
-  | "error";      // terminated by an error
+  | "listing"           // listing Drive folder contents
+  | "reading"           // extracting text / describing images
+  | "condensing"        // summarising large documents with the utility model
+  | "auditing"          // running AI verdict batches (single-pass)
+  | "policy_audit"      // Stage 2: AI policy adequacy check (staged flow)
+  | "evidence_audit"    // Stage 3: AI evidence implementation check (staged flow)
+  | "outcome_review"    // Stage 4: AI outcome & review check (staged flow)
+  | "apsr_build"        // Stage 5: deterministic APSR verdict builder (staged flow)
+  | "saving"            // writing verdicts to the checklist store
+  | "findings_summary"  // Stage 7: findings summary (staged flow)
+  | "complete"          // all done — results written
+  | "error";            // terminated by an error
 
 export type AuditProgressState = {
   folderId: string;

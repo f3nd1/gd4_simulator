@@ -34,14 +34,14 @@ import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit, deriveApsrStatus, type FolderAuditLineVerdict } from "../lib/ai/simulateAI";
-import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP } from "../lib/ai/agentRuntime";
+import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP, runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr, simulateStagedPolicyAudit, simulateStagedEvidenceAudit, simulateStagedOutcomeReview } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow } from "../types";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
@@ -317,6 +317,9 @@ export type WorkspaceState = {
   // overallProgress (optional): position within an "Audit All" run, used by
   // the progress panel to show "3 of 24".
   auditFolderContents: (id: string, extraContext?: string, overallProgress?: { current: number; total: number }) => Promise<void>;
+  // Staged audit: three focused AI passes (policy → evidence → outcome/review)
+  // with a deterministic APSR verdict builder. Mode controls which stages run.
+  auditFolderStaged: (id: string, mode: "policy" | "evidence" | "all", extraContext?: string, overallProgress?: { current: number; total: number }) => Promise<void>;
   // One-click "audit every folder that has a link" used by the Dashboard.
   // bulkAuditStatus carries human-readable progress ("Auditing 3/24 …") while
   // it runs, and is null when idle.
@@ -2167,6 +2170,529 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `Audit failed unexpectedly — ${msg}`, lastAuditLive: false, lastAuditError: msg } : f)),
             busy: null,
           }));
+        }
+      },
+
+      auditFolderStaged: async (id, mode, extraContext, overallProgress) => {
+        const s = get();
+        const folder = s.folders.find((f) => f.id === id);
+        if (!folder) return;
+        set({ busy: "folderaudit" + id });
+        const capturedToken = get().auditRunToken;
+        const scope: AuditScope = mode === "policy" ? "policy" : mode === "evidence" ? "evidence" : "both";
+
+        const setProgress = (stage: AuditProgressState["stage"], extra?: Partial<AuditProgressState>) => {
+          set((st) => {
+            const prev = st.auditProgress?.folderId === id ? st.auditProgress : {};
+            return {
+              auditProgress: {
+                ...prev,
+                folderId: id,
+                folderName: folder.folderName,
+                subCriterionId: folder.subCriterionId,
+                overallCurrent: overallProgress?.current,
+                overallTotal: overallProgress?.total,
+                stage,
+                currentFileName: undefined,
+                currentFileBucket: undefined,
+                currentFileAction: undefined,
+                stageDetail: undefined,
+                errorMessage: undefined,
+                ...extra,
+              } as AuditProgressState,
+            };
+          });
+        };
+
+        let auditHadError = false;
+        const auditStartedAt = Date.now();
+        setProgress("listing", { stageDetail: "Loading GD4 audit points…", status: "running", canCancel: true, startedAt: auditStartedAt, lastHeartbeatAt: auditStartedAt });
+
+        try {
+        const runId = makeRunId(folder.subCriterionId);
+        let newestModified: string | undefined;
+
+        const actingAuditor = s.auditors.find((a) => a.id === get().activeAuditorId) || s.auditors.find((a) => a.role === "Audit Lead") || s.auditors[0];
+        const auditorName = actingAuditor?.name || "Unassigned";
+        const auditorStrictness = actingAuditor ? strictnessFromScore(actingAuditor.strictness) : undefined;
+        const auditorLabel = actingAuditor ? `${auditorName} (strictness: ${auditorStrictness})` : auditorName;
+
+        const finish = (summary: string, live: boolean, liveError?: string, usage?: AIUsage, auxUsage?: AIUsage) => {
+          const log: AIReviewLogEntry = {
+            id: `LOG-${Date.now()}-${++logCounter}`,
+            auditCycleId: s.cycle.id,
+            agent: "Staged Audit Assistant",
+            reviewType: "Evidence",
+            subjectId: folder.subCriterionId,
+            verdict: summary,
+            confidence: "Medium",
+            keyConcerns: [summary],
+            recommendedAction: "Spot-check the auto-set checklist lines against the source documents.",
+            live,
+            liveError,
+            generatedContent: summary,
+            createdAt: new Date().toISOString(),
+            runId,
+            model: usage?.model,
+            promptTokens: usage?.promptTokens,
+            completionTokens: usage?.completionTokens,
+            totalTokens: (usage?.totalTokens || 0) + (auxUsage?.totalTokens || 0) || undefined,
+          };
+          const terminalStage = (auditHadError || liveError) ? "error" : "complete";
+          set((st) => ({
+            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `[Staged] ${summary}`, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel } : f)),
+            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
+            busy: null,
+            auditProgress: st.auditProgress?.folderId === id
+              ? { ...st.auditProgress, stage: terminalStage, stageDetail: undefined, errorMessage: liveError }
+              : st.auditProgress,
+          }));
+        };
+
+        const evidenceId = parseFolderId(folder.folderLink);
+        const policyId = parseFolderId(folder.policyLink);
+        const token = useGoogleDriveStore.getState().getValidToken();
+        if (!evidenceId && !policyId) { auditHadError = true; finish("No Drive folder linked.", false); return; }
+        if (!token) { auditHadError = true; finish("Not connected to Google Drive.", false); return; }
+
+        const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === folder.subCriterionId);
+        if (items.length === 0) { auditHadError = true; finish("No GD4 items map to this sub-criterion.", false); return; }
+
+        // Stage 1: Load FlatAuditPoints
+        const allAuditPoints: FlatAuditPoint[] = items.flatMap((item) => item.flatAuditPoints ?? []);
+        if (allAuditPoints.length === 0) {
+          auditHadError = true;
+          finish("No flat audit points found for this sub-criterion. Run validate:gd4 to check data integrity.", false);
+          return;
+        }
+
+        // Auto-generate checklist lines if missing
+        for (const item of items) {
+          const existing = useChecklistModuleStore.getState().entries[item.id];
+          if (!existing || existing.specific.length === 0) {
+            try { await useChecklistModuleStore.getState().generateSpecific(item.id); useChecklistModuleStore.getState().confirmGenerated(item.id); } catch { /* non-fatal */ }
+          }
+        }
+        const checklistEntries = useChecklistModuleStore.getState().entries;
+        const lineOwners = new Map<string, string>();
+        const lines: { id: string; text: string; sourceRef?: string }[] = [];
+        for (const item of items) {
+          const entry = checklistEntries[item.id];
+          if (!entry) continue;
+          for (const line of entry.specific) {
+            lines.push({ id: line.id, text: line.text, sourceRef: line.sourceRef });
+            lineOwners.set(line.id, item.id);
+          }
+        }
+        if (lines.length === 0) { auditHadError = true; finish("No checklist lines found.", false); return; }
+
+        // Gather and read files (same file reading code as auditFolderContents)
+        type TaggedFile = Awaited<ReturnType<typeof listFolderFilesRecursive>>[number] & { bucket: "policy" | "evidence" | "auto" };
+        const taggedFiles: TaggedFile[] = [];
+        const listErrors: string[] = [];
+        const gather = async (fid: string | null, bucket: TaggedFile["bucket"], label: string) => {
+          if (!fid) return;
+          try { const fs = await listFolderFilesRecursive(fid, token); for (const f of fs) taggedFiles.push({ ...f, bucket }); }
+          catch (err) { listErrors.push(`${label}: ${err instanceof Error ? err.message : String(err)}`); }
+        };
+        const sameLink = !!policyId && !!evidenceId && policyId === evidenceId;
+        if (sameLink) { await gather(evidenceId, "auto", "Folder"); }
+        else {
+          if (scope !== "evidence") await gather(policyId, "policy", "Policy & Procedure");
+          await gather(evidenceId, "evidence", policyId ? "Actual Evidence" : "Evidence");
+        }
+        for (const f of taggedFiles) { if (f.modifiedTime && (!newestModified || f.modifiedTime > newestModified)) newestModified = f.modifiedTime; }
+        if (!policyId && !sameLink) for (const f of taggedFiles) f.bucket = "auto";
+
+        if (taggedFiles.length === 0) {
+          auditHadError = true;
+          finish(listErrors.length ? `Could not list folder(s): ${listErrors.join("; ")}.` : "No files found in the linked folder(s).", false);
+          return;
+        }
+
+        let resolvedContext = extraContext;
+        if (resolvedContext === undefined) {
+          const addId = parseFolderId(get().additionalInfo.link);
+          if (addId) { try { resolvedContext = await readFolderPlainText(addId, token); } catch { resolvedContext = undefined; } }
+        }
+
+        const aiSettings = useAISettingsStore.getState();
+        const schoolCtx = composeSchoolContext(get().schoolContext);
+        const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: schoolCtx });
+        const utilitySettings = effectiveSettings(aiSettings, { purpose: "utility", context: schoolCtx });
+        const canDescribeImages = aiSettings.enabled && !!aiSettings.apiKey;
+        const MAX_IMAGES = 10;
+        let imagesDescribed = 0;
+        let auxUsage: AIUsage | undefined;
+        const scanned: string[] = [];
+        const skipped: string[] = [];
+        const failed: { path: string; reason: string }[] = [];
+
+        const fileKind = (mime: string) =>
+          mime === "application/pdf" ? "PDF" : mime.includes("wordprocessingml") ? "Word" : mime.includes("google-apps.document") ? "Google Doc"
+          : mime.includes("google-apps.spreadsheet") ? "Google Sheet" : mime === XLSX_MIME ? "Excel" : mime === XLS_MIME ? "Excel"
+          : mime === "text/csv" ? "CSV" : mime.includes("google-apps.presentation") ? "Google Slides"
+          : mime.startsWith("image/") ? "image" : "text";
+
+        const evidenceChunks: EvidenceChunk[] = [];
+        let chunkCounter = 0;
+        const inferEvidenceType = (kind: string, bucket: "policy" | "evidence", body: string): EvidenceChunk["evidenceType"] => {
+          if (bucket === "policy") return "Policy/Procedure";
+          const bl = body.toLowerCase();
+          if (/outcome|result|trend|survey|feedback|kpi|satisfaction/.test(bl)) return "Outcome Data";
+          if (/review|minute|meeting|decision|improvement/.test(bl)) return "Review Evidence";
+          if (kind === "Excel" || kind === "CSV" || kind === "Google Sheet") return "Implementation Record";
+          return "Other";
+        };
+
+        const MAX_PART_CHARS = 18_000;
+        let policyDocParts: string[] = [];
+        let evidenceDocParts: string[] = [];
+        const fileRecords: AuditFileRecord[] = taggedFiles.map((file) => ({
+          path: file.path, name: file.path.split("/").pop() || file.path, mimeType: file.mimeType,
+          fileKind: fileKind(file.mimeType), bucket: file.bucket, readStatus: "found" as const, auditStatus: "pending" as const,
+          driveFileId: file.id, driveModifiedTime: file.modifiedTime,
+        }));
+        const filesTotal = taggedFiles.length;
+
+        setProgress("reading", { filesTotal, filesRead: 0, filesSkipped: 0, filesFound: [...fileRecords], stageDetail: `Reading file 1 of ${filesTotal}…`, status: "running", canCancel: true, lastHeartbeatAt: Date.now() });
+
+        const FILE_TEXT_TIMEOUT_MS = 30_000;
+        const FILE_IMAGE_TIMEOUT_MS = 45_000;
+        for (let fi = 0; fi < taggedFiles.length; fi++) {
+          if (get().auditRunToken !== capturedToken) break;
+          const file = taggedFiles[fi];
+          const isImage = IMAGE_MIME_TYPES.has(file.mimeType);
+          const isPolicy = file.bucket === "policy" || (file.bucket === "auto" && classifyFileBucket(file.path) === "policy");
+          const resolvedBucket: "policy" | "evidence" = isPolicy ? "policy" : "evidence";
+          fileRecords[fi] = { ...fileRecords[fi], readStatus: "reading" };
+          setProgress("reading", { filesTotal, filesRead: fi, filesSkipped: skipped.length, filesFound: [...fileRecords], stageDetail: `Reading file ${fi + 1} of ${filesTotal}: ${file.path.split("/").pop() || file.path}`, lastHeartbeatAt: Date.now(), canSkipCurrentFile: true });
+
+          const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
+          const cachedEntry = get().fileTextCache[cacheKey];
+          if (cachedEntry) {
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: cachedEntry.charCount, processingMode: "reused", ...(cachedEntry.pdfQuality ? { suspectedScannedPdf: cachedEntry.pdfQuality.suspectedScannedPdf, extractedTextQuality: cachedEntry.pdfQuality.extractedTextQuality } : {}) };
+            if (cachedEntry.text !== null) {
+              scanned.push(file.path);
+              const body = cachedEntry.text;
+              const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
+              for (let pi = 0; pi < totalParts; pi++) {
+                const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+                const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
+                const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
+                evidenceChunks.push({ chunkId, filePath: file.path, fileName: file.path.split("/").pop() || file.path, bucket: resolvedBucket, fileKind: cachedEntry.fileKind, text: chunkBody, charCount: chunkBody.length, evidenceType: inferEvidenceType(cachedEntry.fileKind, resolvedBucket, chunkBody) });
+                fileRecords[fi] = { ...fileRecords[fi], chunkIds: [...(fileRecords[fi].chunkIds || []), chunkId] };
+                const part = `[CHUNK:${chunkId}] --- ${file.path}${partLabel} [${cachedEntry.fileKind}] ---\n${chunkBody}`;
+                if (isPolicy) policyDocParts.push(part); else evidenceDocParts.push(part);
+              }
+            } else {
+              skipped.push(file.path);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped" };
+            }
+            setProgress("reading", { filesTotal, filesRead: fi + 1, filesSkipped: skipped.length, filesFound: [...fileRecords], lastHeartbeatAt: Date.now() });
+            continue;
+          }
+
+          const fileAbort = new AbortController();
+          const fileTimeoutMs = isImage ? FILE_IMAGE_TIMEOUT_MS : FILE_TEXT_TIMEOUT_MS;
+          let fileTimeoutTimer: ReturnType<typeof setTimeout>;
+          const timeoutPromise = new Promise<never>((_, reject) => { fileTimeoutTimer = setTimeout(() => { fileAbort.abort(); reject(new Error("FILE_TIMEOUT")); }, fileTimeoutMs); });
+          _currentFileAbort = () => { clearTimeout(fileTimeoutTimer); fileAbort.abort(); };
+
+          type FileReadResult = { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality> } | { kind: "image"; description: string } | { kind: "skip" };
+          const readPromise = (async (): Promise<FileReadResult> => {
+            const text = await exportFileText(file, token, fileAbort.signal);
+            if (text !== null) {
+              let pdfQuality: ReturnType<typeof classifyPdfTextQuality> | undefined;
+              if (file.mimeType === "application/pdf") pdfQuality = classifyPdfTextQuality(text);
+              return { kind: "text", text, pdfQuality };
+            }
+            if (isImage && canDescribeImages && imagesDescribed < MAX_IMAGES) {
+              imagesDescribed++;
+              const dataUrl = await exportFileImageDataUrl(file, token, fileAbort.signal);
+              const description = await describeImage(dataUrl, utilitySettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
+              return { kind: "image", description };
+            }
+            return { kind: "skip" };
+          })();
+
+          let fileResult: FileReadResult;
+          try {
+            fileResult = await Promise.race([readPromise, timeoutPromise]);
+            clearTimeout(fileTimeoutTimer!);
+            _currentFileAbort = null;
+          } catch (err) {
+            clearTimeout(fileTimeoutTimer!);
+            _currentFileAbort = null;
+            const wasAborted = fileAbort.signal.aborted;
+            if (wasAborted || (err instanceof Error && err.message === "FILE_TIMEOUT")) {
+              skipped.push(file.path);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: wasAborted ? "Skipped by user" : `Timed out after ${fileTimeoutMs / 1000}s` };
+              setProgress("reading", { filesFound: [...fileRecords], filesSkipped: skipped.length });
+              continue;
+            }
+            if (err instanceof DriveApiError && err.status === 503) { skipped.push(file.path); fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: "Drive temporarily unavailable" }; setProgress("reading", { filesFound: [...fileRecords], filesSkipped: skipped.length }); continue; }
+            failed.push({ path: file.path, reason: err instanceof Error ? err.message : String(err) });
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "failed", failReason: err instanceof Error ? err.message : String(err) };
+            setProgress("reading", { filesFound: [...fileRecords] });
+            continue;
+          }
+
+          switch (fileResult.kind) {
+            case "text": {
+              const body = fileResult.text;
+              scanned.push(file.path);
+              const kind = fileKind(file.mimeType);
+              set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: kind, ...(fileResult.kind === "text" && fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}) } } }));
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}) };
+              const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
+              for (let pi = 0; pi < totalParts; pi++) {
+                const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+                const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
+                const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
+                evidenceChunks.push({ chunkId, filePath: file.path, fileName: file.path.split("/").pop() || file.path, bucket: resolvedBucket, fileKind: kind, text: chunkBody, charCount: chunkBody.length, evidenceType: inferEvidenceType(kind, resolvedBucket, chunkBody) });
+                fileRecords[fi] = { ...fileRecords[fi], chunkIds: [...(fileRecords[fi].chunkIds || []), chunkId] };
+                const part = `[CHUNK:${chunkId}] --- ${file.path}${partLabel} [${kind}] ---\n${chunkBody}`;
+                if (isPolicy) policyDocParts.push(part); else evidenceDocParts.push(part);
+              }
+              break;
+            }
+            case "image": {
+              scanned.push(file.path);
+              const desc = fileResult.description;
+              set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: desc, charCount: desc.length, fileKind: "image" } } }));
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: desc.length, processingMode: "new" };
+              const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
+              evidenceChunks.push({ chunkId, filePath: file.path, fileName: file.path.split("/").pop() || file.path, bucket: resolvedBucket, fileKind: "image", text: desc, charCount: desc.length, evidenceType: "Other" });
+              fileRecords[fi] = { ...fileRecords[fi], chunkIds: [...(fileRecords[fi].chunkIds || []), chunkId] };
+              const part = `[CHUNK:${chunkId}] --- ${file.path} [image] ---\n${desc}`;
+              if (isPolicy) policyDocParts.push(part); else evidenceDocParts.push(part);
+              break;
+            }
+            case "skip":
+              skipped.push(file.path);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped" };
+              break;
+          }
+          setProgress("reading", { filesTotal, filesRead: fi + 1, filesSkipped: skipped.length, filesFound: [...fileRecords], lastHeartbeatAt: Date.now() });
+        }
+
+        if (get().auditRunToken !== capturedToken) {
+          set((st) => ({ busy: null, folders: st.folders.map((f) => f.id === id ? { ...f, lastAuditSummary: "Audit was cancelled." } : f), auditProgress: st.auditProgress?.folderId === id ? { ...st.auditProgress, stage: "complete" } : st.auditProgress }));
+          return;
+        }
+
+        const policyDocText = policyDocParts.join("\n\n=== POLICY & PROCEDURE ===\n\n") || "";
+        const evidenceDocText = evidenceDocParts.join("\n\n=== ACTUAL EVIDENCE ===\n\n") || "";
+        const allDocText = [policyDocText, evidenceDocText].filter(Boolean).join("\n\n");
+
+        if (!allDocText.trim()) {
+          auditHadError = true;
+          finish("No readable content extracted from the linked folder(s). Check that the files are not empty or unsupported.", false);
+          return;
+        }
+
+        // Coverage matrices — populated by staged AI calls
+        let policyRows: PolicyCoverageRow[] = [];
+        let evidenceRows: EvidenceCoverageRow[] = [];
+        let outcomeRows: OutcomeReviewRow[] = [];
+        let live = false;
+        let auditUsage: AIUsage | undefined;
+
+        const criterionId = folder.subCriterionId;
+
+        if (aiSettings.enabled && aiSettings.apiKey) {
+          // Stage 2: Policy Adequacy Audit
+          if (mode === "policy" || mode === "all") {
+            setProgress("policy_audit", { stageDetail: `Checking policy coverage for ${allAuditPoints.length} audit points…`, canCancel: true });
+            try {
+              const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, { criterionId });
+              policyRows = result.rows;
+              auditUsage = addUsage(auditUsage, result.usage);
+            } catch (err) {
+              // Fallback to offline estimate
+              policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);
+            }
+          } else {
+            // Mode = "evidence": skip policy stage, default all to "No" (unknown)
+            policyRows = allAuditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as const, note: "Policy stage not run in evidence-only mode.", chunkIds: [] }));
+          }
+
+          // Stage 3: Evidence Implementation Audit
+          if (mode === "evidence" || mode === "all") {
+            setProgress("evidence_audit", { stageDetail: `Checking implementation evidence for ${allAuditPoints.length} audit points…`, canCancel: true });
+            try {
+              const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, { criterionId });
+              evidenceRows = result.rows;
+              auditUsage = addUsage(auditUsage, result.usage);
+            } catch (err) {
+              evidenceRows = simulateStagedEvidenceAudit(allAuditPoints, evidenceDocText);
+            }
+          } else {
+            evidenceRows = allAuditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as const, note: "Evidence stage not run in policy-only mode.", chunkIds: [] }));
+          }
+
+          // Stage 4: Outcome & Review Audit (full audit only)
+          if (mode === "all") {
+            setProgress("outcome_review", { stageDetail: `Checking outcome data and review records for ${allAuditPoints.length} audit points…`, canCancel: true });
+            try {
+              const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, { criterionId });
+              outcomeRows = result.rows;
+              auditUsage = addUsage(auditUsage, result.usage);
+            } catch (err) {
+              outcomeRows = simulateStagedOutcomeReview(allAuditPoints, allDocText);
+            }
+          } else {
+            outcomeRows = allAuditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "Outcome/review stage not run in policy/evidence-only mode.", chunkIds: [] }));
+          }
+          live = true;
+        } else {
+          // Offline fallback
+          policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);
+          evidenceRows = simulateStagedEvidenceAudit(allAuditPoints, evidenceDocText);
+          outcomeRows = simulateStagedOutcomeReview(allAuditPoints, allDocText);
+        }
+
+        if (get().auditRunToken !== capturedToken) {
+          set((st) => ({ busy: null, auditProgress: st.auditProgress?.folderId === id ? { ...st.auditProgress, stage: "complete" } : st.auditProgress }));
+          return;
+        }
+
+        // Stage 5: Deterministic APSR Verdict Builder
+        setProgress("apsr_build", { stageDetail: "Building APSR verdicts from coverage matrices…" });
+        const policyByRef = new Map(policyRows.map((r) => [r.ref, r]));
+        const evidenceByRef = new Map(evidenceRows.map((r) => [r.ref, r]));
+        const outcomeByRef = new Map(outcomeRows.map((r) => [r.ref, r]));
+
+        // Overall coverage for lines without sourceRef
+        const policyOverall: "Yes" | "Partial" | "No" =
+          policyRows.filter((r) => r.covered === "Yes").length >= policyRows.length / 2 ? "Yes" :
+          policyRows.some((r) => r.covered !== "No") ? "Partial" : "No";
+        const evidenceOverall: "Yes" | "Partial" | "No" =
+          evidenceRows.filter((r) => r.covered === "Yes").length >= evidenceRows.length / 2 ? "Yes" :
+          evidenceRows.some((r) => r.covered !== "No") ? "Partial" : "No";
+        const outcomeOverall = outcomeRows.some((r) => r.outcomeEvident);
+        const reviewOverall = outcomeRows.some((r) => r.reviewEvident);
+
+        type StagedVerdict = { lineId: string; apsr: ApsrBreakdown; status: "Met" | "Partial" | "Not met" };
+        const stagedVerdicts: StagedVerdict[] = lines.map((line) => {
+          const pRow = line.sourceRef ? policyByRef.get(line.sourceRef) : undefined;
+          const eRow = line.sourceRef ? evidenceByRef.get(line.sourceRef) : undefined;
+          const oRow = line.sourceRef ? outcomeByRef.get(line.sourceRef) : undefined;
+
+          // If no matching audit point, use overall coverage as fallback
+          const effectivePRow = pRow ?? { ref: "", pointText: "", covered: policyOverall, note: "Aggregated from all audit points (no direct source ref match).", chunkIds: [] };
+          const effectiveERow = eRow ?? { ref: "", pointText: "", covered: evidenceOverall, note: "Aggregated from all audit points.", chunkIds: [] };
+          const effectiveORow = oRow ?? { ref: "", pointText: "", outcomeEvident: outcomeOverall, reviewEvident: reviewOverall, note: "Aggregated from all audit points.", chunkIds: [] };
+
+          const apsr = buildStagedApsr(effectivePRow, effectiveERow, effectiveORow);
+          const status = deriveApsrStatus(apsr);
+          return { lineId: line.id, apsr, status };
+        });
+
+        // Stage 6: Write to Sub-Criterion Checklist
+        setProgress("saving", { stageDetail: `Saving ${stagedVerdicts.length} verdicts…`, linesAssessed: stagedVerdicts.length, findingsDetected: stagedVerdicts.filter((v) => v.status === "Not met").length });
+        try {
+          const checklist = useChecklistModuleStore.getState();
+          for (const v of stagedVerdicts) {
+            const itemId = lineOwners.get(v.lineId);
+            if (!itemId) continue;
+            checklist.setSpecificStatus(itemId, v.lineId, v.status);
+            const baseNote = apsrAuditNote(v.apsr);
+            const sourceLines = [`SOURCE TRACE`, `Run: ${runId} (staged audit, ${mode} mode, ${live ? "live AI" : "offline estimate"})`, `Auditor: ${auditorName}`];
+            checklist.replaceAuditEvidence(itemId, v.lineId, {
+              title: `Staged audit ${runId} — ${folder.folderName}`,
+              type: evidenceTypeFromApsr(v.apsr, lines.find((l) => l.id === v.lineId)?.text || ""),
+              drive: folder.folderLink || folder.policyLink,
+              owner: folder.owner,
+              date: new Date().toISOString().slice(0, 10),
+              approved: false,
+              reviewed: false,
+              sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
+              auditorNote: `${baseNote}\n\n${sourceLines.join("\n")}`,
+              apsr: v.apsr,
+              runId,
+            });
+          }
+        } catch (err) {
+          finish(`Staged audit failed while writing verdicts: ${err instanceof Error ? err.message : String(err)}`, live);
+          return;
+        }
+
+        const preRaiseFindingIds = new Set(get().customFindings.map((f) => f.id));
+        let autoRaised = 0;
+        try { autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings(runId); } catch { /* non-fatal */ }
+
+        // Stage 7: Findings Summary
+        setProgress("findings_summary", { stageDetail: `Found ${autoRaised} gap${autoRaised === 1 ? "" : "s"} — raising findings…` });
+        await new Promise((r) => setTimeout(r, 300)); // brief pause so stage is visible
+
+        const counts = { Met: 0, Partial: 0, "Not met": 0 } as Record<string, number>;
+        for (const v of stagedVerdicts) counts[v.status]++;
+        const stagesRun = mode === "all" ? "Policy ✓ → Evidence ✓ → Outcome/Review ✓ → APSR verdict" : mode === "policy" ? "Policy ✓ → Evidence — → APSR verdict (approach only)" : "Policy — → Evidence ✓ → APSR verdict (processes only)";
+        const policyGaps = policyRows.filter((r) => r.covered === "No").length;
+        const evidenceGaps = evidenceRows.filter((r) => r.covered === "No").length;
+        const summary = [
+          `Run ${runId} · Staged audit (${mode} mode) · Auditor: ${auditorLabel}.`,
+          `✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${stagedVerdicts.length} lines).`,
+          `Stages: ${stagesRun}.`,
+          mode !== "evidence" ? `Policy coverage: ${policyRows.length - policyGaps}/${policyRows.length} audit points covered.` : null,
+          mode !== "policy" ? `Evidence coverage: ${evidenceRows.length - evidenceGaps}/${evidenceRows.length} audit points covered.` : null,
+          autoRaised > 0 ? `Raised ${autoRaised} new finding${autoRaised === 1 ? "" : "s"}.` : null,
+          `Files read: ${scanned.length} (policy: ${policyDocParts.length > 0 ? "yes" : "none"}, evidence: ${evidenceDocParts.length > 0 ? "yes" : "none"}).`,
+        ].filter(Boolean).join("\n");
+
+        finish(summary, live, undefined, auditUsage, auxUsage);
+
+        const runRecord: AuditRunRecord = {
+          runId, folderId: id, subCriterionId: folder.subCriterionId, subCriterionTitle: folder.folderName,
+          scope, status: auditHadError ? "failed" : "completed",
+          startedAt: new Date(auditStartedAt).toISOString(), endedAt: new Date().toISOString(),
+          auditorName, auditLive: live, aiModel: auditUsage?.model,
+          fileLedger: [...fileRecords],
+          aiSummary: stagedVerdicts.map((v) => ({
+            lineId: v.lineId, lineText: lines.find((l) => l.id === v.lineId)?.text ?? v.lineId,
+            result: v.status as "Met" | "Partial" | "Not met",
+            approachStatus: v.apsr.approach.status, processesStatus: v.apsr.processes.status,
+            systemsOutcomesStatus: v.apsr.systemsOutcomes.status, reviewStatus: v.apsr.review.status,
+            citedChunkIds: [], citedFileNames: [],
+          })),
+          linesAssessed: stagedVerdicts.length, findingsDetected: counts["Not met"] as number,
+          batchCount: 3, chunkCount: evidenceChunks.length,
+        };
+        set((st) => {
+          const prev = st.auditRunHistory[id] ?? [];
+          return { auditRunHistory: { ...st.auditRunHistory, [id]: [runRecord, ...prev].slice(0, 5) }, lastAuditRuns: { ...st.lastAuditRuns, [id]: runRecord } };
+        });
+
+        if (live && autoRaised > 0) {
+          const newFindings = get().customFindings.filter((f) => !preRaiseFindingIds.has(f.id) && f.source === "Checklist");
+          if (newFindings.length > 0) {
+            (async () => {
+              const entries = useChecklistModuleStore.getState().entries;
+              await Promise.all(newFindings.map(async (finding) => {
+                try {
+                  const req = GD4_REQUIREMENTS.find((r) => r.id === finding.gd4ItemId);
+                  if (!req) return;
+                  const entry = entries[finding.gd4ItemId];
+                  const line = entry?.specific.find((l) => l.clause === finding.clause || finding.issue.startsWith(l.text.slice(0, 50)));
+                  if (!line) return;
+                  const dim = findingDimension(line);
+                  const apsr = lineApsr(line);
+                  const result = await runLiveFindingObservation(
+                    { id: req.id, requirement: req.requirement, describeShow: req.describeShow, expectedEvidence: req.expectedEvidence },
+                    { text: line.text, status: line.status }, dim, apsr, analysisSettings
+                  );
+                  get().updateCustomFinding(finding.id, { observation: result.observation, criteria: result.criteria, effect: result.effect });
+                } catch { /* non-fatal */ }
+              }));
+            })();
+          }
+        }
+
+        } catch (outerErr) {
+          const msg = outerErr instanceof Error ? outerErr.message : String(outerErr);
+          set((st) => ({ folders: st.folders.map((f) => f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `Staged audit failed — ${msg}`, lastAuditLive: false, lastAuditError: msg } : f), busy: null }));
         }
       },
 

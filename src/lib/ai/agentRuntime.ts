@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus } from "../../types";
 import { chatComplete, AIClientError, addUsage, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
@@ -826,4 +826,312 @@ export async function runCitationVerifier(
     reason: (parsed.reason as string) || "",
     usage,
   };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Staged folder audit — three focused AI stages + deterministic APSR builder.
+//
+// The key constraint: policy documents can only satisfy Approach; evidence
+// documents satisfy Processes; outcome data satisfies Systems & Outcomes; review
+// records satisfy Review. The old single-pass audit let the model decide APSR in
+// one undifferentiated call. The staged approach enforces these boundaries in code.
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type StagedPolicyAuditResult = {
+  rows: PolicyCoverageRow[];
+  usage?: AIUsage;
+};
+
+export type StagedEvidenceAuditResult = {
+  rows: EvidenceCoverageRow[];
+  usage?: AIUsage;
+};
+
+export type StagedOutcomeReviewAuditResult = {
+  rows: OutcomeReviewRow[];
+  usage?: AIUsage;
+};
+
+const STAGED_BATCH_SIZE = 8; // audit points per AI call (each is smaller than a full checklist line)
+
+function buildStagedPointsBlock(auditPoints: FlatAuditPoint[]): string {
+  return auditPoints.map((p, i) =>
+    `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}`
+  ).join("\n");
+}
+
+// Stage 2: Policy Adequacy Audit.
+// Reads POLICY documents only; checks if each FlatAuditPoint has a documented
+// approach. Does NOT look at evidence documents or outcome data.
+export async function runStagedPolicyAudit(
+  auditPoints: FlatAuditPoint[],
+  policyDocText: string,
+  settings: AISettings,
+  opts: { criterionId?: string } = {}
+): Promise<StagedPolicyAuditResult> {
+  if (auditPoints.length === 0 || !policyDocText.trim()) {
+    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No policy documents provided.", chunkIds: [] })) };
+  }
+  const domainSkill = domainExpertiseFor(opts.criterionId);
+  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+
+  const system = `You are auditing ONLY the POLICY & PROCEDURE documents for a GD4 EduTrust sub-criterion. Your task for each audit point: does this institution's policy documentation DOCUMENT an approach that addresses this requirement? You are assessing APPROACH only — not whether it is implemented, not whether outcomes are achieved.
+
+"Yes" = the policy clearly, specifically, and sustainably documents HOW the institution meets this requirement (names who, what, when, frequency, ownership).
+"Partial" = the policy mentions the requirement but is vague, generic, or incomplete — missing who owns it, missing timing, or using boilerplate language not specific to this institution.
+"No" = the policy document does not address this requirement at all.
+
+IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${skills(apsrRubricSkill, regulatoryReferencesSkill)}${domainBlock}
+
+Respond with JSON only:
+{"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
+
+  const rows: PolicyCoverageRow[] = [];
+  let usage: AIUsage | undefined;
+
+  const batches: FlatAuditPoint[][] = [];
+  for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
+    batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
+  }
+
+  const DOC_CAP = BATCH_DOC_CAP;
+  const docSlice = policyDocText.slice(0, DOC_CAP);
+
+  for (const batch of batches) {
+    const pointsBlock = buildStagedPointsBlock(batch);
+    const user = `Policy & Procedure documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for APPROACH coverage:\n${pointsBlock}`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        settings,
+        { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+      );
+      const parsed = parseJSONObject(content);
+      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+      const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+      for (const p of batch) {
+        const r = byRef.get(p.ref);
+        const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
+          ? (r!.covered as StagedCoverageStatus) : "No";
+        const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        rows.push({ ref: p.ref, pointText: p.text, covered, note: typeof r?.note === "string" ? r.note : "", chunkIds });
+      }
+    } catch {
+      // On error, default all batch points to "No"
+      for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
+    }
+  }
+  return { rows, usage };
+}
+
+// Stage 3: Evidence Implementation Audit.
+// Reads EVIDENCE documents only; checks if each FlatAuditPoint has actual
+// implementation evidence. Receives policy results so it can distinguish
+// "policy exists but not implemented" from "nothing at all".
+export async function runStagedEvidenceAudit(
+  auditPoints: FlatAuditPoint[],
+  evidenceDocText: string,
+  policyRows: PolicyCoverageRow[],
+  settings: AISettings,
+  opts: { criterionId?: string } = {}
+): Promise<StagedEvidenceAuditResult> {
+  if (auditPoints.length === 0 || !evidenceDocText.trim()) {
+    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No evidence documents provided.", chunkIds: [] })) };
+  }
+  const domainSkill = domainExpertiseFor(opts.criterionId);
+  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+  const policyByRef = new Map(policyRows.map((r) => [r.ref, r]));
+
+  const system = `You are auditing ONLY the ACTUAL EVIDENCE documents for a GD4 EduTrust sub-criterion. Your task: does the evidence show that the institution actually IMPLEMENTS each requirement in practice? You are assessing PROCESSES only — not the documented policy (assessed separately), not outcomes.
+
+"Yes" = there are real implementation records, logs, forms, screenshots, registers, or actual operational records showing this was done consistently.
+"Partial" = some implementation evidence exists but it is incomplete, covers only part of the review period, or the sample is too small to be representative.
+"No" = no implementation evidence in these documents for this requirement.
+
+IMPORTANT: A policy document, SOP, or procedure does NOT count as implementation evidence, even if it is filed in the evidence folder. Only actual records of doing something count.
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${skills(apsrRubricSkill, sampleTestingSkill, evidenceTimelinessSkill)}${domainBlock}
+
+Respond with JSON only:
+{"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
+
+  const rows: EvidenceCoverageRow[] = [];
+  let usage: AIUsage | undefined;
+  const batches: FlatAuditPoint[][] = [];
+  for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
+    batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
+  }
+  const DOC_CAP = BATCH_DOC_CAP;
+  const docSlice = evidenceDocText.slice(0, DOC_CAP);
+
+  for (const batch of batches) {
+    const pointsBlock = batch.map((p, i) => {
+      const pol = policyByRef.get(p.ref);
+      const polNote = pol ? ` [Policy adequacy: ${pol.covered}${pol.covered !== "No" ? ` — "${pol.note.slice(0, 80)}"` : ""}]` : "";
+      return `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}${polNote}`;
+    }).join("\n");
+    const user = `Actual evidence documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for IMPLEMENTATION evidence:\n${pointsBlock}`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        settings,
+        { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+      );
+      const parsed = parseJSONObject(content);
+      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+      const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+      for (const p of batch) {
+        const r = byRef.get(p.ref);
+        const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
+          ? (r!.covered as StagedCoverageStatus) : "No";
+        const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        rows.push({ ref: p.ref, pointText: p.text, covered, note: typeof r?.note === "string" ? r.note : "", chunkIds });
+      }
+    } catch {
+      for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
+    }
+  }
+  return { rows, usage };
+}
+
+// Stage 4: Outcome & Review Audit.
+// Reads ALL documents; checks for outcome data (Systems & Outcomes) and
+// review/improvement records (Review). Both outcomes and review are assessed
+// together in one call since they both require looking at all documents.
+export async function runStagedOutcomeReviewAudit(
+  auditPoints: FlatAuditPoint[],
+  allDocText: string,
+  settings: AISettings,
+  opts: { criterionId?: string } = {}
+): Promise<StagedOutcomeReviewAuditResult> {
+  if (auditPoints.length === 0 || !allDocText.trim()) {
+    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "No documents provided.", chunkIds: [] })) };
+  }
+  const domainSkill = domainExpertiseFor(opts.criterionId);
+  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+
+  const system = `You are auditing ALL documents (policy and evidence combined) for outcome data and review/improvement records for a GD4 EduTrust sub-criterion. For each audit point assess:
+
+outcomeEvident: true if there is actual outcome data, KPIs, results, trends, survey data, or performance measurements for this requirement — not just a statement that outcomes will be tracked. The data must cover the review period, name targets or results, and show actual numbers or trends.
+
+reviewEvident: true if there are records of a formal review of this requirement's effectiveness — meeting minutes with agenda item, management review records, improvement actions triggered by data review, or evaluation reports. A policy that says "we will review annually" is NOT evidence of a review having happened.
+
+Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${skills(apsrRubricSkill, benchmarkingSkill, evidenceTimelinessSkill)}${domainBlock}
+
+Respond with JSON only:
+{"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;
+
+  const rows: OutcomeReviewRow[] = [];
+  let usage: AIUsage | undefined;
+  const batches: FlatAuditPoint[][] = [];
+  for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
+    batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
+  }
+  const DOC_CAP = BATCH_DOC_CAP;
+  const docSlice = allDocText.slice(0, DOC_CAP);
+
+  for (const batch of batches) {
+    const pointsBlock = buildStagedPointsBlock(batch);
+    const user = `All documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for OUTCOME DATA and REVIEW RECORDS:\n${pointsBlock}`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        settings,
+        { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+      );
+      const parsed = parseJSONObject(content);
+      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+      const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+      for (const p of batch) {
+        const r = byRef.get(p.ref);
+        const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        rows.push({
+          ref: p.ref, pointText: p.text,
+          outcomeEvident: r?.outcomeEvident === true,
+          reviewEvident: r?.reviewEvident === true,
+          note: typeof r?.note === "string" ? r.note : "",
+          chunkIds,
+        });
+      }
+    } catch {
+      for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "AI call failed.", chunkIds: [] });
+    }
+  }
+  return { rows, usage };
+}
+
+// Stage 5: Deterministic APSR verdict builder.
+// Maps the three coverage matrices to the four APSR dimensions WITHOUT any AI call.
+// Key rule: policy coverage → Approach, evidence coverage → Processes,
+// outcome data → Systems & Outcomes, review records → Review.
+// Policy documents cannot satisfy Processes; evidence documents cannot satisfy Approach
+// (unless they contain a procedure, but that classification happens in Stage 2/3).
+export function buildStagedApsr(
+  policyRow: PolicyCoverageRow | undefined,
+  evidenceRow: EvidenceCoverageRow | undefined,
+  outcomeRow: OutcomeReviewRow | undefined
+): ApsrBreakdown {
+  // Approach — from policy adequacy only
+  const approach: ApsrBreakdown["approach"] = policyRow?.covered === "Yes"
+    ? { status: "Meeting", note: policyRow.note, sourceChunkIds: policyRow.chunkIds }
+    : policyRow?.covered === "Partial"
+      ? { status: "Beginning", note: policyRow.note, sourceChunkIds: policyRow.chunkIds }
+      : { status: "Not evident", note: policyRow?.note || "No policy documentation found for this requirement.", sourceChunkIds: [] };
+
+  // Processes — from evidence coverage only
+  const processes: ApsrBreakdown["processes"] = evidenceRow?.covered === "Yes"
+    ? { status: "Deployed", note: evidenceRow.note, sourceChunkIds: evidenceRow.chunkIds }
+    : evidenceRow?.covered === "Partial"
+      ? { status: "Weak", note: evidenceRow.note, sourceChunkIds: evidenceRow.chunkIds }
+      : { status: "Not evident", note: evidenceRow?.note || "No implementation evidence found for this requirement.", sourceChunkIds: [] };
+
+  // Systems & Outcomes — from outcome data
+  const systemsOutcomes: ApsrBreakdown["systemsOutcomes"] = outcomeRow?.outcomeEvident
+    ? { status: "Evident", note: outcomeRow.note, sourceChunkIds: outcomeRow.chunkIds }
+    : { status: "Not evident", note: outcomeRow?.note || "No outcome data found.", sourceChunkIds: [] };
+
+  // Review — from review records
+  const review: ApsrBreakdown["review"] = outcomeRow?.reviewEvident
+    ? { status: "Evident", note: outcomeRow.note, sourceChunkIds: outcomeRow.chunkIds }
+    : { status: "Not evident", note: outcomeRow?.note || "No review records found.", sourceChunkIds: [] };
+
+  return { approach, processes, systemsOutcomes, review };
+}
+
+// Simulate staged audit (offline, no AI) — produces deterministic coverage rows
+// from the document text using keyword matching, mirroring the same heuristic
+// as simulateFolderAudit but per-audit-point rather than per-checklist-line.
+export function simulateStagedPolicyAudit(auditPoints: FlatAuditPoint[], policyDocText: string): PolicyCoverageRow[] {
+  const docLower = policyDocText.toLowerCase();
+  return auditPoints.map((p) => {
+    const words = p.text.toLowerCase().split(/\W+/).filter((w) => w.length > 4);
+    const matches = words.filter((w) => docLower.includes(w)).length;
+    const covered: StagedCoverageStatus = matches >= 3 ? "Yes" : matches >= 1 ? "Partial" : "No";
+    return { ref: p.ref, pointText: p.text, covered, note: `Offline estimate: ${matches} of ${words.length} keywords found in policy documents.`, chunkIds: [] };
+  });
+}
+
+export function simulateStagedEvidenceAudit(auditPoints: FlatAuditPoint[], evidenceDocText: string): EvidenceCoverageRow[] {
+  const docLower = evidenceDocText.toLowerCase();
+  return auditPoints.map((p) => {
+    const words = p.text.toLowerCase().split(/\W+/).filter((w) => w.length > 4);
+    const matches = words.filter((w) => docLower.includes(w)).length;
+    const covered: StagedCoverageStatus = matches >= 3 ? "Yes" : matches >= 1 ? "Partial" : "No";
+    return { ref: p.ref, pointText: p.text, covered, note: `Offline estimate: ${matches} of ${words.length} keywords found in evidence documents.`, chunkIds: [] };
+  });
+}
+
+export function simulateStagedOutcomeReview(auditPoints: FlatAuditPoint[], allDocText: string): OutcomeReviewRow[] {
+  const docLower = allDocText.toLowerCase();
+  const outcomeWords = ["outcome", "result", "kpi", "trend", "survey", "data", "rate", "percentage", "score", "target"];
+  const reviewWords = ["review", "minute", "meeting", "decision", "improvement", "action", "evaluate"];
+  const hasOutcome = outcomeWords.some((w) => docLower.includes(w));
+  const hasReview = reviewWords.some((w) => docLower.includes(w));
+  return auditPoints.map((p) => ({
+    ref: p.ref, pointText: p.text,
+    outcomeEvident: hasOutcome,
+    reviewEvident: hasReview,
+    note: `Offline estimate: outcome keywords ${hasOutcome ? "found" : "not found"}, review keywords ${hasReview ? "found" : "not found"}.`,
+    chunkIds: [],
+  }));
 }

@@ -36,10 +36,15 @@ function stageToVisualStep(stage: AuditProgressState["stage"]): number {
     case "listing":    return 0;
     case "reading":
     case "condensing": return 1;
-    case "auditing":   return 2;
-    case "saving":     return 3;
-    case "complete":   return 4;
-    case "error":      return -1;
+    case "auditing":
+    case "policy_audit":
+    case "evidence_audit":
+    case "outcome_review":
+    case "apsr_build":   return 2;
+    case "findings_summary":
+    case "saving":       return 3;
+    case "complete":     return 4;
+    case "error":        return -1;
   }
 }
 
@@ -57,6 +62,11 @@ function stageProgress(p: AuditProgressState): number {
       const total = p.batchTotal ?? 1;
       return 50 + Math.round(35 * (done / total));
     }
+    case "policy_audit":   return 50;
+    case "evidence_audit": return 62;
+    case "outcome_review": return 74;
+    case "apsr_build":     return 82;
+    case "findings_summary": return 86;
     case "saving": return 88;
     case "complete": return 100;
     case "error":   return 100;
@@ -1000,6 +1010,7 @@ export function EvidenceFolder() {
   const setFolderField = useWorkspaceStore((s) => s.setFolderField);
   const checkFolderAccess   = useWorkspaceStore((s) => s.checkFolderAccess);
   const auditFolderContents = useWorkspaceStore((s) => s.auditFolderContents);
+  const auditFolderStaged   = useWorkspaceStore((s) => s.auditFolderStaged);
   const cancelBusy          = useWorkspaceStore((s) => s.cancelBusy);
   const clearFileTextCache  = useWorkspaceStore((s) => s.clearFileTextCache);
   const fileTextCacheSize   = useWorkspaceStore((s) => Object.keys(s.fileTextCache).length);
@@ -1284,12 +1295,34 @@ export function EvidenceFolder() {
                         </button>
                       </div>
                     ) : (
-                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                      <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                        <button
+                          onClick={() => auditFolderStaged(f.id, "all")}
+                          title="Staged audit: Policy Adequacy → Evidence Implementation → Outcome & Review → Deterministic APSR verdict"
+                          style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", whiteSpace: "nowrap" }}
+                        >
+                          Staged audit
+                        </button>
+                        <button
+                          onClick={() => auditFolderStaged(f.id, "policy")}
+                          title="Check only Policy & Procedure documents for documented approaches"
+                          style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #7c3aed", background: "#faf5ff", color: "#7c3aed", whiteSpace: "nowrap" }}
+                        >
+                          Policy check
+                        </button>
+                        <button
+                          onClick={() => auditFolderStaged(f.id, "evidence")}
+                          title="Check only Actual Evidence documents for implementation records"
+                          style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #7c3aed", background: "#faf5ff", color: "#7c3aed", whiteSpace: "nowrap" }}
+                        >
+                          Evidence check
+                        </button>
                         <button
                           onClick={() => auditFolderContents(f.id)}
-                          style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #3b82f6", background: "#2563eb", color: "#fff", whiteSpace: "nowrap" }}
+                          title="Original single-pass audit (APSR in one AI call)"
+                          style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #94a3b8", background: "#f8fafc", color: "#64748b", whiteSpace: "nowrap" }}
                         >
-                          Run audit
+                          Classic audit
                         </button>
                         {lastRun && (
                           <button
