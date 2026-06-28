@@ -499,6 +499,18 @@ export type AuditProgressState = {
   connectInfo?: { foldersLinked: number; folderNames: string[] };
   // Whether the AI audit used a live model (true) or offline fallback (false).
   auditLive?: boolean;
+  // Run status — allows the UI to distinguish running from complete/cancelled.
+  status?: "running" | "cancelled" | "failed" | "completed";
+  // Whether the user may cancel or skip the current file right now.
+  canCancel?: boolean;
+  canSkipCurrentFile?: boolean;
+  // Wall-clock timestamp (Date.now()) updated at the start of every file
+  // iteration — lets the UI detect a "stuck" file if it hasn't changed in >60s.
+  lastHeartbeatAt?: number;
+  // When the audit started (Date.now()).
+  startedAt?: number;
+  // Human-readable reason the audit was cancelled, if applicable.
+  cancelReason?: string;
 };
 
 export type AIReviewLogEntry = {

@@ -78,15 +78,19 @@ function withContext(messages: AIChatMessage[], settings: AISettings): AIChatMes
 // hung call leaves the whole audit stuck on "Auditing…" with no way to clear it.
 const REQUEST_TIMEOUT_MS = 90000;
 
-// fetch + an AbortController timeout. Converts the AbortError into a clear,
-// user-facing message so a timeout reads as a timeout, not a generic failure.
-export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+// fetch + an AbortController timeout. An optional external signal (from the
+// per-file abort controller in the audit loop) is chained so cancellation via
+// skipCurrentFile()/cancelBusy() also aborts any in-flight AI calls immediately.
+export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS, externalSignal?: AbortSignal): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Chain external signal: if the caller aborts (user skip/cancel), abort ours too.
+  externalSignal?.addEventListener("abort", () => controller.abort(), { once: true });
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
+      if (externalSignal?.aborted) throw new AIClientError("AI call cancelled.");
       throw new AIClientError(`OpenAI request timed out after ${Math.round(timeoutMs / 1000)}s. The folder may be too large, or the network/API is unresponsive — try again, or audit fewer files at once.`);
     }
     throw err;
@@ -185,7 +189,7 @@ export async function chatComplete(
 // Separate from chatComplete because image evidence (scanned forms, photos
 // of signed documents, etc.) needs a vision-capable multimodal request and a
 // free-text reply, not the JSON-verdict shape every other caller here wants.
-export async function describeImage(imageDataUrl: string, settings: AISettings, opts?: { onUsage?: (u: AIUsage) => void }): Promise<string> {
+export async function describeImage(imageDataUrl: string, settings: AISettings, opts?: { onUsage?: (u: AIUsage) => void; signal?: AbortSignal }): Promise<string> {
   if (!settings.enabled) throw new AIClientError("AI integration is disabled in Settings.");
   if (!settings.apiKey) throw new AIClientError("No OpenAI API key configured in Settings.");
 
@@ -216,7 +220,7 @@ export async function describeImage(imageDataUrl: string, settings: AISettings, 
       Authorization: `Bearer ${settings.apiKey}`,
     },
     body: JSON.stringify(body),
-  });
+  }, REQUEST_TIMEOUT_MS, opts?.signal);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");

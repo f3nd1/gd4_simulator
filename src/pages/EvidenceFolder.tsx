@@ -141,7 +141,7 @@ function DimIcons({ file }: { file: AuditFileRecord }) {
   );
 }
 
-function ReadFilesDetail({ p, isActive }: { p: AuditProgressState; isActive: boolean }) {
+function ReadFilesDetail({ p, isActive, onSkipFile }: { p: AuditProgressState; isActive: boolean; onSkipFile?: () => void }) {
   const files = p.filesFound ?? [];
   const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
 
@@ -160,10 +160,21 @@ function ReadFilesDetail({ p, isActive }: { p: AuditProgressState; isActive: boo
   return (
     <div>
       {isActive && p.currentFileName && (
-        <div style={{ fontSize: 12, color: "#374151", marginBottom: 8 }}>
-          📂 Reading: <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{p.currentFileName}</span>
-          {p.currentFileAction && <span style={{ color: "#64748b", marginLeft: 6 }}>— {p.currentFileAction}</span>}
-          <Dots />
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12, color: "#374151", flex: 1, minWidth: 0 }}>
+            📂 Reading: <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{p.currentFileName}</span>
+            {p.currentFileAction && <span style={{ color: "#64748b", marginLeft: 6 }}>— {p.currentFileAction}</span>}
+            <Dots />
+          </div>
+          {p.canSkipCurrentFile && onSkipFile && (
+            <button
+              onClick={onSkipFile}
+              title="Abort reading this file and move on to the next one"
+              style={{ cursor: "pointer", fontSize: 10.5, padding: "3px 8px", borderRadius: 5, border: "1px solid #fbbf24", background: "#fffbeb", color: "#92400e", whiteSpace: "nowrap", flexShrink: 0 }}
+            >
+              Skip file
+            </button>
+          )}
         </div>
       )}
       <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6, background: "#fff" }}>
@@ -343,14 +354,14 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
   );
 }
 
-function StepDetail({ step, p }: { step: number; p: AuditProgressState }) {
+function StepDetail({ step, p, onSkipFile }: { step: number; p: AuditProgressState; onSkipFile?: () => void }) {
   const currentStep = stageToVisualStep(p.stage);
   const isActive = step === currentStep;
   const isError = p.stage === "error";
   if (isError && step === currentStep) return <ErrorDetail p={p} />;
   switch (step) {
     case 0: return <ConnectDetail p={p} isActive={isActive} />;
-    case 1: return <ReadFilesDetail p={p} isActive={isActive} />;
+    case 1: return <ReadFilesDetail p={p} isActive={isActive} onSkipFile={onSkipFile} />;
     case 2: return <AuditStepDetail p={p} isActive={isActive} />;
     case 3: return <SaveStepDetail p={p} isActive={isActive} />;
     case 4: return <CompleteDetail p={p} />;
@@ -358,10 +369,23 @@ function StepDetail({ step, p }: { step: number; p: AuditProgressState }) {
   }
 }
 
-function AuditProgressModal({ progress, onClose }: { progress: AuditProgressState; onClose: () => void }) {
+const STUCK_THRESHOLD_MS = 60_000; // warn after 60s of no heartbeat on same file
+
+function AuditProgressModal({
+  progress,
+  onClose,
+  onCancel,
+  onSkipFile,
+}: {
+  progress: AuditProgressState;
+  onClose: () => void;
+  onCancel: () => void;
+  onSkipFile: () => void;
+}) {
   const pct = stageProgress(progress);
   const isError = progress.stage === "error";
   const isDone = progress.stage === "complete";
+  const isRunning = !isDone && !isError;
   const currentStep = stageToVisualStep(progress.stage);
 
   // selectedStep: null = auto-follow active step; number = user has pinned a step
@@ -375,6 +399,31 @@ function AuditProgressModal({ progress, onClose }: { progress: AuditProgressStat
     }
   }, [currentStep]);
 
+  // Stuck guard: check heartbeat every 5s; show warning if >60s with no update.
+  const [isStuck, setIsStuck] = useState(false);
+  useEffect(() => {
+    if (!isRunning) { setIsStuck(false); return; }
+    const check = () => {
+      const hb = progress.lastHeartbeatAt;
+      setIsStuck(hb != null && Date.now() - hb > STUCK_THRESHOLD_MS);
+    };
+    check();
+    const t = setInterval(check, 5000);
+    return () => clearInterval(t);
+  }, [isRunning, progress.lastHeartbeatAt]);
+
+  // Close confirmation: ask before dismissing a running audit.
+  const handleClose = () => {
+    if (isRunning) {
+      if (window.confirm("The audit is still running. Cancel it and close?")) {
+        onCancel();
+        onClose();
+      }
+    } else {
+      onClose();
+    }
+  };
+
   const displayStep = selectedStep ?? currentStep;
 
   return (
@@ -385,7 +434,7 @@ function AuditProgressModal({ progress, onClose }: { progress: AuditProgressStat
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 20 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>Running folder audit</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>{isRunning ? "Running folder audit" : isDone ? "Audit complete" : "Audit stopped"}</div>
             <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
               {progress.folderName}
               {progress.overallTotal && progress.overallCurrent != null && (
@@ -395,10 +444,27 @@ function AuditProgressModal({ progress, onClose }: { progress: AuditProgressStat
               )}
             </div>
           </div>
-          {(isDone || isError) && (
-            <button onClick={onClose} style={{ cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#94a3b8", lineHeight: 1, padding: "0 0 0 8px", marginTop: -2 }}>×</button>
+          {/* Cancel button — always shown while running; becomes X when done/error */}
+          {isRunning ? (
+            <button
+              onClick={onCancel}
+              title="Stop the audit and close. Files read so far are not saved."
+              style={{ cursor: "pointer", border: "1px solid #fca5a5", background: "#fff5f5", borderRadius: 7, fontSize: 11.5, fontWeight: 600, color: "#b23121", padding: "5px 12px", whiteSpace: "nowrap", marginLeft: 8 }}
+            >
+              Cancel audit
+            </button>
+          ) : (
+            <button onClick={handleClose} style={{ cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#94a3b8", lineHeight: 1, padding: "0 0 0 8px", marginTop: -2 }}>×</button>
           )}
         </div>
+
+        {/* Stuck warning */}
+        {isStuck && (
+          <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#9a3412", marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+            <span>⚠</span>
+            <span>This file has been reading for over 60 seconds — it may be stuck. Click <b>Skip file</b> to move on, or <b>Cancel audit</b> to stop.</span>
+          </div>
+        )}
 
         {/* Horizontal step flow — completed and active steps are clickable */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18, padding: "0 4px" }}>
@@ -468,7 +534,7 @@ function AuditProgressModal({ progress, onClose }: { progress: AuditProgressStat
               {VISUAL_STEPS[selectedStep].emoji} {VISUAL_STEPS[selectedStep].label} — click the active step to return to live view
             </div>
           )}
-          <StepDetail step={displayStep} p={progress} />
+          <StepDetail step={displayStep} p={progress} onSkipFile={progress.canSkipCurrentFile ? onSkipFile : undefined} />
         </div>
 
         {/* Done / error button */}
@@ -497,6 +563,7 @@ export function EvidenceFolder() {
   const checkFolderAccess = useWorkspaceStore((s) => s.checkFolderAccess);
   const auditFolderContents = useWorkspaceStore((s) => s.auditFolderContents);
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
+  const skipCurrentFile = useWorkspaceStore((s) => s.skipCurrentFile);
   const busy = useWorkspaceStore((s) => s.busy);
   const additionalInfo = useWorkspaceStore((s) => s.additionalInfo);
   const setAdditionalInfoLink = useWorkspaceStore((s) => s.setAdditionalInfoLink);
@@ -562,7 +629,14 @@ export function EvidenceFolder() {
 
   return (
     <>
-    {auditProgress && <AuditProgressModal progress={auditProgress} onClose={clearAuditProgress} />}
+    {auditProgress && (
+      <AuditProgressModal
+        progress={auditProgress}
+        onClose={clearAuditProgress}
+        onCancel={() => { cancelBusy(); clearAuditProgress(); }}
+        onSkipFile={skipCurrentFile}
+      />
+    )}
     <Card>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Evidence folder index</h3>

@@ -123,8 +123,8 @@ export class DriveApiError extends Error {
 
 export type DriveFile = { id: string; name: string; mimeType: string; modifiedTime?: string };
 
-async function driveFetch(url: string, accessToken: string): Promise<Response> {
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+async function driveFetch(url: string, accessToken: string, signal?: AbortSignal): Promise<Response> {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     // Google returns structured JSON ({ error: { message, errors: [...] } })
@@ -237,22 +237,22 @@ const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingm
 
 export const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/tiff"]);
 
-export async function exportFileText(file: DriveFile, accessToken: string): Promise<string | null> {
+export async function exportFileText(file: DriveFile, accessToken: string, signal?: AbortSignal): Promise<string | null> {
   if (file.mimeType in GOOGLE_EXPORT_MIME) {
     const mime = encodeURIComponent(GOOGLE_EXPORT_MIME[file.mimeType]);
-    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${mime}&supportsAllDrives=true`, accessToken);
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${mime}&supportsAllDrives=true`, accessToken, signal);
     return res.text();
   }
   if (file.mimeType === "text/plain" || file.mimeType === "text/csv") {
-    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
     return res.text();
   }
   if (file.mimeType === "application/pdf") {
-    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
     return extractPdfText(await res.arrayBuffer());
   }
   if (file.mimeType === DOCX_MIME) {
-    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
     const { value } = await mammoth.extractRawText({ arrayBuffer: await res.arrayBuffer() });
     return value;
   }
@@ -260,7 +260,7 @@ export async function exportFileText(file: DriveFile, accessToken: string): Prom
   // so the AI auditor can see column headers, row data, and sheet names rather
   // than a flattened anonymous text blob.
   if (file.mimeType === XLSX_MIME || file.mimeType === XLS_MIME) {
-    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
     const buffer = await res.arrayBuffer();
     const wb = XLSX.read(buffer, { type: "array" });
     return extractSpreadsheetText(wb, file.name);
@@ -282,8 +282,8 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 // auditFolderContents in useWorkspaceStore.ts) hands this data: URL to an AI
 // vision call instead. Returned as base64 here, where the raw bytes already
 // are, rather than making every caller re-fetch and re-encode them.
-export async function exportFileImageDataUrl(file: DriveFile, accessToken: string): Promise<string> {
-  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken);
+export async function exportFileImageDataUrl(file: DriveFile, accessToken: string, signal?: AbortSignal): Promise<string> {
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
   const base64 = arrayBufferToBase64(await res.arrayBuffer());
   return `data:${file.mimeType};base64,${base64}`;
 }

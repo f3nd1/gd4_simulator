@@ -43,6 +43,14 @@ import { describeImage, summariseText, effectiveSettings, addUsage, type AIUsage
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 
+// Module-level ref for the currently active per-file abort. Set at the start
+// of each file read; cleared when the file read completes (success, skip, or
+// error). Allows cancelBusy() and skipCurrentFile() to abort the in-flight
+// Drive download or AI call without waiting for the 30/45s timeout to fire.
+// Only one folder audit runs at a time (the busy flag prevents concurrency),
+// so a single module-level ref is sufficient.
+let _currentFileAbort: (() => void) | null = null;
+
 // Best-effort evidence-type classification for audit-attached evidence, from
 // the checklist line being satisfied (the folder audit reads many files into
 // one verdict, so there's no single file type to copy). Keeps the Type column
@@ -241,9 +249,11 @@ export type WorkspaceState = {
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
   // Clears a stranded busy/bulk state so a button stuck on "Auditing…" can be
-  // released. Any in-flight network call still finishes in the background
-  // (bounded by the AI client's request timeout) and harmlessly re-clears busy.
+  // released. Also aborts the currently reading file so the loop exits promptly.
   cancelBusy: () => void;
+  // Skips the file currently being read — aborts its Drive download and/or AI
+  // description call and moves the loop to the next file. No-op if not reading.
+  skipCurrentFile: () => void;
   // Dismisses the audit progress panel (does not cancel the audit itself).
   clearAuditProgress: () => void;
   runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) => void;
@@ -517,7 +527,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
-      cancelBusy: () => set((s) => ({ busy: null, bulkAuditStatus: null, auditRunToken: s.auditRunToken + 1 })),
+      cancelBusy: () => {
+        // Abort the current file read immediately so the loop doesn't wait for
+        // the per-file timeout to fire before releasing the busy state.
+        _currentFileAbort?.();
+        _currentFileAbort = null;
+        set((s) => ({ busy: null, bulkAuditStatus: null, auditRunToken: s.auditRunToken + 1 }));
+      },
+      skipCurrentFile: () => {
+        // Abort only the current file — loop continues to the next one.
+        _currentFileAbort?.();
+        // Note: _currentFileAbort is cleared by the loop itself after the catch.
+      },
       clearAuditProgress: () => set({ auditProgress: null }),
       clearAuditJournal: () => set({ auditJournal: "" }),
 
@@ -1017,7 +1038,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Track whether this run ended in error so finish() can set the right
         // terminal stage (complete vs error) without needing an extra parameter.
         let auditHadError = false;
-        setProgress("listing", { stageDetail: "Listing Drive folder files…" });
+        const auditStartedAt = Date.now();
+        setProgress("listing", {
+          stageDetail: "Listing Drive folder files…",
+          status: "running",
+          canCancel: true,
+          startedAt: auditStartedAt,
+          lastHeartbeatAt: auditStartedAt,
+        });
 
         // Safety net: any unexpected exception that escapes the inner
         // try/catches calls finish() with the error message so the button
@@ -1279,6 +1307,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           else evidenceCount++;
         };
         const filesTotal = taggedFiles.length;
+        // Per-file read timeouts: 30s for text/PDF/doc, 45s for images (includes AI call).
+        const FILE_TEXT_TIMEOUT_MS = 30_000;
+        const FILE_IMAGE_TIMEOUT_MS = 45_000;
         // Build initial file record list for the progress modal; status updated per-file during read.
         const fileRecords: AuditFileRecord[] = taggedFiles.map((file) => ({
           path: file.path,
@@ -1297,6 +1328,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           filesFound: [...fileRecords],
           connectInfo: { foldersLinked: connectedFolderNames.length, folderNames: connectedFolderNames },
           stageDetail: `Reading file 1 of ${filesTotal}…`,
+          status: "running",
+          canCancel: true,
+          lastHeartbeatAt: Date.now(),
         });
         for (let fi = 0; fi < taggedFiles.length; fi++) {
           const file = taggedFiles[fi];
@@ -1314,6 +1348,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             file.bucket === "auto" ? (classifyFileBucket(file.path) === "policy" ? "policy" : "evidence") :
             undefined;
           fileRecords[fi] = { ...fileRecords[fi], readStatus: "reading" };
+          // Heartbeat: update per-file so the stuck-guard can detect hangs.
+          const isImage = IMAGE_MIME_TYPES.has(file.mimeType);
           setProgress("reading", {
             filesTotal,
             filesRead: fi,
@@ -1323,46 +1359,93 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             currentFileBucket: resolvedBucket,
             currentFileAction: fileActionHint,
             stageDetail: `Reading file ${fi + 1} of ${filesTotal}: ${file.path.split("/").pop() || file.path}`,
+            lastHeartbeatAt: Date.now(),
+            canSkipCurrentFile: true,
           });
-          try {
-            const text = await exportFileText(file, token);
+
+          // Per-file abort: allows skipCurrentFile() and cancelBusy() to break
+          // out of the current Drive download or AI description call immediately.
+          const fileAbort = new AbortController();
+          const fileTimeoutMs = isImage ? FILE_IMAGE_TIMEOUT_MS : FILE_TEXT_TIMEOUT_MS;
+          let fileTimeoutTimer: ReturnType<typeof setTimeout>;
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            fileTimeoutTimer = setTimeout(() => {
+              fileAbort.abort();
+              reject(new Error("FILE_TIMEOUT"));
+            }, fileTimeoutMs);
+          });
+          _currentFileAbort = () => { clearTimeout(fileTimeoutTimer); fileAbort.abort(); };
+
+          type FileReadResult =
+            | { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality> }
+            | { kind: "image"; description: string }
+            | { kind: "skip" };
+
+          const readPromise = (async (): Promise<FileReadResult> => {
+            const text = await exportFileText(file, token, fileAbort.signal);
             if (text !== null) {
-              scanned.push(file.path);
-              // For PDFs: classify text quality and flag suspected scans
               let pdfQuality: ReturnType<typeof classifyPdfTextQuality> | undefined;
-              if (file.mimeType === "application/pdf") {
-                pdfQuality = classifyPdfTextQuality(text);
-              }
-              pushPart(file.path, text, file.bucket, fileKind(file.mimeType), fi);
-              fileRecords[fi] = {
-                ...fileRecords[fi],
-                readStatus: "read",
-                charCount: text.length,
-                ...(pdfQuality ? { suspectedScannedPdf: pdfQuality.suspectedScannedPdf, extractedTextQuality: pdfQuality.extractedTextQuality } : {}),
-              };
-              continue;
+              if (file.mimeType === "application/pdf") pdfQuality = classifyPdfTextQuality(text);
+              return { kind: "text", text, pdfQuality };
             }
-            if (IMAGE_MIME_TYPES.has(file.mimeType) && canDescribeImages && imagesDescribed < MAX_IMAGES) {
+            if (isImage && canDescribeImages && imagesDescribed < MAX_IMAGES) {
               imagesDescribed++;
-              const dataUrl = await exportFileImageDataUrl(file, token);
-              const description = await describeImage(dataUrl, utilitySettings, { onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
-              scanned.push(file.path);
-              pushPart(file.path, description, file.bucket, "image", fi);
-              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: description.length };
+              const dataUrl = await exportFileImageDataUrl(file, token, fileAbort.signal);
+              const description = await describeImage(dataUrl, utilitySettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
+              return { kind: "image", description };
+            }
+            return { kind: "skip" };
+          })();
+
+          let fileResult: FileReadResult;
+          try {
+            fileResult = await Promise.race([readPromise, timeoutPromise]);
+            clearTimeout(fileTimeoutTimer!);
+            _currentFileAbort = null;
+          } catch (err) {
+            clearTimeout(fileTimeoutTimer!);
+            _currentFileAbort = null;
+            const wasAborted = fileAbort.signal.aborted;
+            if (wasAborted || (err instanceof Error && err.message === "FILE_TIMEOUT")) {
+              const skipReason = (err instanceof Error && err.message === "FILE_TIMEOUT")
+                ? `Timed out after ${fileTimeoutMs / 1000}s`
+                : "Skipped by user";
+              skipped.push(file.path);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason };
               continue;
             }
-            skipped.push(file.path);
-            fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped" };
-          } catch (err) {
-            // Don't bury the cause — a PDF/.docx that throws here is a read
-            // failure (worker missing, corrupt file, permission), NOT an
-            // unsupported type, and the user needs to see which so they
-            // don't go hunting for the wrong fix.
+            // Genuine read error — mark failed but do not abort the whole audit.
             const failReason = err instanceof Error ? err.message : String(err);
             failed.push({ path: file.path, reason: failReason });
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "failed", failReason };
+            continue;
+          }
+
+          // Apply the successful read result.
+          switch (fileResult.kind) {
+            case "text":
+              scanned.push(file.path);
+              pushPart(file.path, fileResult.text, file.bucket, fileKind(file.mimeType), fi);
+              fileRecords[fi] = {
+                ...fileRecords[fi],
+                readStatus: "read",
+                charCount: fileResult.text.length,
+                ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}),
+              };
+              break;
+            case "image":
+              scanned.push(file.path);
+              pushPart(file.path, fileResult.description, file.bucket, "image", fi);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: fileResult.description.length };
+              break;
+            case "skip":
+              skipped.push(file.path);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped" };
+              break;
           }
         }
+        // Reading stage complete: clear per-file controls.
+        setProgress("reading", { canSkipCurrentFile: false, lastHeartbeatAt: Date.now() });
 
         // Pre-flight: if nothing was readable, tell the user clearly and skip the
         // AI call entirely — an empty prompt would waste tokens and return junk.
