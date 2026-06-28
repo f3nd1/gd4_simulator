@@ -1622,6 +1622,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const result = await runLiveFolderAudit(lines, docText, analysisSettings, {
               strictness,
               standard,
+              criterionId: folder.subCriterionId,
               onBatchProgress: (current, total) => {
                 setProgress("auditing", {
                   batchCurrent: current,
@@ -1649,7 +1650,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (toChallenge.length) {
                 setProgress("auditing", { stageDetail: "Running strict challenge pass…" });
                 try {
-                  const r2 = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard, challenge: toChallenge });
+                  const r2 = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard, criterionId: folder.subCriterionId, challenge: toChallenge });
                   verdicts = r2.verdicts;
                   parseWarnings = [...parseWarnings, ...r2.parseWarnings];
                   folderWarnings = [...new Set([...folderWarnings, ...r2.folderWarnings])];

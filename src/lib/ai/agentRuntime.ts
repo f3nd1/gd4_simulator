@@ -23,6 +23,7 @@ import sourceCitationSkill from "../../data/skills/source-citation-verification.
 import spreadsheetEvidenceSkill from "../../data/skills/spreadsheet-evidence.md?raw";
 import scannedDocumentSkill from "../../data/skills/scanned-document-evidence.md?raw";
 import evidenceRetrievalSkill from "../../data/skills/evidence-retrieval.md?raw";
+import { domainExpertiseFor } from "../../data/skills/domainExpertise";
 import type { EvidenceChunk } from "../../types";
 
 // Injects one or more skill documents into the system prompt, capped so a
@@ -375,6 +376,10 @@ export type FolderAuditOpts = {
   // Describe/Show + Notes + expected evidence) so lines are judged against the
   // real standard, not just their own short wording.
   standard?: string;
+  // The criterion / sub-criterion / item id this folder belongs to (e.g. "4.2"
+  // or "4"). Used to inject the matching specialist domain-expertise skill so
+  // the audit reasons like an auditor who specialises in that criterion.
+  criterionId?: string;
   // When set, this is a second "challenge" pass: re-examine these prior
   // verdicts and downgrade any not fully and explicitly evidenced.
   challenge?: { lineId: string; status: string }[];
@@ -441,6 +446,10 @@ async function runLiveFolderAuditBatch(
   opts: FolderAuditOpts
 ): Promise<FolderAuditResult> {
   const strictness = opts.strictness || "Standard";
+  // Specialist domain expertise for this criterion (corporate finance for C1,
+  // student-protection for C4, pedagogy/assessment for C5, etc.) so the audit
+  // applies the deep, criterion-specific knowledge a human specialist would.
+  const domainSkill = domainExpertiseFor(opts.criterionId);
   // APSR assessment using the official EduTrust Scoring Rubric dimensions
   // (GD4 §23): Approach → Processes → Systems & Outcomes → Review, assessed in
   // that order. The overall Met/Partial/Not met is NOT decided by the model — it
@@ -456,7 +465,13 @@ For EVERY non-empty positive claim (i.e. status is not "Not evident"), cite the 
   const challengeRule = opts.challenge
     ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote approach.status from "Meeting" to "Beginning" unless the documented approach is genuinely specific and sustainable, and demote processes.status unless implementation is explicitly evidenced.`
     : "";
-  const system = `${base}${challengeRule} Each "note" must be 2–3 targeted sentences: name the specific file, record, role, or procedure gap you found; state precisely what is missing and what the institution must do to fix it; include dates, counts, or named roles where visible in the documents. Write as an auditor's direct assessment — never merely describe or summarise the document's contents. Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string, "sourceChunkIds": string[]}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string, "sourceChunkIds": string[]}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string, "sourceChunkIds": string[]}, "review": {"status": "Evident"|"Not evident", "note": string, "sourceChunkIds": string[]}, "overallReason": string, "sources": string[]}], "folderWarnings": ["optional one-sentence warnings about mis-filed documents"]}.`;
+  // Inject the criterion's specialist domain knowledge as its own prominent
+  // block (not mixed into the generic skill bundle) so it is never truncated
+  // and clearly frames the auditor persona for this criterion.
+  const domainBlock = domainSkill
+    ? `\n\n## Apply this specialist domain expertise for THIS criterion\n\nAudit this folder with the depth of the specialist below. Use its specific cross-checks, red flags and calibration — generic observations are not acceptable where this expertise lets you be precise.\n\n${domainSkill.trim()}`
+    : "";
+  const system = `${base}${domainBlock}${challengeRule} Each "note" must be 2–3 targeted sentences: name the specific file, record, role, or procedure gap you found; state precisely what is missing and what the institution must do to fix it; include dates, counts, or named roles where visible in the documents. Write as an auditor's direct assessment — never merely describe or summarise the document's contents. Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string, "sourceChunkIds": string[]}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string, "sourceChunkIds": string[]}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string, "sourceChunkIds": string[]}, "review": {"status": "Evident"|"Not evident", "note": string, "sourceChunkIds": string[]}, "overallReason": string, "sources": string[]}], "folderWarnings": ["optional one-sentence warnings about mis-filed documents"]}.`;
 
   const DOC_CAP = BATCH_DOC_CAP;
   const truncated = docText.length > DOC_CAP;

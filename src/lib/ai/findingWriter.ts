@@ -12,6 +12,7 @@ import apsrRubricSkill from "../../data/skills/apsr-rubric.md?raw";
 import findingSpecificitySkill from "../../data/skills/finding-specificity.md?raw";
 import findingWritingSkill from "../../data/skills/finding-writing.md?raw";
 import evidenceStandardsSkill from "../../data/skills/evidence-standards.md?raw";
+import { domainExpertiseFor } from "../../data/skills/domainExpertise";
 
 export type GroupedFindingWriterResult = {
   title: string;
@@ -163,9 +164,18 @@ export async function runLiveGroupedFindingWriter(
   const groupContext = buildGroupContext(group);
   const evidenceSummary = buildEvidenceStatusSummary(group.lines);
 
+  // Specialist domain knowledge for this finding's criterion, so the finding's
+  // root cause, corrective and preventive actions are written with the depth of
+  // an auditor who specialises in that area rather than generic advice.
+  const domainSkill = domainExpertiseFor(req.subCriterionId ?? req.itemNumber);
+  const domainBlock = domainSkill
+    ? `\n\n## Specialist domain expertise for this criterion\n\nWrite this finding with the precision of the specialist below — use its specific cross-checks, regulatory points and red flags so the observation, root cause and corrective/preventive actions are concrete and domain-accurate, not generic.\n\n${domainSkill.trim()}`
+    : "";
+
   const systemPrompt =
     `You are a GD4 EduTrust internal audit expert. Your task is to write one structured finding draft based on a group of failing checklist lines from an audit. You MUST base everything on the checklist evidence provided — do NOT invent or assume information that is not in the lines.` +
-    skills(apsrRubricSkill, evidenceStandardsSkill, findingSpecificitySkill, findingWritingSkill);
+    skills(apsrRubricSkill, evidenceStandardsSkill, findingSpecificitySkill, findingWritingSkill) +
+    domainBlock;
 
   const userPrompt = `
 Write a structured finding draft for the following group of failing checklist lines.

@@ -5,6 +5,7 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
+import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 
 const SUMMARY_CAP = 320;
 
@@ -361,6 +362,9 @@ function ConnectDetail({ p, isActive }: { p: AuditProgressState; isActive: boole
             </span>
           )}
         </div>
+        {domainExpertiseLabelFor(p.subCriterionId) && (
+          <div style={{ ...muted, marginTop: 4 }}>🎓 Specialist lens: <b>{domainExpertiseLabelFor(p.subCriterionId)}</b></div>
+        )}
       </div>
     );
   }
@@ -894,6 +898,7 @@ function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => v
         {/* Metadata row */}
         <div style={{ padding: "8px 10px", background: "#f8fafc", borderRadius: 8, fontSize: 11.5, color: "#374151", display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12 }}>
           {run.auditorName && <span><span style={muted}>Auditor:</span> {run.auditorName}</span>}
+          {domainExpertiseLabelFor(run.subCriterionId) && <span><span style={muted}>Specialist lens:</span> <b>{domainExpertiseLabelFor(run.subCriterionId)}</b></span>}
           {run.aiModel && <span><span style={muted}>Model:</span> <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5 }}>{run.aiModel}</span></span>}
           <span><span style={muted}>AI:</span> {run.auditLive ? "Live" : "Offline"}</span>
           {run.chunkCount > 0 && <span><span style={muted}>Chunks:</span> {run.chunkCount}</span>}

@@ -62,6 +62,7 @@ Validate GD4 data integrity (35 items, flatAuditPoints consistency): `npm run va
      - `spreadsheet-evidence.md` — Excel/CSV evidence assessment (row coverage, structure)
      - `scanned-document-evidence.md` — scanned PDF detection and audit cues
      - `evidence-retrieval.md` — per-dimension chunk retrieval strategy
+   - **Criterion-specific domain expertise** (`src/data/skills/criterion-{1..7}-*.md` + `domainExpertise.ts`): seven specialist auditor skill files, one per GD4 criterion (C1 corporate governance/finance, C2 HR/marketing/data, C3 agent due-diligence, C4 student-protection/fee-safeguarding, C5 pedagogy/assessment QA, C6 QMS/continual-improvement, C7 performance measurement/data-integrity). `domainExpertise.ts` exposes `criterionIdOf()`, `domainExpertiseFor()` and `domainExpertiseLabelFor()` (maps any item/sub-criterion/criterion id → its criterion number → skill/label). The folder audit (`runLiveFolderAuditBatch`, via `FolderAuditOpts.criterionId`) and the grouped finding writer inject the matching skill as a dedicated prompt block (not capped by `SKILL_CAP`) so the audit and findings reason like a domain specialist. The active "Specialist lens" label is shown in the live audit progress and the audit-run modal.
 
 6. **Evidence folders** (`src/pages/EvidenceFolder.tsx`):
    - Each sub-criterion has one Drive folder link. Convention: organise into two subfolders — `1. Policy & Procedure` and `2. Actual Evidence`. The audit classifies files by path prefix.
