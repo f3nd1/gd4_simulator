@@ -268,9 +268,10 @@ export type FolderAuditOpts = {
 // audit call. Shared with the store so its condense-to-fit pass targets the
 // SAME budget — otherwise the store could condense to just over this and the
 // audit would re-truncate (and show an alarming "files may be missing" note)
-// even though every document was already read and summarised. ~48k chars is
-// ≈12k tokens: comfortably within the model's context and cheap to send.
-export const FOLDER_DOC_CAP = 48000;
+// even though every document was already read and summarised. ~32k chars is
+// ≈8k tokens: smaller prompt → faster response, lower timeout risk for large
+// folders, while still covering more content than any single policy document.
+export const FOLDER_DOC_CAP = 32000;
 
 export type FolderAuditResult = {
   verdicts: FolderAuditLineVerdict[];

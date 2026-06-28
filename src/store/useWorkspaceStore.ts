@@ -1113,8 +1113,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // decide policy-vs-evidence (the previous behaviour). Same-link already
         // tagged "auto" above.
         if (!policyId && !sameLink) for (const f of taggedFiles) f.bucket = "auto";
-        if (taggedFiles.length === 0 && listErrors.length) {
-          finish(`Could not list the linked folder(s): ${listErrors.join("; ")}.`, false, listErrors.join("; "));
+        if (taggedFiles.length === 0) {
+          if (listErrors.length) {
+            finish(`Could not list the linked folder(s): ${listErrors.join("; ")}.`, false, listErrors.join("; "));
+          } else {
+            finish("The linked folder(s) contain no files. Add documents to the Drive folder and try again.", false, "Empty folder — no files found");
+          }
           return;
         }
 
@@ -1197,6 +1201,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // don't go hunting for the wrong fix.
             failed.push({ path: file.path, reason: err instanceof Error ? err.message : String(err) });
           }
+        }
+
+        // Pre-flight: if nothing was readable, tell the user clearly and skip the
+        // AI call entirely — an empty prompt would waste tokens and return junk.
+        if (scanned.length === 0) {
+          const reason = failed.length
+            ? `Could not read any files (${failed.length} file${failed.length === 1 ? "" : "s"} failed, e.g. ${failed[0].reason}). Check that the folder contains supported document types (PDF, Word, Google Docs).`
+            : skipped.length
+            ? `No readable document content found — ${skipped.length} file${skipped.length === 1 ? "" : "s"} are media or unsupported types. Add PDF, Word, or Google Docs files.`
+            : "No readable files were found in the linked folder(s). Add documents and try again.";
+          finish(reason, false, reason);
+          return;
         }
 
         // School-wide context is background only — cap it so a large
@@ -1299,7 +1315,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             live = true;
           } catch (err) {
             liveError = err instanceof Error ? err.message : String(err);
-            verdicts = simulateFolderAudit(lines, docText);
+            // When a live AI call was attempted but failed, do NOT write
+            // offline keyword-estimate verdicts to the checklist — they look
+            // indistinguishable from real AI results and mislead the auditor.
+            // Surface the error so the user can fix it and re-run.
+            finish(
+              `Live call failed: ${liveError}\n\nNo checklist entries were updated. Fix the issue above (e.g. check your API key, reduce the folder size) and run the audit again.`,
+              false,
+              liveError,
+              auditUsage,
+              auxUsage,
+            );
+            return;
           }
         } else {
           verdicts = simulateFolderAudit(lines, docText);
