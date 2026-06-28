@@ -3,11 +3,33 @@ import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useAgentMemoryStore } from "../store/useAgentMemoryStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { useSupabaseSettingsStore } from "../store/useSupabaseSettingsStore";
+import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
+import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import { getSupabaseClient, getSupabaseConfig } from "../lib/supabaseClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 import { listModels } from "../lib/ai/aiClient";
+
+// Re-hydrate every store that uses workspaceStorage so that when Supabase
+// credentials are saved mid-session, all previously-saved data (including the
+// OpenAI key) loads from the database rather than staying at defaults.
+type StoreWithPersist = { persist?: { rehydrate?: () => Promise<void> | void } };
+async function rehydrateAllFromSupabase() {
+  await new Promise<void>((r) => setTimeout(r, 50)); // let the new Supabase client settle
+  const stores: StoreWithPersist[] = [
+    useAISettingsStore as unknown as StoreWithPersist,
+    useWorkspaceStore as unknown as StoreWithPersist,
+    useChecklistModuleStore as unknown as StoreWithPersist,
+    useAgentMemoryStore as unknown as StoreWithPersist,
+    useScoringConfigStore as unknown as StoreWithPersist,
+    useGoogleDriveStore as unknown as StoreWithPersist,
+  ];
+  for (const store of stores) {
+    try { await store.persist?.rehydrate?.(); } catch { /* best-effort */ }
+  }
+}
 
 // GPT-5 family first (current default). The GPT-4 entries stay as fallbacks
 // for anyone whose key/org doesn't yet have GPT-5 access.
@@ -61,6 +83,8 @@ export function Settings() {
   const [draftDbKey, setDraftDbKey] = useState(dbKey);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [rehydrating, setRehydrating] = useState(false);
+  const [rehydrateResult, setRehydrateResult] = useState<string | null>(null);
   const { url: effectiveUrl, key: effectiveKey } = getSupabaseConfig();
   const dbConfigured = !!effectiveUrl && !!effectiveKey;
   const usingOverride = !!dbUrl || !!dbKey;
@@ -107,6 +131,13 @@ export function Settings() {
           unreachable. Leave this blank to keep everything local to this browser only.
         </p>
         <p style={{ fontSize: 12.5, color: "#6b7280" }}>
+          <b>Tip — cross-session persistence:</b> if you are running in an environment where the app URL changes between
+          sessions (e.g. a cloud dev container), browser local storage will not survive a restart. Add your Supabase
+          URL and anon key to a <code>.env.local</code> file in the project root as{" "}
+          <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> so they are picked up
+          automatically each time the server starts — you will not need to re-enter anything on this page.
+        </p>
+        <p style={{ fontSize: 12.5, color: "#6b7280" }}>
           Use only the <b>anon / publishable</b> key from your Supabase project's API settings. Never paste the{" "}
           <b>service_role / secret</b> key here — it bypasses row-level security and this key is sent straight from the
           browser. Required table, run once in the Supabase SQL editor:
@@ -146,14 +177,21 @@ create policy "anon read/write" on public.workspace_state
 
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
-            onClick={() => {
+            onClick={async () => {
               setUrl(draftDbUrl);
               setPublishableKey(draftDbKey);
               setTestResult(null);
+              setRehydrateResult(null);
+              if (draftDbUrl && draftDbKey) {
+                setRehydrating(true);
+                await rehydrateAllFromSupabase();
+                setRehydrating(false);
+                setRehydrateResult("All settings reloaded from Supabase.");
+              }
             }}
             style={{ cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
           >
-            Save
+            Save & reload
           </button>
           <button
             disabled={testing}
@@ -163,11 +201,25 @@ create policy "anon read/write" on public.workspace_state
             {testing ? "Testing…" : "Test connection"}
           </button>
           <button
+            disabled={rehydrating || !dbConfigured}
+            onClick={async () => {
+              setRehydrateResult(null);
+              setRehydrating(true);
+              await rehydrateAllFromSupabase();
+              setRehydrating(false);
+              setRehydrateResult("All settings reloaded from Supabase.");
+            }}
+            style={{ cursor: rehydrating || !dbConfigured ? "not-allowed" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}
+          >
+            {rehydrating ? "Reloading…" : "Reload from Supabase"}
+          </button>
+          <button
             onClick={() => {
               clearDb();
               setDraftDbUrl("");
               setDraftDbKey("");
               setTestResult(null);
+              setRehydrateResult(null);
             }}
             style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}
           >
@@ -179,6 +231,9 @@ create policy "anon read/write" on public.workspace_state
           <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: 8, marginBottom: 0 }}>
             {usingOverride ? "Using the URL/key saved above." : "Using the build's default .env.local URL/key (no override saved above)."}
           </p>
+        )}
+        {rehydrateResult && (
+          <p style={{ fontSize: 12, marginTop: 8, marginBottom: 0, color: "#15803d" }}>{rehydrateResult}</p>
         )}
         {testResult && (
           <p style={{ fontSize: 12, marginTop: 8, marginBottom: 0, color: testResult.ok ? "#15803d" : "#b91c1c" }}>
