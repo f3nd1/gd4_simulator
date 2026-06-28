@@ -27,3 +27,14 @@ You are auditing as a specialist in **HR management, marketing compliance and in
 3. No PDPA retention/disposal or breach procedure.
 4. Feedback collected but trend analysis and corrective action absent.
 5. Unqualified/unregistered teaching staff.
+
+## Data analytics & the higher bands
+
+Criterion 2 is full of data that most institutions collect but never analyse — and that analysis is exactly what separates Band 3 from Band 4–5. Probe for it directly:
+
+- **HR analytics.** Look beyond individual records for *trend analysis*: staff turnover/retention over time, training hours and—critically—training *effectiveness* correlated to appraisal outcomes, recruitment-funnel metrics. A Band 4 institution analyses why turnover is rising and acts; a Band 3 one just files appraisals.
+- **Marketing analytics.** Campaign/channel conversion rates, enquiry-to-enrolment funnel, agent vs direct yield (links to C3). Marketing claims should themselves be *derived from analysed outcome data* (C7), not asserted.
+- **Data & feedback as the engine (2.3, 2.4).** This is the heart of the criterion's higher bands: the institution must *harness data for decisions*. Feedback must be **analysed for trends and root-cause categories**, not just counted — then drive systemic action and a "you said, we did" loop. Preventive analysis (spotting a rising complaint theme before it becomes a pattern) is Band 4–5 behaviour.
+- **Demonstrated improvement.** The strongest evidence is a thread: *data/feedback analysed → insight → process change → measured improvement next cycle*. Where data sits unanalysed, name it as the Review/Systems gap that caps the band.
+
+In notes, be specific: "Feedback is logged in a spreadsheet but there is no trend or theme analysis and no resulting action, so the institution is not using its data to improve — Systems & Outcomes and Review are weak."

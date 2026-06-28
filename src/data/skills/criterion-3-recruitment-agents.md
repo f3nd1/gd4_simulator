@@ -22,5 +22,15 @@ You are auditing as a specialist in **third-party/agent due diligence and channe
 4. Agent complaints / high agent-linked withdrawal rates with no follow-up.
 5. No briefing records — agents left to describe courses and outcomes on their own.
 
+## Data analytics & the higher bands
+
+Agent management is a data-rich area, and the higher bands depend on whether the institution *analyses agent data to manage risk proactively* rather than just filing scorecards:
+
+- **What to analyse per agent and over time:** conversion/yield, student quality and academic performance of agent-sourced students, withdrawal and refund rates by agent, complaint and misrepresentation incidents, visa/eligibility rejection rates. Trends matter — a single scorecard is reactive; tracking each agent's metrics across intakes is analytical.
+- **Preventive analysis.** A Band 4–5 institution spots a deteriorating agent from the data (rising withdrawals or complaints) and acts *before* it harms students or compliance — retraining, probation or termination triggered by a data threshold, not by a crisis.
+- **Demonstrated improvement.** Look for the thread: *agent metrics analysed → underperformer identified → action taken → roster or behaviour changed → better outcomes next intake*. Evaluations collected but never analysed into a decision is a Review-dimension gap that caps the band.
+
+In notes: "Agent appointment records exist but there is no analysis of withdrawal or complaint rates by agent across intakes, so the institution cannot detect a failing agent before harm occurs — this is the gap limiting the band."
+
 ## Calibration
-If the PEI uses no external agents, the criterion may be Not Applicable — but verify that claim against intake records rather than accepting it. Where agents are used, Band 4+ needs evidence the *evaluation cycle changed agent behaviour or the agent roster* — monitoring that produced a decision, not just filed scorecards.
+If the PEI uses no external agents, the criterion may be Not Applicable — but verify that claim against intake records rather than accepting it. Where agents are used, Band 4+ needs evidence the *evaluation cycle changed agent behaviour or the agent roster* — monitoring **data analysed into a decision**, not just filed scorecards.

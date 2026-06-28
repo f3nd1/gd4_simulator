@@ -31,5 +31,15 @@ You are auditing as a specialist in **curriculum design, pedagogy and assessment
 4. At-risk students identified but no intervention records.
 5. Academic Board minutes that rubber-stamp without academic scrutiny.
 
+## Data analytics & the higher bands
+
+Academic quality is where **learning analytics** most clearly distinguishes the higher bands. A Band 3 institution records results; a Band 4–5 institution *analyses learning data to improve teaching and assessment*:
+
+- **What to analyse:** pass/fail and grade-distribution trends by module and cohort, assessment **item analysis** (which questions/criteria most students fail — a signal of a teaching or assessment-design flaw), moderation variance between markers, attrition and progression by course, and course-feedback trends. Look for this analysis tabled at the Academic/Examination Board, not just raw mark sheets.
+- **Preventive / early-warning analytics.** The best evidence is using *formative and engagement data to predict at-risk students early* and intervene before the final assessment — and using item analysis to fix a weak module *before* the next cohort takes it. That foresight is Band 4–5; reacting to a failed cohort afterwards is Band 3.
+- **Demonstrated improvement.** Look for the closed thread: *results/feedback analysed → specific weakness identified → course, assessment or teaching approach redesigned → measured improvement in the next cohort*. Where marks are collected but never analysed into a pedagogical change, name it as the Review/Systems gap capping the band.
+
+In notes: "Module results are recorded but there is no grade-trend or item analysis presented to the Academic Board, so the institution is not using assessment data to improve teaching — this caps Systems & Outcomes and Review."
+
 ## Calibration
-Band 4+ requires the academic *review cycle* to have changed a course, an assessment or a teaching approach based on results/feedback — pedagogy that demonstrably improved, not just policies on file.
+Band 4+ requires the academic *review cycle* to have changed a course, an assessment or a teaching approach based on **analysis of results, item-level data and feedback** — pedagogy that demonstrably improved, not just policies on file or marks on a sheet.

@@ -32,3 +32,13 @@ You are auditing as a specialist in **student-protection regulation and fee safe
 5. Non-standard or unsigned student contract.
 
 Treat 1–5 as Non-Conformities (Cat A/B), not improvement suggestions.
+
+## Data analytics & the higher bands
+
+Compliance (the NCs above) gets the institution to a passing band; **data analytics is what lifts student-protection from Band 3 to Band 4–5**. Even when every record exists, probe whether the institution *analyses* this data to protect students proactively:
+
+- **Attendance analytics → early warning.** The strongest Band 4–5 evidence here is using attendance and engagement data to *predict and intervene with at-risk students before they fail or withdraw* — not just recording attendance and reacting after the threshold is breached. Look for an early-warning analysis, not just a register.
+- **What else to analyse:** withdrawal/deferment *reasons* categorised and trended, refund processing-time analysis, counselling-to-enrolment conversion, complaint themes in support services, fee-collection timeliness. A Band 4 institution reads these trends; a Band 3 one files the individual cases.
+- **Preventive analysis & demonstrated improvement.** Look for the thread: *withdrawal-reason data analysed → root cause found (e.g. a specific course or counselling gap) → process changed → withdrawals fell next intake*. Where the case records exist but are never aggregated and analysed, that is the Systems & Outcomes / Review gap that caps the band even when compliance is clean.
+
+In notes, separate the two clearly: compliance gaps are NCs; the absence of *analysis of student-protection data to anticipate and prevent harm* is what holds an otherwise-compliant institution at Band 3.
