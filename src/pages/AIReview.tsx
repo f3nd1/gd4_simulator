@@ -67,7 +67,7 @@ export function AIReview() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [agentFilter, setAgentFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
-  const [sourceFilter, setSourceFilter] = useState<"" | "live" | "simulated">("");
+  const [searchFilter, setSearchFilter] = useState("");
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "tokens">("newest");
   // Date scope (yyyy-mm-dd; empty = open-ended). Applies to BOTH the cost
   // calculator and the rows, so a period's spend can be totalled.
@@ -99,19 +99,26 @@ export function AIReview() {
     [log, fromDate, toDate]
   );
 
-  // Agent/type/source filters + sort apply to the rows only (on top of the date scope).
+  // Agent/type/search filters + sort apply to the rows only (on top of the date scope).
   const visible = useMemo(() => {
+    const q = searchFilter.trim().toLowerCase();
     const rows = dateScoped.filter(
       (e) =>
         (!agentFilter || e.agent === agentFilter) &&
         (!typeFilter || e.reviewType === typeFilter) &&
-        (!sourceFilter || (sourceFilter === "live" ? e.live : !e.live))
+        (!q ||
+          (e.runId || "").toLowerCase().includes(q) ||
+          (e.subjectId || "").toLowerCase().includes(q) ||
+          (e.agent || "").toLowerCase().includes(q) ||
+          (e.verdict || "").toLowerCase().includes(q) ||
+          (e.reviewType || "").toLowerCase().includes(q) ||
+          (e.model || "").toLowerCase().includes(q))
     );
     const sorted = [...rows];
     if (sortBy === "tokens") sorted.sort((a, b) => (b.totalTokens || 0) - (a.totalTokens || 0));
     else sorted.sort((a, b) => (sortBy === "newest" ? b.createdAt.localeCompare(a.createdAt) : a.createdAt.localeCompare(b.createdAt)));
     return sorted;
-  }, [dateScoped, agentFilter, typeFilter, sourceFilter, sortBy]);
+  }, [dateScoped, agentFilter, typeFilter, searchFilter, sortBy]);
 
   const stats = useMemo(() => {
     const total = dateScoped.length;
@@ -240,19 +247,21 @@ export function AIReview() {
             <option value="">All modules</option>
             {typeOptions.map((t) => <option key={t} value={t}>{moduleLabel(t)}</option>)}
           </select>
-          <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)} style={{ ...inputStyle, width: 130, padding: "5px 6px" }}>
-            <option value="">Live + simulated</option>
-            <option value="live">Live only</option>
-            <option value="simulated">Simulated only</option>
-          </select>
+          <input
+            type="search"
+            value={searchFilter}
+            onChange={(e) => setSearchFilter(e.target.value)}
+            placeholder="Search run ID, subject, agent…"
+            style={{ ...inputStyle, width: 220, padding: "5px 6px" }}
+          />
           <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3, marginLeft: 6 }}>Sort</span>
           <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)} style={{ ...inputStyle, width: 150, padding: "5px 6px" }}>
             <option value="newest">Newest first</option>
             <option value="oldest">Oldest first</option>
             <option value="tokens">Most tokens</option>
           </select>
-          {(agentFilter || typeFilter || sourceFilter) && (
-            <button onClick={() => { setAgentFilter(""); setTypeFilter(""); setSourceFilter(""); }} style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "5px 9px" }}>
+          {(agentFilter || typeFilter || searchFilter) && (
+            <button onClick={() => { setAgentFilter(""); setTypeFilter(""); setSearchFilter(""); }} style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "5px 9px" }}>
               Clear
             </button>
           )}
