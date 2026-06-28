@@ -20,6 +20,7 @@ import type {
   Finding,
   DriveAccessStatus,
   ApsrBreakdown,
+  AuditProgressState,
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
@@ -223,6 +224,10 @@ export type WorkspaceState = {
   // those 22 sample findings only appear once "Use demo data" is clicked.
   seedFindingsLoaded: boolean;
   busy: string | null;
+  // Live progress state for the active folder audit — updated per-file and
+  // per-batch so the UI can show a polished step indicator. Cleared by the
+  // user (clearAuditProgress) so the result panel stays visible after completion.
+  auditProgress: AuditProgressState | null;
   // Persisted "Recheck all evidence" report so it survives navigation and
   // page refreshes. null means the report hasn't been run yet this session.
   evidenceAuditReport: { flags: EvidenceAuditFlag[]; generatedAt: string } | null;
@@ -232,6 +237,8 @@ export type WorkspaceState = {
   // released. Any in-flight network call still finishes in the background
   // (bounded by the AI client's request timeout) and harmlessly re-clears busy.
   cancelBusy: () => void;
+  // Dismisses the audit progress panel (does not cancel the audit itself).
+  clearAuditProgress: () => void;
   runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) => void;
   loadDemoDataset: () => void;
   saveAsNewVersion: (name: string, note?: string) => void;
@@ -272,7 +279,9 @@ export type WorkspaceState = {
   // extraContext (optional): school-wide "Additional info" folder text, fed in
   // as labeled background — never primary evidence (the evidence-sufficiency
   // caps still gate the band).
-  auditFolderContents: (id: string, extraContext?: string) => Promise<void>;
+  // overallProgress (optional): position within an "Audit All" run, used by
+  // the progress panel to show "3 of 24".
+  auditFolderContents: (id: string, extraContext?: string, overallProgress?: { current: number; total: number }) => Promise<void>;
   // One-click "audit every folder that has a link" used by the Dashboard.
   // bulkAuditStatus carries human-readable progress ("Auditing 3/24 …") while
   // it runs, and is null when idle.
@@ -484,6 +493,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       customFindings: [],
       seedFindingsLoaded: false,
       busy: null,
+      auditProgress: null,
       bulkAuditStatus: null,
       additionalInfo: { link: "" },
       schoolContext: { text: "", link: "" },
@@ -497,6 +507,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
       cancelBusy: () => set({ busy: null, bulkAuditStatus: null }),
+      clearAuditProgress: () => set({ auditProgress: null }),
       clearAuditJournal: () => set({ auditJournal: "" }),
 
       runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) =>
@@ -955,11 +966,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // feature — writes the verdicts straight into the Sub-Criterion
       // Checklist rather than just advising. This is the only AI feature in
       // the app permitted to do that.
-      auditFolderContents: async (id, extraContext) => {
+      auditFolderContents: async (id, extraContext, overallProgress) => {
         const s = get();
         const folder = s.folders.find((f) => f.id === id);
         if (!folder) return;
         set({ busy: "folderaudit" + id });
+
+        // Emits a progress update so the UI step-indicator and progress bar
+        // reflect the current stage in real time.
+        const setProgress = (stage: AuditProgressState["stage"], extra?: Partial<AuditProgressState>) => {
+          set({
+            auditProgress: {
+              folderId: id,
+              folderName: folder.folderName,
+              subCriterionId: folder.subCriterionId,
+              stage,
+              overallCurrent: overallProgress?.current,
+              overallTotal: overallProgress?.total,
+              ...extra,
+            },
+          });
+        };
+        // Track whether this run ended in error so finish() can set the right
+        // terminal stage (complete vs error) without needing an extra parameter.
+        let auditHadError = false;
+        setProgress("listing", { stageDetail: "Listing Drive folder files…" });
 
         // Safety net: any unexpected exception that escapes the inner
         // try/catches calls finish() with the error message so the button
@@ -1014,10 +1045,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             auxCompletionTokens: auxUsage?.completionTokens,
             auxTotalTokens: auxUsage?.totalTokens,
           };
+          const terminalStage = (auditHadError || liveError) ? "error" : "complete";
           set((st) => ({
             folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel } : f)),
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
+            auditProgress: st.auditProgress?.folderId === id
+              ? { ...st.auditProgress, stage: terminalStage, stageDetail: undefined, errorMessage: liveError }
+              : st.auditProgress,
           }));
         };
 
@@ -1025,16 +1060,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const policyId = parseFolderId(folder.policyLink);
         const token = useGoogleDriveStore.getState().getValidToken();
         if (!evidenceId && !policyId) {
+          auditHadError = true;
           finish("No Drive folder linked. Add a Policy & Procedure and/or Actual Evidence folder link first.", false);
           return;
         }
         if (!token) {
+          auditHadError = true;
           finish("Not connected to Google Drive. Connect your Google account in Settings, then run the audit again.", false);
           return;
         }
 
         const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === folder.subCriterionId);
         if (items.length === 0) {
+          auditHadError = true;
           finish("No GD4 items map to this sub-criterion, so there is nothing to audit.", false);
           return;
         }
@@ -1068,6 +1106,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }
         }
         if (lines.length === 0) {
+          auditHadError = true;
           finish("Could not generate any checklist lines to audit against — check AI Settings, or add lines manually on the Sub-Criterion Checklist page.", false);
           return;
         }
@@ -1114,6 +1153,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // tagged "auto" above.
         if (!policyId && !sameLink) for (const f of taggedFiles) f.bucket = "auto";
         if (taggedFiles.length === 0) {
+          auditHadError = true;
           if (listErrors.length) {
             finish(`Could not list the linked folder(s): ${listErrors.join("; ")}.`, false, listErrors.join("; "));
           } else {
@@ -1177,7 +1217,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (isPolicy) policyCount++;
           else evidenceCount++;
         };
-        for (const file of taggedFiles) {
+        const filesTotal = taggedFiles.length;
+        setProgress("reading", { filesTotal, filesRead: 0, stageDetail: `Reading file 1 of ${filesTotal}…` });
+        for (let fi = 0; fi < taggedFiles.length; fi++) {
+          const file = taggedFiles[fi];
+          setProgress("reading", { filesTotal, filesRead: fi, stageDetail: `Reading file ${fi + 1} of ${filesTotal}: ${file.path.split("/").pop() || file.path}` });
           try {
             const text = await exportFileText(file, token);
             if (text !== null) {
@@ -1206,6 +1250,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Pre-flight: if nothing was readable, tell the user clearly and skip the
         // AI call entirely — an empty prompt would waste tokens and return junk.
         if (scanned.length === 0) {
+          auditHadError = true;
           const reason = failed.length
             ? `Could not read any files (${failed.length} file${failed.length === 1 ? "" : "s"} failed, e.g. ${failed[0].reason}). Check that the folder contains supported document types (PDF, Word, Google Docs).`
             : skipped.length
@@ -1246,6 +1291,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const rawTotal = parts.reduce((n, p) => n + p.body.length, 0);
         if (rawTotal > bodyBudgetTotal && aiSettings.enabled && aiSettings.apiKey && parts.length) {
           const budget = Math.max(500, Math.floor(bodyBudgetTotal / parts.length));
+          const toCondense = parts.filter((p) => p.body.length > budget);
+          if (toCondense.length > 0) {
+            setProgress("condensing", { condensingTriggered: true, stageDetail: `Condensing ${toCondense.length} large document${toCondense.length === 1 ? "" : "s"}…` });
+          }
           for (const p of parts) {
             if (p.body.length > budget) {
               try {
@@ -1288,8 +1337,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let folderWarnings: string[] = [];
         let auditUsage: AIUsage | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
+          setProgress("auditing", { batchCurrent: 0, batchTotal: Math.ceil(lines.length / 8), stageDetail: "Starting AI audit…" });
           try {
-            const result = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard });
+            const result = await runLiveFolderAudit(lines, docText, analysisSettings, {
+              strictness,
+              standard,
+              onBatchProgress: (current, total) => {
+                setProgress("auditing", {
+                  batchCurrent: current,
+                  batchTotal: total,
+                  stageDetail: total > 1 ? `AI audit batch ${current} of ${total}…` : "Running AI audit…",
+                });
+              },
+            });
             verdicts = result.verdicts;
             truncationNote = result.truncationNote;
             parseWarnings = result.parseWarnings;
@@ -1300,6 +1360,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (strictness === "Strict") {
               const toChallenge = verdicts.filter((v) => v.status !== "Not met").map((v) => ({ lineId: v.lineId, status: v.status }));
               if (toChallenge.length) {
+                setProgress("auditing", { stageDetail: "Running strict challenge pass…" });
                 try {
                   const r2 = await runLiveFolderAudit(lines, docText, analysisSettings, { strictness, standard, challenge: toChallenge });
                   verdicts = r2.verdicts;
@@ -1314,6 +1375,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
             live = true;
           } catch (err) {
+            auditHadError = true;
             liveError = err instanceof Error ? err.message : String(err);
             // When a live AI call was attempted but failed, do NOT write
             // offline keyword-estimate verdicts to the checklist — they look
@@ -1335,6 +1397,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Guarded so an unexpected throw while writing verdicts can't strand
         // `busy` (which would leave this row's button stuck on "Auditing…"
         // forever) — finish() below always runs and clears it.
+        setProgress("saving", { stageDetail: `Saving ${verdicts.length} verdict${verdicts.length === 1 ? "" : "s"}…` });
         const lineTextById = new Map(lines.map((l) => [l.id, l.text]));
         try {
           const checklist = useChecklistModuleStore.getState();
@@ -1600,7 +1663,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         for (let i = 0; i < folders.length; i++) {
           const f = folders[i];
           set({ bulkAuditStatus: `Auditing ${i + 1}/${folders.length}: ${f.subCriterionId} ${f.folderName}` });
-          await get().auditFolderContents(f.id, sharedContext);
+          await get().auditFolderContents(f.id, sharedContext, { current: i + 1, total: folders.length });
         }
         set({ bulkAuditStatus: null });
       },
@@ -1662,7 +1725,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         for (let i = 0; i < toAudit.length; i++) {
           const f = toAudit[i];
           set({ bulkAuditStatus: `Auditing changed ${i + 1}/${toAudit.length}: ${f.subCriterionId} ${f.folderName}` });
-          await get().auditFolderContents(f.id, sharedContext);
+          await get().auditFolderContents(f.id, sharedContext, { current: i + 1, total: toAudit.length });
         }
         set({ bulkAuditStatus: null });
         return { audited: toAudit.length, skipped, unlinked };

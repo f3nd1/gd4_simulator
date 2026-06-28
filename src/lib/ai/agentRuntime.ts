@@ -262,6 +262,9 @@ export type FolderAuditOpts = {
   // When set, this is a second "challenge" pass: re-examine these prior
   // verdicts and downgrade any not fully and explicitly evidenced.
   challenge?: { lineId: string; status: string }[];
+  // Called as each parallel audit batch completes so the UI can show live
+  // batch progress ("Auditing batch 2 of 5"). current is 1-based.
+  onBatchProgress?: (current: number, total: number) => void;
 };
 
 // Wall-clock-safe ceiling on how much extracted document text is sent to one
@@ -396,7 +399,10 @@ export async function runLiveFolderAudit(
 ): Promise<FolderAuditResult> {
   // Small audit (≤ AUDIT_BATCH_SIZE lines): single call — no overhead.
   if (lines.length <= AUDIT_BATCH_SIZE) {
-    return runLiveFolderAuditBatch(lines, docText, settings, opts);
+    opts.onBatchProgress?.(0, 1);
+    const result = await runLiveFolderAuditBatch(lines, docText, settings, opts);
+    opts.onBatchProgress?.(1, 1);
+    return result;
   }
 
   // Large audit: split lines into batches and run them all in parallel.
@@ -408,8 +414,11 @@ export async function runLiveFolderAudit(
     batches.push(lines.slice(i, i + AUDIT_BATCH_SIZE));
   }
 
+  opts.onBatchProgress?.(0, batches.length);
+  let completed = 0;
+
   const results = await Promise.all(
-    batches.map((batchLines) => {
+    batches.map(async (batchLines) => {
       // For the challenge pass, only surface prior verdicts that belong to the
       // lines in THIS batch — sending irrelevant verdicts wastes tokens and
       // confuses the model about which lines it should re-examine.
@@ -417,7 +426,9 @@ export async function runLiveFolderAudit(
       const batchOpts: FolderAuditOpts = opts.challenge
         ? { ...opts, challenge: opts.challenge.filter((c) => batchLineIds.has(c.lineId)) }
         : opts;
-      return runLiveFolderAuditBatch(batchLines, docText, settings, batchOpts);
+      const result = await runLiveFolderAuditBatch(batchLines, docText, settings, batchOpts);
+      opts.onBatchProgress?.(++completed, batches.length);
+      return result;
     })
   );
 

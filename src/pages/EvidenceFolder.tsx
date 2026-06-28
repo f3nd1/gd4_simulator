@@ -3,9 +3,165 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import type { FolderStatus } from "../types";
+import type { AuditProgressState, FolderStatus } from "../types";
 
 const SUMMARY_CAP = 320; // chars shown before the audit summary collapses
+
+// ── Audit Progress Modal ────────────────────────────────────────────────────
+
+const STAGE_LABELS: Record<AuditProgressState["stage"], string> = {
+  listing: "Connecting to Drive",
+  reading: "Reading files",
+  condensing: "Condensing documents",
+  auditing: "Running AI audit",
+  saving: "Saving verdicts",
+  complete: "Audit complete",
+  error: "Error",
+};
+
+const STAGE_ORDER: AuditProgressState["stage"][] = [
+  "listing", "reading", "auditing", "saving", "complete",
+];
+
+function stageProgress(p: AuditProgressState): number {
+  switch (p.stage) {
+    case "listing": return 4;
+    case "reading": {
+      const done = p.filesRead ?? 0;
+      const total = p.filesTotal ?? 1;
+      return 5 + Math.round(35 * (done / total));
+    }
+    case "condensing": return 44;
+    case "auditing": {
+      const done = p.batchCurrent ?? 0;
+      const total = p.batchTotal ?? 1;
+      return 50 + Math.round(35 * (done / total));
+    }
+    case "saving": return 88;
+    case "complete": return 100;
+    case "error": return 100;
+  }
+}
+
+function AuditProgressModal({ progress, onClose }: { progress: AuditProgressState; onClose: () => void }) {
+  const isDone = progress.stage === "complete" || progress.stage === "error";
+  const isError = progress.stage === "error";
+  const pct = stageProgress(progress);
+
+  const visibleStages = STAGE_ORDER.filter((s) => {
+    if (s === "condensing") return false; // shown via stageDetail only
+    return true;
+  });
+
+  const stageIndex = (s: AuditProgressState["stage"]) => STAGE_ORDER.indexOf(s);
+  const currentIdx = stageIndex(progress.stage === "error" || progress.stage === "complete" ? "complete" : progress.stage);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 999,
+      background: "rgba(15,23,42,0.55)", display: "flex", alignItems: "center", justifyContent: "center",
+    }}>
+      <div style={{
+        background: "#fff", borderRadius: 14, boxShadow: "0 8px 40px rgba(0,0,0,0.22)",
+        width: 480, maxWidth: "calc(100vw - 32px)", padding: "28px 28px 24px",
+        fontFamily: "inherit",
+      }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 18 }}>
+          <div style={{ flex: 1 }}>
+            {progress.overallTotal && progress.overallTotal > 1 && (
+              <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>
+                Audit All — folder {progress.overallCurrent ?? "?"} of {progress.overallTotal}
+              </div>
+            )}
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", lineHeight: 1.3 }}>
+              {progress.subCriterionId} {progress.folderName}
+            </div>
+          </div>
+          {isDone && (
+            <button
+              onClick={onClose}
+              style={{ border: "none", background: "transparent", fontSize: 18, cursor: "pointer", color: "#94a3b8", padding: "0 2px", lineHeight: 1, marginTop: -2 }}
+              aria-label="Close"
+            >
+              ×
+            </button>
+          )}
+        </div>
+
+        {/* Step indicator */}
+        <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 18 }}>
+          {visibleStages.map((s, i) => {
+            const idx = stageIndex(s);
+            const done = currentIdx > idx || (isDone && !isError);
+            const active = currentIdx === idx && !isDone;
+            const errThis = isError && currentIdx === idx;
+            return (
+              <div key={s} style={{ display: "flex", alignItems: "center", flex: s === "complete" ? "0 0 auto" : 1 }}>
+                <div style={{
+                  width: 26, height: 26, borderRadius: "50%", flexShrink: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 11, fontWeight: 700,
+                  background: errThis ? "#fee2e2" : done ? "#16a34a" : active ? "#2563eb" : "#f1f5f9",
+                  color: errThis ? "#b91c1c" : done ? "#fff" : active ? "#fff" : "#94a3b8",
+                  border: active ? "2px solid #2563eb" : errThis ? "2px solid #dc2626" : "2px solid transparent",
+                  transition: "background 0.3s",
+                }}>
+                  {errThis ? "!" : done ? "✓" : i + 1}
+                </div>
+                <div style={{ fontSize: 10, color: active ? "#2563eb" : done ? "#16a34a" : "#94a3b8", fontWeight: active ? 700 : 500, marginLeft: 4, whiteSpace: "nowrap" }}>
+                  {STAGE_LABELS[s]}
+                </div>
+                {i < visibleStages.length - 1 && (
+                  <div style={{ flex: 1, height: 2, background: done ? "#16a34a" : "#e2e8f0", margin: "0 6px", minWidth: 8 }} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Progress bar */}
+        <div style={{ background: "#f1f5f9", borderRadius: 6, height: 8, overflow: "hidden", marginBottom: 12 }}>
+          <div style={{
+            height: "100%", borderRadius: 6,
+            background: isError ? "#dc2626" : isDone ? "#16a34a" : "#2563eb",
+            width: `${pct}%`,
+            transition: "width 0.4s ease, background 0.3s",
+          }} />
+        </div>
+
+        {/* Live status text */}
+        {isError ? (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, color: "#b91c1c", lineHeight: 1.5 }}>
+            <b style={{ display: "block", marginBottom: 4 }}>Audit failed</b>
+            {progress.errorMessage || "An error occurred. Check your API key and folder access, then try again."}
+          </div>
+        ) : isDone ? (
+          <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#15803d", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 18 }}>✓</span>
+            <span>Audit complete — verdicts saved to the Sub-Criterion Checklist.</span>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12.5, color: "#475569", minHeight: 28, display: "flex", alignItems: "center", gap: 8 }}>
+            {progress.stage !== "complete" && (
+              <span style={{ display: "inline-block", width: 14, height: 14, borderRadius: "50%", border: "2.5px solid #cbd5e1", borderTopColor: "#2563eb", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+            )}
+            <span>{progress.stageDetail || STAGE_LABELS[progress.stage]}</span>
+          </div>
+        )}
+
+        {/* Condensing note */}
+        {progress.condensingTriggered && progress.stage !== "listing" && progress.stage !== "reading" && (
+          <div style={{ marginTop: 10, fontSize: 11.5, color: "#6b7280", background: "#f8fafc", borderRadius: 6, padding: "6px 10px" }}>
+            Large documents condensed with utility model so the full folder fits the audit.
+          </div>
+        )}
+      </div>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
 
 const STATUSES: FolderStatus[] = ["Good", "In Progress", "Partial", "Missing"];
 const ACCESS_TONE = { Connected: "good", Error: "critical", "Not Connected": "medium" } as const;
@@ -24,6 +180,8 @@ export function EvidenceFolder() {
   const auditors = useWorkspaceStore((s) => s.auditors);
   const activeAuditorId = useWorkspaceStore((s) => s.activeAuditorId);
   const setActiveAuditor = useWorkspaceStore((s) => s.setActiveAuditor);
+  const auditProgress = useWorkspaceStore((s) => s.auditProgress);
+  const clearAuditProgress = useWorkspaceStore((s) => s.clearAuditProgress);
   const [checkingAdditional, setCheckingAdditional] = useState(false);
 
   // The auditor a "Run audit" is performed on behalf of: explicit choice, else
@@ -77,6 +235,8 @@ export function EvidenceFolder() {
   const [showHelp, setShowHelp] = useState(false);
 
   return (
+    <>
+    {auditProgress && <AuditProgressModal progress={auditProgress} onClose={clearAuditProgress} />}
     <Card>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Evidence folder index</h3>
@@ -352,5 +512,6 @@ export function EvidenceFolder() {
         </tbody>
       </table>
     </Card>
+    </>
   );
 }

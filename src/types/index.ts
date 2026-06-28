@@ -375,6 +375,37 @@ export type EvidenceFolder = {
 
 export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation" | "Finding" | "CrossCriterion";
 
+// Live progress state emitted during an Evidence Folder audit. Updated
+// frequently (per-file, per-batch) so the UI can show a polished step
+// indicator and progress bar rather than a plain "Auditing…" label.
+export type AuditProgressStage =
+  | "listing"     // listing Drive folder contents
+  | "reading"     // extracting text / describing images
+  | "condensing"  // summarising large documents with the utility model
+  | "auditing"    // running AI verdict batches
+  | "saving"      // writing verdicts to the checklist store
+  | "complete"    // all done — results written
+  | "error";      // terminated by an error
+
+export type AuditProgressState = {
+  folderId: string;
+  folderName: string;
+  subCriterionId: string;
+  stage: AuditProgressStage;
+  stageDetail?: string;
+  filesRead?: number;
+  filesTotal?: number;
+  batchCurrent?: number;
+  batchTotal?: number;
+  // Set when the condensing step runs (not always needed — only for large folders).
+  condensingTriggered?: boolean;
+  // Non-null when stage === "error".
+  errorMessage?: string;
+  // Populated during "Audit All" so the modal can show "3 of 24".
+  overallCurrent?: number;
+  overallTotal?: number;
+};
+
 export type AIReviewLogEntry = {
   id: string;
   auditCycleId: string;
