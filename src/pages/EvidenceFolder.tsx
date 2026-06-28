@@ -89,31 +89,46 @@ function AuditProgressModal({ progress, onClose }: { progress: AuditProgressStat
           )}
         </div>
 
-        {/* Step indicator */}
-        <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 18 }}>
+        {/* Step indicator — circles on top, labels below, connector lines between circles */}
+        <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 20 }}>
           {visibleStages.map((s, i) => {
             const idx = stageIndex(s);
             const done = currentIdx > idx || (isDone && !isError);
             const active = currentIdx === idx && !isDone;
             const errThis = isError && currentIdx === idx;
+            const isLast = i === visibleStages.length - 1;
             return (
-              <div key={s} style={{ display: "flex", alignItems: "center", flex: s === "complete" ? "0 0 auto" : 1 }}>
-                <div style={{
-                  width: 26, height: 26, borderRadius: "50%", flexShrink: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 11, fontWeight: 700,
-                  background: errThis ? "#fee2e2" : done ? "#16a34a" : active ? "#2563eb" : "#f1f5f9",
-                  color: errThis ? "#b91c1c" : done ? "#fff" : active ? "#fff" : "#94a3b8",
-                  border: active ? "2px solid #2563eb" : errThis ? "2px solid #dc2626" : "2px solid transparent",
-                  transition: "background 0.3s",
-                }}>
-                  {errThis ? "!" : done ? "✓" : i + 1}
+              <div key={s} style={{ display: "flex", alignItems: "flex-start", flex: isLast ? "0 0 auto" : 1, minWidth: 0 }}>
+                {/* Circle + label column */}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: "50%",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 11, fontWeight: 700,
+                    background: errThis ? "#fee2e2" : done ? "#16a34a" : active ? "#2563eb" : "#f1f5f9",
+                    color: errThis ? "#b91c1c" : done ? "#fff" : active ? "#fff" : "#94a3b8",
+                    border: active ? "2px solid #2563eb" : errThis ? "2px solid #dc2626" : "2px solid transparent",
+                    transition: "background 0.3s",
+                    flexShrink: 0,
+                  }}>
+                    {errThis ? "!" : done ? "✓" : i + 1}
+                  </div>
+                  <div style={{
+                    fontSize: 9.5, marginTop: 5, textAlign: "center",
+                    color: active ? "#2563eb" : done ? "#16a34a" : "#94a3b8",
+                    fontWeight: active ? 700 : 500,
+                    maxWidth: 64, lineHeight: 1.25,
+                  }}>
+                    {STAGE_LABELS[s]}
+                  </div>
                 </div>
-                <div style={{ fontSize: 10, color: active ? "#2563eb" : done ? "#16a34a" : "#94a3b8", fontWeight: active ? 700 : 500, marginLeft: 4, whiteSpace: "nowrap" }}>
-                  {STAGE_LABELS[s]}
-                </div>
-                {i < visibleStages.length - 1 && (
-                  <div style={{ flex: 1, height: 2, background: done ? "#16a34a" : "#e2e8f0", margin: "0 6px", minWidth: 8 }} />
+                {/* Connector line between circles */}
+                {!isLast && (
+                  <div style={{
+                    flex: 1, height: 2, marginTop: 13,
+                    background: done ? "#16a34a" : "#e2e8f0",
+                    minWidth: 8,
+                  }} />
                 )}
               </div>
             );
