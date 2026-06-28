@@ -303,6 +303,14 @@ function FileLedger({
         )}
       </div>
 
+      {/* "All done reading — waiting for AI step" transitional indicator */}
+      {isActive && !progress?.currentFileName && files.length > 0 && totalRead === files.length && (
+        <div style={{ fontSize: 12, color: "#7c3aed", marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+          <span>🧩</span>
+          <span>All files read — preparing AI assessment<Dots /></span>
+        </div>
+      )}
+
       {/* Footer */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
         <div style={{ ...muted, display: "flex", gap: 8, flexWrap: "wrap", flex: 1 }}>
@@ -380,7 +388,17 @@ function ConnectDetail({ p, isActive }: { p: AuditProgressState; isActive: boole
 
 function ReadFilesDetail({ p, isActive, onSkipFile, onExportCsv }: { p: AuditProgressState; isActive: boolean; onSkipFile?: () => void; onExportCsv?: () => void }) {
   const files = p.filesFound ?? [];
-  return <FileLedger files={files} isActive={isActive} progress={p} onSkipFile={onSkipFile} onExportCsv={onExportCsv} />;
+  return (
+    <>
+      {p.stage === "condensing" && (
+        <div style={{ fontSize: 12, color: "#7c3aed", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+          <span>🗜️</span>
+          <span>Summarising large files to fit AI context — this may take a moment<Dots /></span>
+        </div>
+      )}
+      <FileLedger files={files} isActive={isActive} progress={p} onSkipFile={onSkipFile} onExportCsv={onExportCsv} />
+    </>
+  );
 }
 
 function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressState; isActive: boolean; onExportAISummary?: () => void }) {
