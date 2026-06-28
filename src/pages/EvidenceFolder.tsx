@@ -3,11 +3,12 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import type { AuditFileRecord, AuditProgressState, FolderStatus } from "../types";
+import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
+import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 
-const SUMMARY_CAP = 320; // chars shown before the audit summary collapses
+const SUMMARY_CAP = 320;
 
-// ── Audit Progress Modal ────────────────────────────────────────────────────
+// ── Shared styles ──────────────────────────────────────────────────────────
 
 const MODAL_KEYFRAMES = `
 @keyframes audit-pulse-ring {
@@ -21,7 +22,6 @@ const MODAL_KEYFRAMES = `
 }
 `;
 
-// Visual steps (condensing is folded into "Read files" visually)
 const VISUAL_STEPS = [
   { emoji: "🔌", label: "Connect" },
   { emoji: "📂", label: "Read files" },
@@ -30,7 +30,6 @@ const VISUAL_STEPS = [
   { emoji: "✅", label: "Complete" },
 ] as const;
 
-// Map audit stage → which visual step (0-based) it belongs to
 function stageToVisualStep(stage: AuditProgressState["stage"]): number {
   switch (stage) {
     case "listing":    return 0;
@@ -72,35 +71,7 @@ function Dots() {
   return <span style={{ color: "#93c5fd", letterSpacing: 2 }}>{"•".repeat(n)}</span>;
 }
 
-// ── Per-step detail panels ─────────────────────────────────────────────────
-
-function ConnectDetail({ p, isActive }: { p: AuditProgressState; isActive: boolean }) {
-  const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
-  if (isActive) {
-    return (
-      <div>
-        <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
-          Connecting to your Google Drive evidence folder<Dots />
-        </div>
-        <div style={muted}>Folder: <b>{p.folderName}</b> · sub-criterion {p.subCriterionId}</div>
-      </div>
-    );
-  }
-  const info = p.connectInfo;
-  return (
-    <div>
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: "#15803d", marginBottom: 6 }}>✓ Connected to Google Drive</div>
-      {info?.folderNames.map((n) => (
-        <div key={n} style={{ fontSize: 11.5, color: "#374151", marginBottom: 2 }}>
-          📁 {n}
-        </div>
-      ))}
-      {p.filesTotal != null && (
-        <div style={{ ...muted, marginTop: 4 }}>{p.filesTotal} file{p.filesTotal !== 1 ? "s" : ""} found</div>
-      )}
-    </div>
-  );
-}
+// ── File list components ───────────────────────────────────────────────────
 
 function FileStatusBadge({ file }: { file: AuditFileRecord }) {
   const badge =
@@ -120,7 +91,20 @@ function FileStatusBadge({ file }: { file: AuditFileRecord }) {
   );
 }
 
-// Dimension icons: shows which APSR dimensions this file was cited for
+function ProcessingModeBadge({ file }: { file: AuditFileRecord }) {
+  if (!file.processingMode) return null;
+  const badge =
+    file.processingMode === "reused"  ? { label: "♻ Cached",  color: "#7c3aed", bg: "#faf5ff" } :
+    file.processingMode === "changed" ? { label: "↻ Changed", color: "#b45309", bg: "#fffbeb" } :
+                                        null;
+  if (!badge) return null;
+  return (
+    <span style={{ fontSize: 9, padding: "0 4px", borderRadius: 3, background: badge.bg, color: badge.color, fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>
+      {badge.label}
+    </span>
+  );
+}
+
 function DimIcons({ file }: { file: AuditFileRecord }) {
   const dims = file.usedForDimensions;
   if (!dims) return null;
@@ -141,9 +125,105 @@ function DimIcons({ file }: { file: AuditFileRecord }) {
   );
 }
 
-function ReadFilesDetail({ p, isActive, onSkipFile }: { p: AuditProgressState; isActive: boolean; onSkipFile?: () => void }) {
-  const files = p.filesFound ?? [];
+type FileFilter = "all" | "read" | "cited" | "not_used" | "skipped" | "failed" | "new" | "changed" | "reused";
+type FileSort = "name" | "status" | "type";
+
+function FileRow({ file }: { file: AuditFileRecord }) {
+  const bucketLabel = file.bucket === "policy" ? "Policy" : file.bucket === "evidence" ? "Evid" : "Auto";
+  const bucketColor = file.bucket === "policy" ? "#1d4ed8" : file.bucket === "evidence" ? "#15803d" : "#9ca3af";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderBottom: "1px solid #f1f5f9", fontSize: 11 }}>
+      <span style={{ fontSize: 9, color: bucketColor, background: bucketColor + "18", borderRadius: 3, padding: "1px 4px", flexShrink: 0 }}>{bucketLabel}</span>
+      <span style={{ flex: 1, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.path}>{file.name}</span>
+      <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.fileKind}</span>
+      {file.charCount != null && <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.charCount.toLocaleString()}c</span>}
+      {file.suspectedScannedPdf && (
+        <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#fef3c7", color: "#92400e", fontWeight: 600, flexShrink: 0 }} title="Suspected scanned PDF">Scan?</span>
+      )}
+      {file.extractedTextQuality && file.extractedTextQuality !== "high" && !file.suspectedScannedPdf && (
+        <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#f1f5f9", color: "#64748b", flexShrink: 0 }}>{file.extractedTextQuality}</span>
+      )}
+      <ProcessingModeBadge file={file} />
+      <DimIcons file={file} />
+      <FileStatusBadge file={file} />
+      {file.failReason && <span style={{ fontSize: 9.5, color: "#b91c1c", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.failReason}>{file.failReason}</span>}
+      {file.skipReason && file.readStatus === "skipped" && <span style={{ fontSize: 9.5, color: "#9ca3af", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.skipReason}>{file.skipReason}</span>}
+    </div>
+  );
+}
+
+// Expandable file ledger with filter tabs, search and sort — used in both the
+// live audit progress modal and the read-only "View last run" modal.
+function FileLedger({
+  files,
+  isActive,
+  progress,
+  onSkipFile,
+  onExportCsv,
+}: {
+  files: AuditFileRecord[];
+  isActive?: boolean;
+  progress?: AuditProgressState;
+  onSkipFile?: () => void;
+  onExportCsv?: () => void;
+}) {
+  const [filter, setFilter] = useState<FileFilter>("all");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<FileSort>("status");
+  const [expanded, setExpanded] = useState(false);
+
   const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+
+  const totalRead    = files.filter((f) => f.readStatus === "read" || f.readStatus === "condensed").length;
+  const totalSkipped = files.filter((f) => f.readStatus === "skipped").length;
+  const totalFailed  = files.filter((f) => f.readStatus === "failed").length;
+  const totalCited   = files.filter((f) => f.auditStatus === "cited").length;
+  const totalNotUsed = files.filter((f) => f.auditStatus === "not_used").length;
+  const totalNew     = files.filter((f) => f.processingMode === "new").length;
+  const totalChanged = files.filter((f) => f.processingMode === "changed").length;
+  const totalReused  = files.filter((f) => f.processingMode === "reused").length;
+
+  const filterTabs: { key: FileFilter; label: string; count: number }[] = [
+    { key: "all",      label: "All",      count: files.length },
+    { key: "read",     label: "Read",     count: totalRead },
+    { key: "cited",    label: "Cited",    count: totalCited },
+    { key: "not_used", label: "Not used", count: totalNotUsed },
+    { key: "skipped",  label: "Skipped",  count: totalSkipped },
+    { key: "failed",   label: "Failed",   count: totalFailed },
+    ...(totalNew     > 0 ? [{ key: "new"     as FileFilter, label: "New",     count: totalNew }]     : []),
+    ...(totalChanged > 0 ? [{ key: "changed" as FileFilter, label: "Changed", count: totalChanged }] : []),
+    ...(totalReused  > 0 ? [{ key: "reused"  as FileFilter, label: "Cached",  count: totalReused }]  : []),
+  ];
+
+  const filtered = useMemo(() => {
+    let out = files;
+    if (filter === "read")     out = out.filter((f) => f.readStatus === "read" || f.readStatus === "condensed");
+    else if (filter === "cited")    out = out.filter((f) => f.auditStatus === "cited");
+    else if (filter === "not_used") out = out.filter((f) => f.auditStatus === "not_used");
+    else if (filter === "skipped")  out = out.filter((f) => f.readStatus === "skipped");
+    else if (filter === "failed")   out = out.filter((f) => f.readStatus === "failed");
+    else if (filter === "new")      out = out.filter((f) => f.processingMode === "new");
+    else if (filter === "changed")  out = out.filter((f) => f.processingMode === "changed");
+    else if (filter === "reused")   out = out.filter((f) => f.processingMode === "reused");
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      out = out.filter((f) => f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q));
+    }
+    const copy = [...out];
+    if (sort === "name")   copy.sort((a, b) => a.name.localeCompare(b.name));
+    else if (sort === "type") copy.sort((a, b) => a.fileKind.localeCompare(b.fileKind));
+    else {
+      const order = ["reading", "failed", "skipped", "condensed", "read", "found"];
+      const auditOrder = ["cited", "not_used", "audited", "pending"];
+      copy.sort((a, b) => {
+        const ai = auditOrder.indexOf(a.auditStatus);
+        const bi = auditOrder.indexOf(b.auditStatus);
+        if (ai !== bi) return ai - bi;
+        return order.indexOf(a.readStatus) - order.indexOf(b.readStatus);
+      });
+    }
+    return copy;
+  }, [files, filter, search, sort]);
 
   if (files.length === 0) {
     return isActive
@@ -151,22 +231,16 @@ function ReadFilesDetail({ p, isActive, onSkipFile }: { p: AuditProgressState; i
       : <div style={muted}>No file records available.</div>;
   }
 
-  const totalRead = files.filter((f) => f.readStatus === "read" || f.readStatus === "condensed").length;
-  const totalSkipped = files.filter((f) => f.readStatus === "skipped").length;
-  const totalFailed = files.filter((f) => f.readStatus === "failed").length;
-  const totalCited = files.filter((f) => f.auditStatus === "cited").length;
-  const totalNotUsed = files.filter((f) => f.auditStatus === "not_used").length;
-
   return (
     <div>
-      {isActive && p.currentFileName && (
+      {isActive && progress?.currentFileName && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
           <div style={{ fontSize: 12, color: "#374151", flex: 1, minWidth: 0 }}>
-            📂 Reading: <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{p.currentFileName}</span>
-            {p.currentFileAction && <span style={{ color: "#64748b", marginLeft: 6 }}>— {p.currentFileAction}</span>}
+            📂 Reading: <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{progress.currentFileName}</span>
+            {progress.currentFileAction && <span style={{ color: "#64748b", marginLeft: 6 }}>— {progress.currentFileAction}</span>}
             <Dots />
           </div>
-          {p.canSkipCurrentFile && onSkipFile && (
+          {progress.canSkipCurrentFile && onSkipFile && (
             <button
               onClick={onSkipFile}
               title="Abort reading this file and move on to the next one"
@@ -177,72 +251,232 @@ function ReadFilesDetail({ p, isActive, onSkipFile }: { p: AuditProgressState; i
           )}
         </div>
       )}
-      <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6, background: "#fff" }}>
-        {files.map((file) => {
-          const bucketLabel = file.bucket === "policy" ? "Policy" : "Evidence";
-          const bucketColor = file.bucket === "policy" ? "#1d4ed8" : "#15803d";
-          return (
-            <div key={file.path} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderBottom: "1px solid #f1f5f9", fontSize: 11 }}>
-              <span style={{ fontSize: 9.5, color: bucketColor, background: bucketColor + "18", borderRadius: 3, padding: "1px 4px", flexShrink: 0 }}>{bucketLabel}</span>
-              <span style={{ flex: 1, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.path}>{file.name}</span>
-              <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.fileKind}</span>
-              {file.charCount != null && <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.charCount.toLocaleString()}c</span>}
-              {file.suspectedScannedPdf && (
-                <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#fef3c7", color: "#92400e", fontWeight: 600, flexShrink: 0 }} title="Suspected scanned PDF — little extractable text">Scan?</span>
-              )}
-              {file.extractedTextQuality && file.extractedTextQuality !== "high" && !file.suspectedScannedPdf && (
-                <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#f1f5f9", color: "#64748b", flexShrink: 0 }}>{file.extractedTextQuality}</span>
-              )}
-              <DimIcons file={file} />
-              <FileStatusBadge file={file} />
-              {file.failReason && <span style={{ fontSize: 9.5, color: "#b91c1c", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.failReason}>{file.failReason}</span>}
-              {file.skipReason && file.readStatus === "skipped" && <span style={{ fontSize: 9.5, color: "#9ca3af", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.skipReason}>{file.skipReason}</span>}
-            </div>
-          );
-        })}
+
+      {/* Filter tabs + controls */}
+      <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+        {filterTabs.filter(t => t.count > 0 || t.key === "all").map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setFilter(t.key)}
+            style={{
+              cursor: "pointer", fontSize: 10, padding: "2px 7px", borderRadius: 10,
+              border: filter === t.key ? "1px solid #3b82f6" : "1px solid #e2e8f0",
+              background: filter === t.key ? "#eff6ff" : "#f8fafc",
+              color: filter === t.key ? "#1d4ed8" : "#64748b",
+              fontWeight: filter === t.key ? 700 : 400,
+            }}
+          >
+            {t.label} {t.count}
+          </button>
+        ))}
+        <div style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+          <input
+            placeholder="Search…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ ...inputStyle, width: 90, padding: "2px 5px", fontSize: 10 }}
+          />
+          <select value={sort} onChange={(e) => setSort(e.target.value as FileSort)} style={{ ...inputStyle, padding: "2px 4px", fontSize: 10 }}>
+            <option value="status">Sort: status</option>
+            <option value="name">Sort: name</option>
+            <option value="type">Sort: type</option>
+          </select>
+        </div>
       </div>
-      <div style={{ ...muted, marginTop: 5, display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <span><b>{files.length}</b> files found</span>
-        {totalRead > 0 && <span style={{ color: "#15803d" }}><b>{totalRead}</b> read</span>}
-        {totalCited > 0 && <span style={{ color: "#0369a1" }}><b>{totalCited}</b> cited</span>}
-        {totalNotUsed > 0 && <span style={{ color: "#6b7280" }}><b>{totalNotUsed}</b> not used</span>}
-        {totalSkipped > 0 && <span><b>{totalSkipped}</b> skipped</span>}
-        {totalFailed > 0 && <span style={{ color: "#b91c1c" }}><b>{totalFailed}</b> failed</span>}
+
+      {/* File list */}
+      <div
+        style={{
+          maxHeight: expanded ? 560 : 320,
+          overflowY: "auto",
+          border: "1px solid #e2e8f0",
+          borderRadius: 6,
+          background: "#fff",
+          transition: "max-height 0.2s",
+        }}
+      >
+        {filtered.map((file) => <FileRow key={file.path} file={file} />)}
+        {filtered.length === 0 && (
+          <div style={{ padding: "12px", color: "#94a3b8", fontSize: 11.5, textAlign: "center" }}>
+            No files match this filter.
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
+        <div style={{ ...muted, display: "flex", gap: 8, flexWrap: "wrap", flex: 1 }}>
+          <span><b>{files.length}</b> files</span>
+          {totalRead > 0 && <span style={{ color: "#15803d" }}><b>{totalRead}</b> read</span>}
+          {totalCited > 0 && <span style={{ color: "#0369a1" }}><b>{totalCited}</b> cited</span>}
+          {totalNotUsed > 0 && <span style={{ color: "#6b7280" }}><b>{totalNotUsed}</b> not used</span>}
+          {totalSkipped > 0 && <span><b>{totalSkipped}</b> skipped</span>}
+          {totalFailed > 0 && <span style={{ color: "#b91c1c" }}><b>{totalFailed}</b> failed</span>}
+          {totalReused > 0 && <span style={{ color: "#7c3aed" }}><b>{totalReused}</b> cached</span>}
+        </div>
+        {files.length > 8 && (
+          <button
+            onClick={() => setExpanded((e) => !e)}
+            style={{ cursor: "pointer", border: "none", background: "transparent", color: "#2563eb", fontSize: 10.5, padding: 0 }}
+          >
+            {expanded ? "↑ Collapse" : "↓ Expand"}
+          </button>
+        )}
+        {onExportCsv && (
+          <button
+            onClick={onExportCsv}
+            title="Download file ledger as CSV"
+            style={{ cursor: "pointer", fontSize: 10, padding: "2px 8px", borderRadius: 5, border: "1px solid #cbd5e1", background: "#fff", color: "#374151" }}
+          >
+            ⬇ CSV
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-function AuditStepDetail({ p, isActive }: { p: AuditProgressState; isActive: boolean }) {
+// ── Per-step detail panels ─────────────────────────────────────────────────
+
+function ConnectDetail({ p, isActive }: { p: AuditProgressState; isActive: boolean }) {
   const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
-  const batch = p.batchCurrent ?? 0;
-  const total = p.batchTotal ?? 1;
-  const isStrict = p.stageDetail?.includes("strict") || p.stageDetail?.includes("challenge");
   if (isActive) {
     return (
       <div>
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
-          🤖 {isStrict ? "Running strict challenge pass" : `Asking AI to assess your evidence — batch ${batch} of ${total}`}<Dots />
+          Connecting to your Google Drive evidence folder<Dots />
         </div>
-        <div style={{ ...muted, marginBottom: 4 }}>
-          {isStrict ? "Re-checking every Met/Partial verdict: is this truly implemented with records, or just a policy on paper?" : "Comparing your evidence files against each GD4 checklist requirement and writing verdicts"}
-        </div>
-        <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {p.filesTotal != null && <span><b>{p.filesTotal}</b> file{p.filesTotal !== 1 ? "s" : ""} in scope</span>}
-          {total > 1 && <span>Batch <b>{batch}</b> of <b>{total}</b></span>}
-          <span>{p.auditLive ? "Live AI" : "Offline estimate"}</span>
+        <div style={muted}>Folder: <b>{p.folderName}</b> · sub-criterion {p.subCriterionId}
+          {p.scope && p.scope !== "both" && (
+            <span style={{ marginLeft: 8, fontSize: 10, background: "#eff6ff", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>
+              {p.scope === "policy" ? "Policy only" : "Evidence only"}
+            </span>
+          )}
         </div>
       </div>
     );
   }
+  const info = p.connectInfo;
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: "#15803d", marginBottom: 6 }}>✓ Connected to Google Drive</div>
+      {info?.folderNames.map((n) => (
+        <div key={n} style={{ fontSize: 11.5, color: "#374151", marginBottom: 2 }}>
+          📁 {n}
+        </div>
+      ))}
+      {p.filesTotal != null && (
+        <div style={{ ...muted, marginTop: 4 }}>{p.filesTotal} file{p.filesTotal !== 1 ? "s" : ""} found
+          {p.scope && p.scope !== "both" && (
+            <span style={{ marginLeft: 8, fontSize: 10, background: "#eff6ff", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>
+              {p.scope === "policy" ? "Policy only" : "Evidence only"}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReadFilesDetail({ p, isActive, onSkipFile, onExportCsv }: { p: AuditProgressState; isActive: boolean; onSkipFile?: () => void; onExportCsv?: () => void }) {
+  const files = p.filesFound ?? [];
+  return <FileLedger files={files} isActive={isActive} progress={p} onSkipFile={onSkipFile} onExportCsv={onExportCsv} />;
+}
+
+function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressState; isActive: boolean; onExportAISummary?: () => void }) {
+  const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+  const batch = p.batchCurrent ?? 0;
+  const total = p.batchTotal ?? 1;
+  const isStrict = p.stageDetail?.includes("strict") || p.stageDetail?.includes("challenge");
+
+  const files = p.filesFound ?? [];
+  const totalNew     = files.filter((f) => f.processingMode === "new").length;
+  const totalChanged = files.filter((f) => f.processingMode === "changed").length;
+  const totalReused  = files.filter((f) => f.processingMode === "reused").length;
+  const hasProcessingModes = totalNew + totalChanged + totalReused > 0;
+
+  if (isActive) {
+    return (
+      <div>
+        <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
+          🤖 {isStrict ? "Running strict challenge pass" : `Asking AI — batch ${batch} of ${total}`}<Dots />
+        </div>
+        <div style={{ ...muted, marginBottom: 4 }}>
+          {isStrict ? "Re-checking every Met/Partial verdict: truly implemented, or just a policy on paper?" : "Comparing evidence against GD4 checklist requirements and writing verdicts"}
+        </div>
+        <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {p.filesTotal != null && <span><b>{p.filesTotal}</b> file{p.filesTotal !== 1 ? "s" : ""}</span>}
+          {p.chunksCount != null && <span><b>{p.chunksCount}</b> chunks</span>}
+          {total > 1 && <span>Batch <b>{batch}</b>/<b>{total}</b></span>}
+          {p.aiModel && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#64748b" }}>{p.aiModel}</span>}
+          <span>{p.auditLive ? "Live AI" : "Offline"}</span>
+        </div>
+        {hasProcessingModes && (
+          <div style={{ ...muted, marginTop: 4, display: "flex", gap: 8 }}>
+            {totalNew > 0 && <span><b>{totalNew}</b> new</span>}
+            {totalChanged > 0 && <span><b>{totalChanged}</b> changed</span>}
+            {totalReused > 0 && <span style={{ color: "#7c3aed" }}><b>{totalReused}</b> cached</span>}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Completed Ask AI panel — show verdicts table if available
+  const verdicts = p.verdictLines ?? [];
   return (
     <div>
       <div style={{ fontSize: 12.5, fontWeight: 600, color: "#15803d", marginBottom: 4 }}>✓ AI audit complete</div>
-      <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 10, flexWrap: "wrap" }}>
-        {p.filesTotal != null && <span><b>{p.filesTotal}</b> files analysed</span>}
+      <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+        {p.filesTotal != null && <span><b>{p.filesTotal}</b> files</span>}
+        {p.chunksCount != null && <span><b>{p.chunksCount}</b> chunks</span>}
         {total > 1 && <span><b>{total}</b> batch{total !== 1 ? "es" : ""}</span>}
-        <span>{p.auditLive ? "Live AI" : "Offline estimate"}</span>
+        {p.aiModel && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#64748b" }}>{p.aiModel}</span>}
+        <span>{p.auditLive ? "Live AI" : "Offline"}</span>
+        {hasProcessingModes && <>
+          {totalNew > 0 && <span><b>{totalNew}</b> new</span>}
+          {totalChanged > 0 && <span><b>{totalChanged}</b> changed</span>}
+          {totalReused > 0 && <span style={{ color: "#7c3aed" }}><b>{totalReused}</b> cached</span>}
+        </>}
       </div>
+      {verdicts.length > 0 && (
+        <div>
+          <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+                  <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Line</th>
+                  <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Result</th>
+                  <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>A·P·S·R</th>
+                  <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Cited</th>
+                </tr>
+              </thead>
+              <tbody>
+                {verdicts.map((v) => {
+                  const resultColor = v.result === "Met" ? "#15803d" : v.result === "Partial" ? "#b45309" : "#b91c1c";
+                  const apsrSummary = [v.approachStatus[0], v.processesStatus[0], v.systemsOutcomesStatus[0], v.reviewStatus[0]].join("·");
+                  return (
+                    <tr key={v.lineId} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                      <td style={{ padding: "3px 6px", fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#374151" }} title={v.lineText}>{v.lineId}</td>
+                      <td style={{ padding: "3px 6px", fontWeight: 700, color: resultColor }}>{v.result}</td>
+                      <td style={{ padding: "3px 6px", fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#6b7280" }}>{apsrSummary}</td>
+                      <td style={{ padding: "3px 6px", fontSize: 10, color: "#6b7280" }}>{v.citedChunkIds.length > 0 ? v.citedChunkIds.join(", ") : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {onExportAISummary && (
+            <button
+              onClick={onExportAISummary}
+              style={{ marginTop: 5, cursor: "pointer", fontSize: 10, padding: "2px 8px", borderRadius: 5, border: "1px solid #cbd5e1", background: "#fff", color: "#374151" }}
+            >
+              ⬇ Export AI summary CSV
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -257,7 +491,7 @@ function SaveStepDetail({ p, isActive }: { p: AuditProgressState; isActive: bool
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>💾 Saving AI verdicts to your checklist<Dots /></div>
         <div style={{ ...muted, display: "flex", gap: 10, flexWrap: "wrap" }}>
           {lines > 0 && <span><b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed</span>}
-          {issues > 0 && <span style={{ color: "#b45309" }}><b>{issues}</b> potential gap{issues !== 1 ? "s" : ""} flagged</span>}
+          {issues > 0 && <span style={{ color: "#b45309" }}><b>{issues}</b> potential gap{issues !== 1 ? "s" : ""}</span>}
         </div>
         <div style={{ ...muted, marginTop: 4 }}>Verdicts will appear in the Sub-Criterion Checklist once this step completes.</div>
       </div>
@@ -274,18 +508,16 @@ function SaveStepDetail({ p, isActive }: { p: AuditProgressState; isActive: bool
   );
 }
 
-function CompleteDetail({ p }: { p: AuditProgressState }) {
+function CompleteDetail({ p, onExportFileLedger, onExportAISummary }: { p: AuditProgressState; onExportFileLedger?: () => void; onExportAISummary?: () => void }) {
   const lines = p.linesAssessed ?? 0;
   const issues = p.findingsDetected ?? 0;
   const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
-
-  // File summary stats
   const files = p.filesFound ?? [];
-  const totalFound = files.length;
-  const totalRead = files.filter((f) => f.readStatus === "read" || f.readStatus === "condensed").length;
+  const totalFound   = files.length;
+  const totalRead    = files.filter((f) => f.readStatus === "read" || f.readStatus === "condensed").length;
   const totalSkipped = files.filter((f) => f.readStatus === "skipped").length;
-  const totalFailed = files.filter((f) => f.readStatus === "failed").length;
-  const totalCited = files.filter((f) => f.auditStatus === "cited").length;
+  const totalFailed  = files.filter((f) => f.readStatus === "failed").length;
+  const totalCited   = files.filter((f) => f.auditStatus === "cited").length;
   const totalNotUsed = files.filter((f) => f.auditStatus === "not_used").length;
 
   return (
@@ -293,11 +525,11 @@ function CompleteDetail({ p }: { p: AuditProgressState }) {
       <div style={{ fontSize: 14, fontWeight: 700, color: "#15803d", marginBottom: 8 }}>Audit finished successfully!</div>
       <div style={{ padding: "8px 12px", background: "#f0fdf4", borderRadius: 8, fontSize: 12.5, color: "#166534", display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 6 }}>
         {lines > 0 && <span>✓ <b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed</span>}
-        {issues > 0 ? <span>⚠ <b>{issues}</b> potential issue{issues !== 1 ? "s" : ""} flagged</span> : lines > 0 ? <span>✓ No issues flagged</span> : null}
+        {issues > 0 ? <span>⚠ <b>{issues}</b> potential issue{issues !== 1 ? "s" : ""}</span> : lines > 0 ? <span>✓ No issues flagged</span> : null}
       </div>
       {totalFound > 0 && (
-        <div style={{ padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#374151", display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
-          <span><b>{totalFound}</b> files found</span>
+        <div style={{ padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#374151", display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+          <span><b>{totalFound}</b> files</span>
           {totalRead > 0 && <span style={{ color: "#15803d" }}><b>{totalRead}</b> read</span>}
           {totalCited > 0 && <span style={{ color: "#0369a1" }}><b>{totalCited}</b> cited by AI</span>}
           {totalNotUsed > 0 && <span style={{ color: "#6b7280" }}><b>{totalNotUsed}</b> not used</span>}
@@ -305,7 +537,27 @@ function CompleteDetail({ p }: { p: AuditProgressState }) {
           {totalFailed > 0 && <span style={{ color: "#b91c1c" }}><b>{totalFailed}</b> failed</span>}
         </div>
       )}
-      <div style={muted}>Check the Sub-Criterion Checklist to review verdicts and evidence.</div>
+      <div style={{ ...muted, marginBottom: 8 }}>Check the Sub-Criterion Checklist to review verdicts and evidence.</div>
+      {(onExportFileLedger || onExportAISummary) && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {onExportFileLedger && (
+            <button
+              onClick={onExportFileLedger}
+              style={{ cursor: "pointer", fontSize: 11, padding: "5px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#374151" }}
+            >
+              ⬇ File ledger CSV
+            </button>
+          )}
+          {onExportAISummary && (
+            <button
+              onClick={onExportAISummary}
+              style={{ cursor: "pointer", fontSize: 11, padding: "5px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#374151" }}
+            >
+              ⬇ AI summary CSV
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -316,7 +568,6 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
   const linesAssessed = p.linesAssessed ?? 0;
   const partialSaved = linesAssessed > 0;
 
-  // Detect which step failed from what was completed before the error
   let failedStep: string;
   let guidance: string;
   if (filesFound === 0 && filesRead === 0) {
@@ -324,10 +575,10 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
     guidance = "Check that your Google Drive is still connected (Settings → Google Drive) and that the folder link is correct. If the folder is in a Shared Drive, make sure your Google account has at least Viewer access.";
   } else if (filesRead === 0 || (p.filesTotal != null && filesRead < p.filesTotal)) {
     failedStep = "Reading evidence files";
-    guidance = "One or more files could not be read. Password-protected PDFs and unsupported file types are skipped automatically — this error usually means a network issue or an unusually large file. Try running the audit again; the folder will be re-scanned from the beginning.";
+    guidance = "One or more files could not be read. Password-protected PDFs and unsupported file types are skipped automatically — this error usually means a network issue or an unusually large file. Try running the audit again.";
   } else {
     failedStep = "Asking AI to assess";
-    guidance = "The AI call timed out or was rejected. Check your OpenAI key in Settings → AI Settings (key must start with 'sk-'). If the folder has more than 15–20 files, try reducing it to the most relevant ones — smaller folders complete faster and are less likely to time out.";
+    guidance = "The AI call timed out or was rejected. Check your OpenAI key in Settings → AI Settings. If the folder has more than 15–20 files, try reducing it to the most relevant ones.";
   }
 
   return (
@@ -340,11 +591,11 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
       </div>
       {partialSaved ? (
         <div style={{ fontSize: 12, color: "#15803d", background: "#f0fdf4", borderRadius: 8, padding: "6px 10px", marginBottom: 8 }}>
-          ✓ <b>{linesAssessed}</b> checklist verdict{linesAssessed !== 1 ? "s" : ""} were saved before the error — those results are kept in the checklist.
+          ✓ <b>{linesAssessed}</b> verdict{linesAssessed !== 1 ? "s" : ""} saved before the error — those results are kept.
         </div>
       ) : (
         <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 8 }}>
-          No checklist verdicts were saved — you can safely run the audit again once the issue is fixed.
+          No verdicts saved — you can safely run the audit again once the issue is fixed.
         </div>
       )}
       <div style={{ fontSize: 11.5, color: "#374151" }}>
@@ -354,33 +605,45 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
   );
 }
 
-function StepDetail({ step, p, onSkipFile }: { step: number; p: AuditProgressState; onSkipFile?: () => void }) {
+function StepDetail({
+  step, p, onSkipFile, onExportFileLedger, onExportAISummary,
+}: {
+  step: number;
+  p: AuditProgressState;
+  onSkipFile?: () => void;
+  onExportFileLedger?: () => void;
+  onExportAISummary?: () => void;
+}) {
   const currentStep = stageToVisualStep(p.stage);
   const isActive = step === currentStep;
   const isError = p.stage === "error";
   if (isError && step === currentStep) return <ErrorDetail p={p} />;
   switch (step) {
     case 0: return <ConnectDetail p={p} isActive={isActive} />;
-    case 1: return <ReadFilesDetail p={p} isActive={isActive} onSkipFile={onSkipFile} />;
-    case 2: return <AuditStepDetail p={p} isActive={isActive} />;
+    case 1: return <ReadFilesDetail p={p} isActive={isActive} onSkipFile={onSkipFile} onExportCsv={onExportFileLedger} />;
+    case 2: return <AuditStepDetail p={p} isActive={isActive} onExportAISummary={onExportAISummary} />;
     case 3: return <SaveStepDetail p={p} isActive={isActive} />;
-    case 4: return <CompleteDetail p={p} />;
+    case 4: return <CompleteDetail p={p} onExportFileLedger={onExportFileLedger} onExportAISummary={onExportAISummary} />;
     default: return null;
   }
 }
 
-const STUCK_THRESHOLD_MS = 60_000; // warn after 60s of no heartbeat on same file
+const STUCK_THRESHOLD_MS = 60_000;
 
 function AuditProgressModal({
   progress,
   onClose,
   onCancel,
   onSkipFile,
+  onExportFileLedger,
+  onExportAISummary,
 }: {
   progress: AuditProgressState;
   onClose: () => void;
   onCancel: () => void;
   onSkipFile: () => void;
+  onExportFileLedger: () => void;
+  onExportAISummary: () => void;
 }) {
   const pct = stageProgress(progress);
   const isError = progress.stage === "error";
@@ -388,18 +651,15 @@ function AuditProgressModal({
   const isRunning = !isDone && !isError;
   const currentStep = stageToVisualStep(progress.stage);
 
-  // selectedStep: null = auto-follow active step; number = user has pinned a step
   const [selectedStep, setSelectedStep] = useState<number | null>(null);
-  // Auto-advance: when currentStep moves forward and user hasn't pinned, follow it
   const prevCurrentStep = useRef(currentStep);
   useEffect(() => {
     if (prevCurrentStep.current !== currentStep) {
       prevCurrentStep.current = currentStep;
-      setSelectedStep(null); // clear pin, follow new active step
+      setSelectedStep(null);
     }
   }, [currentStep]);
 
-  // Stuck guard: check heartbeat every 5s; show warning if >60s with no update.
   const [isStuck, setIsStuck] = useState(false);
   useEffect(() => {
     if (!isRunning) { setIsStuck(false); return; }
@@ -412,7 +672,6 @@ function AuditProgressModal({
     return () => clearInterval(t);
   }, [isRunning, progress.lastHeartbeatAt]);
 
-  // Close confirmation: ask before dismissing a running audit.
   const handleClose = () => {
     if (isRunning) {
       if (window.confirm("The audit is still running. Cancel it and close?")) {
@@ -429,26 +688,31 @@ function AuditProgressModal({
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
       <style>{MODAL_KEYFRAMES}</style>
-      <div style={{ background: "#fff", borderRadius: 16, padding: "28px 28px 24px", width: "100%", maxWidth: 560, boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "28px 28px 24px", width: "100%", maxWidth: 860, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", maxHeight: "92vh", overflowY: "auto" }}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 20 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>{isRunning ? "Running folder audit" : isDone ? "Audit complete" : "Audit stopped"}</div>
-            <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
-              {progress.folderName}
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#0f172a" }}>
+              {isRunning ? "Running folder audit" : isDone ? "Audit complete" : "Audit stopped"}
+            </div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 2, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <span>{progress.folderName}</span>
+              {progress.scope && progress.scope !== "both" && (
+                <span style={{ fontSize: 10, background: "#eff6ff", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>
+                  {progress.scope === "policy" ? "Policy only" : "Evidence only"}
+                </span>
+              )}
               {progress.overallTotal && progress.overallCurrent != null && (
-                <span style={{ marginLeft: 8, background: "#f1f5f9", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>
+                <span style={{ background: "#f1f5f9", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>
                   Folder {progress.overallCurrent} of {progress.overallTotal}
                 </span>
               )}
             </div>
           </div>
-          {/* Cancel button — always shown while running; becomes X when done/error */}
           {isRunning ? (
             <button
               onClick={onCancel}
-              title="Stop the audit and close. Files read so far are not saved."
               style={{ cursor: "pointer", border: "1px solid #fca5a5", background: "#fff5f5", borderRadius: 7, fontSize: 11.5, fontWeight: 600, color: "#b23121", padding: "5px 12px", whiteSpace: "nowrap", marginLeft: 8 }}
             >
               Cancel audit
@@ -458,15 +722,14 @@ function AuditProgressModal({
           )}
         </div>
 
-        {/* Stuck warning */}
         {isStuck && (
           <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#9a3412", marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
             <span>⚠</span>
-            <span>This file has been reading for over 60 seconds — it may be stuck. Click <b>Skip file</b> to move on, or <b>Cancel audit</b> to stop.</span>
+            <span>This file has been reading for over 60 seconds — it may be stuck. Click <b>Skip file</b> or <b>Cancel audit</b> to stop.</span>
           </div>
         )}
 
-        {/* Horizontal step flow — completed and active steps are clickable */}
+        {/* Step flow */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18, padding: "0 4px" }}>
           {VISUAL_STEPS.map((step, i) => {
             const status: "done" | "active" | "future" | "error" =
@@ -485,14 +748,8 @@ function AuditProgressModal({
                 >
                   <div style={{
                     width: 42, height: 42, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
-                    background:
-                      status === "done" ? "#dcfce7" :
-                      status === "active" ? "#2563eb" :
-                      status === "error" ? "#fee2e2" : "#f1f5f9",
-                    color:
-                      status === "done" ? "#15803d" :
-                      status === "active" ? "#fff" :
-                      status === "error" ? "#b23121" : "#cbd5e1",
+                    background: status === "done" ? "#dcfce7" : status === "active" ? "#2563eb" : status === "error" ? "#fee2e2" : "#f1f5f9",
+                    color: status === "done" ? "#15803d" : status === "active" ? "#fff" : status === "error" ? "#b23121" : "#cbd5e1",
                     transition: "background 0.4s, color 0.4s",
                     animation: status === "active" ? "audit-pulse-ring 2s ease-in-out infinite" : "none",
                     outline: isSelected ? "2px solid #3b82f6" : "none",
@@ -517,35 +774,187 @@ function AuditProgressModal({
         {/* Progress bar */}
         <div style={{ background: "#f1f5f9", borderRadius: 6, height: 6, overflow: "hidden", marginBottom: 18 }}>
           <div style={{
-            height: "100%",
-            width: `${pct}%`,
-            borderRadius: 6,
+            height: "100%", width: `${pct}%`, borderRadius: 6,
             background: isError ? "#ef4444" : isDone ? "#22c55e" : "linear-gradient(90deg, #3b82f6 0%, #60a5fa 50%, #93c5fd 100%)",
-            backgroundSize: "200% 100%",
-            transition: "width 0.5s ease",
+            backgroundSize: "200% 100%", transition: "width 0.5s ease",
             animation: !isDone && !isError ? "audit-shimmer 2s linear infinite" : "none",
           }} />
         </div>
 
-        {/* Per-step detail panel */}
+        {/* Detail panel */}
         <div style={{ background: "#f8fafc", borderRadius: 10, padding: "14px 16px", minHeight: 80 }}>
           {selectedStep !== null && selectedStep !== currentStep && (
             <div style={{ fontSize: 10.5, color: "#94a3b8", marginBottom: 6 }}>
               {VISUAL_STEPS[selectedStep].emoji} {VISUAL_STEPS[selectedStep].label} — click the active step to return to live view
             </div>
           )}
-          <StepDetail step={displayStep} p={progress} onSkipFile={progress.canSkipCurrentFile ? onSkipFile : undefined} />
+          <StepDetail
+            step={displayStep}
+            p={progress}
+            onSkipFile={progress.canSkipCurrentFile ? onSkipFile : undefined}
+            onExportFileLedger={onExportFileLedger}
+            onExportAISummary={onExportAISummary}
+          />
         </div>
 
-        {/* Done / error button */}
+        {/* Completion buttons — stay open after done */}
         {(isDone || isError) && (
+          <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {isDone && (
+              <Link
+                to={`/sub-checklist?item=${progress.subCriterionId}.1`}
+                style={{ flex: 1, cursor: "pointer", padding: "10px", borderRadius: 10, border: "none", background: "#dcfce7", color: "#15803d", fontWeight: 700, fontSize: 13, textAlign: "center", textDecoration: "none", display: "block" }}
+              >
+                View results →
+              </Link>
+            )}
+            {isError && (
+              <button
+                onClick={onClose}
+                style={{ flex: 1, cursor: "pointer", padding: "10px", borderRadius: 10, border: "none", background: "#fee2e2", color: "#b23121", fontWeight: 700, fontSize: 13 }}
+              >
+                Dismiss
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              style={{ cursor: "pointer", padding: "10px 16px", borderRadius: 10, border: "1px solid #e2e8f0", background: "#fff", color: "#64748b", fontSize: 12 }}
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Read-only "View last run" modal ────────────────────────────────────────
+
+function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => void }) {
+  const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
+
+  const handleExportFileLedger = () => {
+    const csv = exportFileLedgerCsv(run);
+    downloadCsv(csv, auditCsvFilename("gd4-audit-file-ledger", run));
+  };
+
+  const handleExportAISummary = () => {
+    const csv = exportAISummaryCsv(run);
+    downloadCsv(csv, auditCsvFilename("gd4-audit-ai-summary", run));
+  };
+
+  const verdicts = run.aiSummary;
+  const met      = verdicts.filter((v) => v.result === "Met").length;
+  const partial  = verdicts.filter((v) => v.result === "Partial").length;
+  const notMet   = verdicts.filter((v) => v.result === "Not met").length;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "24px 24px 20px", width: "100%", maxWidth: 860, boxShadow: "0 20px 60px rgba(0,0,0,0.18)", maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", marginBottom: 16 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
+              Audit run — {run.subCriterionId} {run.subCriterionTitle}
+            </div>
+            <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 2, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontFamily: "ui-monospace,monospace", background: "#f1f5f9", border: "1px solid #d1d5db", borderRadius: 4, padding: "1px 5px" }}>{run.runId}</span>
+              <span>{new Date(run.startedAt).toLocaleString()}</span>
+              {run.scope !== "both" && (
+                <span style={{ fontSize: 10, background: "#eff6ff", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>
+                  {run.scope === "policy" ? "Policy only" : "Evidence only"}
+                </span>
+              )}
+              <span style={{ fontSize: 10, background: run.status === "completed" ? "#f0fdf4" : "#fef2f2", color: run.status === "completed" ? "#15803d" : "#b91c1c", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>
+                {run.status}
+              </span>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#94a3b8", lineHeight: 1, padding: "0 0 0 8px", marginTop: -2 }}>×</button>
+        </div>
+
+        {/* Metadata row */}
+        <div style={{ padding: "8px 10px", background: "#f8fafc", borderRadius: 8, fontSize: 11.5, color: "#374151", display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12 }}>
+          {run.auditorName && <span><span style={muted}>Auditor:</span> {run.auditorName}</span>}
+          {run.aiModel && <span><span style={muted}>Model:</span> <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5 }}>{run.aiModel}</span></span>}
+          <span><span style={muted}>AI:</span> {run.auditLive ? "Live" : "Offline"}</span>
+          {run.chunkCount > 0 && <span><span style={muted}>Chunks:</span> {run.chunkCount}</span>}
+          {run.batchCount > 0 && <span><span style={muted}>Batches:</span> {run.batchCount}</span>}
+          <span><span style={muted}>Lines:</span> {run.linesAssessed}</span>
+        </div>
+
+        {/* Verdict summary */}
+        {verdicts.length > 0 && (
+          <div style={{ padding: "6px 10px", background: "#f0fdf4", borderRadius: 8, fontSize: 12, color: "#166534", display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+            <span>✓ <b>{met}</b> Met</span>
+            <span>◐ <b>{partial}</b> Partial</span>
+            <span>✗ <b>{notMet}</b> Not met</span>
+          </div>
+        )}
+
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          {/* File ledger */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>File ledger ({run.fileLedger.length} files)</div>
+            <FileLedger files={run.fileLedger} onExportCsv={handleExportFileLedger} />
+          </div>
+
+          {/* AI summary table */}
+          {verdicts.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>AI summary ({verdicts.length} lines)</div>
+              <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6, marginBottom: 6 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+                      <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Line</th>
+                      <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Text</th>
+                      <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Result</th>
+                      <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>A·P·S·R</th>
+                      <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Cited</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {verdicts.map((v) => {
+                      const resultColor = v.result === "Met" ? "#15803d" : v.result === "Partial" ? "#b45309" : "#b91c1c";
+                      const apsrSummary = [v.approachStatus[0], v.processesStatus[0], v.systemsOutcomesStatus[0], v.reviewStatus[0]].join("·");
+                      return (
+                        <tr key={v.lineId} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                          <td style={{ padding: "3px 6px", fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#374151" }}>{v.lineId}</td>
+                          <td style={{ padding: "3px 6px", color: "#475569", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={v.lineText}>{v.lineText}</td>
+                          <td style={{ padding: "3px 6px", fontWeight: 700, color: resultColor }}>{v.result}</td>
+                          <td style={{ padding: "3px 6px", fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#6b7280" }}>{apsrSummary}</td>
+                          <td style={{ padding: "3px 6px", fontSize: 10, color: "#6b7280" }}>{v.citedChunkIds.length > 0 ? v.citedChunkIds.join(", ") : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <button
+                onClick={handleExportAISummary}
+                style={{ cursor: "pointer", fontSize: 10, padding: "2px 8px", borderRadius: 5, border: "1px solid #cbd5e1", background: "#fff", color: "#374151" }}
+              >
+                ⬇ Export AI summary CSV
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
+          <button
+            onClick={handleExportFileLedger}
+            style={{ cursor: "pointer", fontSize: 11, padding: "6px 12px", borderRadius: 7, border: "1px solid #cbd5e1", background: "#fff", color: "#374151" }}
+          >
+            ⬇ File ledger CSV
+          </button>
           <button
             onClick={onClose}
-            style={{ marginTop: 16, cursor: "pointer", width: "100%", padding: "10px", borderRadius: 10, border: "none", background: isError ? "#fee2e2" : "#dcfce7", color: isError ? "#b23121" : "#15803d", fontWeight: 700, fontSize: 13 }}
+            style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11, padding: "6px 14px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#374151" }}
           >
-            {isError ? "Dismiss" : "View results →"}
+            Close
           </button>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -556,24 +965,35 @@ function AuditProgressModal({
 const STATUSES: FolderStatus[] = ["Good", "In Progress", "Partial", "Missing"];
 const ACCESS_TONE = { Connected: "good", Error: "critical", "Not Connected": "medium" } as const;
 
+const SCOPE_OPTIONS: { value: AuditScope; label: string; desc: string }[] = [
+  { value: "both",     label: "Both (Policy + Evidence)", desc: "Read all files from both folders" },
+  { value: "policy",   label: "Policy only",              desc: "Read only the Policy & Procedure folder" },
+  { value: "evidence", label: "Evidence only",            desc: "Read only the Actual Evidence folder" },
+];
+
 export function EvidenceFolder() {
-  const folders = useWorkspaceStore((s) => s.folders);
-  const departments = useWorkspaceStore((s) => s.departments);
+  const folders        = useWorkspaceStore((s) => s.folders);
+  const departments    = useWorkspaceStore((s) => s.departments);
   const setFolderField = useWorkspaceStore((s) => s.setFolderField);
-  const checkFolderAccess = useWorkspaceStore((s) => s.checkFolderAccess);
+  const checkFolderAccess   = useWorkspaceStore((s) => s.checkFolderAccess);
   const auditFolderContents = useWorkspaceStore((s) => s.auditFolderContents);
-  const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
-  const skipCurrentFile = useWorkspaceStore((s) => s.skipCurrentFile);
-  const busy = useWorkspaceStore((s) => s.busy);
-  const additionalInfo = useWorkspaceStore((s) => s.additionalInfo);
-  const setAdditionalInfoLink = useWorkspaceStore((s) => s.setAdditionalInfoLink);
+  const cancelBusy          = useWorkspaceStore((s) => s.cancelBusy);
+  const skipCurrentFile     = useWorkspaceStore((s) => s.skipCurrentFile);
+  const busy                = useWorkspaceStore((s) => s.busy);
+  const additionalInfo      = useWorkspaceStore((s) => s.additionalInfo);
+  const setAdditionalInfoLink     = useWorkspaceStore((s) => s.setAdditionalInfoLink);
   const checkAdditionalInfoAccess = useWorkspaceStore((s) => s.checkAdditionalInfoAccess);
-  const auditors = useWorkspaceStore((s) => s.auditors);
-  const activeAuditorId = useWorkspaceStore((s) => s.activeAuditorId);
-  const setActiveAuditor = useWorkspaceStore((s) => s.setActiveAuditor);
-  const auditProgress = useWorkspaceStore((s) => s.auditProgress);
+  const auditors       = useWorkspaceStore((s) => s.auditors);
+  const activeAuditorId    = useWorkspaceStore((s) => s.activeAuditorId);
+  const setActiveAuditor   = useWorkspaceStore((s) => s.setActiveAuditor);
+  const auditProgress      = useWorkspaceStore((s) => s.auditProgress);
   const clearAuditProgress = useWorkspaceStore((s) => s.clearAuditProgress);
+  const auditScope         = useWorkspaceStore((s) => s.auditScope);
+  const setAuditScope      = useWorkspaceStore((s) => s.setAuditScope);
+  const lastAuditRuns      = useWorkspaceStore((s) => s.lastAuditRuns);
+
   const [checkingAdditional, setCheckingAdditional] = useState(false);
+  const [viewingRun, setViewingRun] = useState<AuditRunRecord | null>(null);
 
   const effectiveAuditor =
     auditors.find((a) => a.id === activeAuditorId) || auditors.find((a) => a.role === "Audit Lead") || auditors[0];
@@ -588,14 +1008,12 @@ export function EvidenceFolder() {
     row.scrollIntoView({ behavior: "smooth", block: "center" });
     row.style.transition = "background 0.3s";
     row.style.background = "#fff7e0";
-    const t = setTimeout(() => {
-      row.style.background = "";
-    }, 2200);
+    const t = setTimeout(() => { row.style.background = ""; }, 2200);
     return () => clearTimeout(t);
   }, [focusSub, folders]);
 
   const [critFilter, setCritFilter] = useState("");
-  const [subFilter, setSubFilter] = useState("");
+  const [subFilter, setSubFilter]   = useState("");
   const criteria = useMemo(() => [...new Set(folders.map((f) => f.subCriterionId.split(".")[0]))].sort((a, b) => Number(a) - Number(b)), [folders]);
   const subCriteria = useMemo(
     () => folders.filter((f) => !critFilter || f.subCriterionId.split(".")[0] === critFilter).map((f) => ({ id: f.subCriterionId, name: f.folderName })),
@@ -608,15 +1026,12 @@ export function EvidenceFolder() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showHelp, setShowHelp] = useState(false);
   const [overflowOpen, setOverflowOpen] = useState<string | null>(null);
-
-  // Dismiss keys include a timestamp so a new run auto-un-dismisses
   const [dismissedAccessNotes, setDismissedAccessNotes] = useState<Set<string>>(new Set());
   const [dismissedAuditResults, setDismissedAuditResults] = useState<Set<string>>(new Set());
 
-  const dismissAccessNote = (key: string) => setDismissedAccessNotes((s) => new Set([...s, key]));
+  const dismissAccessNote  = (key: string) => setDismissedAccessNotes((s) => new Set([...s, key]));
   const dismissAuditResult = (key: string) => setDismissedAuditResults((s) => new Set([...s, key]));
 
-  // Close overflow on outside click
   useEffect(() => {
     if (!overflowOpen) return;
     const handler = (e: MouseEvent) => {
@@ -627,6 +1042,21 @@ export function EvidenceFolder() {
     return () => document.removeEventListener("mousedown", handler);
   }, [overflowOpen]);
 
+  // CSV export helpers for the live progress modal
+  const handleExportFileLedger = () => {
+    if (!auditProgress) return;
+    const run = progressToRunRecord(auditProgress);
+    const csv = exportFileLedgerCsv(run);
+    downloadCsv(csv, auditCsvFilename("gd4-audit-file-ledger", run));
+  };
+
+  const handleExportAISummary = () => {
+    if (!auditProgress) return;
+    const run = progressToRunRecord(auditProgress);
+    const csv = exportAISummaryCsv(run);
+    downloadCsv(csv, auditCsvFilename("gd4-audit-ai-summary", run));
+  };
+
   return (
     <>
     {auditProgress && (
@@ -635,7 +1065,12 @@ export function EvidenceFolder() {
         onClose={clearAuditProgress}
         onCancel={() => { cancelBusy(); clearAuditProgress(); }}
         onSkipFile={skipCurrentFile}
+        onExportFileLedger={handleExportFileLedger}
+        onExportAISummary={handleExportAISummary}
       />
+    )}
+    {viewingRun && (
+      <AuditRunModal run={viewingRun} onClose={() => setViewingRun(null)} />
     )}
     <Card>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -647,25 +1082,21 @@ export function EvidenceFolder() {
       {showHelp && (
         <>
           <p style={{ fontSize: 12.5, color: "#6b7280" }}>
-            One evidence folder per GD4 sub-criterion. All folders live in Google Drive — the owning department is set up on the Audit Cycle page.
-            "Check access" (in the row action menu) confirms this app can see the folder's files (including subfolders). "Run audit" does the whole pipeline in one click:
-            it generates the Sub-Criterion Checklist lines if none exist yet, reads every supported file (PDF, Word, text/CSV, and images via AI),
-            sets each line's status, and updates the band/score — shown in the result block below the row. To audit every linked folder at once, use
-            "Audit all folders → score" on the Dashboard. Both require connecting Google Drive in Settings first.
+            One evidence folder per GD4 sub-criterion. "Run audit" reads every supported file, judges each checklist line with AI, and writes verdicts.
+            Use the scope selector to audit only Policy or only Evidence files. Files are cached — unchanged Drive files are reused on repeat audits.
+            "View last run" reopens the read-only audit record with full file ledger and AI summary CSVs.
           </p>
           <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", background: "#f8fafc", marginBottom: 10, fontSize: 12 }}>
-            <b style={{ fontSize: 11.5, color: "#475569" }}>Link two folders per sub-criterion, using the Links column below:</b>
+            <b style={{ fontSize: 11.5, color: "#475569" }}>Link two folders per sub-criterion:</b>
             <ol style={{ margin: "4px 0 4px", paddingLeft: 18, color: "#475569" }}>
               <li><b>Policy &amp; Procedure</b> — the documented approach</li>
               <li><b>Actual Evidence</b> — records showing it is implemented</li>
             </ol>
-            <span style={{ color: "#6b7280" }}>
-              "Run audit" reads both folders and reports a per-type breakdown. (If you only link one, the audit still works and falls back to reading subfolders named "Policy"/"Procedure" inside it.) General, school-wide documents that aren't tied to one sub-criterion go in the <b>Additional info</b> folder below. Omit NRIC/FIN details before uploading.
-            </span>
           </div>
         </>
       )}
 
+      {/* Additional info folder */}
       <div style={{ border: "1px solid #d8c7a4", borderRadius: 10, padding: "10px", background: "#fffaf0", marginTop: 16, marginBottom: 12, fontSize: 12 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
           <b style={{ fontSize: 12, color: "#7a5b12" }}>Additional info — general supporting documents (school-wide, applies to all criteria)</b>
@@ -691,19 +1122,16 @@ export function EvidenceFolder() {
           </button>
         </div>
         {additionalInfo.accessNote && (
-          <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 4 }}>
+          <div style={{ fontSize: 11.5, color: "#6b7280" }}>
             {additionalInfo.accessNote}{additionalInfo.accessAt && <span style={{ color: "#94a3b8" }}> — checked {new Date(additionalInfo.accessAt).toLocaleString()}</span>}
           </div>
         )}
       </div>
 
+      {/* Filters */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
         <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>Filter</span>
-        <select
-          value={critFilter}
-          onChange={(e) => { setCritFilter(e.target.value); setSubFilter(""); }}
-          style={{ ...inputStyle, width: 150, padding: "5px 6px" }}
-        >
+        <select value={critFilter} onChange={(e) => { setCritFilter(e.target.value); setSubFilter(""); }} style={{ ...inputStyle, width: 150, padding: "5px 6px" }}>
           <option value="">All criteria</option>
           {criteria.map((c) => <option key={c} value={c}>Criterion {c}</option>)}
         </select>
@@ -717,33 +1145,43 @@ export function EvidenceFolder() {
           </button>
         )}
         <span style={{ fontSize: 11.5, color: "#94a3b8", marginLeft: "auto" }}>
-          Showing {visibleFolders.length} of {folders.length}
+          {visibleFolders.length} of {folders.length}
         </span>
       </div>
 
+      {/* Auditor + scope selectors */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10, padding: "8px 10px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
         <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>Run audit as</span>
         {auditors.length === 0 ? (
           <span style={{ fontSize: 12, color: "#b23121" }}>
-            No auditors yet — add one on <Link to="/auditors" style={{ color: "#2563eb" }}>Auditor Creation</Link> so audits are attributed to a person.
+            No auditors yet — add one on <Link to="/auditors" style={{ color: "#2563eb" }}>Auditor Creation</Link>.
           </span>
         ) : (
-          <>
-            <select
-              value={activeAuditorId || effectiveAuditor?.id || ""}
-              onChange={(e) => setActiveAuditor(e.target.value || null)}
-              style={{ ...inputStyle, width: 230, padding: "5px 6px" }}
-            >
-              {auditors.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} — {a.role} (strictness {a.strictness})
-                </option>
-              ))}
-            </select>
-            <span style={{ fontSize: 11.5, color: "#94a3b8" }}>
-              The named auditor owns the result; their strictness drives how hard the AI judges.
-            </span>
-          </>
+          <select
+            value={activeAuditorId || effectiveAuditor?.id || ""}
+            onChange={(e) => setActiveAuditor(e.target.value || null)}
+            style={{ ...inputStyle, width: 230, padding: "5px 6px" }}
+          >
+            {auditors.map((a) => (
+              <option key={a.id} value={a.id}>{a.name} — {a.role} ({a.strictness})</option>
+            ))}
+          </select>
+        )}
+        <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3, marginLeft: 8 }}>Scope</span>
+        <select
+          value={auditScope}
+          onChange={(e) => setAuditScope(e.target.value as AuditScope)}
+          style={{ ...inputStyle, width: 200, padding: "5px 6px" }}
+          title="Which source folders to read"
+        >
+          {SCOPE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        {auditScope !== "both" && (
+          <span style={{ fontSize: 11, color: "#b45309", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 5, padding: "2px 8px" }}>
+            ⚠ Partial scope — only {auditScope === "policy" ? "Policy" : "Evidence"} files will be read
+          </span>
         )}
       </div>
 
@@ -757,6 +1195,7 @@ export function EvidenceFolder() {
             const auditDismissKey = `${f.id}:${f.lastAuditRunId || f.lastAuditAt || ""}`;
             const policyDismissKey = `${f.id}:policy:${f.policyAccessAt || ""}`;
             const evidenceDismissKey = `${f.id}:evidence:${f.accessCheckAt || ""}`;
+            const lastRun = lastAuditRuns[f.id];
             return (
               <Fragment key={f.id}>
                 <tr className="rowh" ref={(el) => { rowRefs.current[f.subCriterionId] = el; }}>
@@ -764,9 +1203,7 @@ export function EvidenceFolder() {
                   <td>
                     <select value={f.owner} onChange={(e) => setFolderField(f.id, "owner", e.target.value)} style={{ ...inputStyle, width: 110, padding: "4px 6px" }}>
                       <option value="">(unassigned)</option>
-                      {departments.map((d) => (
-                        <option key={d.id} value={d.acronym}>{d.acronym}</option>
-                      ))}
+                      {departments.map((d) => <option key={d.id} value={d.acronym}>{d.acronym}</option>)}
                     </select>
                   </td>
                   <td>
@@ -776,7 +1213,6 @@ export function EvidenceFolder() {
                   </td>
                   <td>
                     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                      {/* Policy link row */}
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <span style={{ fontSize: 10, fontWeight: 700, color: "#3b82f6", minWidth: 52, textTransform: "uppercase", letterSpacing: 0.3 }}>Policy</span>
                         <input
@@ -786,11 +1222,8 @@ export function EvidenceFolder() {
                           style={{ ...inputStyle, width: 140, padding: "3px 5px", fontSize: 11 }}
                         />
                         {f.policyLink && <a href={f.policyLink} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#3b82f6" }}>↗</a>}
-                        {f.policyAccessStatus && (
-                          <Pill s={ACCESS_TONE[f.policyAccessStatus]}>{f.policyAccessStatus}</Pill>
-                        )}
+                        {f.policyAccessStatus && <Pill s={ACCESS_TONE[f.policyAccessStatus]}>{f.policyAccessStatus}</Pill>}
                       </div>
-                      {/* Evidence link row */}
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <span style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", minWidth: 52, textTransform: "uppercase", letterSpacing: 0.3 }}>Evidence</span>
                         <input
@@ -800,26 +1233,17 @@ export function EvidenceFolder() {
                           style={{ ...inputStyle, width: 140, padding: "3px 5px", fontSize: 11 }}
                         />
                         {f.folderLink && <a href={f.folderLink} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#16a34a" }}>↗</a>}
-                        {f.accessCheckStatus && (
-                          <Pill s={ACCESS_TONE[f.accessCheckStatus]}>{f.accessCheckStatus}</Pill>
-                        )}
+                        {f.accessCheckStatus && <Pill s={ACCESS_TONE[f.accessCheckStatus]}>{f.accessCheckStatus}</Pill>}
                       </div>
                     </div>
                   </td>
                   <td>
                     {isBusy ? (
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                        <button
-                          disabled
-                          style={{ cursor: "wait", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #93c5fd", background: "#dbeafe", color: "#1d4ed8", whiteSpace: "nowrap", opacity: 0.8 }}
-                        >
+                        <button disabled style={{ cursor: "wait", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #93c5fd", background: "#dbeafe", color: "#1d4ed8", whiteSpace: "nowrap", opacity: 0.8 }}>
                           Auditing…
                         </button>
-                        <button
-                          onClick={cancelBusy}
-                          title="Stop waiting and release the button. Any in-flight request finishes in the background."
-                          style={{ cursor: "pointer", fontSize: 11, padding: "6px 9px", borderRadius: 7, border: "1px solid #fca5a5", background: "#fff", color: "#b23121", whiteSpace: "nowrap" }}
-                        >
+                        <button onClick={cancelBusy} style={{ cursor: "pointer", fontSize: 11, padding: "6px 9px", borderRadius: 7, border: "1px solid #fca5a5", background: "#fff", color: "#b23121", whiteSpace: "nowrap" }}>
                           Cancel
                         </button>
                       </div>
@@ -831,7 +1255,16 @@ export function EvidenceFolder() {
                         >
                           Run audit
                         </button>
-                        {/* Overflow menu for secondary actions */}
+                        {lastRun && (
+                          <button
+                            onClick={() => setViewingRun(lastRun)}
+                            title={`View run ${lastRun.runId} — ${new Date(lastRun.startedAt).toLocaleDateString()}`}
+                            style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#374151", whiteSpace: "nowrap" }}
+                          >
+                            Last run ↗
+                          </button>
+                        )}
+                        {/* Overflow menu */}
                         <div id={`overflow-${f.id}`} style={{ position: "relative" }}>
                           <button
                             onClick={() => setOverflowOpen(overflowOpen === f.id ? null : f.id)}
@@ -869,30 +1302,22 @@ export function EvidenceFolder() {
                   <tr>
                     <td colSpan={5} style={{ padding: "0 10px 8px 28px" }}>
                       <div style={{ background: "#fff7ed", borderLeft: "3px solid #fb923c", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12, color: "#9a3412" }}>
-                        ⚠ The <b>Policy &amp; Procedure</b> and <b>Actual Evidence</b> links point to the <b>same folder</b>. The audit will read it once (not twice), but a proper audit needs two different folders — one of policies, one of actual records — so implementation can be verified separately from the documented approach.
+                        ⚠ The <b>Policy &amp; Procedure</b> and <b>Actual Evidence</b> links point to the <b>same folder</b>. Link two different folders for a proper audit.
                       </div>
                     </td>
                   </tr>
                 )}
 
-                {/* Policy access note (dismissible) */}
+                {/* Policy access note */}
                 {f.policyAccessNote && !dismissedAccessNotes.has(policyDismissKey) && (
                   <tr>
                     <td colSpan={5} style={{ padding: "0 10px 6px 28px" }}>
                       <div style={{ background: "#f8fafc", borderLeft: "3px solid #93c5fd", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#3b82f6", textTransform: "uppercase", letterSpacing: 0.4 }}>Access check — policy</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#3b82f6", textTransform: "uppercase", letterSpacing: 0.4 }}>Access — policy</span>
                           <Pill s={ACCESS_TONE[f.policyAccessStatus || "Not Connected"]}>{f.policyAccessStatus || "Not Connected"}</Pill>
-                          {f.policyAccessAt && (
-                            <span style={{ color: "#94a3b8", fontSize: 11 }}>checked {new Date(f.policyAccessAt).toLocaleString()}</span>
-                          )}
-                          <button
-                            onClick={() => dismissAccessNote(policyDismissKey)}
-                            title="Dismiss"
-                            style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}
-                          >
-                            ✕
-                          </button>
+                          {f.policyAccessAt && <span style={{ color: "#94a3b8", fontSize: 11 }}>checked {new Date(f.policyAccessAt).toLocaleString()}</span>}
+                          <button onClick={() => dismissAccessNote(policyDismissKey)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>✕</button>
                         </div>
                         <div style={{ color: "#475569", lineHeight: 1.5 }}>{f.policyAccessNote}</div>
                       </div>
@@ -900,24 +1325,16 @@ export function EvidenceFolder() {
                   </tr>
                 )}
 
-                {/* Evidence access note (dismissible) */}
+                {/* Evidence access note */}
                 {f.accessCheckNote && !dismissedAccessNotes.has(evidenceDismissKey) && (
                   <tr>
                     <td colSpan={5} style={{ padding: "0 10px 6px 28px" }}>
                       <div style={{ background: "#f8fafc", borderLeft: "3px solid #86efac", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", letterSpacing: 0.4 }}>Access check — evidence</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", letterSpacing: 0.4 }}>Access — evidence</span>
                           <Pill s={ACCESS_TONE[f.accessCheckStatus || "Not Connected"]}>{f.accessCheckStatus || "Not Connected"}</Pill>
-                          {f.accessCheckAt && (
-                            <span style={{ color: "#94a3b8", fontSize: 11 }}>checked {new Date(f.accessCheckAt).toLocaleString()}</span>
-                          )}
-                          <button
-                            onClick={() => dismissAccessNote(evidenceDismissKey)}
-                            title="Dismiss"
-                            style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}
-                          >
-                            ✕
-                          </button>
+                          {f.accessCheckAt && <span style={{ color: "#94a3b8", fontSize: 11 }}>checked {new Date(f.accessCheckAt).toLocaleString()}</span>}
+                          <button onClick={() => dismissAccessNote(evidenceDismissKey)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>✕</button>
                         </div>
                         <div style={{ color: "#475569", lineHeight: 1.5 }}>{f.accessCheckNote}</div>
                       </div>
@@ -930,50 +1347,26 @@ export function EvidenceFolder() {
                   <tr>
                     <td colSpan={5} style={{ padding: "0 10px 10px 28px" }}>
                       <div style={{ background: "#f0fdf4", borderLeft: "3px solid #86c79f", borderRadius: "0 8px 8px 0", padding: "10px 12px", fontSize: 12 }}>
-                        {/* Header row: label + pills + dismiss */}
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.4 }}>Combined audit — policy &amp; evidence</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.4 }}>Audit result</span>
                           <Pill s={f.lastAuditLive ? "progress" : "medium"}>{f.lastAuditLive ? "AI" : "Offline estimate"}</Pill>
-                          {f.lastAuditLive === false && f.lastAuditError && (
-                            <span style={{ color: "#9a6b15", fontSize: 11 }} title={f.lastAuditError}>AI unavailable — used keyword fallback</span>
-                          )}
-                          <button
-                            onClick={() => dismissAuditResult(auditDismissKey)}
-                            title="Dismiss result block (data is kept)"
-                            style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}
-                          >
-                            ✕
-                          </button>
+                          <button onClick={() => dismissAuditResult(auditDismissKey)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>✕</button>
                         </div>
-                        {/* Key metadata row */}
                         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 7, padding: "5px 8px", background: "#fff", borderRadius: 6, border: "1px solid #dcfce7" }}>
                           {f.lastAuditRunId && (
-                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#374151", background: "#f1f5f9", border: "1px solid #d1d5db", borderRadius: 5, padding: "1px 6px" }} title="Audit run ID — stamped on checklist evidence and the AI Review Log.">{f.lastAuditRunId}</span>
+                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#374151", background: "#f1f5f9", border: "1px solid #d1d5db", borderRadius: 5, padding: "1px 6px" }}>{f.lastAuditRunId}</span>
                           )}
-                          {f.lastAuditAuditor && (
-                            <span style={{ fontSize: 11.5, color: "#374151" }}>
-                              <span style={{ color: "#6b7280" }}>Auditor:</span> <b>{f.lastAuditAuditor}</b>
-                            </span>
-                          )}
-                          {f.lastAuditAt && (
-                            <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>
-                              Audited {new Date(f.lastAuditAt).toLocaleString()}
-                            </span>
-                          )}
+                          {f.lastAuditAuditor && <span style={{ fontSize: 11.5, color: "#374151" }}><span style={{ color: "#6b7280" }}>Auditor:</span> <b>{f.lastAuditAuditor}</b></span>}
+                          {f.lastAuditAt && <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>Audited {new Date(f.lastAuditAt).toLocaleString()}</span>}
                         </div>
-                        {/* Summary text */}
                         <div style={{ color: "#334155", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
                           {f.lastAuditSummary.length > SUMMARY_CAP && !expanded[f.id]
                             ? `${f.lastAuditSummary.slice(0, SUMMARY_CAP)}…`
                             : f.lastAuditSummary}
                         </div>
-                        {/* Footer: expand + link */}
                         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
                           {f.lastAuditSummary.length > SUMMARY_CAP && (
-                            <button
-                              onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))}
-                              style={{ cursor: "pointer", border: "none", background: "transparent", color: "#2563eb", fontSize: 11.5, padding: 0, textDecoration: "underline" }}
-                            >
+                            <button onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))} style={{ cursor: "pointer", border: "none", background: "transparent", color: "#2563eb", fontSize: 11.5, padding: 0, textDecoration: "underline" }}>
                               {expanded[f.id] ? "Show less" : "Show full result"}
                             </button>
                           )}
