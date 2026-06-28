@@ -73,12 +73,12 @@ export type ChecklistModuleState = {
 
   setSampling: (itemId: string, lineId: string, sampling: SamplingInfo) => void;
 
-  confirmDraftFinding: (itemId: string, lineId: string, draft: DraftFindingInfo) => void;
+  confirmDraftFinding: (itemId: string, lineId: string, draft: DraftFindingInfo, auditRunId?: string) => void;
   // Scans every checklist line and raises a draft finding for each one that is
   // Not met, or marked Met/Partial but with no real evidence attached
   // (the "capped" case). Skips lines that already produced a finding. Returns
   // the number of NEW findings raised so the caller can confirm to the user.
-  raiseAllUnmetFindings: () => number;
+  raiseAllUnmetFindings: (auditRunId?: string) => number;
 };
 
 function mapEntry(
@@ -291,7 +291,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       // The only place a draft finding is ever written to the Findings
       // module — only called from an explicit "Save to findings register"
       // button click, never automatically, per the spec's requirement.
-      confirmDraftFinding: (itemId, lineId, draft) => {
+      confirmDraftFinding: (itemId, lineId, draft, auditRunId?) => {
         const s = get();
         const line = s.entries[itemId]?.specific.find((l) => l.id === lineId);
         if (!line || line.draftFinding?.savedFindingId) return;
@@ -308,10 +308,8 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           overdue: false,
           managementDecisionNeeded: draft.severity === "Critical" || draft.severity === "High",
           status: "Open",
-          // Carry the detailed report + dimension onto the finding so the
-          // Findings register can show why it failed (procedure vs evidence)
-          // without re-deriving it.
           source: "Checklist",
+          auditRunId: auditRunId ?? draft.auditRunId,
           dimension: draft.dimension,
           riskCategory: draft.riskCategory,
           clause: draft.clause,
@@ -332,7 +330,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       // marked Met/Partial but no real evidence backs it (sufficiency Missing —
       // the "false pass" the audit caps to Band 1). Reuses confirmDraftFinding
       // so each finding is deduped and traceable exactly like a manual one.
-      raiseAllUnmetFindings: () => {
+      raiseAllUnmetFindings: (auditRunId?) => {
         const entries = get().entries;
         let raised = 0;
         // Build a set of "gd4ItemId:issue-prefix" keys from already-raised findings
@@ -352,7 +350,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
             const dupKey = `${itemId}:${draft.issue.slice(0, 60)}`;
             if (existingKeys.has(dupKey)) continue; // skip near-duplicate
             existingKeys.add(dupKey);
-            get().confirmDraftFinding(itemId, line.id, draft);
+            get().confirmDraftFinding(itemId, line.id, draft, auditRunId);
             // confirmDraftFinding stamps the new finding id onto the line — use
             // it to pre-fill the closure with the derived root cause / corrective
             // / preventive, so the AFI reads deep from the moment it is raised.

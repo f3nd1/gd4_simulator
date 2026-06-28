@@ -164,6 +164,7 @@ export type Finding = {
   // Provenance + detailed report, populated when a finding is raised from a
   // checklist line / folder audit (undefined on a plain manual finding).
   source?: "Audit" | "Checklist" | "Manual" | "Seed";
+  auditRunId?: string;  // e.g. "AR-6.3-3YVF" — set when auto-raised from a folder audit run
   dimension?: FindingDimension;
   // Risk category: A = regulatory breach (SSG mandatory requirement, can
   // trigger enforcement), B = Star-disqualifying (Criterion 7 or
@@ -260,6 +261,7 @@ export type DraftFindingInfo = {
   dimension?: FindingDimension;
   // Risk category — same meaning as on Finding.
   riskCategory?: "A" | "B" | "C" | "D";
+  auditRunId?: string;
 };
 
 export type GenericChecklistLine = {

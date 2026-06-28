@@ -1462,7 +1462,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // dimension (procedure vs evidence) and the detailed root-cause report.
         let autoRaised = 0;
         try {
-          autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings();
+          autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings(runId);
         } catch {
           // Non-fatal: a finding-raise failure must not strand the audit.
         }

@@ -482,7 +482,10 @@ export function Findings() {
               <Fragment key={f.id}>
                 <tr className="rowh" style={{ cursor: hasDetail ? "pointer" : "default" }} onClick={() => hasDetail && setExpandedId(open ? null : f.id)}>
                   <td style={{ width: 18, color: "#94a3b8", textAlign: "center" }}>{hasDetail ? (open ? "▾" : "▸") : ""}</td>
-                  <td><b style={{ color: "#ce9e5d" }}>{f.id}</b></td>
+                  <td>
+                    <b style={{ color: "#ce9e5d" }}>{f.id}</b>
+                    {f.auditRunId && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#94a3b8", marginLeft: 6 }}>{f.auditRunId}</span>}
+                  </td>
                   <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5, color: "#6b7280" }}>{f.gd4ItemId}</td>
                   <td style={{ fontSize: 12.5 }}>{f.issue}</td>
                   <td>{f.dimension ? <Pill s={dimensionTone(f.dimension)}>{dimensionLabel(f.dimension)}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
@@ -539,6 +542,7 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
           GD4 {req.id} · {req.requirement}
           {f.clause && <span style={{ fontFamily: "ui-monospace,monospace", marginLeft: 8 }}>{f.clause}</span>}
           {f.source && <Pill s="neutral">{f.source}</Pill>}
+          {f.auditRunId && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#6b7280", marginLeft: 6 }}>Run: {f.auditRunId}</span>}
           {f.dimension && <span style={{ marginLeft: 4 }}><Pill s={dimensionTone(f.dimension)}>{dimensionLabel(f.dimension)}</Pill></span>}
           {f.riskCategory && <span style={{ marginLeft: 4 }}><Pill s={riskCatTone(f.riskCategory) as Parameters<typeof Pill>[0]["s"]}>{riskCatLabel(f.riskCategory)}</Pill></span>}
         </div>

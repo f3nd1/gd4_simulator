@@ -12,8 +12,13 @@ function mk(p: Partial<Record<keyof ApsrBreakdown, { status: string; note?: stri
 }
 
 describe("deriveApsrStatus — Approach hard-gating (official EduTrust APSR rubric)", () => {
-  it("a Beginning Approach caps the line to Not met even with everything else evident", () => {
-    expect(deriveApsrStatus(mk({ approach: { status: "Beginning" } }))).toBe("Not met");
+  it("a Beginning Approach with deployed processes is Partial (Band 2) — not Not met", () => {
+    // Beginning approach + strong processes = Band 2 = Partial per the GD4 APSR rubric
+    expect(deriveApsrStatus(mk({ approach: { status: "Beginning" } }))).toBe("Partial");
+  });
+
+  it("a Beginning Approach with no processes at all is Not met (Band 1)", () => {
+    expect(deriveApsrStatus(mk({ approach: { status: "Beginning" }, processes: { status: "Not evident" } }))).toBe("Not met");
   });
 
   it("a Not-evident Approach caps the line to Not met regardless of implementation", () => {

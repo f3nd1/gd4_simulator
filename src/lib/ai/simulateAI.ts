@@ -215,7 +215,13 @@ export type FolderAuditLineVerdict = { lineId: string; status: "Met" | "Partial"
 // short. Met requires the full rubric: a Meeting-level Approach, deployed
 // Processes, evident Systems & Outcomes, and an evident Review.
 export function deriveApsrStatus(p: ApsrBreakdown): "Met" | "Partial" | "Not met" {
-  if (p.approach.status !== "Meeting") return "Not met"; // Approach gates everything
+  if (p.approach.status === "Not evident") return "Not met"; // No approach at all
+  if (p.approach.status === "Beginning") {
+    // Band 2: Beginning approach + at least some processes = Partial
+    // Band 1: Beginning approach + no processes at all = Not met
+    return p.processes.status !== "Not evident" ? "Partial" : "Not met";
+  }
+  // Meeting approach
   if (p.processes.status === "Not evident") return "Not met"; // documented but not deployed
   if (p.processes.status === "Deployed" && p.systemsOutcomes.status === "Evident" && p.review.status === "Evident") return "Met";
   return "Partial"; // deployed but outcomes and/or review not yet evident
@@ -238,8 +244,12 @@ export function apsrReason(p: ApsrBreakdown): string {
 export function apsrAuditNote(p: ApsrBreakdown): string {
   const status = deriveApsrStatus(p);
   let why: string;
-  if (p.approach.status !== "Meeting")
-    why = "the documented approach itself is incomplete or too generic — Approach gates the whole line";
+  if (p.approach.status === "Not evident")
+    why = "no documented approach was found — Approach gates the whole line";
+  else if (p.approach.status === "Beginning" && p.processes.status === "Not evident")
+    why = "the documented approach is too generic AND no implementation records were found — both must be addressed";
+  else if (p.approach.status === "Beginning")
+    why = "the documented approach exists but is too generic — strengthen the policy to reach a higher band";
   else if (p.processes.status === "Not evident")
     why = "the policy is adequate, but no implementation evidence was submitted to prove it is actually done";
   else if (status === "Met")
