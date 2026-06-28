@@ -66,6 +66,11 @@ export type ChecklistModuleState = {
   setSpecificStatus: (itemId: string, lineId: string, status: SpecificLineStatus) => void;
 
   addEvidence: (itemId: string, lineId: string, evidence: Omit<SubChecklistEvidenceItem, "id">) => void;
+  // Replaces all auto-generated audit evidence (items that have a runId, i.e.
+  // produced by a Drive audit) with a fresh one, while leaving manually-added
+  // evidence intact. Prevents stale "Not met" rows from accumulating when the
+  // same folder is re-audited after fixes.
+  replaceAuditEvidence: (itemId: string, lineId: string, evidence: Omit<SubChecklistEvidenceItem, "id">) => void;
   fillEvidenceFromLink: (itemId: string, lineId: string, link: string) => Promise<EvidenceFillDraft>;
   updateEvidence: (itemId: string, lineId: string, evidenceId: string, patch: Partial<SubChecklistEvidenceItem>) => void;
   removeEvidence: (itemId: string, lineId: string, evidenceId: string) => void;
@@ -258,6 +263,20 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         set((s) =>
           mapEntry(s, itemId, (e) =>
             mapLine(e, lineId, (l) => ({ ...l, evidence: [...l.evidence, { ...evidence, id: `EV-${Date.now()}-${l.evidence.length}` }] }))
+          )
+        ),
+
+      replaceAuditEvidence: (itemId, lineId, evidence) =>
+        set((s) =>
+          mapEntry(s, itemId, (e) =>
+            mapLine(e, lineId, (l) => ({
+              ...l,
+              // Keep manual evidence (no runId); discard prior auto-audit items.
+              evidence: [
+                ...l.evidence.filter((ev) => !ev.runId),
+                { ...evidence, id: `EV-${Date.now()}-${l.evidence.filter((ev) => !ev.runId).length}` },
+              ],
+            }))
           )
         ),
 

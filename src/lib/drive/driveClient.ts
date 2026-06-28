@@ -142,10 +142,22 @@ async function driveFetch(url: string, accessToken: string): Promise<Response> {
 // account genuinely has viewer access to it.
 export async function listFolderFiles(folderId: string, accessToken: string): Promise<DriveFile[]> {
   const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
-  const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,modifiedTime)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
-  const res = await driveFetch(url, accessToken);
-  const data = await res.json();
-  return (data.files || []) as DriveFile[];
+  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+  const all: DriveFile[] = [];
+  let pageToken: string | undefined;
+  // Guard: cap at 5 pages (500 files) per folder level to prevent runaway
+  // loops on very large or looping Shared Drive structures.
+  const MAX_PAGES = 5;
+  let pages = 0;
+  do {
+    const url = pageToken ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}` : baseUrl;
+    const res = await driveFetch(url, accessToken);
+    const data = await res.json();
+    all.push(...((data.files || []) as DriveFile[]));
+    pageToken = data.nextPageToken as string | undefined;
+    pages++;
+  } while (pageToken && pages < MAX_PAGES);
+  return all;
 }
 
 const FOLDER_MIME = "application/vnd.google-apps.folder";

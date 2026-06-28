@@ -224,6 +224,11 @@ export type WorkspaceState = {
   // those 22 sample findings only appear once "Use demo data" is clicked.
   seedFindingsLoaded: boolean;
   busy: string | null;
+  // Monotonically-increasing counter used as a run-cancellation guard: each
+  // audit captures it at start; cancelBusy() increments it; before writing
+  // results the audit checks whether the current value still matches its
+  // captured value — if not, it was cancelled and results are discarded.
+  auditRunToken: number;
   // Live progress state for the active folder audit — updated per-file and
   // per-batch so the UI can show a polished step indicator. Cleared by the
   // user (clearAuditProgress) so the result panel stays visible after completion.
@@ -496,6 +501,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       customFindings: [],
       seedFindingsLoaded: false,
       busy: null,
+      auditRunToken: 0,
       auditProgress: null,
       bulkAuditStatus: null,
       additionalInfo: { link: "" },
@@ -509,7 +515,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
-      cancelBusy: () => set({ busy: null, bulkAuditStatus: null }),
+      cancelBusy: () => set((s) => ({ busy: null, bulkAuditStatus: null, auditRunToken: s.auditRunToken + 1 })),
       clearAuditProgress: () => set({ auditProgress: null }),
       clearAuditJournal: () => set({ auditJournal: "" }),
 
@@ -974,6 +980,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const folder = s.folders.find((f) => f.id === id);
         if (!folder) return;
         set({ busy: "folderaudit" + id });
+        // Capture the cancellation token at start — if cancelBusy() is called
+        // while the AI call is in flight, this value will no longer match
+        // get().auditRunToken and the results will be discarded without writing.
+        const capturedToken = get().auditRunToken;
 
         // Emits a progress update so the UI step-indicator and progress bar
         // reflect the current stage in real time.
@@ -1430,6 +1440,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           verdicts = simulateFolderAudit(lines, docText);
         }
 
+        // Cancel guard: if the user clicked "Cancel" while the AI call was in
+        // flight, the token won't match — discard results without writing.
+        if (get().auditRunToken !== capturedToken) {
+          set((st) => ({
+            busy: null,
+            folders: st.folders.map((f) =>
+              f.id === id
+                ? { ...f, lastAuditSummary: "Audit was cancelled — no results were saved.", lastAuditAt: new Date().toISOString(), lastAuditLive: false }
+                : f
+            ),
+            auditProgress: st.auditProgress?.folderId === id
+              ? { ...st.auditProgress, stage: "complete" as const, stageDetail: "Audit cancelled." }
+              : st.auditProgress,
+          }));
+          return;
+        }
+
         // Guarded so an unexpected throw while writing verdicts can't strand
         // `busy` (which would leave this row's button stuck on "Auditing…"
         // forever) — finish() below always runs and clears it.
@@ -1458,7 +1485,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               `Auditor: ${auditorName}`,
               auditorName === "Unassigned (no auditor set up)" ? "Set up an auditor and review before relying on this verdict." : "Review before relying on this verdict.",
             ];
-            checklist.addEvidence(itemId, v.lineId, {
+            // replaceAuditEvidence removes prior auto-audit evidence (identified
+            // by having a runId) before adding the new one, so a re-audit never
+            // accumulates stale "Not met" rows alongside the new verdicts.
+            checklist.replaceAuditEvidence(itemId, v.lineId, {
               title: `Drive audit ${runId} — ${folder.folderName}`,
               type: evidenceTypeFromApsr(v.apsr, lineTextById.get(v.lineId) || ""),
               drive: folder.folderLink || folder.policyLink,
@@ -1706,12 +1736,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             sharedContext = "";
           }
         }
+        let bulkSucceeded = 0;
+        let bulkFailed = 0;
         for (let i = 0; i < folders.length; i++) {
           const f = folders[i];
           set({ bulkAuditStatus: `Auditing ${i + 1}/${folders.length}: ${f.subCriterionId} ${f.folderName}` });
           await get().auditFolderContents(f.id, sharedContext, { current: i + 1, total: folders.length });
+          const updated = get().folders.find((x) => x.id === f.id);
+          if (updated?.lastAuditError) bulkFailed++;
+          else bulkSucceeded++;
         }
-        set({ bulkAuditStatus: null });
+        const unlinked = get().folders.length - folders.length;
+        const bulkSummary = [
+          `Bulk audit complete — ${folders.length} folder${folders.length === 1 ? "" : "s"} processed.`,
+          bulkSucceeded > 0 ? `✓ ${bulkSucceeded} succeeded` : "",
+          bulkFailed > 0 ? `✗ ${bulkFailed} failed (see individual rows for errors)` : "",
+          unlinked > 0 ? `${unlinked} unlinked (no Drive folder set)` : "",
+        ].filter(Boolean).join(" · ");
+        set({ bulkAuditStatus: bulkSummary });
+        // Clear after 10 s so the status bar doesn't persist indefinitely.
+        setTimeout(() => set((s) => (s.bulkAuditStatus === bulkSummary ? { bulkAuditStatus: null } : {})), 10_000);
       },
 
       auditChangedFolders: async () => {
