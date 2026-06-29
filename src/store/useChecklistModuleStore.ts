@@ -144,12 +144,14 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         let liveError: string | undefined;
         let genUsage: AIUsage | undefined;
         let genPromptSent: string | undefined;
+        let genRejectedIdeas: { text: string; reason: string }[] | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(useWorkspaceStore.getState().schoolContext) });
             const result = await runLiveChecklistGeneration(req, settings, (u) => { genUsage = u; });
             raw = result.lines;
             rejectedCount = result.rejectedCount;
+            genRejectedIdeas = result.rejectedIdeas;
             genPromptSent = result.promptSent;
             if (!raw.length) raw = simulateChecklistGeneration(req);
             else live = true;
@@ -192,7 +194,12 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           recommendedAction: "Review, edit and confirm the generated lines before they count toward the band.",
           live,
           liveError,
-          generatedContent: lines.map((l) => `[${l.clause || "—"}] ${l.text}`).join("\n"),
+          generatedContent: [
+            lines.map((l) => `[${l.clause || "—"}] ${l.sourceRef ? `(${l.sourceRef}) ` : ""}${l.text}`).join("\n"),
+            genRejectedIdeas && genRejectedIdeas.length > 0
+              ? `\n\nREJECTED IDEAS (${genRejectedIdeas.length}):\n${genRejectedIdeas.map((r) => `- ${r.text}\n  Reason: ${r.reason}`).join("\n")}`
+              : "",
+          ].join(""),
           promptSent: genPromptSent,
           usage: genUsage,
         });
