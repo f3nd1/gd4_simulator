@@ -86,7 +86,8 @@ export function Findings() {
   }, [fromItem]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedSubCrits, setExpandedSubCrits] = useState<Set<string>>(new Set());
+  const [detailFinding, setDetailFinding] = useState<Finding | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [genNote, setGenNote] = useState<string | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
@@ -246,6 +247,28 @@ export function Findings() {
     });
     return filtered;
   }, [allFindings, typeFilter, sevFilter, dimFilter, riskCatFilter, dateFilter, critFilter, subCritFilter, sortCol, sortDir]);
+
+  const SEV_ORDER: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 };
+
+  const groupedRows = useMemo(() => {
+    const map = new Map<string, { subCritId: string; findings: Finding[] }>();
+    for (const f of rows) {
+      const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
+      const scId = req?.subCriterionId ?? f.gd4ItemId;
+      if (!map.has(scId)) map.set(scId, { subCritId: scId, findings: [] });
+      map.get(scId)!.findings.push(f);
+    }
+    return Array.from(map.values()).sort((a, b) => a.subCritId.localeCompare(b.subCritId));
+  }, [rows]);
+
+  const summaryStats = useMemo(() => {
+    const subCrits = new Set(rows.map((f) => {
+      const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
+      return req?.subCriterionId ?? f.gd4ItemId;
+    }));
+    const open = rows.filter((f) => (closures[f.id]?.human || "") !== "Accepted").length;
+    return { subCrits: subCrits.size, gaps: rows.length, open, closed: rows.length - open };
+  }, [rows, closures]);
 
   function generateFromGaps() {
     const n = raiseAllUnmetFindings();
@@ -585,106 +608,134 @@ export function Findings() {
           </select>
         ))}
       </div>
-      <div style={{ overflowX: "auto" }}>
-      <table style={{ tableLayout: "fixed", width: "100%", minWidth: 760 }}>
-        <colgroup>
-          <col style={{ width: 18 }} />
-          <col style={{ width: 72 }} />
-          <col style={{ width: 62 }} />
-          <col style={{ width: "auto" }} />
-          <col style={{ width: 120 }} />
-          <col style={{ width: 90 }} />
-          <col style={{ width: 74 }} />
-          <col style={{ width: 48 }} />
-          <col style={{ width: 100 }} />
-          <col style={{ width: 60 }} />
-          <col style={{ width: 60 }} />
-        </colgroup>
-        <thead>
-          <tr>
-            <th />
-            <th style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }} onClick={() => { if (sortCol === "id") setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortCol("id"); setSortDir("asc"); } }}>
-              ID {sortCol === "id" ? (sortDir === "asc" ? "↑" : "↓") : <span style={{ color: "#d1d5db" }}>↕</span>}
-            </th>
-            <th style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }} onClick={() => { if (sortCol === "gd4") setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortCol("gd4"); setSortDir("asc"); } }}>
-              GD4 {sortCol === "gd4" ? (sortDir === "asc" ? "↑" : "↓") : <span style={{ color: "#d1d5db" }}>↕</span>}
-            </th>
-            <th>Issue</th>
-            <th>Dimension</th>
-            <th>Risk</th>
-            <th>Severity</th>
-            <th>Owner</th>
-            <th style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }} onClick={() => { if (sortCol === "raised") setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortCol("raised"); setSortDir("desc"); } }}>
-              Raised {sortCol === "raised" ? (sortDir === "asc" ? "↑" : "↓") : <span style={{ color: "#d1d5db" }}>↕</span>}
-            </th>
-            <th>Status</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((f) => {
-            const closed = (closures[f.id]?.human || "") === "Accepted";
-            const open = expandedId === f.id;
-            const hasDetail = !!(f.rootCause || f.corrective || f.preventive || f.apsr);
-            const raisedDate = f.createdAt ? new Date(f.createdAt) : null;
-            const raisedStr = raisedDate
-              ? raisedDate.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" }) + " " + raisedDate.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
-              : "—";
+      {/* Summary bar */}
+      {rows.length > 0 && (
+        <div style={{ fontSize: 12.5, color: "#475569", marginBottom: 10, display: "flex", gap: 12, alignItems: "center", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 12px", flexWrap: "wrap" }}>
+          <span><b>{summaryStats.subCrits}</b> sub-criteria</span>
+          <span style={{ color: "#cbd5e1" }}>·</span>
+          <span><b>{summaryStats.gaps}</b> gaps</span>
+          <span style={{ color: "#cbd5e1" }}>·</span>
+          <span style={{ color: "#b91c1c" }}><b>{summaryStats.open}</b> open</span>
+          <span style={{ color: "#cbd5e1" }}>·</span>
+          <span style={{ color: "#15803d" }}><b>{summaryStats.closed}</b> closed</span>
+        </div>
+      )}
+
+      {/* Grouped findings list */}
+      {groupedRows.length === 0 ? (
+        <div style={{ padding: "18px 4px", color: "#6b7280", fontSize: 12.5 }}>
+          No findings to show. Run a folder audit (Evidence Folder page) — findings are raised automatically from the gaps — or click <b>Generate from gaps</b> above to create them from the current Sub-Criterion Checklist.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {groupedRows.map(({ subCritId, findings: grpFindings }) => {
+            const sc = GD4_SUB_CRITERIA.find((s) => s.id === subCritId);
+            const isOpen = expandedSubCrits.has(subCritId);
+            const closedCount = grpFindings.filter((f) => (closures[f.id]?.human || "") === "Accepted").length;
+            const openCount = grpFindings.length - closedCount;
+            const highestSev = grpFindings.reduce((best, f) => (SEV_ORDER[f.severity] ?? 0) > (SEV_ORDER[best] ?? 0) ? f.severity : best, "Low" as Severity);
+            const statusLabel = closedCount === 0 ? "All open" : openCount === 0 ? "All closed" : "In progress";
+            const statusColor = openCount === 0 ? "#15803d" : closedCount > 0 ? "#b45309" : "#b91c1c";
+            const earliestDate = grpFindings.reduce<string | undefined>((e, f) => (!e || (f.createdAt && f.createdAt < e)) ? f.createdAt : e, undefined);
+            const earliestStr = earliestDate ? new Date(earliestDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" }) : "";
             return (
-              <Fragment key={f.id}>
-                <tr className="rowh" style={{ cursor: hasDetail ? "pointer" : "default" }} onClick={() => { hasDetail && setExpandedId(open ? null : f.id); setConfirmDeleteId(null); }}>
-                  <td style={{ width: 18, color: "#94a3b8", textAlign: "center" }}>{hasDetail ? (open ? "▾" : "▸") : ""}</td>
-                  <td style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    <b style={{ color: "#ce9e5d" }}>{f.id}</b>
-                  </td>
-                  <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5, color: "#6b7280" }}>{f.gd4ItemId}</td>
-                  <td style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.issue}>{f.issue}</td>
-                  <td style={{ overflow: "hidden" }}>{f.dimension ? <Pill s={dimensionTone(f.dimension)}>{f.dimension}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
-                  <td>{f.riskCategory ? <Pill s={riskCatTone(f.riskCategory) as Parameters<typeof Pill>[0]["s"]}>Cat {f.riskCategory}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
-                  <td><Pill s={severityTone(f.severity)}>{f.severity}</Pill></td>
-                  <td style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.owner}</td>
-                  <td style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap" }}>{raisedStr}</td>
-                  <td><Pill s={closed ? "good" : "critical"}>{closed ? "Closed" : "Open"}</Pill></td>
-                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
-                    {confirmDeleteId === f.id ? (
-                      <>
-                        <button onClick={() => { removeCustomFinding(f.id); setConfirmDeleteId(null); setExpandedId(null); }} style={{ fontSize: 11, color: "#fff", background: "#ef4444", border: "none", borderRadius: 4, padding: "2px 7px", cursor: "pointer", marginRight: 4 }}>Delete</button>
-                        <button onClick={() => setConfirmDeleteId(null)} style={{ fontSize: 11, color: "#6b7280", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}>Cancel</button>
-                      </>
-                    ) : (
-                      <button onClick={() => setConfirmDeleteId(f.id)} style={{ fontSize: 11, color: "#94a3b8", background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px" }} title="Remove finding">✕</button>
-                    )}
-                  </td>
-                </tr>
-                {open && hasDetail && (
-                  <tr>
-                    <td colSpan={11} style={{ background: "#f8fafc", padding: "10px 14px" }}>
-                      <FindingDetail finding={f} />
-                    </td>
-                  </tr>
+              <div key={subCritId} style={{ border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+                {/* Sub-criterion group row */}
+                <div
+                  className="rowh"
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: "pointer", background: isOpen ? "#f8fafc" : "#fff", flexWrap: "wrap" }}
+                  onClick={() => setExpandedSubCrits((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(subCritId)) next.delete(subCritId); else next.add(subCritId);
+                    return next;
+                  })}
+                >
+                  <span style={{ color: "#94a3b8", fontSize: 12 }}>{isOpen ? "▾" : "▸"}</span>
+                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 12, fontWeight: 700, color: "#4338ca", minWidth: 36 }}>{subCritId}</span>
+                  {sc && <span style={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sc.title}</span>}
+                  <span style={{ fontSize: 11.5, color: "#6b7280", whiteSpace: "nowrap" }}>{grpFindings.length} gap{grpFindings.length !== 1 ? "s" : ""}</span>
+                  <Pill s={severityTone(highestSev)}>{highestSev}</Pill>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, color: statusColor, whiteSpace: "nowrap" }}>{statusLabel}</span>
+                  {earliestStr && <span style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap" }}>from {earliestStr}</span>}
+                </div>
+
+                {/* Individual finding rows (compact) */}
+                {isOpen && (
+                  <div style={{ borderTop: "1px solid #f1f5f9" }}>
+                    {grpFindings.map((f) => {
+                      const closed = (closures[f.id]?.human || "") === "Accepted";
+                      const isSelected = detailFinding?.id === f.id;
+                      const truncatedIssue = f.issue.length > 80 ? f.issue.slice(0, 80) + "…" : f.issue;
+                      return (
+                        <div
+                          key={f.id}
+                          className="rowh"
+                          style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 14px 7px 28px", cursor: "pointer", background: isSelected ? "#eef2ff" : "#fff", borderTop: "1px solid #f8fafc", flexWrap: "wrap" }}
+                          onClick={() => setDetailFinding(isSelected ? null : f)}
+                        >
+                          <span style={{ fontSize: 12.5, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.issue}>{truncatedIssue}</span>
+                          <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap" }}>{f.gd4ItemId}</span>
+                          {f.dimension && <Pill s={dimensionTone(f.dimension)}>{f.dimension}</Pill>}
+                          <Pill s={severityTone(f.severity)}>{f.severity}</Pill>
+                          <Pill s={closed ? "good" : "critical"}>{closed ? "Closed" : "Open"}</Pill>
+                          <span style={{ whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                            {confirmDeleteId === f.id ? (
+                              <>
+                                <button onClick={() => { removeCustomFinding(f.id); setConfirmDeleteId(null); if (detailFinding?.id === f.id) setDetailFinding(null); }} style={{ fontSize: 11, color: "#fff", background: "#ef4444", border: "none", borderRadius: 4, padding: "2px 7px", cursor: "pointer", marginRight: 4 }}>Delete</button>
+                                <button onClick={() => setConfirmDeleteId(null)} style={{ fontSize: 11, color: "#6b7280", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}>Cancel</button>
+                              </>
+                            ) : (
+                              <button onClick={() => setConfirmDeleteId(f.id)} style={{ fontSize: 11, color: "#94a3b8", background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px" }} title="Remove finding">✕</button>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
-              </Fragment>
+              </div>
             );
           })}
-          {rows.length === 0 && (
-            <tr>
-              <td colSpan={11} style={{ padding: "18px 14px", color: "#6b7280", fontSize: 12.5 }}>
-                No findings to show. Run a folder audit (Evidence Folder page) — findings are raised automatically from the gaps — or click <b>Generate from gaps</b> above to create them from the current Sub-Criterion Checklist.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-      </div>
+        </div>
+      )}
+
       <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <span>
           {seedFindingsLoaded && "Includes findings carried over from the loaded demo dataset. "}
-          Click a finding to read its full report.
+          Click a sub-criterion to expand, then click a finding to view full details.
         </span>
         <Link to="/afi-closure" style={{ fontSize: 12, color: "#15803d", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>
           Manage closure in Quality Action / AFI →
         </Link>
       </div>
+
+      {/* Side panel — full finding detail */}
+      {detailFinding && (
+        <div
+          style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 440, maxWidth: "100vw", background: "#fff", boxShadow: "-4px 0 20px rgba(0,0,0,0.12)", zIndex: 200, overflowY: "auto", padding: "16px 20px" }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <b style={{ color: "#ce9e5d", fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{detailFinding.id}</b>
+            <Pill s={severityTone(detailFinding.severity)}>{detailFinding.severity}</Pill>
+            {detailFinding.dimension && <Pill s={dimensionTone(detailFinding.dimension)}>{detailFinding.dimension}</Pill>}
+            <Pill s={(closures[detailFinding.id]?.human || "") === "Accepted" ? "good" : "critical"}>{(closures[detailFinding.id]?.human || "") === "Accepted" ? "Closed" : "Open"}</Pill>
+            <button onClick={() => setDetailFinding(null)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", fontSize: 18, color: "#94a3b8", lineHeight: 1, padding: "2px 4px" }} title="Close panel">✕</button>
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, lineHeight: 1.4 }}>{detailFinding.issue}</div>
+          <FindingDetail finding={detailFinding} />
+          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+            <Link to="/afi-closure" style={{ fontSize: 12, color: "#15803d", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>
+              Manage closure →
+            </Link>
+            <Link to={`/sub-checklist?item=${detailFinding.gd4ItemId}`} style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
+              View checklist →
+            </Link>
+          </div>
+        </div>
+      )}
+      {detailFinding && (
+        <div onClick={() => setDetailFinding(null)} style={{ position: "fixed", inset: 0, zIndex: 199, background: "rgba(0,0,0,0.08)" }} />
+      )}
     </Card>
     </Fragment>
   );
