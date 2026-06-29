@@ -236,7 +236,31 @@ export function SubCriterionChecklist() {
     return item ? auditEvidence([item], entries, folders) : [];
   }, [scored.items, selectedId, entries, folders]);
 
-  const sortedSpecific = useMemo(() => [...specific].sort((a, b) => (b.afiTag ? 1 : 0) - (a.afiTag ? 1 : 0)), [specific]);
+  // Dedupe for display: the same GD4 source line can end up in `specific`
+  // twice (e.g. an audit auto-generated + verdicted copy alongside a freshly
+  // regenerated "Not Started" copy), which surfaces as the same line appearing
+  // once "Not met" and once "Not Started". Collapse by identity (sourceRef, or
+  // the line text when there is no ref), keeping the most-progressed instance
+  // (one with attached evidence / a non-default status wins). Display only —
+  // band/scoring still read the raw `specific` array.
+  const sortedSpecific = useMemo(() => {
+    const rank = (l: SpecificChecklistLine) => (l.evidence.length > 0 ? 2 : 0) + (l.status !== "Not Started" ? 1 : 0);
+    const byKey = new Map<string, SpecificChecklistLine>();
+    const order: string[] = [];
+    for (const l of specific) {
+      const key = l.sourceRef || l.text.trim().toLowerCase();
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, l);
+        order.push(key);
+      } else if (rank(l) > rank(existing)) {
+        byKey.set(key, l);
+      }
+    }
+    return order
+      .map((k) => byKey.get(k)!)
+      .sort((a, b) => (b.afiTag ? 1 : 0) - (a.afiTag ? 1 : 0));
+  }, [specific]);
 
   const chartItems = useMemo(
     () =>
@@ -558,21 +582,29 @@ export function SubCriterionChecklist() {
             const suff = lineSufficiency(l);
             const needsFinding = l.status === "Not met" || (l.status !== "Not Applicable" && l.status !== "Not Started" && suff === "Missing");
             const draft = needsFinding ? buildDraftFinding(req, l) : null;
+            const expanded = expandedLine === l.id;
+            const truncated = l.text.length > 80 ? l.text.slice(0, 80) + "…" : l.text;
+            const ref = l.sourceType && l.generatedBy === "ai" ? sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined) : l.clause || null;
             return (
-              <div key={l.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 9, marginBottom: 7 }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <div key={l.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 7 }}>
+                {/* Compact row — click anywhere (outside the controls) to expand */}
+                <div
+                  onClick={() => toggleEvidence(l.id)}
+                  style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: 9, cursor: "pointer" }}
+                >
+                  <span style={{ color: "#94a3b8", fontSize: 12 }}>{expanded ? "▾" : "▸"}</span>
                   {l.afiTag && <Pill s="critical">AFI {l.afiTag}</Pill>}
-                  <span style={{ fontSize: 12 }}>{l.text}</span>
-                  {l.clause && <span style={{ fontSize: 10.5, color: "#94a3b8", fontFamily: "ui-monospace,monospace" }}>{l.clause}</span>}
-                  {l.sourceType && l.generatedBy === "ai" && (
+                  <span style={{ fontSize: 12, flex: 1, minWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.text}>{truncated}</span>
+                  {ref && (
                     <span
-                      style={{ fontSize: 10, color: "#a8a29e", cursor: l.sourceText ? "help" : "default" }}
+                      style={{ fontSize: 10, color: "#a8a29e", fontFamily: "ui-monospace,monospace", cursor: l.sourceText ? "help" : "default" }}
                       title={l.sourceText ? `Source: "${l.sourceText}"` : undefined}
                     >
-                      GD4: {sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined)}{l.apsrDimension ? ` · ${l.apsrDimension}` : ""}
+                      {ref}
                     </span>
                   )}
-                  <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+                  {l.apsrDimension && <Pill s="neutral">{l.apsrDimension}</Pill>}
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
                     <select
                       value={l.status}
                       onChange={(e) => setSpecificStatus(selectedId, l.id, e.target.value as SpecificLineStatus)}
@@ -581,40 +613,49 @@ export function SubCriterionChecklist() {
                       {SPECIFIC_OPTIONS.map((o) => <option key={o}>{o}</option>)}
                     </select>
                     <Pill s={statusTone(l.status)}>{l.status}</Pill>
-                    {l.status !== "Not Applicable" && <Pill s={sufficiencyTone(suff)}>Evidence: {suff}</Pill>}
-                    <button
-                      onClick={() => toggleEvidence(l.id)}
-                      style={{ cursor: "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "1px solid #cbd5e1", background: expandedLine === l.id ? "#eef1f5" : "#fff" }}
-                    >
-                      Evidence ({l.evidence.length})
-                    </button>
-                    <button onClick={() => removeSpecificLine(selectedId, l.id)} style={{ cursor: "pointer", fontSize: 11, color: "#b23121", border: "none", background: "transparent" }}>
-                      Remove
+                    {l.status !== "Not Applicable" && (
+                      l.evidence.length > 0
+                        ? <Pill s={sufficiencyTone(suff)}>Evidence ({l.evidence.length})</Pill>
+                        : <Pill s="critical">Evidence: Missing</Pill>
+                    )}
+                    {draft && (
+                      l.draftFinding?.savedFindingId ? (
+                        <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none" }}>View finding →</Link>
+                      ) : (
+                        <button
+                          onClick={() => toggleEvidence(l.id)}
+                          style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#9a6b15", border: "none", background: "transparent", padding: "2px 4px" }}
+                        >
+                          View finding
+                        </button>
+                      )
+                    )}
+                    <button onClick={() => removeSpecificLine(selectedId, l.id)} title="Remove line" style={{ cursor: "pointer", fontSize: 11, color: "#b23121", border: "none", background: "transparent" }}>
+                      ✕
                     </button>
                   </div>
                 </div>
 
-                {draft && (
-                  <div style={{ marginTop: 7, background: "#faf0d9", borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>
-                    <b>Draft finding:</b> {draft.issue} <Pill s={draft.severity === "High" ? "high" : "medium"}>{draft.severity}</Pill>
-                    {l.draftFinding?.savedFindingId ? (
-                      <>
-                        <Pill s="good">Saved as {l.draftFinding.savedFindingId}</Pill>
-                        <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none", marginLeft: 6 }}>View →</Link>
-                      </>
-                    ) : (
-                      <button
-                        onClick={() => confirmDraftFinding(selectedId, l.id, draft)}
-                        style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, marginLeft: 8, padding: "4px 9px", borderRadius: 6, border: "1px solid #9a6b15", background: "#fff", color: "#9a6b15" }}
-                      >
-                        Save to findings register
-                      </button>
+                {expanded && (
+                  <div style={{ padding: "0 9px 9px", borderTop: "1px solid #f1f5f9", paddingTop: 8 }}>
+                    {draft && (
+                      <div style={{ marginBottom: 8, background: "#faf0d9", borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>
+                        <b>Draft finding:</b> {draft.issue} <Pill s={draft.severity === "High" ? "high" : "medium"}>{draft.severity}</Pill>
+                        {l.draftFinding?.savedFindingId ? (
+                          <>
+                            {" "}<Pill s="good">Saved as {l.draftFinding.savedFindingId}</Pill>
+                            <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none", marginLeft: 6 }}>View →</Link>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => confirmDraftFinding(selectedId, l.id, draft)}
+                            style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, marginLeft: 8, padding: "4px 9px", borderRadius: 6, border: "1px solid #9a6b15", background: "#fff", color: "#9a6b15" }}
+                          >
+                            Save to findings register
+                          </button>
+                        )}
+                      </div>
                     )}
-                  </div>
-                )}
-
-                {expandedLine === l.id && (
-                  <div style={{ marginTop: 8, borderTop: "1px solid #f1f5f9", paddingTop: 8 }}>
                     {l.evidence.length > 0 && (
                       <table style={{ marginBottom: 8 }}>
                         <thead>

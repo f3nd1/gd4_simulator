@@ -75,8 +75,10 @@ export function Findings() {
   const [dimFilter, setDimFilter] = useState<FindingDimension | "All">("All");
   const [riskCatFilter, setRiskCatFilter] = useState<"A" | "B" | "C" | "D" | "All">("All");
   const [dateFilter, setDateFilter] = useState<"all" | "7d" | "30d" | "90d">("all");
-  const [sortCol, setSortCol] = useState<"raised" | "id" | "gd4">("raised");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Grouped view sorts groups by sub-criterion and keeps findings in raised
+  // order within each group; the old sortable column headers are gone.
+  const sortCol = "raised" as const;
+  const sortDir = "desc" as const;
   const fromItem = searchParams.get("item"); // e.g. "1.1.1" — jumps to that item's sub-criterion filter
   useEffect(() => {
     if (fromItem) {
