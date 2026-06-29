@@ -6,7 +6,7 @@ export type AIDebugEntry = {
   timestamp: string;
   functionName: string;
   module: string;
-  systemPromptSnippet: string;
+  systemPrompt: string;
 };
 
 type AIDebugLogStore = {
@@ -25,7 +25,7 @@ export const useAIDebugLogStore = create<AIDebugLogStore>((set) => ({
           timestamp: new Date().toISOString(),
           functionName,
           module,
-          systemPromptSnippet: systemPrompt.slice(0, 300),
+          systemPrompt,
         },
         ...s.entries,
       ],
