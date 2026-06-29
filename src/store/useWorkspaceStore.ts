@@ -44,6 +44,7 @@ import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImag
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow } from "../types";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
+import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 
 // Module-level ref for the currently active per-file abort. Set at the start
@@ -2647,15 +2648,63 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const stagesRun = mode === "all" ? "Policy ✓ → Evidence ✓ → Outcome/Review ✓ → APSR verdict" : mode === "policy" ? "Policy ✓ → Evidence — → APSR verdict (approach only)" : "Policy — → Evidence ✓ → APSR verdict (processes only)";
         const policyGaps = policyRows.filter((r) => r.covered === "No").length;
         const evidenceGaps = evidenceRows.filter((r) => r.covered === "No").length;
-        const summary = [
-          `Run ${runId} · Staged audit (${mode} mode) · Auditor: ${auditorLabel}.`,
-          `✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${stagedVerdicts.length} lines).`,
-          `Stages: ${stagesRun}.`,
-          mode !== "evidence" ? `Policy coverage: ${policyRows.length - policyGaps}/${policyRows.length} audit points covered.` : null,
-          mode !== "policy" ? `Evidence coverage: ${evidenceRows.length - evidenceGaps}/${evidenceRows.length} audit points covered.` : null,
-          autoRaised > 0 ? `Raised ${autoRaised} new finding${autoRaised === 1 ? "" : "s"}.` : null,
-          `Files read: ${scanned.length} (policy: ${policyDocParts.length > 0 ? "yes" : "none"}, evidence: ${evidenceDocParts.length > 0 ? "yes" : "none"}).`,
-        ].filter(Boolean).join("\n");
+
+        // Helper to produce a short file list like the classic audit
+        const briefListStaged = (names: string[]) => {
+          const base = names.map((n) => n.split("/").pop() || n);
+          if (base.length <= 3) return base.join(", ");
+          return base.slice(0, 3).join(", ") + ` … +${base.length - 3} more`;
+        };
+
+        // Band per GD4 item (computed from fresh checklist state, same as classic audit)
+        const freshEntriesStaged = useChecklistModuleStore.getState().entries;
+        const req = GD4_REQUIREMENTS.find((r) => r.subCriterionId === folder.subCriterionId);
+        const bandPartsStaged: string[] = [];
+        if (req) {
+          const e = freshEntriesStaged[req.id];
+          if (e && e.specific.length > 0) {
+            bandPartsStaged.push(`${req.id} → Band ${computeBand(e.generic, e.specific, req.gateSensitive).finalBand}`);
+          }
+        }
+
+        // Per-line notes for Not met / Partial lines
+        const gapNotes = stagedVerdicts
+          .filter((v) => v.status !== "Met")
+          .slice(0, 5)
+          .map((v) => {
+            const lineText = lines.find((l) => l.id === v.lineId)?.text ?? v.lineId;
+            const dims: string[] = [];
+            if (v.apsr.approach.status !== "Meeting") dims.push(`Approach${v.apsr.approach.note ? `: ${v.apsr.approach.note.slice(0, 80)}` : ""}`);
+            if (v.apsr.processes.status !== "Deployed") dims.push(`Processes${v.apsr.processes.note ? `: ${v.apsr.processes.note.slice(0, 80)}` : ""}`);
+            if (v.apsr.systemsOutcomes.status !== "Evident") dims.push(`Outcomes${v.apsr.systemsOutcomes.note ? `: ${v.apsr.systemsOutcomes.note.slice(0, 80)}` : ""}`);
+            if (v.apsr.review.status !== "Evident") dims.push(`Review${v.apsr.review.note ? `: ${v.apsr.review.note.slice(0, 80)}` : ""}`);
+            const dimStr = dims.length > 0 ? ` [${dims.join(" · ")}]` : "";
+            return `  ${v.status === "Not met" ? "✗" : "◐"} ${lineText.slice(0, 100)}${dimStr}`;
+          });
+        if (stagedVerdicts.filter((v) => v.status !== "Met").length > 5) {
+          gapNotes.push(`  … and ${stagedVerdicts.filter((v) => v.status !== "Met").length - 5} more gaps`);
+        }
+
+        // Specialist lens
+        const specialistLabel = domainExpertiseLabelFor(folder.subCriterionId);
+
+        const lineParts: string[] = [];
+        lineParts.push(`Run ${runId} · Staged audit (${mode} mode) · Auditor: ${auditorLabel}.`);
+        if (specialistLabel) lineParts.push(`Specialist lens: ${specialistLabel}.`);
+        lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${stagedVerdicts.length} lines).`);
+        if (bandPartsStaged.length) lineParts.push(`Band: ${bandPartsStaged.join(", ")}.`);
+        if (autoRaised > 0) lineParts.push(`Raised ${autoRaised} new finding${autoRaised === 1 ? "" : "s"} from the gaps — see the Findings register.`);
+        if (gapNotes.length > 0) lineParts.push(`Gap detail:\n${gapNotes.join("\n")}`);
+        lineParts.push(`Stages: ${stagesRun}.`);
+        if (mode !== "evidence") lineParts.push(`Policy coverage: ${policyRows.length - policyGaps}/${policyRows.length} audit points covered.`);
+        if (mode !== "policy") lineParts.push(`Evidence coverage: ${evidenceRows.length - evidenceGaps}/${evidenceRows.length} audit points covered.`);
+        lineParts.push(
+          scanned.length
+            ? `Files read: ${scanned.length} (policy: ${policyDocParts.length > 0 ? policyDocParts.length : "none"}, evidence: ${evidenceDocParts.length > 0 ? evidenceDocParts.length : "none"}) — ${briefListStaged(scanned)}.`
+            : "Files read: none — no readable files were found in this folder."
+        );
+        lineParts.push(live ? `Method: EduTrust APSR rubric vs GD4 standard — Approach gates the result, then Processes, Systems & Outcomes, Review (3 AI passes).` : "Method: offline keyword estimate — AI was not used (check AI Settings).");
+        const summary = lineParts.join("\n");
 
         finish(summary, live, undefined, auditUsage, auxUsage);
 

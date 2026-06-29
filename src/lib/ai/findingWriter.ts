@@ -211,7 +211,7 @@ export async function runLiveGroupedFindingWriter(
     : "";
 
   const systemPrompt =
-    `You are a GD4 EduTrust internal audit expert. Your task is to write one structured finding draft based on a group of failing checklist lines from an audit. You MUST base everything on the checklist evidence provided — do NOT invent or assume information that is not in the lines. For the root cause: apply 5-Why methodology — reach the systemic Level 3 root cause (a governance, training, data-collection, or review gap), not the symptom. For the criteria section: cite the exact regulatory provision (Act, clause, or SSG instrument) in addition to the GD4 item number. For the effect section: name the specific band ceiling with a concrete Band 4–5 benchmark so the institution knows what "fixed" looks like. Where the checklist lines mention a sample, express the gap as a rate (N of M). Flag any evidence-timeliness issues visible in the line notes (recently created documents, short coverage periods).` +
+    `You are a GD4 EduTrust internal audit expert. Your task is to write one structured finding draft based on a group of failing checklist lines from an audit. You MUST base everything on the checklist evidence provided — do NOT invent or assume information that is not in the lines. For the root cause: apply 5-Why methodology — reach the systemic Level 3 root cause (a governance, training, data-collection, or review gap), not the symptom. For the criteria section: quote the GD4 requirement text EXACTLY, word-for-word — do not paraphrase or summarise it. Also cite the exact regulatory provision (Act, clause, or SSG instrument) in addition to the GD4 item number. For the effect section: name the specific band ceiling with a concrete Band 4–5 benchmark so the institution knows what "fixed" looks like. Where the checklist lines mention a sample, express the gap as a rate (N of M). Flag any evidence-timeliness issues visible in the line notes (recently created documents, short coverage periods).` +
     skills(apsrRubricSkill, evidenceStandardsSkill, findingSpecificitySkill, findingWritingSkill, rootCauseMethodologySkill, sampleTestingSkill, evidenceTimelinessSkill, benchmarkingSkill) +
     skillsFull(regulatoryReferencesSkill) +
     domainBlock;
@@ -234,7 +234,7 @@ Return ONLY a JSON object with these exact keys:
 {
   "title": "GD4 [item] — [Gap in plain English]",
   "observation": "What the auditor found (WHO/WHAT/WHEN/HOW MANY — be specific, cite checklist refs)",
-  "criteria": "What GD4 requires (quote or closely paraphrase, include the item number)",
+  "criteria": "EXACT word-for-word quote of what GD4 requires — copy the requirement text verbatim from the GD4 item, do NOT paraphrase or summarise. Include the item number and the exact regulatory clause or SSG instrument.",
   "effect": "Why the gap matters (regulatory/band consequence, name the APSR dimension cap)",
   "rootCause": "System root cause — ask why 3 times, write level 3",
   "corrective": "Time-bound, verifiable action to fix the specific gap now",
