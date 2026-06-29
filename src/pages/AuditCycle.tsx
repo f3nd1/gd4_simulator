@@ -17,6 +17,7 @@ export function AuditCycle() {
   const addDepartment = useWorkspaceStore((s) => s.addDepartment);
   const updateDepartment = useWorkspaceStore((s) => s.updateDepartment);
   const removeDepartment = useWorkspaceStore((s) => s.removeDepartment);
+  const resetDepartments = useWorkspaceStore((s) => s.resetDepartments);
   const locked = cycle.status === "Locked";
 
   const [deptForm, setDeptForm] = useState(EMPTY_DEPT_FORM);
@@ -149,7 +150,15 @@ export function AuditCycle() {
     </div>
 
     <Card>
-      <h3 style={{ marginTop: 0, fontSize: 14 }}>Departments</h3>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 4 }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Departments</h3>
+        <button
+          onClick={() => { if (confirm("Reset departments to the default UCC list? This will replace all current departments.")) resetDepartments(); }}
+          style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#475569" }}
+        >
+          Reset to defaults
+        </button>
+      </div>
       <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
         Shared department directory for this workspace. Auditor Creation, Auditor Checklist, Dashboard and the Export
         Centre all reference these records instead of free-typed department names.

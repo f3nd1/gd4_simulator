@@ -321,6 +321,7 @@ export type WorkspaceState = {
   addDepartment: (d: Department) => void;
   updateDepartment: (id: string, patch: Partial<Department>) => void;
   removeDepartment: (id: string) => void;
+  resetDepartments: () => void;
 
   setFolderField: <K extends keyof EvidenceFolder>(id: string, field: K, value: EvidenceFolder[K]) => void;
   checkFolderAccess: (id: string, tab?: "policy" | "evidence") => Promise<void>;
@@ -976,6 +977,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       addDepartment: (d) => set((s) => ({ departments: [...s.departments, d] })),
       updateDepartment: (id, patch) => set((s) => ({ departments: s.departments.map((d) => (d.id === id ? { ...d, ...patch } : d)) })),
       removeDepartment: (id) => set((s) => ({ departments: s.departments.filter((d) => d.id !== id) })),
+      resetDepartments: () => set({ departments: DEFAULT_DEPARTMENTS }),
 
       setFolderField: (id, field, value) => set((s) => ({ folders: s.folders.map((f) => (f.id === id ? { ...f, [field]: value } : f)) })),
 
