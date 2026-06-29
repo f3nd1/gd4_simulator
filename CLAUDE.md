@@ -16,15 +16,19 @@ Run a single test file: `npx vitest run src/lib/__tests__/scoring.test.ts`
 
 Validate GD4 data integrity (35 items, flatAuditPoints consistency): `npm run validate:gd4`
 
+## Git workflow
+
+Development branch: `claude/prototype-development-y5nqqi`. Commit directly there; the user does `git pull` to pick up changes. Never push to `main` without explicit instruction.
+
 ## Architecture
 
 **Stack**: React 19 + Zustand 5 + Vite + TypeScript + HashRouter (`#/` paths). No server — pure client SPA.
 
-**Domain**: GD4 EduTrust audit simulator for UCC. Models a full audit cycle: setup → evidence collection → AI audit → scoring/banding → findings → management review → export.
+**Domain**: GD4 EduTrust audit simulator for UCC (United Ceres College, Singapore). Models a full audit cycle: setup → evidence collection → AI audit → scoring/banding → findings → management review → export.
 
 ### Key data flow
 
-1. **GD4 requirements** live in `src/data/gd4Requirements.ts` — `GD4_REQUIREMENTS[]`, `GD4_CRITERIA[]`, `GENERAL_SUPPORTING_DOCS`. The 24 sub-criteria are the backbone every other module refers to by `itemNumber` (e.g. `"1.1"`). Each `GD4Requirement` now carries a `flatAuditPoints: FlatAuditPoint[]` array automatically derived from the official text: Describe/Show bullets that contain a ": sub1; sub2; sub3" list pattern are split into lettered children (refs like `"6.2.1.DS1.a"`); simple bullets produce one point each (e.g. `"1.1.1.DS2"`). Run `npm run validate:gd4` to verify data integrity (21 checks).
+1. **GD4 requirements** live in `src/data/gd4Requirements.ts` — `GD4_REQUIREMENTS[]`, `GD4_CRITERIA[]`, `GENERAL_SUPPORTING_DOCS`. The 24 sub-criteria are the backbone every other module refers to by `itemNumber` (e.g. `"1.1"`). Each `GD4Requirement` carries `flatAuditPoints: FlatAuditPoint[]` derived from the official text: Describe/Show bullets with a ": sub1; sub2; sub3" list pattern are split into lettered children (refs like `"6.2.1.DS1.a"`); simple bullets produce one point each. Run `npm run validate:gd4` to verify data integrity.
 
 2. **Scoring pipeline** (`src/lib/scoring.ts`):
    - `aiScore(ev)` → weighted APSR sum → `getBand(score)` → `Band` (1–5)
@@ -36,74 +40,68 @@ Validate GD4 data integrity (35 items, flatAuditPoints consistency): `npm run va
    - `computeBand(generic, specific, gate)` — maturity ceiling (G1-G4 lenses) × coverage cap × evidence weakest-link rule → `finalBand`
    - `lineSufficiency(line)` — Present / Weak / Missing based on attached evidence
    - `findingDimension(line)` — maps APSR weakness to `FindingDimension` ("Procedure" | "Evidence" | "Outcomes" | "Review" | "Unverified")
-   - `buildDraftFinding(req, entry)` — generates a `DraftFindingInfo` from an unmet checklist entry
+   - `buildDraftFinding(req, entry)` — generates a `DraftFindingInfo` from an unmet checklist entry; `issue` field quotes GD4 requirement text verbatim
 
 4. **Stores** (all Zustand, persisted to Supabase + localStorage fallback):
-   - `useWorkspaceStore` — the main store: audit cycle, school context, evidence folders, `additionalInfo` link, audit run (`auditFolderContents`/`auditAllFolders`), busy state, snapshots. After each folder audit, calls `raiseAllUnmetFindings()` automatically.
-   - `useChecklistModuleStore` — per-item checklist lines, evidence items, drafts; `raiseAllUnmetFindings()`, `confirmDraftFinding()`.
+   - `useWorkspaceStore` — main store: audit cycle, school context, evidence folders, `additionalInfo` link, audit run (`auditFolderContents` / `auditFolderStaged` / `auditAllFolders`), busy state, snapshots, `auditRunHistory`. After each folder audit calls `raiseAllUnmetFindings()` automatically.
+   - `useChecklistModuleStore` — per-item checklist lines, evidence items, drafts; `raiseAllUnmetFindings()`, `confirmDraftFinding()`, `setSpecificStatus()`, `replaceAuditEvidence()`.
+   - `useFindingDraftStore` — grouped finding drafts by sub-criterion; `generateFindingsFromChecklist()`, `confirmGroupedDraft()`, `discardDraft()`, `updateDraftField()`.
    - `useScoringConfigStore` — award thresholds, AI strictness setting.
    - `useAISettingsStore` — OpenAI key + model selection.
    - `useGoogleDriveStore` — Drive OAuth token (never persisted — excluded by `partialize`).
-   - `useAgentMemoryStore` — AI agent memory stubs.
    - `useSaveStatusStore` — "saving…/saved" indicator.
    - `supabaseStorage.ts` — debounced write + `beforeunload` flush.
 
 5. **AI layer** (`src/lib/ai/`):
    - `aiClient.ts` — `fetchWithTimeout()` (90s AbortController), `callAI()`, `summariseText()`.
-   - `agentRuntime.ts` — `runLiveFolderAudit()`, `FOLDER_DOC_CAP = 48000` (shared with store). Imports 8 skill files (see below) and passes them to the system prompt via `skills()`. Each APSR dimension in the JSON response now includes `sourceChunkIds: string[]`. `runCitationVerifier()` is a second-pass Strict-mode function that re-checks whether the cited chunk IDs actually support the claimed verdict.
-   - `simulateAI.ts` — offline fallback keyword-matcher used when no OpenAI key. `FolderAuditLineVerdict` includes an optional `overallReason` field.
-   - Skills (`src/data/skills/`): 8 skill files injected into the system prompt via `skills(...)` (capped to 3000 chars total):
-     - `apsr-rubric.md` — APSR rubric definitions
-     - `evidence-standards.md` — evidence quality standards
-     - `external-auditor.md` — auditor persona
-     - `finding-specificity.md` — AFI writing guidelines
-     - `evidence-ledger.md` — file lifecycle states (found→reading→read→cited/not_used/skipped/failed)
-     - `source-citation-verification.md` — per-dimension citation rules and downgrade logic
-     - `spreadsheet-evidence.md` — Excel/CSV evidence assessment (row coverage, structure)
-     - `scanned-document-evidence.md` — scanned PDF detection and audit cues
-     - `evidence-retrieval.md` — per-dimension chunk retrieval strategy
-     - `regulatory-references.md` — exact SSG/CPE/PDPA/Companies Act provisions per criterion so findings cite the regulation, not just the GD4 item number
-     - `root-cause-methodology.md` — 5-Why discipline, symptom→immediate cause→root cause hierarchy, corrective vs preventive distinction
-     - `interview-and-fieldwork.md` — oral-assertion vs evidence distinction, fieldwork probing questions per APSR dimension, flags for post-audit documentation and key-person dependencies
-     - `sample-testing-methodology.md` — minimum sample sizes, selection strategies, rate-based observation language, response-rate thresholds for survey/outcome data
-     - `evidence-timeliness.md` — date-audit rules: documents created close to audit deadline, coverage-period gaps, cycle-coverage requirements for trend data
-     - `benchmarking-and-good-practice.md` — concrete Band 2–5 descriptions with criterion-specific examples of what Band 4–5 looks like so recommendations are targets, not platitudes
-   - **Criterion-specific domain expertise** (`src/data/skills/criterion-{1..7}-*.md` + `domainExpertise.ts`): seven specialist auditor skill files, one per GD4 criterion (C1 corporate governance/finance, C2 HR/marketing/data, C3 agent due-diligence, C4 student-protection/fee-safeguarding, C5 pedagogy/assessment QA, C6 QMS/continual-improvement, C7 performance measurement/data-integrity). `domainExpertise.ts` exposes `criterionIdOf()`, `domainExpertiseFor()` and `domainExpertiseLabelFor()` (maps any item/sub-criterion/criterion id → its criterion number → skill/label). The folder audit (`runLiveFolderAuditBatch`, via `FolderAuditOpts.criterionId`) and the grouped finding writer inject the matching skill as a dedicated prompt block (not capped by `SKILL_CAP`) so the audit and findings reason like a domain specialist. The active "Specialist lens" label is shown in the live audit progress and the audit-run modal.
+   - `agentRuntime.ts` — `runLiveFolderAudit()`, `FOLDER_DOC_CAP = 48000`. Also exports `runStagedPolicyAudit`, `runStagedEvidenceAudit`, `runStagedOutcomeReviewAudit`, `buildStagedApsr` for the three-pass staged audit. `runCitationVerifier()` is the second-pass Strict-mode function. Skills injected via `skills()` (capped to `SKILL_CAP = 3000` chars); `skillsFull()` in `findingWriter.ts` is uncapped (used for `regulatoryReferencesSkill` to preserve full clause tables).
+   - `simulateAI.ts` — offline fallback keyword-matcher. `FolderAuditLineVerdict` includes an optional `overallReason` field. Also exports `simulateStagedPolicyAudit`, `simulateStagedEvidenceAudit`, `simulateStagedOutcomeReview`.
+   - `findingWriter.ts` — `runLiveGroupedFindingWriter()` (AI) and `simulateGroupedFindingWriter()` (offline). The system prompt instructs the AI to quote GD4 requirement text **exactly word-for-word** in the `criteria` field — no paraphrasing. Both inject domain-specialist skill via `domainExpertiseFor()`.
+   - `findingGrouper.ts` — groups failing checklist lines by GD4 source ref + APSR dimension into `ChecklistLineGroup[]`.
 
-6. **Evidence folders** (`src/pages/EvidenceFolder.tsx`):
-   - Each sub-criterion has one Drive folder link. Convention: organise into two subfolders — `1. Policy & Procedure` and `2. Actual Evidence`. The audit classifies files by path prefix.
-   - A single workspace-level `additionalInfo` folder provides school-wide context to all audits (read once, passed as labeled context; does not bypass evidence-sufficiency caps).
+6. **Skills** (`src/data/skills/`): injected into audit system prompts:
+   - Generic skills (15): `apsr-rubric.md`, `evidence-standards.md`, `external-auditor.md`, `finding-specificity.md`, `finding-writing.md`, `evidence-ledger.md`, `source-citation-verification.md`, `spreadsheet-evidence.md`, `scanned-document-evidence.md`, `evidence-retrieval.md`, `regulatory-references.md`, `root-cause-methodology.md`, `interview-and-fieldwork.md`, `sample-testing-methodology.md`, `evidence-timeliness.md`, `benchmarking-and-good-practice.md`
+   - Criterion-specific (7): `criterion-{1..7}-*.md` — specialist auditor lenses per criterion (C1 governance/finance, C2 HR/data, C3 agent due-diligence, C4 student-protection, C5 academic QA, C6 QMS, C7 outcomes/data-integrity). Injected as a dedicated block (not capped) via `domainExpertiseFor(subCriterionId)`.
+   - `domainExpertise.ts` — `criterionIdOf()`, `domainExpertiseFor()`, `domainExpertiseLabelFor()` (maps any item/sub-criterion/criterion id → skill + display label).
+
+7. **Staged audit** (`auditFolderStaged` in `useWorkspaceStore.ts`): three sequential AI passes — Policy (Approach), Evidence (Processes + Outcomes), Outcome/Review (Review) — then a deterministic `buildStagedApsr()` merger. Progress stages: `listing → reading → policy_audit → evidence_audit → outcome_review → apsr_build → saving → findings_summary → complete`. The `lastAuditSummary` written to the folder includes: specialist lens, band per GD4 item, per-line APSR gap notes, file names read, method description.
+
+8. **Evidence folders** (`src/pages/EvidenceFolder.tsx`):
+   - Each sub-criterion has one Drive folder link. Convention: two subfolders — `1. Policy & Procedure` and `2. Actual Evidence`. Audit classifies files by path prefix; `scope` param (`"policy"` | `"evidence"` | `"all"`) controls which bucket is gathered.
+   - A single workspace-level `additionalInfo` folder provides school-wide context to all audits (does not bypass evidence-sufficiency caps).
+   - Audit completion panel stats (lines assessed, potential issues, files) link to Sub-Criterion Checklist and Findings register pre-filtered to that item.
    - `cancelBusy()` store action releases a stranded audit.
 
 ### Types (`src/types/index.ts`)
 
-Core types: `GD4Requirement`, `AuditCycle`, `Finding` (with `source?`, `dimension?`, `clause?`, `rootCause?`, `corrective?`, `preventive?`), `FindingDimension`, `SubCriterionChecklistEntry`, `SpecificChecklistLine`, `GenericChecklistLine`, `SubChecklistEvidenceItem`, `ApsrBreakdown`, `DraftFindingInfo`, `ChecklistOverride`.
+Key exact-value constraints (TypeScript union types — violations cause TS errors):
+- `ApsrBreakdown.approach.status`: `"Meeting" | "Beginning" | "Not evident"`
+- `ApsrBreakdown.processes.status`: `"Deployed" | "Weak" | "Not evident"`
+- `ApsrBreakdown.systemsOutcomes.status`: `"Evident" | "Limited" | "Not evident"`
+- `ApsrBreakdown.review.status`: `"Evident" | "Not evident"`
 
-`AuditFileRecord` extended fields: `suspectedScannedPdf?`, `extractedTextQuality?` (`"none"|"low"|"medium"|"high"`), `summaryCharCount?`, `skipReason?`, `chunkIds?`, `citedByLineIds?`, `usedForDimensions?`. `auditStatus` now includes `"cited"` and `"not_used"` in addition to `"pending"` and `"audited"`.
+`Finding` fields: `source?`, `dimension?`, `clause?`, `rootCause?`, `corrective?`, `preventive?`, `createdAt?: string` (ISO string, set on creation), `linkedChecklistLineIds?`, `linkedSourceRefs?`, `linkedSourceTexts?`, `evidenceStatusSummary?`, `groupedFindingId?`.
 
-`ApsrBreakdown` dimensions each carry `sourceChunkIds?: string[]` — the chunk IDs the AI cited as evidence for that dimension's verdict.
+`SubChecklistEvidenceItem.title` — the correct field name for evidence item descriptions (not `description` or `name`).
 
-`EvidenceChunk` — represents a single piece of evidence passed to the AI: `{ chunkId, filePath, fileName, bucket, fileKind, sheetName?, rowRange?, text, charCount, evidenceType }`. Chunks are assigned sequential IDs (`C001`, `C002`, …) before the AI call; after verdicts return, `sourceChunkIds` are mapped back to `AuditFileRecord` entries to mark files as `cited` or `not_used`.
+`AuditFileRecord.auditStatus` values: `"pending"`, `"audited"`, `"cited"`, `"not_used"`.
 
-Citation-gap downgrade (code-level, no AI call): any APSR dimension that returns a positive status (`"Meeting"` or `"Beginning"`) with no `sourceChunkIds` (absent or empty array) is downgraded to `"Not evident"` with a note appended.
+`EvidenceChunk` — `{ chunkId, filePath, fileName, bucket, fileKind, sheetName?, rowRange?, text, charCount, evidenceType }`. Chunk IDs are sequential (`C001`, `C002`, …). Citation-gap downgrade: any positive APSR dimension with no `sourceChunkIds` is code-level downgraded to `"Not evident"`.
 
 ### Tests (`src/lib/__tests__/`, `src/lib/ai/__tests__/`)
 
-Vitest. 8 test files covering: `scoring.ts`, `checklistBanding.ts`, checklist→scoring integration, AFI overlay, APSR logic, finding analysis, evidence ledger (PDF quality classification, chunk ID format, citation downgrade logic, spreadsheet extraction, skill file keyword verification), and Excel extraction edge cases (multi-sheet, 200-row cap, blank row filtering). Run `npm test` to execute all.
-
-Note: test files must import `classifyPdfTextQuality` and `extractSpreadsheetText` from `src/lib/drive/textUtils` (not `driveClient`) — `driveClient` instantiates a pdfjs Worker at module load time, which is unavailable in Node/Vitest.
+Vitest. Test files must import `classifyPdfTextQuality` and `extractSpreadsheetText` from `src/lib/drive/textUtils` (not `driveClient`) — `driveClient` instantiates a pdfjs Worker at module load time which is unavailable in Node/Vitest.
 
 ### Routing
 
-HashRouter — all routes under `#/`. Route list in `src/App.tsx`; nav labels/hints in `src/nav.ts`.
+HashRouter — all routes under `#/`. Route list in `src/App.tsx`; nav labels/hints in `src/nav.ts`. Filter pre-selection via `?item=<gd4ItemId>` query param on `/sub-checklist` and `/findings`.
 
 ### Persistence & security
 
-- Supabase URL + publishable key come from `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` (`.env.local`, never committed).
-- No service-role key anywhere in the client bundle.
+- Supabase URL + publishable key from `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` (`.env.local`, never committed).
 - Drive OAuth token excluded from Zustand `partialize` — never written to storage.
-- Writes are debounced ~600ms; `beforeunload` flushes the pending write.
+- Writes debounced ~600ms; `beforeunload` flushes the pending write.
 
 ### Dev server (Codespaces)
 
-Port 5173 forwarded with `"protocol": "http"` in `.devcontainer/devcontainer.json`. If the browser tries to download instead of render, confirm the port is set to HTTP (not HTTPS) in the Ports tab and open via the globe icon.
+Port 5173 forwarded with `"protocol": "http"` in `.devcontainer/devcontainer.json`. If the browser tries to download instead of render, confirm the port is HTTP (not HTTPS) in the Ports tab and open via the globe icon.
