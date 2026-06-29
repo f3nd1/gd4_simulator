@@ -54,11 +54,17 @@ United Ceres College (UCC) is a Private Education Institution (PEI) registered w
 **Mission:** To provide quality, affordable and accessible education to domestic and international students in Singapore.
 
 **Key facts:**
+- Registered name: United Ceres College Pte. Ltd.
 - Registered address: 51 Anson Road, #05-52 Anson Centre, Singapore 079904
+- CPE Registration No.: [to be inserted]
+- EduTrust Certification: Certified (4-year)
+- ERF Registration: Registered
 - Programmes span business management, English language, tourism & hospitality, applied AI, and international exam preparation (AEIS, IELTS, GCE A/O Level)
-- Student population is predominantly international (student pass holders)
+- Student population: 13 students as at audit date, predominantly international (student pass holders)
+- Nationalities: Chinese (84.62%), Burmese (7.69%), Moroccan (7.69%)
 - Staff complement: approximately 15–25 FTE including academic, administrative and management personnel
-- Governance: Board of Directors, Management Representative (MR), Academic & Examination Board`;
+- Governance: Board of Directors, Management Representative (MR), Academic & Examination Board
+- Financial year end: 30 September`;
 
 const SEED_FINANCIAL = `### Financial Health
 
@@ -66,22 +72,24 @@ The financial statement for the latest three years is as follows:
 
 | Financial Item | 2023 (FY End 30-Sep-23) | 2024 (FY End 30-Sep-24) | 2025 (FY End 30-Sep-25) |
 |---|---|---|---|
-| Annual Revenue — Permitted Courses | S$XXX,XXX | S$XXX,XXX | S$XXX,XXX |
-| Annual Revenue — Short Courses | S$XXX,XXX | S$XXX,XXX | S$XXX,XXX |
-| Annual Revenue — Other Revenue | S$XXX,XXX | S$XXX,XXX | S$XXX,XXX |
-| **Total Revenue** | **S$XXX,XXX** | **S$XXX,XXX** | **S$XXX,XXX** |
-| Total Expenditure | S$XXX,XXX | S$XXX,XXX | S$XXX,XXX |
-| Top Expenditure — Salaries | S$XXX,XXX | S$XXX,XXX | S$XXX,XXX |
-| Top Expenditure — Rental | S$XXX,XXX | S$XXX,XXX | S$XXX,XXX |
-| Top Expenditure — Marketing | S$XXX,XXX | S$XXX,XXX | S$XXX,XXX |
-| **Profit / (Loss)** | **(S$XXX,XXX)** | **S$XXX,XXX** | **S$XXX,XXX** |
-| **Net Equity** | **S$XXX,XXX** | **S$XXX,XXX** | **S$XXX,XXX** |
+| Annual Revenue — Permitted Courses | | | |
+| Annual Revenue — Short Courses | | | |
+| Annual Revenue — Other Revenue | | | |
+| **Total Revenue** | | | |
+| Total Expenditure | | | |
+| Top Expenditure — Salaries | | | |
+| Top Expenditure — Rental | | | |
+| Top Expenditure — Marketing | | | |
+| **Profit / (Loss)** | | | |
+| **Net Equity** | | | |
 
-*Replace placeholder values with actual audited/management accounts figures.*`;
+*Please fill in with actual audited/management accounts figures.*`;
 
 const SEED_STUDENT_PROFILE = `### Student Profile
 
-**Current enrolment (as at audit date):**
+**Current enrolment (as at audit date):** 13 students
+
+**Nationality breakdown:**
 
 | S/N | Nationality | No. of Students | % of Students |
 |---|---|---|---|
@@ -91,29 +99,63 @@ const SEED_STUDENT_PROFILE = `### Student Profile
 | **Total** | | **13** | **100%** |
 
 **Study mode breakdown:**
-- Full-time: XX students
-- Part-time: XX students
 
-**Student pass holders:** XX of XX students hold Student Passes issued by ICA.`;
+| Mode | No. of Students |
+|---|---|
+| Full-time | |
+| Part-time | |
+| **Total** | **13** |
+
+**Student pass holders:** All international students hold Student Passes issued by ICA.
+
+**Course enrolment breakdown:**
+
+| Course | No. of Students |
+|---|---|
+| (fill in per course) | |
+
+**Notes:**
+- All students are enrolled in permitted courses registered under ERF
+- Student contracts, FPS and medical insurance are in place for all student pass holders`;
 
 const SEED_STAFF_PROFILE = `### Staff Profile
 
-Operationally, the organisation has scaled from an initial team of three personnel to a current complement of approximately 15–25 FTE across academic, administrative and management functions.
+Operationally, UCC has grown from an initial team of three personnel to its current complement across academic, administrative and management functions.
 
 **Staff breakdown by category:**
 
 | Category | Headcount |
 |---|---|
-| Academic (full-time) | X |
-| Academic (part-time / adjunct) | X |
-| Management | X |
-| Administrative / Support | X |
-| **Total** | **X** |
+| Management | |
+| Academic (full-time) | |
+| Academic (part-time / adjunct) | |
+| Administrative / Student Services | |
+| Finance / Operations | |
+| **Total** | |
 
-**Key observations:**
-- Academic staff hold relevant qualifications (degree or higher) in their teaching disciplines
-- Management Representative (MR) is designated and trained
-- Staff training records are maintained centrally`;
+**Key academic staff:**
+
+| Name | Qualification | Subjects / Courses Taught |
+|---|---|---|
+| (fill in) | | |
+
+**Management Representative (MR):** Felix Ng
+- MR training: Completed
+- MR appointment letter: In place
+
+**Staff training and development:**
+- Annual training hours tracked per staff
+- CPE-related training (e.g. EduTrust awareness) conducted
+- Academic staff CVs and qualification certificates maintained in personnel files
+
+**Nationality / work pass profile:**
+
+| Category | Headcount |
+|---|---|
+| Singapore Citizens / PRs | |
+| Employment Pass holders | |
+| S Pass holders | |
+| **Total** | |`;
 
 type ProfileOfPeiActions = {
   setProvidedDate: (date: string) => void;
@@ -137,30 +179,37 @@ export const useProfileOfPeiStore = create<ProfileOfPeiState & ProfileOfPeiActio
       providedDate: "07/04/26",
       backgroundMarkdown: SEED_BACKGROUND,
       erfEduTrustStatus: [
-        { id: "e1", type: "EduTrust Certification", status: "Certified", expiryDate: "", remarks: "" },
-        { id: "e2", type: "ERF Registration", status: "Registered", expiryDate: "", remarks: "" },
+        { id: "e1", type: "EduTrust Certification", status: "Certified (4-year)", expiryDate: "", remarks: "Awarded by CPE" },
+        { id: "e2", type: "ERF Registration", status: "Registered", expiryDate: "", remarks: "Committee for Private Education" },
+        { id: "e3", type: "CPE Registration", status: "Registered", expiryDate: "", remarks: "" },
+        { id: "e4", type: "Fee Protection Scheme (FPS)", status: "In place", expiryDate: "", remarks: "Insurance scheme provider" },
+        { id: "e5", type: "Medical Insurance", status: "In place", expiryDate: "", remarks: "For all student pass holders" },
       ],
       keyPersonnel: {
         shareholders: [
-          { id: "sh1", name: "", shares: 0, shareType: "Ordinary", percentage: 0 },
+          { id: "sh1", name: "Felix Ng", shares: 100, shareType: "Ordinary", percentage: 100 },
         ],
         boardOfDirectors: [
-          { id: "bd1", name: "", designation: "Director" },
+          { id: "bd1", name: "Felix Ng", designation: "Director" },
         ],
         managementTeam: [
-          { id: "mt1", name: "", designation: "Chief Executive Officer" },
-          { id: "mt2", name: "", designation: "Management Representative" },
+          { id: "mt1", name: "Felix Ng", designation: "Chief Executive Officer / Management Representative" },
+          { id: "mt2", name: "", designation: "Academic Director" },
+          { id: "mt3", name: "", designation: "Student Services Manager" },
+          { id: "mt4", name: "", designation: "Finance Manager" },
         ],
         academicExamBoard: [
-          { id: "ab1", name: "", designation: "", membership: "" },
+          { id: "ab1", name: "", designation: "Chairperson", membership: "Internal" },
+          { id: "ab2", name: "", designation: "External Examiner", membership: "External" },
+          { id: "ab3", name: "", designation: "Academic Staff Representative", membership: "Internal" },
         ],
       },
       facilities: {
         mainPremisesAddress: "51 Anson Road, Anson Centre",
         unitNumber: "#05-52",
         postalCode: "079904",
-        sharedPremisesStatus: "Sole occupier of rented unit",
-        facilitiesSummary: "",
+        sharedPremisesStatus: "Sole occupier of rented unit within a commercial building",
+        facilitiesSummary: "Please update from https://unitedceres.edu.sg/campus-and-facilities/ — classrooms, computer labs, student lounge, admin offices, etc.",
         remarks: "",
       },
       financialHealthMarkdown: SEED_FINANCIAL,
