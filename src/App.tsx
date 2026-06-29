@@ -24,6 +24,7 @@ import { Finalisation } from "./pages/Finalisation";
 import { ExportCentre } from "./pages/ExportCentre";
 import { Settings } from "./pages/Settings";
 import { SchoolContext } from "./pages/SchoolContext";
+import { ProfileOfPei } from "./pages/ProfileOfPei";
 import { FinalReport } from "./pages/FinalReport";
 import { Analytics } from "./pages/Analytics";
 import { Help } from "./pages/Help";
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/help" element={<Help />} />
+          <Route path="/profile-of-pei" element={<ProfileOfPei />} />
           <Route path="/school-context" element={<SchoolContext />} />
           <Route path="/draft-workspace" element={<DraftWorkspace />} />
           <Route path="/audit-cycle" element={<AuditCycle />} />
