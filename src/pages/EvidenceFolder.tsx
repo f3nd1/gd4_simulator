@@ -632,24 +632,46 @@ function CompleteDetail({ p, onExportFileLedger, onExportAISummary }: { p: Audit
   const totalCited   = files.filter((f) => f.auditStatus === "cited").length;
   const totalNotUsed = files.filter((f) => f.auditStatus === "not_used").length;
 
+  const checklistHref = p.subCriterionId ? `#/sub-checklist?item=${p.subCriterionId}` : "#/sub-checklist";
+  const findingsHref  = p.subCriterionId ? `#/findings?item=${p.subCriterionId}` : "#/findings";
+
+  const chipLink: React.CSSProperties = { cursor: "pointer", textDecoration: "none", borderRadius: 6, padding: "5px 11px", fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 };
+
   return (
     <div>
       <div style={{ fontSize: 14, fontWeight: 700, color: "#15803d", marginBottom: 8 }}>Audit finished successfully!</div>
-      <div style={{ padding: "8px 12px", background: "#f0fdf4", borderRadius: 8, fontSize: 12.5, color: "#166534", display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 6 }}>
-        {lines > 0 && <span>✓ <b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed</span>}
-        {issues > 0 ? <span>⚠ <b>{issues}</b> potential issue{issues !== 1 ? "s" : ""}</span> : lines > 0 ? <span>✓ No issues flagged</span> : null}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        {lines > 0 && (
+          <a href={checklistHref} style={{ ...chipLink, background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0" }}>
+            ✓ <b>{lines}</b> checklist line{lines !== 1 ? "s" : ""} assessed →
+          </a>
+        )}
+        {issues > 0 ? (
+          <a href={findingsHref} style={{ ...chipLink, background: "#fffbeb", color: "#92400e", border: "1px solid #fcd34d" }}>
+            ⚠ <b>{issues}</b> potential issue{issues !== 1 ? "s" : ""} → Findings
+          </a>
+        ) : lines > 0 ? (
+          <a href={checklistHref} style={{ ...chipLink, background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0" }}>
+            ✓ No issues flagged
+          </a>
+        ) : null}
       </div>
       {totalFound > 0 && (
-        <div style={{ padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#374151", display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
-          <span><b>{totalFound}</b> files</span>
-          {totalRead > 0 && <span style={{ color: "#15803d" }}><b>{totalRead}</b> read</span>}
-          {totalCited > 0 && <span style={{ color: "#0369a1" }}><b>{totalCited}</b> cited by AI</span>}
+        <div style={{ padding: "6px 10px", background: "#f8fafc", borderRadius: 6, fontSize: 11.5, color: "#374151", display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+          <a href={checklistHref} style={{ color: "#374151", textDecoration: "none", fontWeight: 600 }}><b>{totalFound}</b> files</a>
+          {totalRead > 0 && <a href={checklistHref} style={{ color: "#15803d", textDecoration: "none" }}><b>{totalRead}</b> read</a>}
+          {totalCited > 0 && <a href={checklistHref} style={{ color: "#0369a1", textDecoration: "none" }}><b>{totalCited}</b> cited by AI</a>}
           {totalNotUsed > 0 && <span style={{ color: "#6b7280" }}><b>{totalNotUsed}</b> not used</span>}
           {totalSkipped > 0 && <span><b>{totalSkipped}</b> skipped</span>}
           {totalFailed > 0 && <span style={{ color: "#b91c1c" }}><b>{totalFailed}</b> failed</span>}
         </div>
       )}
-      <div style={{ ...muted, marginBottom: 8 }}>Check the Sub-Criterion Checklist to review verdicts and evidence.</div>
+      <div style={{ ...muted, marginBottom: 8 }}>
+        Check the{" "}
+        <a href={checklistHref} style={{ color: "#4f46e5", fontWeight: 600 }}>Sub-Criterion Checklist</a>
+        {issues > 0 && <> · <a href={findingsHref} style={{ color: "#b45309", fontWeight: 600 }}>Findings register</a></>}
+        {" "}to review verdicts and evidence.
+      </div>
       {(onExportFileLedger || onExportAISummary) && (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {onExportFileLedger && (
