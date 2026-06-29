@@ -5,6 +5,7 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
+import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 
 const SUMMARY_CAP = 320;
 
@@ -35,10 +36,15 @@ function stageToVisualStep(stage: AuditProgressState["stage"]): number {
     case "listing":    return 0;
     case "reading":
     case "condensing": return 1;
-    case "auditing":   return 2;
-    case "saving":     return 3;
-    case "complete":   return 4;
-    case "error":      return -1;
+    case "auditing":
+    case "policy_audit":
+    case "evidence_audit":
+    case "outcome_review":
+    case "apsr_build":   return 2;
+    case "findings_summary":
+    case "saving":       return 3;
+    case "complete":     return 4;
+    case "error":        return -1;
   }
 }
 
@@ -56,6 +62,11 @@ function stageProgress(p: AuditProgressState): number {
       const total = p.batchTotal ?? 1;
       return 50 + Math.round(35 * (done / total));
     }
+    case "policy_audit":   return 50;
+    case "evidence_audit": return 62;
+    case "outcome_review": return 74;
+    case "apsr_build":     return 82;
+    case "findings_summary": return 86;
     case "saving": return 88;
     case "complete": return 100;
     case "error":   return 100;
@@ -303,6 +314,14 @@ function FileLedger({
         )}
       </div>
 
+      {/* "All done reading — waiting for AI step" transitional indicator */}
+      {isActive && !progress?.currentFileName && files.length > 0 && totalRead === files.length && (
+        <div style={{ fontSize: 12, color: "#7c3aed", marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+          <span>🧩</span>
+          <span>All files read — preparing AI assessment<Dots /></span>
+        </div>
+      )}
+
       {/* Footer */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
         <div style={{ ...muted, display: "flex", gap: 8, flexWrap: "wrap", flex: 1 }}>
@@ -353,6 +372,9 @@ function ConnectDetail({ p, isActive }: { p: AuditProgressState; isActive: boole
             </span>
           )}
         </div>
+        {domainExpertiseLabelFor(p.subCriterionId) && (
+          <div style={{ ...muted, marginTop: 4 }}>🎓 Specialist lens: <b>{domainExpertiseLabelFor(p.subCriterionId)}</b></div>
+        )}
       </div>
     );
   }
@@ -380,7 +402,17 @@ function ConnectDetail({ p, isActive }: { p: AuditProgressState; isActive: boole
 
 function ReadFilesDetail({ p, isActive, onSkipFile, onExportCsv }: { p: AuditProgressState; isActive: boolean; onSkipFile?: () => void; onExportCsv?: () => void }) {
   const files = p.filesFound ?? [];
-  return <FileLedger files={files} isActive={isActive} progress={p} onSkipFile={onSkipFile} onExportCsv={onExportCsv} />;
+  return (
+    <>
+      {p.stage === "condensing" && (
+        <div style={{ fontSize: 12, color: "#7c3aed", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+          <span>🗜️</span>
+          <span>Summarising large files to fit AI context — this may take a moment<Dots /></span>
+        </div>
+      )}
+      <FileLedger files={files} isActive={isActive} progress={p} onSkipFile={onSkipFile} onExportCsv={onExportCsv} />
+    </>
+  );
 }
 
 function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressState; isActive: boolean; onExportAISummary?: () => void }) {
@@ -876,6 +908,7 @@ function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => v
         {/* Metadata row */}
         <div style={{ padding: "8px 10px", background: "#f8fafc", borderRadius: 8, fontSize: 11.5, color: "#374151", display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12 }}>
           {run.auditorName && <span><span style={muted}>Auditor:</span> {run.auditorName}</span>}
+          {domainExpertiseLabelFor(run.subCriterionId) && <span><span style={muted}>Specialist lens:</span> <b>{domainExpertiseLabelFor(run.subCriterionId)}</b></span>}
           {run.aiModel && <span><span style={muted}>Model:</span> <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5 }}>{run.aiModel}</span></span>}
           <span><span style={muted}>AI:</span> {run.auditLive ? "Live" : "Offline"}</span>
           {run.chunkCount > 0 && <span><span style={muted}>Chunks:</span> {run.chunkCount}</span>}
@@ -977,7 +1010,10 @@ export function EvidenceFolder() {
   const setFolderField = useWorkspaceStore((s) => s.setFolderField);
   const checkFolderAccess   = useWorkspaceStore((s) => s.checkFolderAccess);
   const auditFolderContents = useWorkspaceStore((s) => s.auditFolderContents);
+  const auditFolderStaged   = useWorkspaceStore((s) => s.auditFolderStaged);
   const cancelBusy          = useWorkspaceStore((s) => s.cancelBusy);
+  const clearFileTextCache  = useWorkspaceStore((s) => s.clearFileTextCache);
+  const fileTextCacheSize   = useWorkspaceStore((s) => Object.keys(s.fileTextCache).length);
   const skipCurrentFile     = useWorkspaceStore((s) => s.skipCurrentFile);
   const busy                = useWorkspaceStore((s) => s.busy);
   const additionalInfo      = useWorkspaceStore((s) => s.additionalInfo);
@@ -1086,6 +1122,17 @@ export function EvidenceFolder() {
             Use the scope selector to audit only Policy or only Evidence files. Files are cached — unchanged Drive files are reused on repeat audits.
             "View last run" reopens the read-only audit record with full file ledger and AI summary CSVs.
           </p>
+          {fileTextCacheSize > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "6px 10px", background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 7 }}>
+              <span style={{ fontSize: 12, color: "#6d28d9" }}>♻ {fileTextCacheSize} file{fileTextCacheSize !== 1 ? "s" : ""} cached from previous audits</span>
+              <button
+                onClick={() => { if (confirm("Clear the file text cache? The next audit will re-download all files from Drive.")) clearFileTextCache(); }}
+                style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", borderRadius: 5, fontSize: 11, padding: "2px 8px", color: "#7c3aed" }}
+              >
+                Clear cache
+              </button>
+            </div>
+          )}
           <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", background: "#f8fafc", marginBottom: 10, fontSize: 12 }}>
             <b style={{ fontSize: 11.5, color: "#475569" }}>Link two folders per sub-criterion:</b>
             <ol style={{ margin: "4px 0 4px", paddingLeft: 18, color: "#475569" }}>
@@ -1248,12 +1295,34 @@ export function EvidenceFolder() {
                         </button>
                       </div>
                     ) : (
-                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                      <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                        <button
+                          onClick={() => auditFolderStaged(f.id, "all")}
+                          title="Staged audit: Policy Adequacy → Evidence Implementation → Outcome & Review → Deterministic APSR verdict"
+                          style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", whiteSpace: "nowrap" }}
+                        >
+                          Staged audit
+                        </button>
+                        <button
+                          onClick={() => auditFolderStaged(f.id, "policy")}
+                          title="Check only Policy & Procedure documents for documented approaches"
+                          style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #7c3aed", background: "#faf5ff", color: "#7c3aed", whiteSpace: "nowrap" }}
+                        >
+                          Policy check
+                        </button>
+                        <button
+                          onClick={() => auditFolderStaged(f.id, "evidence")}
+                          title="Check only Actual Evidence documents for implementation records"
+                          style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #7c3aed", background: "#faf5ff", color: "#7c3aed", whiteSpace: "nowrap" }}
+                        >
+                          Evidence check
+                        </button>
                         <button
                           onClick={() => auditFolderContents(f.id)}
-                          style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #3b82f6", background: "#2563eb", color: "#fff", whiteSpace: "nowrap" }}
+                          title="Original single-pass audit (APSR in one AI call)"
+                          style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #94a3b8", background: "#f8fafc", color: "#64748b", whiteSpace: "nowrap" }}
                         >
-                          Run audit
+                          Classic audit
                         </button>
                         {lastRun && (
                           <button

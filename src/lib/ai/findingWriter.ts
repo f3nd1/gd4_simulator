@@ -12,6 +12,12 @@ import apsrRubricSkill from "../../data/skills/apsr-rubric.md?raw";
 import findingSpecificitySkill from "../../data/skills/finding-specificity.md?raw";
 import findingWritingSkill from "../../data/skills/finding-writing.md?raw";
 import evidenceStandardsSkill from "../../data/skills/evidence-standards.md?raw";
+import rootCauseMethodologySkill from "../../data/skills/root-cause-methodology.md?raw";
+import regulatoryReferencesSkill from "../../data/skills/regulatory-references.md?raw";
+import sampleTestingSkill from "../../data/skills/sample-testing-methodology.md?raw";
+import evidenceTimelinessSkill from "../../data/skills/evidence-timeliness.md?raw";
+import benchmarkingSkill from "../../data/skills/benchmarking-and-good-practice.md?raw";
+import { domainExpertiseFor } from "../../data/skills/domainExpertise";
 
 export type GroupedFindingWriterResult = {
   title: string;
@@ -163,9 +169,18 @@ export async function runLiveGroupedFindingWriter(
   const groupContext = buildGroupContext(group);
   const evidenceSummary = buildEvidenceStatusSummary(group.lines);
 
+  // Specialist domain knowledge for this finding's criterion, so the finding's
+  // root cause, corrective and preventive actions are written with the depth of
+  // an auditor who specialises in that area rather than generic advice.
+  const domainSkill = domainExpertiseFor(req.subCriterionId ?? req.itemNumber);
+  const domainBlock = domainSkill
+    ? `\n\n## Specialist domain expertise for this criterion\n\nWrite this finding with the precision of the specialist below — use its specific cross-checks, regulatory points and red flags so the observation, root cause and corrective/preventive actions are concrete and domain-accurate, not generic.\n\n${domainSkill.trim()}`
+    : "";
+
   const systemPrompt =
-    `You are a GD4 EduTrust internal audit expert. Your task is to write one structured finding draft based on a group of failing checklist lines from an audit. You MUST base everything on the checklist evidence provided — do NOT invent or assume information that is not in the lines.` +
-    skills(apsrRubricSkill, evidenceStandardsSkill, findingSpecificitySkill, findingWritingSkill);
+    `You are a GD4 EduTrust internal audit expert. Your task is to write one structured finding draft based on a group of failing checklist lines from an audit. You MUST base everything on the checklist evidence provided — do NOT invent or assume information that is not in the lines. For the root cause: apply 5-Why methodology — reach the systemic Level 3 root cause (a governance, training, data-collection, or review gap), not the symptom. For the criteria section: cite the exact regulatory provision (Act, clause, or SSG instrument) in addition to the GD4 item number. For the effect section: name the specific band ceiling with a concrete Band 4–5 benchmark so the institution knows what "fixed" looks like. Where the checklist lines mention a sample, express the gap as a rate (N of M). Flag any evidence-timeliness issues visible in the line notes (recently created documents, short coverage periods).` +
+    skills(apsrRubricSkill, evidenceStandardsSkill, findingSpecificitySkill, findingWritingSkill, rootCauseMethodologySkill, regulatoryReferencesSkill, sampleTestingSkill, evidenceTimelinessSkill, benchmarkingSkill) +
+    domainBlock;
 
   const userPrompt = `
 Write a structured finding draft for the following group of failing checklist lines.

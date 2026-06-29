@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus } from "../../types";
 import { chatComplete, AIClientError, addUsage, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
@@ -23,6 +23,13 @@ import sourceCitationSkill from "../../data/skills/source-citation-verification.
 import spreadsheetEvidenceSkill from "../../data/skills/spreadsheet-evidence.md?raw";
 import scannedDocumentSkill from "../../data/skills/scanned-document-evidence.md?raw";
 import evidenceRetrievalSkill from "../../data/skills/evidence-retrieval.md?raw";
+import regulatoryReferencesSkill from "../../data/skills/regulatory-references.md?raw";
+import rootCauseMethodologySkill from "../../data/skills/root-cause-methodology.md?raw";
+import interviewFieldworkSkill from "../../data/skills/interview-and-fieldwork.md?raw";
+import sampleTestingSkill from "../../data/skills/sample-testing-methodology.md?raw";
+import evidenceTimelinessSkill from "../../data/skills/evidence-timeliness.md?raw";
+import benchmarkingSkill from "../../data/skills/benchmarking-and-good-practice.md?raw";
+import { domainExpertiseFor } from "../../data/skills/domainExpertise";
 import type { EvidenceChunk } from "../../types";
 
 // Injects one or more skill documents into the system prompt, capped so a
@@ -313,7 +320,7 @@ export async function runLiveClosureDraft(
   settings: AISettings,
   context?: { standard?: string; apsr?: string }
 ): Promise<{ root: string; corr: string; prev: string; usage?: AIUsage }> {
-  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — distinguish an Approach gap (the documented policy/procedure is missing or too generic in the PPD) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — then a CORRECTIVE action that fixes this specific gap now, and a PREVENTIVE action that stops it recurring. Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.${skills(findingWritingSkill, sgPeiContextSkill, riskRemediationSkill, findingSpecificitySkill)}`;
+  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — use the 5-Why methodology to reach the systemic level (Level 3): distinguish an Approach gap (policy/procedure missing or too generic) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — name the governance, training, data-collection, or review gap as the root cause, not the symptom — then a CORRECTIVE action that fixes this specific gap now (time-bound, names the record/document and responsible role), and a PREVENTIVE action that changes the system so the gap cannot recur (must be different from the corrective action — a new checkpoint, policy section, or standing review item). Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.${skills(findingWritingSkill, sgPeiContextSkill, riskRemediationSkill, findingSpecificitySkill, rootCauseMethodologySkill)}`;
   const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}${context?.standard ? `\n\nOfficial GD4 requirement:\n${context.standard}` : ""}${context?.apsr ? `\n\nAPSR assessment of this line:\n${context.apsr}` : ""}`;
   // Higher temperature for drafting (natural, varied narrative) vs deterministic verdicts.
   let usage: AIUsage | undefined;
@@ -375,6 +382,10 @@ export type FolderAuditOpts = {
   // Describe/Show + Notes + expected evidence) so lines are judged against the
   // real standard, not just their own short wording.
   standard?: string;
+  // The criterion / sub-criterion / item id this folder belongs to (e.g. "4.2"
+  // or "4"). Used to inject the matching specialist domain-expertise skill so
+  // the audit reasons like an auditor who specialises in that criterion.
+  criterionId?: string;
   // When set, this is a second "challenge" pass: re-examine these prior
   // verdicts and downgrade any not fully and explicitly evidenced.
   challenge?: { lineId: string; status: string }[];
@@ -441,6 +452,10 @@ async function runLiveFolderAuditBatch(
   opts: FolderAuditOpts
 ): Promise<FolderAuditResult> {
   const strictness = opts.strictness || "Standard";
+  // Specialist domain expertise for this criterion (corporate finance for C1,
+  // student-protection for C4, pedagogy/assessment for C5, etc.) so the audit
+  // applies the deep, criterion-specific knowledge a human specialist would.
+  const domainSkill = domainExpertiseFor(opts.criterionId);
   // APSR assessment using the official EduTrust Scoring Rubric dimensions
   // (GD4 §23): Approach → Processes → Systems & Outcomes → Review, assessed in
   // that order. The overall Met/Partial/Not met is NOT decided by the model — it
@@ -452,11 +467,17 @@ async function runLiveFolderAuditBatch(
 3. SYSTEMS & OUTCOMES (the desired outcomes derived from that implementation). systemsOutcomes.status: "Evident" if the desired outcomes/results are actually produced, "Limited" if outcomes are limited, "Not evident" if none.
 4. REVIEW (evaluation of the appropriateness, relevance and effectiveness of the approach and process for continual improvement). review.status: "Evident" if there is a real review with improvement action, "Not evident" otherwise.
 Each "note" must be a critical AUDITOR ANALYSIS, not a description or summary of the document. Never merely restate what the document contains. For approach.note: judge HOW WELL the documented approach meets THIS requirement — name specifically which Describe/Show expectations it covers and which it omits or addresses only weakly, say whether it is genuinely specific to this institution or boilerplate/generic, whether it is sustainable (repeatable, with named owners and timing) or ad hoc, and end with ONE concrete improvement the institution should make. For processes/systemsOutcomes/review notes: state what evidence WOULD prove the dimension and what is actually missing, not a paraphrase of any text found. A note that only describes the document's contents is a failure — write the auditor's judgement of its adequacy and gaps.
-For EVERY non-empty positive claim (i.e. status is not "Not evident"), cite the specific chunk ID(s) from the document headers (e.g. "C001", "C002") in "sourceChunkIds" on that dimension. If no chunk directly supports a positive status, leave sourceChunkIds as an empty array — do NOT invent chunk IDs. Also populate the top-level "sources" array with file paths for backward compatibility. Cross-check file types: if a file in the POLICY & PROCEDURE section looks like an operational record, log, attendance sheet, minutes or filled-in form (not a policy/SOP/procedure/plan/framework), or a file in the ACTUAL EVIDENCE section looks like a pure undated policy document with no implementation records, add a one-sentence warning per problematic file to "folderWarnings" (e.g. "Policy folder: 'HR_Attendance_Log_Jan.xlsx' appears to be an attendance record, not a procedure — move to Actual Evidence").${STRICTNESS_CLAUSE[strictness] || ""}${skills(apsrRubricSkill, evidenceStandardsSkill, externalAuditorSkill, evidenceLedgerSkill, sourceCitationSkill, spreadsheetEvidenceSkill, scannedDocumentSkill, evidenceRetrievalSkill, findingSpecificitySkill)}`;
+For EVERY non-empty positive claim (i.e. status is not "Not evident"), cite the specific chunk ID(s) from the document headers (e.g. "C001", "C002") in "sourceChunkIds" on that dimension. If no chunk directly supports a positive status, leave sourceChunkIds as an empty array — do NOT invent chunk IDs. Also populate the top-level "sources" array with file paths for backward compatibility. Cross-check file types: if a file in the POLICY & PROCEDURE section looks like an operational record, log, attendance sheet, minutes or filled-in form (not a policy/SOP/procedure/plan/framework), or a file in the ACTUAL EVIDENCE section looks like a pure undated policy document with no implementation records, add a one-sentence warning per problematic file to "folderWarnings" (e.g. "Policy folder: 'HR_Attendance_Log_Jan.xlsx' appears to be an attendance record, not a procedure — move to Actual Evidence"). Also flag evidence-timeliness issues: documents dated within 4 weeks of audit, records that don't span the full review period, and any claims about outcomes that lack a stated survey response rate.${STRICTNESS_CLAUSE[strictness] || ""}${skills(apsrRubricSkill, evidenceStandardsSkill, externalAuditorSkill, evidenceLedgerSkill, sourceCitationSkill, spreadsheetEvidenceSkill, scannedDocumentSkill, evidenceRetrievalSkill, findingSpecificitySkill, regulatoryReferencesSkill, evidenceTimelinessSkill, sampleTestingSkill, interviewFieldworkSkill)}`;
   const challengeRule = opts.challenge
     ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote approach.status from "Meeting" to "Beginning" unless the documented approach is genuinely specific and sustainable, and demote processes.status unless implementation is explicitly evidenced.`
     : "";
-  const system = `${base}${challengeRule} Each "note" must be 2–3 targeted sentences: name the specific file, record, role, or procedure gap you found; state precisely what is missing and what the institution must do to fix it; include dates, counts, or named roles where visible in the documents. Write as an auditor's direct assessment — never merely describe or summarise the document's contents. Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string, "sourceChunkIds": string[]}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string, "sourceChunkIds": string[]}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string, "sourceChunkIds": string[]}, "review": {"status": "Evident"|"Not evident", "note": string, "sourceChunkIds": string[]}, "overallReason": string, "sources": string[]}], "folderWarnings": ["optional one-sentence warnings about mis-filed documents"]}.`;
+  // Inject the criterion's specialist domain knowledge as its own prominent
+  // block (not mixed into the generic skill bundle) so it is never truncated
+  // and clearly frames the auditor persona for this criterion.
+  const domainBlock = domainSkill
+    ? `\n\n## Apply this specialist domain expertise for THIS criterion\n\nAudit this folder with the depth of the specialist below. Use its specific cross-checks, red flags and calibration — generic observations are not acceptable where this expertise lets you be precise.\n\n${domainSkill.trim()}`
+    : "";
+  const system = `${base}${domainBlock}${challengeRule} Each "note" must be 2–3 targeted sentences: name the specific file, record, role, or procedure gap you found; state precisely what is missing and what the institution must do to fix it; include dates, counts, or named roles where visible in the documents. Write as an auditor's direct assessment — never merely describe or summarise the document's contents. Respond with JSON only: {"lines": [{"lineId": string, "approach": {"status": "Meeting"|"Beginning"|"Not evident", "note": string, "sourceChunkIds": string[]}, "processes": {"status": "Deployed"|"Weak"|"Not evident", "note": string, "sourceChunkIds": string[]}, "systemsOutcomes": {"status": "Evident"|"Limited"|"Not evident", "note": string, "sourceChunkIds": string[]}, "review": {"status": "Evident"|"Not evident", "note": string, "sourceChunkIds": string[]}, "overallReason": string, "sources": string[]}], "folderWarnings": ["optional one-sentence warnings about mis-filed documents"]}.`;
 
   const DOC_CAP = BATCH_DOC_CAP;
   const truncated = docText.length > DOC_CAP;
@@ -671,7 +692,7 @@ export async function runLiveCrossCriterionAnalysis(
   immediateActions: string[];
   usage?: AIUsage;
 }> {
-  const system = `You are a senior EduTrust strategic consultant reviewing a complete internal audit result for a Singapore PEI. Analyse the criterion bands, open findings, and audit journal to produce: (1) top 3 strategic priorities (most impactful gaps to address first), (2) systemic issues (cross-cutting root causes that appear in multiple criteria), (3) a concrete path to 4-Year (Star) — what specifically needs to change, (4) the single most urgent immediate action. Be specific to the GD4 standard, cite criterion and sub-criterion numbers. Do not soften or hedge. Respond with JSON only: {"priorities": string[], "systemicIssues": string[], "starPath": string, "immediateActions": string[]}.${skills(bandCalibrationSkill, sgPeiContextSkill, consultantInsightsSkill, riskRemediationSkill, externalAuditorSkill)}`;
+  const system = `You are a senior EduTrust strategic consultant reviewing a complete internal audit result for a Singapore PEI. Analyse the criterion bands, open findings, and audit journal to produce: (1) top 3 strategic priorities (most impactful gaps to address first), (2) systemic issues (cross-cutting root causes that appear in multiple criteria — use root-cause methodology to find the underlying governance/training/data gap, not the symptoms), (3) a concrete path to 4-Year (Star) — what specifically needs to change at each band level with concrete benchmarks for Band 4–5 behaviour, (4) the single most urgent immediate action. Be specific to the GD4 standard, cite criterion and sub-criterion numbers. Do not soften or hedge. Respond with JSON only: {"priorities": string[], "systemicIssues": string[], "starPath": string, "immediateActions": string[]}.${skills(bandCalibrationSkill, sgPeiContextSkill, consultantInsightsSkill, riskRemediationSkill, externalAuditorSkill, rootCauseMethodologySkill, benchmarkingSkill)}`;
 
   const criterionBandLines = input.criterionBands.map((c) => `C${c.id} Band ${c.band} — ${c.title}`).join("\n");
 
@@ -739,7 +760,8 @@ export async function runLiveFindingObservation(
 3. EFFECT — the regulatory, certification, or operational consequence of this gap. Name the specific EduTrust band ceiling or SSG compliance risk. Be direct, not generic.
 
 Use [bracketed placeholders] wherever you need specific data (names, dates, counts) that the auditor must fill in. Do not soften or hedge the observation.
-Respond with JSON only: {"observation": string, "criteria": string, "effect": string}.${skills(findingSpecificitySkill, sgPeiContextSkill, findingWritingSkill)}`;
+Apply root-cause methodology: distinguish symptom → immediate cause → systemic root cause, and use 5-Why thinking to reach the system-level cause in the observation. State any sample denominator if visible in the APSR notes. Cite the specific regulatory provision (not just the GD4 item) in the criteria section where applicable. In the effect section, name the specific band ceiling and the concrete regulatory or certification consequence using benchmarking reference points.
+Respond with JSON only: {"observation": string, "criteria": string, "effect": string}.${skills(findingSpecificitySkill, sgPeiContextSkill, findingWritingSkill, rootCauseMethodologySkill, regulatoryReferencesSkill, sampleTestingSkill, benchmarkingSkill)}`;
 
   const user = `GD4 ${req.id}: ${req.requirement}
 Describe/Show: ${req.describeShow.slice(0, 3).join("; ")}
@@ -804,4 +826,312 @@ export async function runCitationVerifier(
     reason: (parsed.reason as string) || "",
     usage,
   };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Staged folder audit — three focused AI stages + deterministic APSR builder.
+//
+// The key constraint: policy documents can only satisfy Approach; evidence
+// documents satisfy Processes; outcome data satisfies Systems & Outcomes; review
+// records satisfy Review. The old single-pass audit let the model decide APSR in
+// one undifferentiated call. The staged approach enforces these boundaries in code.
+// ──────────────────────────────────────────────────────────────────────────────
+
+export type StagedPolicyAuditResult = {
+  rows: PolicyCoverageRow[];
+  usage?: AIUsage;
+};
+
+export type StagedEvidenceAuditResult = {
+  rows: EvidenceCoverageRow[];
+  usage?: AIUsage;
+};
+
+export type StagedOutcomeReviewAuditResult = {
+  rows: OutcomeReviewRow[];
+  usage?: AIUsage;
+};
+
+const STAGED_BATCH_SIZE = 8; // audit points per AI call (each is smaller than a full checklist line)
+
+function buildStagedPointsBlock(auditPoints: FlatAuditPoint[]): string {
+  return auditPoints.map((p, i) =>
+    `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}`
+  ).join("\n");
+}
+
+// Stage 2: Policy Adequacy Audit.
+// Reads POLICY documents only; checks if each FlatAuditPoint has a documented
+// approach. Does NOT look at evidence documents or outcome data.
+export async function runStagedPolicyAudit(
+  auditPoints: FlatAuditPoint[],
+  policyDocText: string,
+  settings: AISettings,
+  opts: { criterionId?: string } = {}
+): Promise<StagedPolicyAuditResult> {
+  if (auditPoints.length === 0 || !policyDocText.trim()) {
+    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No policy documents provided.", chunkIds: [] })) };
+  }
+  const domainSkill = domainExpertiseFor(opts.criterionId);
+  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+
+  const system = `You are auditing ONLY the POLICY & PROCEDURE documents for a GD4 EduTrust sub-criterion. Your task for each audit point: does this institution's policy documentation DOCUMENT an approach that addresses this requirement? You are assessing APPROACH only — not whether it is implemented, not whether outcomes are achieved.
+
+"Yes" = the policy clearly, specifically, and sustainably documents HOW the institution meets this requirement (names who, what, when, frequency, ownership).
+"Partial" = the policy mentions the requirement but is vague, generic, or incomplete — missing who owns it, missing timing, or using boilerplate language not specific to this institution.
+"No" = the policy document does not address this requirement at all.
+
+IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${skills(apsrRubricSkill, regulatoryReferencesSkill)}${domainBlock}
+
+Respond with JSON only:
+{"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
+
+  const rows: PolicyCoverageRow[] = [];
+  let usage: AIUsage | undefined;
+
+  const batches: FlatAuditPoint[][] = [];
+  for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
+    batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
+  }
+
+  const DOC_CAP = BATCH_DOC_CAP;
+  const docSlice = policyDocText.slice(0, DOC_CAP);
+
+  for (const batch of batches) {
+    const pointsBlock = buildStagedPointsBlock(batch);
+    const user = `Policy & Procedure documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for APPROACH coverage:\n${pointsBlock}`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        settings,
+        { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+      );
+      const parsed = parseJSONObject(content);
+      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+      const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+      for (const p of batch) {
+        const r = byRef.get(p.ref);
+        const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
+          ? (r!.covered as StagedCoverageStatus) : "No";
+        const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        rows.push({ ref: p.ref, pointText: p.text, covered, note: typeof r?.note === "string" ? r.note : "", chunkIds });
+      }
+    } catch {
+      // On error, default all batch points to "No"
+      for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
+    }
+  }
+  return { rows, usage };
+}
+
+// Stage 3: Evidence Implementation Audit.
+// Reads EVIDENCE documents only; checks if each FlatAuditPoint has actual
+// implementation evidence. Receives policy results so it can distinguish
+// "policy exists but not implemented" from "nothing at all".
+export async function runStagedEvidenceAudit(
+  auditPoints: FlatAuditPoint[],
+  evidenceDocText: string,
+  policyRows: PolicyCoverageRow[],
+  settings: AISettings,
+  opts: { criterionId?: string } = {}
+): Promise<StagedEvidenceAuditResult> {
+  if (auditPoints.length === 0 || !evidenceDocText.trim()) {
+    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No evidence documents provided.", chunkIds: [] })) };
+  }
+  const domainSkill = domainExpertiseFor(opts.criterionId);
+  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+  const policyByRef = new Map(policyRows.map((r) => [r.ref, r]));
+
+  const system = `You are auditing ONLY the ACTUAL EVIDENCE documents for a GD4 EduTrust sub-criterion. Your task: does the evidence show that the institution actually IMPLEMENTS each requirement in practice? You are assessing PROCESSES only — not the documented policy (assessed separately), not outcomes.
+
+"Yes" = there are real implementation records, logs, forms, screenshots, registers, or actual operational records showing this was done consistently.
+"Partial" = some implementation evidence exists but it is incomplete, covers only part of the review period, or the sample is too small to be representative.
+"No" = no implementation evidence in these documents for this requirement.
+
+IMPORTANT: A policy document, SOP, or procedure does NOT count as implementation evidence, even if it is filed in the evidence folder. Only actual records of doing something count.
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${skills(apsrRubricSkill, sampleTestingSkill, evidenceTimelinessSkill)}${domainBlock}
+
+Respond with JSON only:
+{"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
+
+  const rows: EvidenceCoverageRow[] = [];
+  let usage: AIUsage | undefined;
+  const batches: FlatAuditPoint[][] = [];
+  for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
+    batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
+  }
+  const DOC_CAP = BATCH_DOC_CAP;
+  const docSlice = evidenceDocText.slice(0, DOC_CAP);
+
+  for (const batch of batches) {
+    const pointsBlock = batch.map((p, i) => {
+      const pol = policyByRef.get(p.ref);
+      const polNote = pol ? ` [Policy adequacy: ${pol.covered}${pol.covered !== "No" ? ` — "${pol.note.slice(0, 80)}"` : ""}]` : "";
+      return `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}${polNote}`;
+    }).join("\n");
+    const user = `Actual evidence documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for IMPLEMENTATION evidence:\n${pointsBlock}`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        settings,
+        { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+      );
+      const parsed = parseJSONObject(content);
+      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+      const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+      for (const p of batch) {
+        const r = byRef.get(p.ref);
+        const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
+          ? (r!.covered as StagedCoverageStatus) : "No";
+        const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        rows.push({ ref: p.ref, pointText: p.text, covered, note: typeof r?.note === "string" ? r.note : "", chunkIds });
+      }
+    } catch {
+      for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
+    }
+  }
+  return { rows, usage };
+}
+
+// Stage 4: Outcome & Review Audit.
+// Reads ALL documents; checks for outcome data (Systems & Outcomes) and
+// review/improvement records (Review). Both outcomes and review are assessed
+// together in one call since they both require looking at all documents.
+export async function runStagedOutcomeReviewAudit(
+  auditPoints: FlatAuditPoint[],
+  allDocText: string,
+  settings: AISettings,
+  opts: { criterionId?: string } = {}
+): Promise<StagedOutcomeReviewAuditResult> {
+  if (auditPoints.length === 0 || !allDocText.trim()) {
+    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "No documents provided.", chunkIds: [] })) };
+  }
+  const domainSkill = domainExpertiseFor(opts.criterionId);
+  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+
+  const system = `You are auditing ALL documents (policy and evidence combined) for outcome data and review/improvement records for a GD4 EduTrust sub-criterion. For each audit point assess:
+
+outcomeEvident: true if there is actual outcome data, KPIs, results, trends, survey data, or performance measurements for this requirement — not just a statement that outcomes will be tracked. The data must cover the review period, name targets or results, and show actual numbers or trends.
+
+reviewEvident: true if there are records of a formal review of this requirement's effectiveness — meeting minutes with agenda item, management review records, improvement actions triggered by data review, or evaluation reports. A policy that says "we will review annually" is NOT evidence of a review having happened.
+
+Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${skills(apsrRubricSkill, benchmarkingSkill, evidenceTimelinessSkill)}${domainBlock}
+
+Respond with JSON only:
+{"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;
+
+  const rows: OutcomeReviewRow[] = [];
+  let usage: AIUsage | undefined;
+  const batches: FlatAuditPoint[][] = [];
+  for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
+    batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
+  }
+  const DOC_CAP = BATCH_DOC_CAP;
+  const docSlice = allDocText.slice(0, DOC_CAP);
+
+  for (const batch of batches) {
+    const pointsBlock = buildStagedPointsBlock(batch);
+    const user = `All documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for OUTCOME DATA and REVIEW RECORDS:\n${pointsBlock}`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        settings,
+        { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+      );
+      const parsed = parseJSONObject(content);
+      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+      const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+      for (const p of batch) {
+        const r = byRef.get(p.ref);
+        const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        rows.push({
+          ref: p.ref, pointText: p.text,
+          outcomeEvident: r?.outcomeEvident === true,
+          reviewEvident: r?.reviewEvident === true,
+          note: typeof r?.note === "string" ? r.note : "",
+          chunkIds,
+        });
+      }
+    } catch {
+      for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "AI call failed.", chunkIds: [] });
+    }
+  }
+  return { rows, usage };
+}
+
+// Stage 5: Deterministic APSR verdict builder.
+// Maps the three coverage matrices to the four APSR dimensions WITHOUT any AI call.
+// Key rule: policy coverage → Approach, evidence coverage → Processes,
+// outcome data → Systems & Outcomes, review records → Review.
+// Policy documents cannot satisfy Processes; evidence documents cannot satisfy Approach
+// (unless they contain a procedure, but that classification happens in Stage 2/3).
+export function buildStagedApsr(
+  policyRow: PolicyCoverageRow | undefined,
+  evidenceRow: EvidenceCoverageRow | undefined,
+  outcomeRow: OutcomeReviewRow | undefined
+): ApsrBreakdown {
+  // Approach — from policy adequacy only
+  const approach: ApsrBreakdown["approach"] = policyRow?.covered === "Yes"
+    ? { status: "Meeting", note: policyRow.note, sourceChunkIds: policyRow.chunkIds }
+    : policyRow?.covered === "Partial"
+      ? { status: "Beginning", note: policyRow.note, sourceChunkIds: policyRow.chunkIds }
+      : { status: "Not evident", note: policyRow?.note || "No policy documentation found for this requirement.", sourceChunkIds: [] };
+
+  // Processes — from evidence coverage only
+  const processes: ApsrBreakdown["processes"] = evidenceRow?.covered === "Yes"
+    ? { status: "Deployed", note: evidenceRow.note, sourceChunkIds: evidenceRow.chunkIds }
+    : evidenceRow?.covered === "Partial"
+      ? { status: "Weak", note: evidenceRow.note, sourceChunkIds: evidenceRow.chunkIds }
+      : { status: "Not evident", note: evidenceRow?.note || "No implementation evidence found for this requirement.", sourceChunkIds: [] };
+
+  // Systems & Outcomes — from outcome data
+  const systemsOutcomes: ApsrBreakdown["systemsOutcomes"] = outcomeRow?.outcomeEvident
+    ? { status: "Evident", note: outcomeRow.note, sourceChunkIds: outcomeRow.chunkIds }
+    : { status: "Not evident", note: outcomeRow?.note || "No outcome data found.", sourceChunkIds: [] };
+
+  // Review — from review records
+  const review: ApsrBreakdown["review"] = outcomeRow?.reviewEvident
+    ? { status: "Evident", note: outcomeRow.note, sourceChunkIds: outcomeRow.chunkIds }
+    : { status: "Not evident", note: outcomeRow?.note || "No review records found.", sourceChunkIds: [] };
+
+  return { approach, processes, systemsOutcomes, review };
+}
+
+// Simulate staged audit (offline, no AI) — produces deterministic coverage rows
+// from the document text using keyword matching, mirroring the same heuristic
+// as simulateFolderAudit but per-audit-point rather than per-checklist-line.
+export function simulateStagedPolicyAudit(auditPoints: FlatAuditPoint[], policyDocText: string): PolicyCoverageRow[] {
+  const docLower = policyDocText.toLowerCase();
+  return auditPoints.map((p) => {
+    const words = p.text.toLowerCase().split(/\W+/).filter((w) => w.length > 4);
+    const matches = words.filter((w) => docLower.includes(w)).length;
+    const covered: StagedCoverageStatus = matches >= 3 ? "Yes" : matches >= 1 ? "Partial" : "No";
+    return { ref: p.ref, pointText: p.text, covered, note: `Offline estimate: ${matches} of ${words.length} keywords found in policy documents.`, chunkIds: [] };
+  });
+}
+
+export function simulateStagedEvidenceAudit(auditPoints: FlatAuditPoint[], evidenceDocText: string): EvidenceCoverageRow[] {
+  const docLower = evidenceDocText.toLowerCase();
+  return auditPoints.map((p) => {
+    const words = p.text.toLowerCase().split(/\W+/).filter((w) => w.length > 4);
+    const matches = words.filter((w) => docLower.includes(w)).length;
+    const covered: StagedCoverageStatus = matches >= 3 ? "Yes" : matches >= 1 ? "Partial" : "No";
+    return { ref: p.ref, pointText: p.text, covered, note: `Offline estimate: ${matches} of ${words.length} keywords found in evidence documents.`, chunkIds: [] };
+  });
+}
+
+export function simulateStagedOutcomeReview(auditPoints: FlatAuditPoint[], allDocText: string): OutcomeReviewRow[] {
+  const docLower = allDocText.toLowerCase();
+  const outcomeWords = ["outcome", "result", "kpi", "trend", "survey", "data", "rate", "percentage", "score", "target"];
+  const reviewWords = ["review", "minute", "meeting", "decision", "improvement", "action", "evaluate"];
+  const hasOutcome = outcomeWords.some((w) => docLower.includes(w));
+  const hasReview = reviewWords.some((w) => docLower.includes(w));
+  return auditPoints.map((p) => ({
+    ref: p.ref, pointText: p.text,
+    outcomeEvident: hasOutcome,
+    reviewEvident: hasReview,
+    note: `Offline estimate: outcome keywords ${hasOutcome ? "found" : "not found"}, review keywords ${hasReview ? "found" : "not found"}.`,
+    chunkIds: [],
+  }));
 }

@@ -1,4 +1,5 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useFindingDraftStore } from "../store/useFindingDraftStore";
@@ -66,12 +67,20 @@ export function Findings() {
   const raiseAllUnmetFindings = useChecklistModuleStore((s) => s.raiseAllUnmetFindings);
   const scored = useScored();
   const allFindings = useAllFindings();
+  const [searchParams] = useSearchParams();
   const [typeFilter, setTypeFilter] = useState<FindingType | "All">("All");
   const [sevFilter, setSevFilter] = useState<Severity | "All">("All");
   const [critFilter, setCritFilter] = useState<string>("All");
-  const [subCritFilter, setSubCritFilter] = useState<string>("All");
+  const [subCritFilter, setSubCritFilter] = useState<string>(() => searchParams.get("subCrit") ?? "All");
   const [dimFilter, setDimFilter] = useState<FindingDimension | "All">("All");
   const [riskCatFilter, setRiskCatFilter] = useState<"A" | "B" | "C" | "D" | "All">("All");
+  const fromItem = searchParams.get("item"); // e.g. "1.1.1" — jumps to that item's sub-criterion filter
+  useEffect(() => {
+    if (fromItem) {
+      const req = GD4_REQUIREMENTS.find((r) => r.id === fromItem);
+      if (req) setSubCritFilter(req.subCriterionId);
+    }
+  }, [fromItem]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -261,6 +270,20 @@ export function Findings() {
 
   return (
     <Fragment>
+    {/* Cross-module navigation bar */}
+    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+      <Link to="/sub-checklist" style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
+        ← Sub-Criterion Checklist
+      </Link>
+      {fromItem && (
+        <Link to={`/sub-checklist?item=${fromItem}`} style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#e0e7ff" }}>
+          ← Back to {fromItem}
+        </Link>
+      )}
+      <Link to="/afi-closure" style={{ fontSize: 12, color: "#15803d", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4", marginLeft: "auto" }}>
+        Quality Action / AFI →
+      </Link>
+    </div>
     {showRoadmap && (
       <Card style={{ marginBottom: 12 }}>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>90-day remediation roadmap</h3>
@@ -617,9 +640,14 @@ export function Findings() {
           )}
         </tbody>
       </table>
-      <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 10 }}>
-        {seedFindingsLoaded && "Includes findings carried over from the loaded demo dataset. "}
-        Click a finding to read its full report. Manage closure for each on the Quality Action / AFI screen.
+      <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span>
+          {seedFindingsLoaded && "Includes findings carried over from the loaded demo dataset. "}
+          Click a finding to read its full report.
+        </span>
+        <Link to="/afi-closure" style={{ fontSize: 12, color: "#15803d", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>
+          Manage closure in Quality Action / AFI →
+        </Link>
       </div>
     </Card>
     </Fragment>
@@ -790,7 +818,12 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
           {f.linkedSourceRefs?.length ? <div style={{ fontSize: 11.5, color: "#475569" }}>GD4 refs: {f.linkedSourceRefs.join(", ")}</div> : null}
           {f.evidenceStatusSummary ? <div style={{ fontSize: 11.5, color: "#475569", marginTop: 2 }}>{f.evidenceStatusSummary}</div> : null}
           {f.createdFromAuditRunId ? <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2, fontFamily: "ui-monospace,monospace" }}>Audit run: {f.createdFromAuditRunId}</div> : null}
-          {f.linkedChecklistLineIds?.length ? <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{f.linkedChecklistLineIds.length} linked checklist line{f.linkedChecklistLineIds.length !== 1 ? "s" : ""}</div> : null}
+          {f.linkedChecklistLineIds?.length ? (
+            <div style={{ fontSize: 11, marginTop: 4, display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ color: "#94a3b8" }}>{f.linkedChecklistLineIds.length} linked checklist line{f.linkedChecklistLineIds.length !== 1 ? "s" : ""}</span>
+              <Link to={`/sub-checklist?item=${f.gd4ItemId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none" }}>View in checklist →</Link>
+            </div>
+          ) : null}
         </div>
       )}
       {apsr && (

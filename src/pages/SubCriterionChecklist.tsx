@@ -81,10 +81,11 @@ const APSR_DIMS: { id: FindingDimension; gId: "G1" | "G2" | "G3" | "G4"; userLab
   { id: "Review",    gId: "G4", userLabel: "Review & improvement", desc: "Periodic review feeding improvements" },
 ];
 
-function EvidenceGapPanel({ generic, specific, req }: {
+function EvidenceGapPanel({ generic, specific, req, itemId }: {
   generic: GenericChecklistLine[];
   specific: SpecificChecklistLine[];
   req: GD4Requirement;
+  itemId: string;
 }) {
   const hasData = specific.length > 0 || generic.some((g) => g.status !== "Not Started");
   if (!hasData) return null;
@@ -161,11 +162,14 @@ function EvidenceGapPanel({ generic, specific, req }: {
         ))}
       </div>
       {finding ? (
-        <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "7px 10px", background: finding.bg, borderRadius: 8 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "7px 10px", background: finding.bg, borderRadius: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: finding.color, padding: "2px 8px", background: "rgba(255,255,255,0.75)", borderRadius: 6, flexShrink: 0 }}>
             Likely: {finding.type}
           </span>
-          <span style={{ fontSize: 11.5, color: "#374151" }}>{finding.desc}</span>
+          <span style={{ fontSize: 11.5, color: "#374151", flex: 1 }}>{finding.desc}</span>
+          <Link to={`/findings?item=${itemId}`} style={{ fontSize: 11.5, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff", flexShrink: 0 }}>
+            View / raise findings →
+          </Link>
         </div>
       ) : (
         activeLines.length > 0 && (
@@ -372,14 +376,34 @@ export function SubCriterionChecklist() {
         </Card>
 
         <Card>
-          {cameFromRubricBanding && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+            {cameFromRubricBanding && (
+              <Link
+                to={`/rubric-banding?view=item&scrollTo=${selectedId}`}
+                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 700, color: BLUE, textDecoration: "none", padding: "4px 10px", border: "1px solid #bfdbfe", borderRadius: 6, background: "#eff6ff" }}
+              >
+                ← Rubric Banding
+              </Link>
+            )}
             <Link
-              to={`/rubric-banding?view=item&scrollTo=${selectedId}`}
-              style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 700, color: BLUE, textDecoration: "none", marginBottom: 8 }}
+              to={`/evidence-folder`}
+              style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #e2e8f0", borderRadius: 6, background: "#f8fafc" }}
             >
-              ← Back to Rubric Banding
+              ← Evidence Folder
             </Link>
-          )}
+            <Link
+              to={`/findings?item=${selectedId}`}
+              style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff", marginLeft: "auto" }}
+            >
+              Findings for {selectedId} →
+            </Link>
+            <Link
+              to="/afi-closure"
+              style={{ fontSize: 12, color: "#15803d", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}
+            >
+              Quality Action / AFI →
+            </Link>
+          </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
             <h3 style={{ margin: 0, fontSize: 14 }}>{req.id} · {req.requirement}</h3>
             {req.gateSensitive && <Pill s="high">Gate-sensitive</Pill>}
@@ -574,7 +598,10 @@ export function SubCriterionChecklist() {
                   <div style={{ marginTop: 7, background: "#faf0d9", borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>
                     <b>Draft finding:</b> {draft.issue} <Pill s={draft.severity === "High" ? "high" : "medium"}>{draft.severity}</Pill>
                     {l.draftFinding?.savedFindingId ? (
-                      <Pill s="good">Saved as {l.draftFinding.savedFindingId}</Pill>
+                      <>
+                        <Pill s="good">Saved as {l.draftFinding.savedFindingId}</Pill>
+                        <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none", marginLeft: 6 }}>View →</Link>
+                      </>
                     ) : (
                       <button
                         onClick={() => confirmDraftFinding(selectedId, l.id, draft)}
@@ -760,7 +787,7 @@ export function SubCriterionChecklist() {
           )}
         </Card>
 
-        <EvidenceGapPanel generic={generic} specific={specific} req={req} />
+        <EvidenceGapPanel generic={generic} specific={specific} req={req} itemId={selectedId} />
 
         <Card>
           <h3 style={{ marginTop: 0, fontSize: 14 }}>Band result</h3>
