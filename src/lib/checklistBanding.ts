@@ -252,12 +252,27 @@ export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLi
     Unverified: `This line is marked as met but has no evidence attached. An SSG assessor will treat it as unverified — it cannot contribute to the band until evidence is linked.`,
   };
 
+  const evidenceNames = line.evidence.length > 0
+    ? line.evidence.slice(0, 3).map((e) => e.title ?? "").filter(Boolean).join("; ")
+    : "";
+  const issueDetail = sufficiency === "Missing"
+    ? (line.evidence.length === 0 ? "no evidence attached" : `evidence insufficient — ${evidenceNames || "records present but not meeting standard"}`)
+    : sufficiency === "Weak"
+    ? `evidence weak${evidenceNames ? ` — ${evidenceNames}` : ""}`
+    : "line partially met";
+
+  const suggestedActionText = sufficiency === "Missing" && line.evidence.length === 0
+    ? `Create, approve and file the required ${dim.toLowerCase()} documentation for GD4 ${req.id}: "${line.text?.slice(0, 120) ?? req.requirement}". Attach it as evidence against this checklist line.`
+    : sufficiency === "Missing"
+    ? `Replace the insufficient evidence for GD4 ${req.id} — "${line.text?.slice(0, 120) ?? req.requirement}" — with complete, dated records that satisfy the ${dim.toLowerCase()} dimension. Current records: ${evidenceNames || "(see evidence items)"}.`
+    : `Supplement the partial evidence for GD4 ${req.id}: "${line.text?.slice(0, 120) ?? req.requirement}". Ensure records are approved, complete and cover the full audit period.`;
+
   return {
     gd4ItemId: req.id,
     clause: line.clause,
-    issue: `${line.text} — marked ${line.status}${sufficiency === "Missing" ? ", evidence missing" : sufficiency === "Weak" ? ", evidence weak" : ""}.`,
+    issue: `GD4 ${req.id} — ${line.text?.slice(0, 120) ?? req.requirement} [${line.status}; ${issueDetail}]`,
     severity: req.gateSensitive ? "High" : "Medium",
-    suggestedAction: `Provide and approve evidence for: ${line.text}`,
+    suggestedAction: suggestedActionText,
     observation,
     criteria: `GD4 ${req.id} requires: ${req.requirement}${req.expectedEvidence.length ? ` Expected evidence includes: ${req.expectedEvidence.join("; ")}.` : ""}`,
     effect: effectByDim[dim] ?? effectByDim.Evidence,

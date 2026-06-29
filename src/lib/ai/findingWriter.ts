@@ -41,9 +41,15 @@ export type GroupedFindingWriterResult = {
 // Private skill-injection helper (mirrors the private `skills()` in agentRuntime.ts —
 // not exported there, so we duplicate the ~4-line function here).
 const SKILL_CAP = 3000;
+// regulatoryReferencesSkill is exempt from the cap — it contains clause tables that
+// must not be truncated mid-table or the AI cites wrong act/section numbers.
 function skills(...docs: string[]): string {
   const content = docs.map((d) => d.trim().slice(0, SKILL_CAP)).join("\n\n---\n\n");
   return content ? `\n\n## Auditor knowledge base (apply this expertise to your assessment)\n\n${content}` : "";
+}
+function skillsFull(...docs: string[]): string {
+  const content = docs.map((d) => d.trim()).join("\n\n---\n\n");
+  return content ? `\n\n## Regulatory references (full — cite exact clauses)\n\n${content}` : "";
 }
 
 // Extracts the first valid JSON object from a potentially noisy model reply.
@@ -79,7 +85,23 @@ function buildGroupContext(group: ChecklistLineGroup): string {
     if (l.sourceRef) parts.push(`  GD4 ref: ${l.sourceRef}`);
     if (l.sourceText) parts.push(`  GD4 text: ${l.sourceText}`);
     if (apsr) {
-      parts.push(`  APSR: Approach=${apsr.approach.status}, Processes=${apsr.processes.status}, Systems & Outcomes=${apsr.systemsOutcomes.status}, Review=${apsr.review.status}`);
+      const apsrParts = [`  APSR: Approach=${apsr.approach.status}, Processes=${apsr.processes.status}, Systems & Outcomes=${apsr.systemsOutcomes.status}, Review=${apsr.review.status}`];
+      if (apsr.approach.note) apsrParts.push(`  Approach note: ${apsr.approach.note}`);
+      if (apsr.processes.note) apsrParts.push(`  Processes note: ${apsr.processes.note}`);
+      if (apsr.systemsOutcomes.note) apsrParts.push(`  Systems & Outcomes note: ${apsr.systemsOutcomes.note}`);
+      if (apsr.review.note) apsrParts.push(`  Review note: ${apsr.review.note}`);
+      parts.push(...apsrParts);
+    }
+    // Include evidence item names/descriptions so the AI can reference specific records
+    if (l.evidence.length > 0) {
+      parts.push(`  Evidence items (${l.evidence.length}):`);
+      l.evidence.slice(0, 6).forEach((ev, ei) => {
+        const desc = [ev.title ?? "", ev.sufficiency ? `[${ev.sufficiency}]` : ""].filter(Boolean).join(" ");
+        parts.push(`    ${ei + 1}. ${desc || "(unnamed item)"}`);
+      });
+      if (l.evidence.length > 6) parts.push(`    … and ${l.evidence.length - 6} more`);
+    } else {
+      parts.push(`  Evidence items: none attached`);
     }
     return parts.join("\n");
   }).join("\n\n");
@@ -130,9 +152,20 @@ export function simulateGroupedFindingWriter(
     : "Under the APSR rubric, a gap in the primary dimension caps this sub-criterion and may prevent a Band 3 or above outcome.";
   const effect = `${severityNote} The identified gap in ${gapLabel} will limit the institution's EduTrust band for sub-criterion ${req.subCriterionId}.`;
 
-  const rootCause = `The ${dim.toLowerCase()} requirement under ${itemRef} has not been fully established or evidenced. No systematic mechanism ensures this gap is detected and remediated within the management cycle.`;
+  // Build line-specific rootCause using actual checklist text from failing lines
+  const notMetLines = group.lines.filter((l) => l.status === "Not met");
+  const partialLines = group.lines.filter((l) => l.status === "Partial");
+  const primaryLine = notMetLines[0] ?? partialLines[0] ?? group.lines[0];
+  const primaryLineText = primaryLine?.text ?? `the ${dim.toLowerCase()} requirement`;
+  const missingEvidence = primaryLine?.evidence.length === 0;
 
-  const corrective = `Produce and file the missing ${gapLabel} evidence for the affected checklist points (${refs}) within 30 days. For 'Not met' points, create the required ${dim.toLowerCase()} documentation and have it formally approved.`;
+  const rootCause = missingEvidence
+    ? `No evidence records were found for "${primaryLineText}" under ${itemRef}. The ${dim.toLowerCase()} requirement has not been implemented or the records have not been maintained in a retrievable location. No systematic mechanism exists in the management cycle to detect and remediate this gap.`
+    : `The evidence for "${primaryLineText}" under ${itemRef} is incomplete or insufficient. The ${dim.toLowerCase()} practice may occur in isolation but is not consistently documented, reviewed, or tracked — so it cannot be verified or sustained across audit periods.`;
+
+  const corrective = notMetLines.length > 0
+    ? `Within 30 days, create and formally approve the missing ${dim.toLowerCase()} records for: ${notMetLines.slice(0, 3).map((l) => `"${l.text?.slice(0, 80) ?? "checklist point"}"`).join("; ")}${notMetLines.length > 3 ? ` and ${notMetLines.length - 3} more` : ""}. File them against the affected GD4 references (${refs}).`
+    : `Strengthen and supplement the partial evidence for the ${lineCount} checklist point${lineCount > 1 ? "s" : ""} under ${refs}. Replace any weak records with complete, dated, and approved documentation covering the full period.`;
 
   const preventive = `Add a standing agenda item to the Management Review to verify ${dim.toLowerCase()} compliance for this requirement each semester. Assign a named owner responsible for maintaining and updating the required documentation.`;
 
@@ -179,7 +212,8 @@ export async function runLiveGroupedFindingWriter(
 
   const systemPrompt =
     `You are a GD4 EduTrust internal audit expert. Your task is to write one structured finding draft based on a group of failing checklist lines from an audit. You MUST base everything on the checklist evidence provided — do NOT invent or assume information that is not in the lines. For the root cause: apply 5-Why methodology — reach the systemic Level 3 root cause (a governance, training, data-collection, or review gap), not the symptom. For the criteria section: cite the exact regulatory provision (Act, clause, or SSG instrument) in addition to the GD4 item number. For the effect section: name the specific band ceiling with a concrete Band 4–5 benchmark so the institution knows what "fixed" looks like. Where the checklist lines mention a sample, express the gap as a rate (N of M). Flag any evidence-timeliness issues visible in the line notes (recently created documents, short coverage periods).` +
-    skills(apsrRubricSkill, evidenceStandardsSkill, findingSpecificitySkill, findingWritingSkill, rootCauseMethodologySkill, regulatoryReferencesSkill, sampleTestingSkill, evidenceTimelinessSkill, benchmarkingSkill) +
+    skills(apsrRubricSkill, evidenceStandardsSkill, findingSpecificitySkill, findingWritingSkill, rootCauseMethodologySkill, sampleTestingSkill, evidenceTimelinessSkill, benchmarkingSkill) +
+    skillsFull(regulatoryReferencesSkill) +
     domainBlock;
 
   const userPrompt = `
