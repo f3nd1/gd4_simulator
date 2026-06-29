@@ -181,6 +181,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         const rejectionNote = rejectedCount > 0
           ? `${rejectedCount} AI-proposed line(s) were rejected — they lacked a traceable official GD4 source and were not added.`
           : undefined;
+        console.log("pushAIReviewLog called for checklist", itemId, { live, linesCount: lines.length, hasPromptSent: !!genPromptSent });
         useWorkspaceStore.getState().pushAIReviewLog({
           agent: "Checklist Generator",
           reviewType: "Checklist",
