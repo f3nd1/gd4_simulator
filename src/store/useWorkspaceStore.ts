@@ -2314,7 +2314,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (sameLink) { await gather(evidenceId, "auto", "Folder"); }
         else {
           if (scope !== "evidence") await gather(policyId, "policy", "Policy & Procedure");
-          await gather(evidenceId, "evidence", policyId ? "Actual Evidence" : "Evidence");
+          if (scope !== "policy") await gather(evidenceId, "evidence", policyId ? "Actual Evidence" : "Evidence");
         }
         for (const f of taggedFiles) { if (f.modifiedTime && (!newestModified || f.modifiedTime > newestModified)) newestModified = f.modifiedTime; }
         if (!policyId && !sameLink) for (const f of taggedFiles) f.bucket = "auto";

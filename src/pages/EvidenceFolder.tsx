@@ -1317,13 +1317,6 @@ export function EvidenceFolder() {
                         >
                           Evidence check
                         </button>
-                        <button
-                          onClick={() => auditFolderContents(f.id)}
-                          title="Original single-pass audit (APSR in one AI call)"
-                          style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #94a3b8", background: "#f8fafc", color: "#64748b", whiteSpace: "nowrap" }}
-                        >
-                          Classic audit
-                        </button>
                         {lastRun && (
                           <button
                             onClick={() => setViewingRun(lastRun)}
