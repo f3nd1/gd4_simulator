@@ -143,12 +143,14 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         let live = false;
         let liveError: string | undefined;
         let genUsage: AIUsage | undefined;
+        let genPromptSent: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
             const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(useWorkspaceStore.getState().schoolContext) });
             const result = await runLiveChecklistGeneration(req, settings, (u) => { genUsage = u; });
             raw = result.lines;
             rejectedCount = result.rejectedCount;
+            genPromptSent = result.promptSent;
             if (!raw.length) raw = simulateChecklistGeneration(req);
             else live = true;
           } catch (err) {
@@ -191,6 +193,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           live,
           liveError,
           generatedContent: lines.map((l) => `[${l.clause || "—"}] ${l.text}`).join("\n"),
+          promptSent: genPromptSent,
           usage: genUsage,
         });
         set((s) => ({
@@ -272,6 +275,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           live: draft.live,
           liveError,
           generatedContent: `Title: ${draft.title}\nType: ${draft.type}\nDate: ${draft.date}\nSufficiency: ${draft.sufficiency}\nAuditor note: ${draft.auditorNote}`,
+          promptSent: (draft as { usage?: AIUsage; promptSent?: string }).promptSent,
           usage: (draft as { usage?: AIUsage }).usage,
         });
         set({ busy: null });

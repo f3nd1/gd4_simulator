@@ -80,6 +80,7 @@ function fmtUSD(n: number): string {
 export function AIReview() {
   const log = useWorkspaceStore((s) => s.aiReviewLog);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [expandedTab, setExpandedTab] = useState<Record<string, "output" | "prompt">>({});
   const [agentFilter, setAgentFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [searchFilter, setSearchFilter] = useState("");
@@ -341,9 +342,26 @@ export function AIReview() {
                           <div style={{ color: "#6b7280", fontWeight: 400 }}>Fell back to the offline simulation engine for this run — check your API key/model in Settings.</div>
                         </div>
                       )}
-                      <div style={{ color: "#6b7280", marginBottom: 4 }}>Full generated content:</div>
+                      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+                        {(["output", "prompt"] as const).map((tab) => {
+                          const isActive = (expandedTab[e.id] ?? "output") === tab;
+                          const disabled = tab === "prompt" && !e.promptSent;
+                          return (
+                            <button
+                              key={tab}
+                              disabled={disabled}
+                              onClick={() => setExpandedTab((prev) => ({ ...prev, [e.id]: tab }))}
+                              style={{ cursor: disabled ? "default" : "pointer", border: `1px solid ${isActive ? "#6366f1" : "#cbd5e1"}`, background: isActive ? "#eef2ff" : "#fff", borderRadius: 5, fontSize: 11, padding: "3px 10px", color: disabled ? "#cbd5e1" : isActive ? "#4338ca" : "#374151", fontWeight: isActive ? 600 : 400 }}
+                            >
+                              {tab === "output" ? "Output" : "Prompt Sent"}
+                            </button>
+                          );
+                        })}
+                      </div>
                       <div style={{ whiteSpace: "pre-wrap", fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>
-                        {e.generatedContent || e.keyConcerns.join("\n")}
+                        {(expandedTab[e.id] ?? "output") === "output"
+                          ? (e.generatedContent || e.keyConcerns.join("\n"))
+                          : (e.promptSent || "(prompt not captured for this run)")}
                       </div>
                     </td>
                   </tr>

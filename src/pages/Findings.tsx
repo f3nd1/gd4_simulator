@@ -157,6 +157,7 @@ export function Findings() {
         recommendedAction: "Review and edit the drafted finding body before saving",
         live: settings.enabled,
         generatedContent: `OBSERVATION:\n${result.observation}\n\nCRITERIA:\n${result.criteria}\n\nEFFECT:\n${result.effect}`,
+        promptSent: result.promptSent,
         usage: result.usage,
       });
       setForm((f) => ({

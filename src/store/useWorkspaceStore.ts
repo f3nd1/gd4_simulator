@@ -395,6 +395,7 @@ export type WorkspaceState = {
     live: boolean;
     liveError?: string;
     generatedContent?: string;
+    promptSent?: string;
     runId?: string;
     usage?: AIUsage;
   }) => void;
@@ -951,6 +952,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             recommendedAction: "Review and edit the drafted actions, then link closure evidence.",
             live: true,
             generatedContent: `ROOT CAUSE:\n${draft.root}\n\nCORRECTIVE:\n${draft.corr}\n\nPREVENTIVE:\n${draft.prev}`,
+            promptSent: draft.promptSent,
             usage: draft.usage,
           });
           set((s) => {
@@ -2126,6 +2128,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                     recommendedAction: "Review and edit the drafted finding body before closing.",
                     live: true,
                     generatedContent: `OBSERVATION:\n${result.observation}\n\nCRITERIA:\n${result.criteria}\n\nEFFECT:\n${result.effect}`,
+                    promptSent: result.promptSent,
                     runId,
                     usage: result.usage,
                   });
@@ -2165,6 +2168,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                     recommendedAction: "Review the drafted actions in Quality Action / AFI, then link closure evidence.",
                     live: true,
                     generatedContent: `ROOT CAUSE:\n${draft.root}\n\nCORRECTIVE:\n${draft.corr}\n\nPREVENTIVE:\n${draft.prev}`,
+                    promptSent: draft.promptSent,
                     runId,
                     usage: draft.usage,
                   });
@@ -2233,7 +2237,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const auditorStrictness = actingAuditor ? strictnessFromScore(actingAuditor.strictness) : undefined;
         const auditorLabel = actingAuditor ? `${auditorName} (strictness: ${auditorStrictness})` : auditorName;
 
-        const finish = (summary: string, live: boolean, liveError?: string, usage?: AIUsage, auxUsage?: AIUsage) => {
+        const finish = (summary: string, live: boolean, liveError?: string, usage?: AIUsage, auxUsage?: AIUsage, promptSent?: string) => {
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
             auditCycleId: s.cycle.id,
@@ -2247,6 +2251,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             live,
             liveError,
             generatedContent: summary,
+            promptSent,
             createdAt: new Date().toISOString(),
             runId,
             model: usage?.model,
@@ -2514,6 +2519,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let outcomeRows: OutcomeReviewRow[] = [];
         let live = false;
         let auditUsage: AIUsage | undefined;
+        let stagedPromptSent: string | undefined;
 
         const criterionId = folder.subCriterionId;
 
@@ -2525,6 +2531,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, { criterionId });
               policyRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
+              if (result.promptSent) stagedPromptSent = result.promptSent;
             } catch (err) {
               // Fallback to offline estimate
               policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);
@@ -2541,6 +2548,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, { criterionId });
               evidenceRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
+              if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
             } catch (err) {
               evidenceRows = simulateStagedEvidenceAudit(allAuditPoints, evidenceDocText);
             }
@@ -2555,6 +2563,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, { criterionId });
               outcomeRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
+              if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
             } catch (err) {
               outcomeRows = simulateStagedOutcomeReview(allAuditPoints, allDocText);
             }
@@ -2706,7 +2715,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         lineParts.push(live ? `Method: EduTrust APSR rubric vs GD4 standard — Approach gates the result, then Processes, Systems & Outcomes, Review (3 AI passes).` : "Method: offline keyword estimate — AI was not used (check AI Settings).");
         const summary = lineParts.join("\n");
 
-        finish(summary, live, undefined, auditUsage, auxUsage);
+        finish(summary, live, undefined, auditUsage, auxUsage, stagedPromptSent);
 
         const runRecord: AuditRunRecord = {
           runId, folderId: id, subCriterionId: folder.subCriterionId, subCriterionTitle: folder.folderName,
@@ -2995,6 +3004,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             live: entry.live,
             liveError: entry.liveError,
             generatedContent: entry.generatedContent,
+            promptSent: entry.promptSent,
             createdAt: new Date().toISOString(),
             runId: entry.runId,
             model: entry.usage?.model,
