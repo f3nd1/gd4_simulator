@@ -427,6 +427,15 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
   const totalReused  = files.filter((f) => f.processingMode === "reused").length;
   const hasProcessingModes = totalNew + totalChanged + totalReused > 0;
 
+  // Staged audit stages have distinct labels and descriptions
+  const STAGED_STAGE_INFO: Record<string, { icon: string; headline: string; detail: string }> = {
+    policy_audit:   { icon: "📋", headline: "Pass 1 of 3 — Policy & Approach check", detail: "AI is reading your policy documents and checking whether each GD4 audit point has a documented approach. It is scoring the Approach (A) dimension of the APSR rubric." },
+    evidence_audit: { icon: "🔍", headline: "Pass 2 of 3 — Implementation evidence check", detail: "AI is reviewing your actual evidence files to verify that the documented policies are implemented in practice. It is scoring the Processes (P) and Systems & Outcomes (S) dimensions." },
+    outcome_review: { icon: "📊", headline: "Pass 3 of 3 — Outcomes & Review check", detail: "AI is looking for outcome data, trend analysis, and management review records to confirm that results are measured and improvements are tracked. It is scoring the Review (R) dimension." },
+    apsr_build:     { icon: "⚙️", headline: "Building APSR verdicts", detail: "All three AI passes are complete. Combining Approach, Processes, Outcomes and Review scores into a single verdict for each checklist line." },
+  };
+  const stagedInfo = STAGED_STAGE_INFO[p.stage ?? ""];
+
   if (isActive) {
     // Show files that have been processed by the AI so far
     const analyzedFiles = files.filter((f) => f.auditStatus === "cited" || f.auditStatus === "not_used" || f.auditStatus === "audited");
@@ -437,17 +446,50 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
     return (
       <div>
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
-          🤖 {isStrict ? "Running strict challenge pass" : `Asking AI — batch ${batch} of ${total}`}<Dots />
+          {stagedInfo
+            ? <>{stagedInfo.icon} {stagedInfo.headline}<Dots /></>
+            : isStrict ? <>🔎 Running strict challenge pass<Dots /></>
+            : <>🤖 Asking AI — batch {batch} of {total}<Dots /></>
+          }
         </div>
         <div style={{ ...muted, marginBottom: 8 }}>
-          {isStrict ? "Re-checking every Met/Partial verdict: truly implemented, or just a policy on paper?" : "Comparing evidence against GD4 checklist requirements and writing verdicts"}
+          {stagedInfo
+            ? stagedInfo.detail
+            : isStrict
+              ? "Re-checking every Met/Partial verdict: truly implemented, or just a policy on paper?"
+              : "Comparing evidence against GD4 checklist requirements and writing verdicts"
+          }
         </div>
+        {p.stageDetail && !stagedInfo && (
+          <div style={{ ...muted, marginBottom: 8, fontStyle: "italic" }}>{p.stageDetail}</div>
+        )}
+
+        {/* Staged audit pass mini-tracker */}
+        {stagedInfo && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            {(["policy_audit", "evidence_audit", "outcome_review"] as const).map((stg, i) => {
+              const stageOrder = ["policy_audit", "evidence_audit", "outcome_review", "apsr_build"];
+              const currentIdx = stageOrder.indexOf(p.stage ?? "");
+              const isDone = currentIdx > i;
+              const isCurrent = stageOrder.indexOf(stg) === currentIdx;
+              const labels = ["Policy", "Evidence", "Outcomes"];
+              return (
+                <span key={stg} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 10, fontWeight: 600, background: isDone ? "#dcfce7" : isCurrent ? "#dbeafe" : "#f1f5f9", color: isDone ? "#15803d" : isCurrent ? "#1d4ed8" : "#94a3b8", border: isCurrent ? "1px solid #93c5fd" : "1px solid transparent" }}>
+                    {isDone ? "✓ " : isCurrent ? "⏳ " : ""}{labels[i]}
+                  </span>
+                  {i < 2 && <span style={{ color: "#cbd5e1", fontSize: 10 }}>→</span>}
+                </span>
+              );
+            })}
+          </div>
+        )}
 
         {/* Stats bar */}
         <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8, padding: "6px 10px", background: "#f1f5f9", borderRadius: 6 }}>
           {p.filesTotal != null && <span><b>{p.filesTotal}</b> file{p.filesTotal !== 1 ? "s" : ""}</span>}
           {p.chunksCount != null && <span><b>{p.chunksCount}</b> chunks sent to AI</span>}
-          {total > 1 && <span>Batch <b>{batch}</b>/<b>{total}</b></span>}
+          {!stagedInfo && total > 1 && <span>Batch <b>{batch}</b>/<b>{total}</b></span>}
           {p.linesAssessed != null && p.linesAssessed > 0 && <span style={{ color: "#15803d" }}><b>{p.linesAssessed}</b> line{p.linesAssessed !== 1 ? "s" : ""} assessed</span>}
           {p.findingsDetected != null && p.findingsDetected > 0 && <span style={{ color: "#b45309" }}><b>{p.findingsDetected}</b> gap{p.findingsDetected !== 1 ? "s" : ""} detected</span>}
           {p.aiModel && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#64748b" }}>{p.aiModel}</span>}
