@@ -205,12 +205,25 @@ const DEFAULT_AUDITORS: AuditorProfile[] = [
 // names already implied by the auditor data above. Person-in-charge is left
 // blank for the user to fill in via Audit Cycle.
 const DEFAULT_DEPARTMENTS: Department[] = [
-  { id: "SQ", acronym: "SQ", fullName: "Quality Assurance", personInCharge: "" },
-  { id: "SGL", acronym: "SGL", fullName: "Leadership", personInCharge: "" },
-  { id: "ALI / CM", acronym: "ALI / CM", fullName: "Academic", personInCharge: "" },
-  { id: "AD / AN", acronym: "AD / AN", fullName: "Student Administration", personInCharge: "" },
-  { id: "SSO", acronym: "SSO", fullName: "Student Support", personInCharge: "" },
+  { id: "ALI", acronym: "ALI", fullName: "Academic and Learning Innovation", personInCharge: "" },
+  { id: "CM", acronym: "CM", fullName: "Course Management", personInCharge: "" },
+  { id: "CD", acronym: "CD", fullName: "Curriculum Development", personInCharge: "" },
+  { id: "GEP", acronym: "GEP", fullName: "Global Expansion and Partnerships", personInCharge: "" },
+  { id: "IG", acronym: "IG", fullName: "International Growth and Alliances", personInCharge: "" },
+  { id: "OEE", acronym: "OEE", fullName: "Operational Excellence", personInCharge: "" },
+  { id: "AN", acronym: "AN", fullName: "Administration", personInCharge: "" },
+  { id: "FN", acronym: "FN", fullName: "Finance", personInCharge: "" },
   { id: "HR", acronym: "HR", fullName: "Human Resources", personInCharge: "" },
+  { id: "IT", acronym: "IT", fullName: "IT Services", personInCharge: "" },
+  { id: "SES", acronym: "SES", fullName: "Sales Enablement and Strategy", personInCharge: "" },
+  { id: "MG", acronym: "MG", fullName: "Marketing", personInCharge: "" },
+  { id: "SL", acronym: "SL", fullName: "Sales", personInCharge: "" },
+  { id: "SGL", acronym: "SGL", fullName: "Strategic Governance and Leadership", personInCharge: "" },
+  { id: "CG", acronym: "CG", fullName: "Corporate Governance", personInCharge: "" },
+  { id: "SQ", acronym: "SQ", fullName: "Strategic and Quality Management", personInCharge: "" },
+  { id: "SSO", acronym: "SSO", fullName: "Student Success and Outreach", personInCharge: "" },
+  { id: "AD", acronym: "AD", fullName: "Admissions", personInCharge: "" },
+  { id: "SS", acronym: "SS", fullName: "Student Support", personInCharge: "" },
 ];
 
 export type WorkspaceState = {
