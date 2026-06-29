@@ -135,12 +135,8 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       // disabled in Settings. Results land in pendingGenerated so the user
       // can edit/add/remove lines before confirming them into the checklist.
       generateSpecific: async (itemId) => {
-        console.log("generateSpecific called with itemId:", itemId);
-        try {
         set({ busy: itemId });
-        const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
-        console.log("req found:", req?.id ?? "UNDEFINED — itemId did not match any GD4 requirement");
-        if (!req) { set({ busy: null }); return; }
+        const req = GD4_REQUIREMENTS.find((r) => r.id === itemId)!;
         const aiSettings = useAISettingsStore.getState();
         let raw: GeneratedChecklistLine[];
         let rejectedCount = 0;
@@ -185,7 +181,6 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         const rejectionNote = rejectedCount > 0
           ? `${rejectedCount} AI-proposed line(s) were rejected — they lacked a traceable official GD4 source and were not added.`
           : undefined;
-        console.log("pushAIReviewLog called for checklist", itemId, { live, linesCount: lines.length, hasPromptSent: !!genPromptSent });
         useWorkspaceStore.getState().pushAIReviewLog({
           agent: "Checklist Generator",
           reviewType: "Checklist",
@@ -212,10 +207,6 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           ...mapEntry(s, itemId, (e) => ({ ...e, pendingGenerated: lines, generatedLive: live, generatedAt: new Date().toLocaleString() })),
           busy: null,
         }));
-        } catch (err) {
-          console.error("generateSpecific CRASHED:", err);
-          set({ busy: null });
-        }
       },
 
       updatePendingLine: (itemId, lineId, patch) =>
