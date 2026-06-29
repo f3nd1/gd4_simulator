@@ -686,6 +686,7 @@ export type AIReviewLogEntry = {
   live: boolean;
   liveError?: string;
   generatedContent?: string;
+  promptSent?: string;
   createdAt: string;
   // Short audit-run id shared with the folder result, checklist evidence and
   // journal entry from the same run, so a log row can be traced back to source.

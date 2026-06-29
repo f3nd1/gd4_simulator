@@ -28,6 +28,7 @@ export type GroupedFindingWriterResult = {
   evidenceStatusSummary: string;
   live: boolean;
   usage?: AIUsage;
+  promptSent?: string;
 };
 
 
@@ -271,5 +272,6 @@ Each apsrBullets array may contain 1–3 bullet strings. Do not add extra keys.
     evidenceStatusSummary: buildEvidenceStatusSummary(group.lines),
     live: true,
     usage,
+    promptSent: `SYSTEM:\n${systemPrompt}\n\nUSER:\n${userPrompt}`,
   };
 }

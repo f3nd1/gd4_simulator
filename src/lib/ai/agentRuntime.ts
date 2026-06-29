@@ -120,6 +120,7 @@ export type ChecklistGenerationResult = {
   lines: GeneratedChecklistLine[];
   rejectedCount: number;
   rejectedIdeas?: { text: string; reason: string }[];
+  promptSent?: string;
 };
 
 // Converts a GD4 item's official text into traceable, testable checklist lines.
@@ -240,7 +241,7 @@ ${sourceBlock}${req.gateSensitive ? "\n\nNote: This item is gate-sensitive — a
     .filter((r): r is Record<string, string> => !!r && typeof r === "object" && typeof (r as Record<string, unknown>).text === "string")
     .map((r) => ({ text: r.text, reason: r.reason || "Not directly supported by official GD4 wording" }));
 
-  return { lines, rejectedCount, rejectedIdeas };
+  return { lines, rejectedCount, rejectedIdeas, promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}` };
 }
 
 export async function runLiveClosureReview(
@@ -291,7 +292,7 @@ export async function runLiveClosureDraft(
   finding: { issue: string; gd4ItemId: string },
   settings: AISettings,
   context?: { standard?: string; apsr?: string }
-): Promise<{ root: string; corr: string; prev: string; usage?: AIUsage }> {
+): Promise<{ root: string; corr: string; prev: string; usage?: AIUsage; promptSent?: string }> {
   const closureDomainSkill = domainExpertiseFor(finding.gd4ItemId);
   const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — use the 5-Why methodology to reach the systemic level (Level 3): distinguish an Approach gap (policy/procedure missing or too generic) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — name the governance, training, data-collection, or review gap as the root cause, not the symptom — then a CORRECTIVE action that fixes this specific gap now (time-bound, names the record/document and responsible role), and a PREVENTIVE action that changes the system so the gap cannot recur (must be different from the corrective action — a new checkpoint, policy section, or standing review item). Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.${buildSystemPrompt("afiClosure", null, "runLiveClosureDraft", finding.gd4ItemId, closureDomainSkill)}${buildDomainBlock(closureDomainSkill)}`;
   const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}${context?.standard ? `\n\nOfficial GD4 requirement:\n${context.standard}` : ""}${context?.apsr ? `\n\nAPSR assessment of this line:\n${context.apsr}` : ""}`;
@@ -304,6 +305,7 @@ export async function runLiveClosureDraft(
     corr: (parsed.corr as string) || "",
     prev: (parsed.prev as string) || "",
     usage,
+    promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}`,
   };
 }
 
@@ -316,7 +318,7 @@ export async function runLiveEvidenceFill(
   link: string,
   lineText: string,
   settings: AISettings
-): Promise<Omit<EvidenceFillDraft, "live"> & { live: true; usage?: AIUsage }> {
+): Promise<Omit<EvidenceFillDraft, "live"> & { live: true; usage?: AIUsage; promptSent?: string }> {
   const system = `You are an evidence intake assistant for an EduTrust GD4 internal audit. You are given only a document link/filename and the checklist line it is meant to support — you cannot open or read the document, so never assume or invent its content. Suggest plausible metadata from the link/filename alone, and draft a short auditor note (1-2 sentences) that explicitly tells the human auditor what they still need to verify themselves. Respond with JSON only: {"title": string, "type": "Policy/Procedure" | "Record/Log" | "System screenshot" | "Minutes" | "Survey/Feedback" | "Other", "date": string (YYYY-MM-DD, guess if unknown), "sufficiency": "Present" | "Weak" | "Missing", "auditorNote": string}.${buildSystemPrompt("evidenceTracking", null, "runLiveEvidenceFill")}`;
   const user = `Evidence link: ${link}\nChecklist line this evidence is meant to support: ${lineText}`;
 
@@ -332,6 +334,7 @@ export async function runLiveEvidenceFill(
     auditorNote: (parsed.auditorNote as string) || `Verify this evidence actually demonstrates: "${lineText}".`,
     live: true,
     usage,
+    promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}`,
   };
 }
 
@@ -714,7 +717,7 @@ export async function runLiveFindingObservation(
   dimension: string,
   apsr: ApsrBreakdown | undefined,
   settings: AISettings
-): Promise<{ observation: string; criteria: string; effect: string; usage?: AIUsage }> {
+): Promise<{ observation: string; criteria: string; effect: string; usage?: AIUsage; promptSent?: string }> {
   const apsrSummary = apsr
     ? [
         `Approach: ${apsr.approach.status}${apsr.approach.note ? ` — ${apsr.approach.note}` : ""}`,
@@ -752,6 +755,7 @@ Dimension (APSR leg that fell short): ${dimension}`;
     criteria: (parsed.criteria as string) || `GD4 ${req.id} requires: ${req.requirement}`,
     effect: (parsed.effect as string) || `This gap must be resolved before the EduTrust assessment. See the dimension (${dimension}) for the applicable band ceiling.`,
     usage,
+    promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}`,
   };
 }
 
@@ -813,16 +817,19 @@ export async function runCitationVerifier(
 export type StagedPolicyAuditResult = {
   rows: PolicyCoverageRow[];
   usage?: AIUsage;
+  promptSent?: string;
 };
 
 export type StagedEvidenceAuditResult = {
   rows: EvidenceCoverageRow[];
   usage?: AIUsage;
+  promptSent?: string;
 };
 
 export type StagedOutcomeReviewAuditResult = {
   rows: OutcomeReviewRow[];
   usage?: AIUsage;
+  promptSent?: string;
 };
 
 const STAGED_BATCH_SIZE = 8; // audit points per AI call (each is smaller than a full checklist line)
@@ -862,6 +869,7 @@ Respond with JSON only:
 
   const rows: PolicyCoverageRow[] = [];
   let usage: AIUsage | undefined;
+  let firstPromptSent: string | undefined;
 
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
@@ -874,6 +882,7 @@ Respond with JSON only:
   for (const batch of batches) {
     const pointsBlock = buildStagedPointsBlock(batch);
     const user = `Policy & Procedure documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for APPROACH coverage:\n${pointsBlock}`;
+    if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
     try {
       const content = await chatComplete(
         [{ role: "system", content: system }, { role: "user", content: user }],
@@ -895,7 +904,7 @@ Respond with JSON only:
       for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
     }
   }
-  return { rows, usage };
+  return { rows, usage, promptSent: firstPromptSent };
 }
 
 // Stage 3: Evidence Implementation Audit.
@@ -930,6 +939,7 @@ Respond with JSON only:
 
   const rows: EvidenceCoverageRow[] = [];
   let usage: AIUsage | undefined;
+  let firstPromptSent: string | undefined;
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
     batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
@@ -944,6 +954,7 @@ Respond with JSON only:
       return `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}${polNote}`;
     }).join("\n");
     const user = `Actual evidence documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for IMPLEMENTATION evidence:\n${pointsBlock}`;
+    if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
     try {
       const content = await chatComplete(
         [{ role: "system", content: system }, { role: "user", content: user }],
@@ -964,7 +975,7 @@ Respond with JSON only:
       for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
     }
   }
-  return { rows, usage };
+  return { rows, usage, promptSent: firstPromptSent };
 }
 
 // Stage 4: Outcome & Review Audit.
@@ -996,6 +1007,7 @@ Respond with JSON only:
 
   const rows: OutcomeReviewRow[] = [];
   let usage: AIUsage | undefined;
+  let firstPromptSent: string | undefined;
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
     batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
@@ -1006,6 +1018,7 @@ Respond with JSON only:
   for (const batch of batches) {
     const pointsBlock = buildStagedPointsBlock(batch);
     const user = `All documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for OUTCOME DATA and REVIEW RECORDS:\n${pointsBlock}`;
+    if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
     try {
       const content = await chatComplete(
         [{ role: "system", content: system }, { role: "user", content: user }],
@@ -1030,7 +1043,7 @@ Respond with JSON only:
       for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "AI call failed.", chunkIds: [] });
     }
   }
-  return { rows, usage };
+  return { rows, usage, promptSent: firstPromptSent };
 }
 
 // Stage 5: Deterministic APSR verdict builder.
