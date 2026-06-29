@@ -75,6 +75,8 @@ export function Findings() {
   const [dimFilter, setDimFilter] = useState<FindingDimension | "All">("All");
   const [riskCatFilter, setRiskCatFilter] = useState<"A" | "B" | "C" | "D" | "All">("All");
   const [dateFilter, setDateFilter] = useState<"all" | "7d" | "30d" | "90d">("all");
+  const [sortCol, setSortCol] = useState<"raised" | "id" | "gd4">("raised");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const fromItem = searchParams.get("item"); // e.g. "1.1.1" — jumps to that item's sub-criterion filter
   useEffect(() => {
     if (fromItem) {
@@ -214,21 +216,35 @@ export function Findings() {
     setDraftError(null);
   }
 
-  const rows = allFindings.filter((f) => {
-    if (typeFilter !== "All" && f.type !== typeFilter) return false;
-    if (sevFilter !== "All" && f.severity !== sevFilter) return false;
-    if (dimFilter !== "All" && f.dimension !== dimFilter) return false;
-    if (riskCatFilter !== "All" && f.riskCategory !== riskCatFilter) return false;
-    if (dateFilter !== "all" && f.createdAt) {
-      const days = dateFilter === "7d" ? 7 : dateFilter === "30d" ? 30 : 90;
-      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-      if (new Date(f.createdAt).getTime() < cutoff) return false;
-    }
-    const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
-    if (critFilter !== "All" && req?.criterion !== critFilter) return false;
-    if (subCritFilter !== "All" && req?.subCriterionId !== subCritFilter) return false;
-    return true;
-  });
+  const rows = useMemo(() => {
+    const filtered = allFindings.filter((f) => {
+      if (typeFilter !== "All" && f.type !== typeFilter) return false;
+      if (sevFilter !== "All" && f.severity !== sevFilter) return false;
+      if (dimFilter !== "All" && f.dimension !== dimFilter) return false;
+      if (riskCatFilter !== "All" && f.riskCategory !== riskCatFilter) return false;
+      if (dateFilter !== "all" && f.createdAt) {
+        const days = dateFilter === "7d" ? 7 : dateFilter === "30d" ? 30 : 90;
+        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+        if (new Date(f.createdAt).getTime() < cutoff) return false;
+      }
+      const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
+      if (critFilter !== "All" && req?.criterion !== critFilter) return false;
+      if (subCritFilter !== "All" && req?.subCriterionId !== subCritFilter) return false;
+      return true;
+    });
+    filtered.sort((a, b) => {
+      let cmp = 0;
+      if (sortCol === "raised") {
+        cmp = (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
+      } else if (sortCol === "id") {
+        cmp = a.id.localeCompare(b.id);
+      } else if (sortCol === "gd4") {
+        cmp = a.gd4ItemId.localeCompare(b.gd4ItemId);
+      }
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+    return filtered;
+  }, [allFindings, typeFilter, sevFilter, dimFilter, riskCatFilter, dateFilter, critFilter, subCritFilter, sortCol, sortDir]);
 
   function generateFromGaps() {
     const n = raiseAllUnmetFindings();
@@ -552,77 +568,81 @@ export function Findings() {
         </Card>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-        <select
-          value={critFilter}
-          onChange={(e) => {
-            setCritFilter(e.target.value);
-            setSubCritFilter("All");
-          }}
-          style={filterSelectStyle}
-        >
-          <option value="All">All criteria</option>
-          {GD4_CRITERIA.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.id} — {c.title}
-            </option>
-          ))}
-        </select>
-        <select value={subCritFilter} onChange={(e) => setSubCritFilter(e.target.value)} style={filterSelectStyle}>
-          <option value="All">All sub-criteria</option>
-          {subCritOptions.map((sc) => (
-            <option key={sc.id} value={sc.id}>
-              {sc.id} — {sc.title}
-            </option>
-          ))}
-        </select>
-        <select value={dimFilter} onChange={(e) => setDimFilter(e.target.value as FindingDimension | "All")} style={filterSelectStyle}>
-          {DIMENSIONS.map((d) => <option key={d} value={d}>{d === "All" ? "All dimensions" : dimensionLabel(d)}</option>)}
-        </select>
-        <select value={riskCatFilter} onChange={(e) => setRiskCatFilter(e.target.value as "A" | "B" | "C" | "D" | "All")} style={filterSelectStyle}>
-          {RISK_CATS.map((c) => (
-            <option key={c} value={c}>
-              {c === "All" ? "All risk categories" : `Cat ${c} — ${c === "A" ? "Regulatory" : c === "B" ? "Star risk" : c === "C" ? "Band cap" : "Enhancement"}`}
-            </option>
-          ))}
-        </select>
-        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as FindingType | "All")} style={filterSelectStyle}>
-          {TYPES.map((t) => <option key={t}>{t}</option>)}
-        </select>
-        <select value={sevFilter} onChange={(e) => setSevFilter(e.target.value as Severity | "All")} style={filterSelectStyle}>
-          {SEVERITIES.map((s) => <option key={s}>{s}</option>)}
-        </select>
-        <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as "all" | "7d" | "30d" | "90d")} style={filterSelectStyle}>
-          <option value="all">All time</option>
-          <option value="7d">Last 7 days</option>
-          <option value="30d">Last 30 days</option>
-          <option value="90d">Last 90 days</option>
-        </select>
+      {/* Filters — single row, compact labels */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "nowrap", overflowX: "auto", alignItems: "center" }}>
+        {([
+          { value: critFilter, onChange: (v: string) => { setCritFilter(v); setSubCritFilter("All"); }, options: [{ value: "All", label: "Criterion" }, ...GD4_CRITERIA.map((c) => ({ value: c.id, label: `${c.id}` }))] },
+          { value: subCritFilter, onChange: (v: string) => setSubCritFilter(v), options: [{ value: "All", label: "Sub-crit" }, ...subCritOptions.map((sc) => ({ value: sc.id, label: sc.id }))] },
+          { value: dimFilter, onChange: (v: string) => setDimFilter(v as FindingDimension | "All"), options: [{ value: "All", label: "Dimension" }, ...DIMENSIONS.slice(1).map((d) => ({ value: d, label: d === "Procedure" ? "Procedure" : d === "Evidence" ? "Evidence" : d }))] },
+          { value: riskCatFilter, onChange: (v: string) => setRiskCatFilter(v as "A" | "B" | "C" | "D" | "All"), options: [{ value: "All", label: "Risk cat" }, ...RISK_CATS.slice(1).map((c) => ({ value: c, label: `Cat ${c}` }))] },
+          { value: typeFilter, onChange: (v: string) => setTypeFilter(v as FindingType | "All"), options: [{ value: "All", label: "Type" }, ...TYPES.slice(1).map((t) => ({ value: t, label: t }))] },
+          { value: sevFilter, onChange: (v: string) => setSevFilter(v as Severity | "All"), options: [{ value: "All", label: "Severity" }, ...SEVERITIES.slice(1).map((s) => ({ value: s, label: s }))] },
+          { value: dateFilter, onChange: (v: string) => setDateFilter(v as "all" | "7d" | "30d" | "90d"), options: [{ value: "all", label: "All time" }, { value: "7d", label: "7 days" }, { value: "30d", label: "30 days" }, { value: "90d", label: "90 days" }] },
+        ] as const).map((f, i) => (
+          <select key={i} value={f.value} onChange={(e) => (f.onChange as (v: string) => void)(e.target.value)} style={{ ...filterSelectStyle, minWidth: 0, flex: "0 0 auto", fontSize: 11.5, padding: "4px 6px" }}>
+            {(f.options as readonly { value: string; label: string }[]).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        ))}
       </div>
-      <table>
+      <div style={{ overflowX: "auto" }}>
+      <table style={{ tableLayout: "fixed", width: "100%", minWidth: 760 }}>
+        <colgroup>
+          <col style={{ width: 18 }} />
+          <col style={{ width: 72 }} />
+          <col style={{ width: 62 }} />
+          <col style={{ width: "auto" }} />
+          <col style={{ width: 120 }} />
+          <col style={{ width: 90 }} />
+          <col style={{ width: 74 }} />
+          <col style={{ width: 48 }} />
+          <col style={{ width: 100 }} />
+          <col style={{ width: 60 }} />
+          <col style={{ width: 60 }} />
+        </colgroup>
         <thead>
-          <tr><th /><th>ID</th><th>GD4 item</th><th>Issue</th><th>Dimension</th><th>Risk</th><th>Severity</th><th>Owner</th><th>Raised</th><th>Status</th><th /></tr>
+          <tr>
+            <th />
+            <th style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }} onClick={() => { if (sortCol === "id") setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortCol("id"); setSortDir("asc"); } }}>
+              ID {sortCol === "id" ? (sortDir === "asc" ? "↑" : "↓") : <span style={{ color: "#d1d5db" }}>↕</span>}
+            </th>
+            <th style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }} onClick={() => { if (sortCol === "gd4") setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortCol("gd4"); setSortDir("asc"); } }}>
+              GD4 {sortCol === "gd4" ? (sortDir === "asc" ? "↑" : "↓") : <span style={{ color: "#d1d5db" }}>↕</span>}
+            </th>
+            <th>Issue</th>
+            <th>Dimension</th>
+            <th>Risk</th>
+            <th>Severity</th>
+            <th>Owner</th>
+            <th style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }} onClick={() => { if (sortCol === "raised") setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortCol("raised"); setSortDir("desc"); } }}>
+              Raised {sortCol === "raised" ? (sortDir === "asc" ? "↑" : "↓") : <span style={{ color: "#d1d5db" }}>↕</span>}
+            </th>
+            <th>Status</th>
+            <th />
+          </tr>
         </thead>
         <tbody>
           {rows.map((f) => {
             const closed = (closures[f.id]?.human || "") === "Accepted";
             const open = expandedId === f.id;
             const hasDetail = !!(f.rootCause || f.corrective || f.preventive || f.apsr);
+            const raisedDate = f.createdAt ? new Date(f.createdAt) : null;
+            const raisedStr = raisedDate
+              ? raisedDate.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" }) + " " + raisedDate.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+              : "—";
             return (
               <Fragment key={f.id}>
                 <tr className="rowh" style={{ cursor: hasDetail ? "pointer" : "default" }} onClick={() => { hasDetail && setExpandedId(open ? null : f.id); setConfirmDeleteId(null); }}>
                   <td style={{ width: 18, color: "#94a3b8", textAlign: "center" }}>{hasDetail ? (open ? "▾" : "▸") : ""}</td>
-                  <td>
+                  <td style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     <b style={{ color: "#ce9e5d" }}>{f.id}</b>
-                    {f.auditRunId && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#94a3b8", marginLeft: 6 }}>{f.auditRunId}</span>}
                   </td>
                   <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5, color: "#6b7280" }}>{f.gd4ItemId}</td>
-                  <td style={{ fontSize: 12.5 }}>{f.issue}</td>
-                  <td>{f.dimension ? <Pill s={dimensionTone(f.dimension)}>{dimensionLabel(f.dimension)}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
-                  <td>{f.riskCategory ? <Pill s={riskCatTone(f.riskCategory) as Parameters<typeof Pill>[0]["s"]}>{riskCatLabel(f.riskCategory)}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
+                  <td style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.issue}>{f.issue}</td>
+                  <td style={{ overflow: "hidden" }}>{f.dimension ? <Pill s={dimensionTone(f.dimension)}>{f.dimension}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
+                  <td>{f.riskCategory ? <Pill s={riskCatTone(f.riskCategory) as Parameters<typeof Pill>[0]["s"]}>Cat {f.riskCategory}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
                   <td><Pill s={severityTone(f.severity)}>{f.severity}</Pill></td>
-                  <td>{f.owner}</td>
-                  <td style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>{f.createdAt ? new Date(f.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" }) : "—"}</td>
+                  <td style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.owner}</td>
+                  <td style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap" }}>{raisedStr}</td>
                   <td><Pill s={closed ? "good" : "critical"}>{closed ? "Closed" : "Open"}</Pill></td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                     {confirmDeleteId === f.id ? (
@@ -637,7 +657,7 @@ export function Findings() {
                 </tr>
                 {open && hasDetail && (
                   <tr>
-                    <td colSpan={10} style={{ background: "#f8fafc", padding: "10px 14px" }}>
+                    <td colSpan={11} style={{ background: "#f8fafc", padding: "10px 14px" }}>
                       <FindingDetail finding={f} />
                     </td>
                   </tr>
@@ -647,13 +667,14 @@ export function Findings() {
           })}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={10} style={{ padding: "18px 14px", color: "#6b7280", fontSize: 12.5 }}>
+              <td colSpan={11} style={{ padding: "18px 14px", color: "#6b7280", fontSize: 12.5 }}>
                 No findings to show. Run a folder audit (Evidence Folder page) — findings are raised automatically from the gaps — or click <b>Generate from gaps</b> above to create them from the current Sub-Criterion Checklist.
               </td>
             </tr>
           )}
         </tbody>
       </table>
+      </div>
       <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <span>
           {seedFindingsLoaded && "Includes findings carried over from the loaded demo dataset. "}
