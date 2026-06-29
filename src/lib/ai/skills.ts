@@ -125,6 +125,36 @@ const SKILL_CAP = 3000;
 
 const SEP = "\n\n---\n\n";
 
+// Maps raw skill content → its source filename so buildSystemPrompt() can
+// wrap each block with a labelled header and footer for traceability.
+const SKILL_NAMES = new Map<string, string>([
+  [externalAuditorSkill,        "external-auditor.md"],
+  [evidenceStandardsSkill,      "evidence-standards.md"],
+  [apsrRubricSkill,             "apsr-rubric.md"],
+  [benchmarkingSkill,           "benchmarking-and-good-practice.md"],
+  [bandCalibrationSkill,        "band-calibration.md"],
+  [evidenceRetrievalSkill,      "evidence-retrieval.md"],
+  [sourceCitationSkill,         "source-citation-verification.md"],
+  [evidenceTimelinessSkill,     "evidence-timeliness.md"],
+  [findingSpecificitySkill,     "finding-specificity.md"],
+  [findingWritingSkill,         "finding-writing.md"],
+  [regulatoryReferencesSkill,   "regulatory-references.md"],
+  [rootCauseMethodologySkill,   "root-cause-methodology.md"],
+  [evidenceLedgerSkill,         "evidence-ledger.md"],
+  [interviewFieldworkSkill,     "interview-and-fieldwork.md"],
+  [sampleTestingSkill,          "sample-testing-methodology.md"],
+  [scannedDocumentSkill,        "scanned-document-evidence.md"],
+  [spreadsheetEvidenceSkill,    "spreadsheet-evidence.md"],
+  [sgPeiContextSkill,           "sg-pei-context.md"],
+  [consultantInsightsSkill,     "consultant-insights.md"],
+  [riskRemediationSkill,        "risk-and-remediation.md"],
+]);
+
+function labelSkill(raw: string, content: string): string {
+  const name = SKILL_NAMES.get(raw) ?? "unknown.md";
+  return `=== SKILL: ${name} ===\n${content}\n=== END: ${name} ===`;
+}
+
 // ─── buildSystemPrompt ───────────────────────────────────────────────────────
 
 /**
@@ -146,14 +176,14 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType | nul
 
   // Capped skills: BASE + module capped skills, each truncated to SKILL_CAP chars.
   const cappedDocs = [...BASE_SKILLS, ...moduleSkills.capped]
-    .map((d) => d.trim().slice(0, SKILL_CAP));
+    .map((d) => labelSkill(d, d.trim().slice(0, SKILL_CAP)));
 
   // File-type bonus skills — also capped.
-  if (fileType === "scanned")     cappedDocs.push(scannedDocumentSkill.trim().slice(0, SKILL_CAP));
-  if (fileType === "spreadsheet") cappedDocs.push(spreadsheetEvidenceSkill.trim().slice(0, SKILL_CAP));
+  if (fileType === "scanned")     cappedDocs.push(labelSkill(scannedDocumentSkill, scannedDocumentSkill.trim().slice(0, SKILL_CAP)));
+  if (fileType === "spreadsheet") cappedDocs.push(labelSkill(spreadsheetEvidenceSkill, spreadsheetEvidenceSkill.trim().slice(0, SKILL_CAP)));
 
   // Uncapped skills appended after (regulatory references must not be truncated).
-  const uncappedDocs = moduleSkills.uncapped.map((d) => d.trim());
+  const uncappedDocs = moduleSkills.uncapped.map((d) => labelSkill(d, d.trim()));
 
   const allDocs = [...cappedDocs, ...uncappedDocs].filter(Boolean);
   if (allDocs.length === 0) return "";
