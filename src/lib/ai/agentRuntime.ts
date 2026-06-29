@@ -9,33 +9,35 @@ import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confi
 import { chatComplete, AIClientError, addUsage, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
-import apsrRubricSkill from "../../data/skills/apsr-rubric.md?raw";
-import evidenceStandardsSkill from "../../data/skills/evidence-standards.md?raw";
-import findingWritingSkill from "../../data/skills/finding-writing.md?raw";
-import bandCalibrationSkill from "../../data/skills/band-calibration.md?raw";
-import sgPeiContextSkill from "../../data/skills/sg-pei-context.md?raw";
-import externalAuditorSkill from "../../data/skills/external-auditor.md?raw";
-import consultantInsightsSkill from "../../data/skills/consultant-insights.md?raw";
-import riskRemediationSkill from "../../data/skills/risk-and-remediation.md?raw";
-import findingSpecificitySkill from "../../data/skills/finding-specificity.md?raw";
-import evidenceLedgerSkill from "../../data/skills/evidence-ledger.md?raw";
-import sourceCitationSkill from "../../data/skills/source-citation-verification.md?raw";
-import spreadsheetEvidenceSkill from "../../data/skills/spreadsheet-evidence.md?raw";
-import scannedDocumentSkill from "../../data/skills/scanned-document-evidence.md?raw";
-import evidenceRetrievalSkill from "../../data/skills/evidence-retrieval.md?raw";
-import regulatoryReferencesSkill from "../../data/skills/regulatory-references.md?raw";
-import rootCauseMethodologySkill from "../../data/skills/root-cause-methodology.md?raw";
-import interviewFieldworkSkill from "../../data/skills/interview-and-fieldwork.md?raw";
-import sampleTestingSkill from "../../data/skills/sample-testing-methodology.md?raw";
-import evidenceTimelinessSkill from "../../data/skills/evidence-timeliness.md?raw";
-import benchmarkingSkill from "../../data/skills/benchmarking-and-good-practice.md?raw";
+import {
+  apsrRubricSkill,
+  evidenceStandardsSkill,
+  findingWritingSkill,
+  bandCalibrationSkill,
+  sgPeiContextSkill,
+  externalAuditorSkill,
+  consultantInsightsSkill,
+  riskRemediationSkill,
+  findingSpecificitySkill,
+  evidenceLedgerSkill,
+  sourceCitationSkill,
+  spreadsheetEvidenceSkill,
+  scannedDocumentSkill,
+  evidenceRetrievalSkill,
+  regulatoryReferencesSkill,
+  rootCauseMethodologySkill,
+  interviewFieldworkSkill,
+  sampleTestingSkill,
+  evidenceTimelinessSkill,
+  benchmarkingSkill,
+  buildSystemPrompt,
+  buildDomainBlock,
+} from "./skills";
 import { domainExpertiseFor } from "../../data/skills/domainExpertise";
 import type { EvidenceChunk } from "../../types";
 
-// Injects one or more skill documents into the system prompt, capped so a
-// large skill file can't dominate the token budget. Skills are domain-expert
-// knowledge that condition the model's judgement without replacing the
-// per-call instructions.
+// Legacy local helper — used in prompt inline-building calls that pre-date the
+// module system. New calls should use buildSystemPrompt() from skills.ts.
 const SKILL_CAP = 3000;
 function skills(...docs: string[]): string {
   const content = docs.map((d) => d.trim().slice(0, SKILL_CAP)).join("\n\n---\n\n");
