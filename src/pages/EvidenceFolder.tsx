@@ -428,23 +428,61 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
   const hasProcessingModes = totalNew + totalChanged + totalReused > 0;
 
   if (isActive) {
+    // Show files that have been processed by the AI so far
+    const analyzedFiles = files.filter((f) => f.auditStatus === "cited" || f.auditStatus === "not_used" || f.auditStatus === "audited");
+    const citedCount = files.filter((f) => f.auditStatus === "cited").length;
+    const notUsedCount = files.filter((f) => f.auditStatus === "not_used").length;
+    const pendingCount = files.filter((f) => f.auditStatus === "pending" || !f.auditStatus).length;
+
     return (
       <div>
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>
           🤖 {isStrict ? "Running strict challenge pass" : `Asking AI — batch ${batch} of ${total}`}<Dots />
         </div>
-        <div style={{ ...muted, marginBottom: 4 }}>
+        <div style={{ ...muted, marginBottom: 8 }}>
           {isStrict ? "Re-checking every Met/Partial verdict: truly implemented, or just a policy on paper?" : "Comparing evidence against GD4 checklist requirements and writing verdicts"}
         </div>
-        <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 10, flexWrap: "wrap" }}>
+
+        {/* Stats bar */}
+        <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8, padding: "6px 10px", background: "#f1f5f9", borderRadius: 6 }}>
           {p.filesTotal != null && <span><b>{p.filesTotal}</b> file{p.filesTotal !== 1 ? "s" : ""}</span>}
-          {p.chunksCount != null && <span><b>{p.chunksCount}</b> chunks</span>}
+          {p.chunksCount != null && <span><b>{p.chunksCount}</b> chunks sent to AI</span>}
           {total > 1 && <span>Batch <b>{batch}</b>/<b>{total}</b></span>}
+          {p.linesAssessed != null && p.linesAssessed > 0 && <span style={{ color: "#15803d" }}><b>{p.linesAssessed}</b> line{p.linesAssessed !== 1 ? "s" : ""} assessed</span>}
+          {p.findingsDetected != null && p.findingsDetected > 0 && <span style={{ color: "#b45309" }}><b>{p.findingsDetected}</b> gap{p.findingsDetected !== 1 ? "s" : ""} detected</span>}
           {p.aiModel && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#64748b" }}>{p.aiModel}</span>}
-          <span>{p.auditLive ? "Live AI" : "Offline"}</span>
+          <span style={{ color: p.auditLive ? "#7c3aed" : "#94a3b8" }}>{p.auditLive ? "Live AI" : "Offline"}</span>
         </div>
+
+        {/* Live file status — shows which files the AI has cited vs not used */}
+        {analyzedFiles.length > 0 && (
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4, display: "flex", gap: 10 }}>
+              <span>Files analysed by AI so far: <b>{analyzedFiles.length}</b></span>
+              {citedCount > 0 && <span style={{ color: "#0369a1" }}>📎 <b>{citedCount}</b> cited</span>}
+              {notUsedCount > 0 && <span style={{ color: "#6b7280" }}>— <b>{notUsedCount}</b> not used</span>}
+              {pendingCount > 0 && <span style={{ color: "#94a3b8" }}>⏳ <b>{pendingCount}</b> pending</span>}
+            </div>
+            <div style={{ maxHeight: 150, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6, background: "#fff" }}>
+              {analyzedFiles.map((file) => {
+                const isCited = file.auditStatus === "cited";
+                const isNotUsed = file.auditStatus === "not_used";
+                return (
+                  <div key={file.path} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", borderBottom: "1px solid #f1f5f9", fontSize: 10.5 }}>
+                    <span style={{ flexShrink: 0, fontSize: 9, padding: "1px 4px", borderRadius: 3, background: isCited ? "#e0f2fe" : "#f3f4f6", color: isCited ? "#0369a1" : "#6b7280", fontWeight: 600 }}>
+                      {isCited ? "📎 Cited" : isNotUsed ? "— Not used" : "✓ Done"}
+                    </span>
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#374151" }}>{file.name}</span>
+                    <span style={{ flexShrink: 0, color: "#94a3b8", fontSize: 9.5 }}>{file.fileKind}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {hasProcessingModes && (
-          <div style={{ ...muted, marginTop: 4, display: "flex", gap: 8 }}>
+          <div style={{ ...muted, display: "flex", gap: 8 }}>
             {totalNew > 0 && <span><b>{totalNew}</b> new</span>}
             {totalChanged > 0 && <span><b>{totalChanged}</b> changed</span>}
             {totalReused > 0 && <span style={{ color: "#7c3aed" }}><b>{totalReused}</b> cached</span>}

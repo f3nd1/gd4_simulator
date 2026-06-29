@@ -24,6 +24,7 @@ export function AFIClosure() {
   const [selFinding, setSelFinding] = useState<string | null>(null);
   const [critFilter, setCritFilter] = useState<string>("All");
   const [subCritFilter, setSubCritFilter] = useState<string>("All");
+  const [dateFilter, setDateFilter] = useState<"all" | "7d" | "30d" | "90d">("all");
   const [draftErrors, setDraftErrors] = useState<Record<string, string>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -36,6 +37,11 @@ export function AFIClosure() {
     const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
     if (critFilter !== "All" && req?.criterion !== critFilter) return false;
     if (subCritFilter !== "All" && req?.subCriterionId !== subCritFilter) return false;
+    if (dateFilter !== "all" && f.createdAt) {
+      const days = dateFilter === "7d" ? 7 : dateFilter === "30d" ? 30 : 90;
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      if (new Date(f.createdAt).getTime() < cutoff) return false;
+    }
     return true;
   });
 
@@ -79,6 +85,12 @@ export function AFIClosure() {
             </option>
           ))}
         </select>
+        <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as "all" | "7d" | "30d" | "90d")} style={filterSelectStyle}>
+          <option value="all">All time</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="90d">Last 90 days</option>
+        </select>
       </div>
       {seedFindingsLoaded && (
         <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 10 }}>
@@ -98,6 +110,7 @@ export function AFIClosure() {
               <b style={{ color: "#ce9e5d", minWidth: 30 }}>{f.id}</b>
               <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#6b7280", minWidth: 38 }}>{f.gd4ItemId}</span>
               <span style={{ flex: 1, fontSize: 12.5 }}>{f.issue}</span>
+              {f.createdAt && <span style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>{new Date(f.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" })}</span>}
               <Pill s={f.severity === "Critical" || f.severity === "High" ? "critical" : f.severity === "Medium" ? "medium" : "neutral"}>{f.severity}</Pill>
               {c.human === "Accepted" ? (
                 <Pill s="good">closed</Pill>

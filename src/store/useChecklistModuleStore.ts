@@ -350,6 +350,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           managementDecisionNeeded: draft.severity === "Critical" || draft.severity === "High",
           status: "Open",
           source: "Checklist",
+          createdAt: new Date().toISOString(),
           auditRunId: auditRunId ?? draft.auditRunId,
           dimension: draft.dimension,
           riskCategory: draft.riskCategory,

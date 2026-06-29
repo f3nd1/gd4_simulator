@@ -191,6 +191,7 @@ export type Finding = {
   evidenceStatusSummary?: string;
   groupedFindingId?: string;
   createdFromAuditRunId?: string;
+  createdAt?: string;
 };
 
 // Two-layer sub-criterion checklist module: a generic 4-line maturity check

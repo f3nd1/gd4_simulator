@@ -74,6 +74,7 @@ export function Findings() {
   const [subCritFilter, setSubCritFilter] = useState<string>(() => searchParams.get("subCrit") ?? "All");
   const [dimFilter, setDimFilter] = useState<FindingDimension | "All">("All");
   const [riskCatFilter, setRiskCatFilter] = useState<"A" | "B" | "C" | "D" | "All">("All");
+  const [dateFilter, setDateFilter] = useState<"all" | "7d" | "30d" | "90d">("all");
   const fromItem = searchParams.get("item"); // e.g. "1.1.1" — jumps to that item's sub-criterion filter
   useEffect(() => {
     if (fromItem) {
@@ -203,6 +204,7 @@ export function Findings() {
       managementDecisionNeeded: form.severity === "Critical" || form.severity === "High",
       status: "Open",
       source: "Manual",
+      createdAt: new Date().toISOString(),
       dimension: form.dimension || undefined,
       riskCategory: (form.riskCategory as "A" | "B" | "C" | "D") || undefined,
     };
@@ -217,6 +219,11 @@ export function Findings() {
     if (sevFilter !== "All" && f.severity !== sevFilter) return false;
     if (dimFilter !== "All" && f.dimension !== dimFilter) return false;
     if (riskCatFilter !== "All" && f.riskCategory !== riskCatFilter) return false;
+    if (dateFilter !== "all" && f.createdAt) {
+      const days = dateFilter === "7d" ? 7 : dateFilter === "30d" ? 30 : 90;
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      if (new Date(f.createdAt).getTime() < cutoff) return false;
+    }
     const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
     if (critFilter !== "All" && req?.criterion !== critFilter) return false;
     if (subCritFilter !== "All" && req?.subCriterionId !== subCritFilter) return false;
@@ -585,10 +592,16 @@ export function Findings() {
         <select value={sevFilter} onChange={(e) => setSevFilter(e.target.value as Severity | "All")} style={filterSelectStyle}>
           {SEVERITIES.map((s) => <option key={s}>{s}</option>)}
         </select>
+        <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as "all" | "7d" | "30d" | "90d")} style={filterSelectStyle}>
+          <option value="all">All time</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="90d">Last 90 days</option>
+        </select>
       </div>
       <table>
         <thead>
-          <tr><th /><th>ID</th><th>GD4 item</th><th>Issue</th><th>Dimension</th><th>Risk</th><th>Severity</th><th>Owner</th><th>Status</th><th /></tr>
+          <tr><th /><th>ID</th><th>GD4 item</th><th>Issue</th><th>Dimension</th><th>Risk</th><th>Severity</th><th>Owner</th><th>Raised</th><th>Status</th><th /></tr>
         </thead>
         <tbody>
           {rows.map((f) => {
@@ -609,6 +622,7 @@ export function Findings() {
                   <td>{f.riskCategory ? <Pill s={riskCatTone(f.riskCategory) as Parameters<typeof Pill>[0]["s"]}>{riskCatLabel(f.riskCategory)}</Pill> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
                   <td><Pill s={severityTone(f.severity)}>{f.severity}</Pill></td>
                   <td>{f.owner}</td>
+                  <td style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>{f.createdAt ? new Date(f.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" }) : "—"}</td>
                   <td><Pill s={closed ? "good" : "critical"}>{closed ? "Closed" : "Open"}</Pill></td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                     {confirmDeleteId === f.id ? (
@@ -623,7 +637,7 @@ export function Findings() {
                 </tr>
                 {open && hasDetail && (
                   <tr>
-                    <td colSpan={9} style={{ background: "#f8fafc", padding: "10px 14px" }}>
+                    <td colSpan={10} style={{ background: "#f8fafc", padding: "10px 14px" }}>
                       <FindingDetail finding={f} />
                     </td>
                   </tr>
@@ -633,7 +647,7 @@ export function Findings() {
           })}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={9} style={{ padding: "18px 14px", color: "#6b7280", fontSize: 12.5 }}>
+              <td colSpan={10} style={{ padding: "18px 14px", color: "#6b7280", fontSize: 12.5 }}>
                 No findings to show. Run a folder audit (Evidence Folder page) — findings are raised automatically from the gaps — or click <b>Generate from gaps</b> above to create them from the current Sub-Criterion Checklist.
               </td>
             </tr>
