@@ -7,17 +7,18 @@ export type AIDebugEntry = {
   functionName: string;
   module: string;
   systemPrompt: string;
+  criterionSkill?: string;
 };
 
 type AIDebugLogStore = {
   entries: AIDebugEntry[];
-  addEntry: (functionName: string, module: string, systemPrompt: string) => void;
+  addEntry: (functionName: string, module: string, systemPrompt: string, criterionSkill?: string) => void;
   clearLog: () => void;
 };
 
 export const useAIDebugLogStore = create<AIDebugLogStore>((set) => ({
   entries: [],
-  addEntry: (functionName, module, systemPrompt) =>
+  addEntry: (functionName, module, systemPrompt, criterionSkill) =>
     set((s) => ({
       entries: [
         {
@@ -26,6 +27,7 @@ export const useAIDebugLogStore = create<AIDebugLogStore>((set) => ({
           functionName,
           module,
           systemPrompt,
+          criterionSkill,
         },
         ...s.entries,
       ],

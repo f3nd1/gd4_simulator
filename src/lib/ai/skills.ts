@@ -13,6 +13,24 @@
 // tables — truncating mid-table causes the AI to cite wrong act/section numbers.
 // All other skills are capped at SKILL_CAP chars each to control token spend.
 
+// ─── Criterion file name lookup (for debug log only) ────────────────────────
+
+const CRITERION_FILENAMES: Record<string, string> = {
+  "1": "criterion-1-leadership-finance.md",
+  "2": "criterion-2-hr-data.md",
+  "3": "criterion-3-agent-due-diligence.md",
+  "4": "criterion-4-student-protection.md",
+  "5": "criterion-5-academic-qa.md",
+  "6": "criterion-6-qms.md",
+  "7": "criterion-7-outcomes.md",
+};
+
+function criterionFilenameFor(anyId: string | undefined | null): string | undefined {
+  if (!anyId) return undefined;
+  const seg = anyId.trim().split(".")[0];
+  return CRITERION_FILENAMES[seg];
+}
+
 // ─── Raw imports ────────────────────────────────────────────────────────────
 
 import externalAuditorSkill        from "../../data/skills/external-auditor.md?raw";
@@ -171,7 +189,7 @@ function labelSkill(raw: string, content: string): string {
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("findingWriter");
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("evidenceReview", "spreadsheet");
  */
-export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string): string {
+export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string, criterionId?: string): string {
   const moduleSkills = MODULE_SKILLS[module];
 
   // Capped skills: BASE + module capped skills, each truncated to SKILL_CAP chars.
@@ -193,8 +211,9 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType | nul
   // Dev-only: log each buildSystemPrompt() call to the AI Debug Log page.
   if (import.meta.env.DEV && fnName) {
     // Lazy import to avoid pulling Zustand into non-React contexts in production.
+    const criterionSkill = criterionFilenameFor(criterionId);
     import("../../store/useAIDebugLogStore").then(({ useAIDebugLogStore }) => {
-      useAIDebugLogStore.getState().addEntry(fnName, module, result);
+      useAIDebugLogStore.getState().addEntry(fnName, module, result, criterionSkill);
     });
   }
 

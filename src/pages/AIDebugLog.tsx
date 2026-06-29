@@ -103,6 +103,17 @@ function AIDebugLogDev() {
                   >
                     {e.module}
                   </span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      background: e.criterionSkill ? "#dcfce7" : "#f1f5f9",
+                      color: e.criterionSkill ? "#15803d" : "#94a3b8",
+                      borderRadius: 4,
+                      padding: "1px 6px",
+                    }}
+                  >
+                    {e.criterionSkill ? `criterion: ${e.criterionSkill}` : "criterion: none"}
+                  </span>
                   {!open && (
                     <span style={{ fontSize: 11, color: "#94a3b8", fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 400 }}>
                       {e.systemPrompt.slice(0, 120).replace(/\n/g, " ")}…
