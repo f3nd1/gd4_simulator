@@ -187,12 +187,12 @@ describe("Courses Offered — schema", () => {
 // 12. Courses preserve blank values and "NA"
 describe("Courses Offered — blank and NA values", () => {
   it("AEIS courses have NA for ptContactHours", () => {
-    const aeis = useProfileOfPeiStore.getState().coursesOffered.find((c) => c.abbreviation === "AEIS P2");
+    const aeis = useProfileOfPeiStore.getState().coursesOffered.find((c) => c.abbreviation === "AEIS-P2");
     expect(aeis?.ptContactHours).toBe("NA");
   });
-  it("CME course has empty ftContactHours", () => {
-    const cme = useProfileOfPeiStore.getState().coursesOffered.find((c) => c.abbreviation === "CME");
-    expect(cme?.ftContactHours).toBe("");
+  it("E-Learning variants have empty ftContactHours", () => {
+    const cgme = useProfileOfPeiStore.getState().coursesOffered.find((c) => c.abbreviation === "CGM-E");
+    expect(cgme?.ftContactHours).toBe("");
   });
   it("CEL course has empty ptContactHours", () => {
     const cel = useProfileOfPeiStore.getState().coursesOffered.find((c) => c.abbreviation === "CEL");
