@@ -438,7 +438,7 @@ async function runLiveFolderAuditBatch(
 3. SYSTEMS & OUTCOMES (the desired outcomes derived from that implementation). systemsOutcomes.status: "Evident" if the desired outcomes/results are actually produced, "Limited" if outcomes are limited, "Not evident" if none.
 4. REVIEW (evaluation of the appropriateness, relevance and effectiveness of the approach and process for continual improvement). review.status: "Evident" if there is a real review with improvement action, "Not evident" otherwise.
 Each "note" must be a critical AUDITOR ANALYSIS, not a description or summary of the document. Never merely restate what the document contains. For approach.note: judge HOW WELL the documented approach meets THIS requirement — name specifically which Describe/Show expectations it covers and which it omits or addresses only weakly, say whether it is genuinely specific to this institution or boilerplate/generic, whether it is sustainable (repeatable, with named owners and timing) or ad hoc, and end with ONE concrete improvement the institution should make. For processes/systemsOutcomes/review notes: state what evidence WOULD prove the dimension and what is actually missing, not a paraphrase of any text found. A note that only describes the document's contents is a failure — write the auditor's judgement of its adequacy and gaps.
-For EVERY non-empty positive claim (i.e. status is not "Not evident"), cite the specific chunk ID(s) from the document headers (e.g. "C001", "C002") in "sourceChunkIds" on that dimension. If no chunk directly supports a positive status, leave sourceChunkIds as an empty array — do NOT invent chunk IDs. Also populate the top-level "sources" array with file paths for backward compatibility. Cross-check file types: if a file in the POLICY & PROCEDURE section looks like an operational record, log, attendance sheet, minutes or filled-in form (not a policy/SOP/procedure/plan/framework), or a file in the ACTUAL EVIDENCE section looks like a pure undated policy document with no implementation records, add a one-sentence warning per problematic file to "folderWarnings" (e.g. "Policy folder: 'HR_Attendance_Log_Jan.xlsx' appears to be an attendance record, not a procedure — move to Actual Evidence"). Also flag evidence-timeliness issues: documents dated within 4 weeks of audit, records that don't span the full review period, and any claims about outcomes that lack a stated survey response rate.${STRICTNESS_CLAUSE[strictness] || ""}${buildSystemPrompt("evidenceReview", null, "runLiveFolderAuditBatch")}`;
+For EVERY non-empty positive claim (i.e. status is not "Not evident"), cite the specific chunk ID(s) from the document headers (e.g. "C001", "C002") in "sourceChunkIds" on that dimension. If no chunk directly supports a positive status, leave sourceChunkIds as an empty array — do NOT invent chunk IDs. Also populate the top-level "sources" array with file paths for backward compatibility. Cross-check file types: if a file in the POLICY & PROCEDURE section looks like an operational record, log, attendance sheet, minutes or filled-in form (not a policy/SOP/procedure/plan/framework), or a file in the ACTUAL EVIDENCE section looks like a pure undated policy document with no implementation records, add a one-sentence warning per problematic file to "folderWarnings" (e.g. "Policy folder: 'HR_Attendance_Log_Jan.xlsx' appears to be an attendance record, not a procedure — move to Actual Evidence"). Also flag evidence-timeliness issues: documents dated within 4 weeks of audit, records that don't span the full review period, and any claims about outcomes that lack a stated survey response rate.${STRICTNESS_CLAUSE[strictness] || ""}${buildSystemPrompt("evidenceReview", null, "runLiveFolderAuditBatch", opts.criterionId)}`;
   const challengeRule = opts.challenge
     ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote approach.status from "Meeting" to "Beginning" unless the documented approach is genuinely specific and sustainable, and demote processes.status unless implementation is explicitly evidenced.`
     : "";
@@ -853,7 +853,7 @@ export async function runStagedPolicyAudit(
 "No" = the policy document does not address this requirement at all.
 
 IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${buildSystemPrompt("evidenceReview", null, "runStagedPolicyAudit")}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${buildSystemPrompt("evidenceReview", null, "runStagedPolicyAudit", opts.criterionId)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -921,7 +921,7 @@ export async function runStagedEvidenceAudit(
 "No" = no implementation evidence in these documents for this requirement.
 
 IMPORTANT: A policy document, SOP, or procedure does NOT count as implementation evidence, even if it is filed in the evidence folder. Only actual records of doing something count.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${buildSystemPrompt("evidenceReview", null, "runStagedEvidenceAudit")}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${buildSystemPrompt("evidenceReview", null, "runStagedEvidenceAudit", opts.criterionId)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -987,7 +987,7 @@ outcomeEvident: true if there is actual outcome data, KPIs, results, trends, sur
 
 reviewEvident: true if there are records of a formal review of this requirement's effectiveness — meeting minutes with agenda item, management review records, improvement actions triggered by data review, or evaluation reports. A policy that says "we will review annually" is NOT evidence of a review having happened.
 
-Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${buildSystemPrompt("evidenceReview", null, "runStagedOutcomeReviewAudit")}${domainBlock}
+Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${buildSystemPrompt("evidenceReview", null, "runStagedOutcomeReviewAudit", opts.criterionId)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;
