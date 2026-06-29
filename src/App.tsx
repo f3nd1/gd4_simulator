@@ -17,6 +17,7 @@ import { Interview } from "./pages/Interview";
 import { Findings } from "./pages/Findings";
 import { AFIClosure } from "./pages/AFIClosure";
 import { AIReview } from "./pages/AIReview";
+import { AIDebugLog } from "./pages/AIDebugLog";
 import { HumanReview } from "./pages/HumanReview";
 import { ReAudit } from "./pages/ReAudit";
 import { ManagementReview } from "./pages/ManagementReview";
@@ -54,6 +55,7 @@ export default function App() {
           <Route path="/findings" element={<Findings />} />
           <Route path="/afi-closure" element={<AFIClosure />} />
           <Route path="/ai-review" element={<AIReview />} />
+          <Route path="/ai-debug" element={<AIDebugLog />} />
           <Route path="/human-review" element={<HumanReview />} />
           <Route path="/re-audit" element={<ReAudit />} />
           {/* Version History merged into Draft Workspace; keep the old path working. */}

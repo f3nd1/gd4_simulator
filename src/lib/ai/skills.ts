@@ -133,6 +133,7 @@ const SEP = "\n\n---\n\n";
  * @param module   Which action type is being performed (determines MODULE skills).
  * @param fileType Optional: "scanned" or "spreadsheet" — adds the matching
  *                 file-type skill on top of the module set.
+ * @param fnName   Optional: calling function name — written to the AI Debug Log in DEV.
  * @returns        A string starting with "\n\n## Auditor knowledge base…" or ""
  *                 if no skills apply.
  *
@@ -140,7 +141,7 @@ const SEP = "\n\n---\n\n";
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("findingWriter");
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("evidenceReview", "spreadsheet");
  */
-export function buildSystemPrompt(module: SkillModule, fileType?: FileType): string {
+export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string): string {
   const moduleSkills = MODULE_SKILLS[module];
 
   // Capped skills: BASE + module capped skills, each truncated to SKILL_CAP chars.
@@ -157,7 +158,17 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType): str
   const allDocs = [...cappedDocs, ...uncappedDocs].filter(Boolean);
   if (allDocs.length === 0) return "";
 
-  return `\n\n## Auditor knowledge base (apply this expertise to your assessment)\n\n${allDocs.join(SEP)}`;
+  const result = `\n\n## Auditor knowledge base (apply this expertise to your assessment)\n\n${allDocs.join(SEP)}`;
+
+  // Dev-only: log each buildSystemPrompt() call to the AI Debug Log page.
+  if (import.meta.env.DEV && fnName) {
+    // Lazy import to avoid pulling Zustand into non-React contexts in production.
+    import("../../store/useAIDebugLogStore").then(({ useAIDebugLogStore }) => {
+      useAIDebugLogStore.getState().addEntry(fnName, module, result);
+    });
+  }
+
+  return result;
 }
 
 // ─── Convenience: inject a one-off domain expertise block ────────────────────
