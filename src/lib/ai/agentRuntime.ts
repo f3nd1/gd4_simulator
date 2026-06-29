@@ -144,7 +144,7 @@ STRICT RULES — violations cause your output to be discarded:
 2. Do NOT add generic internal-audit checks (e.g. "check if the process is effective").
 3. Do NOT add "good practice" items unless those exact words appear in the official GD4 wording.
 4. Do NOT infer extra requirements from PEI context or your general knowledge.
-5. Rewrite each source point as a clear, unambiguous audit instruction — preferred forms: "Verify that the institution has [GD4 wording]." / "Check records showing [official requirement]." / "Confirm evidence of [expected evidence item]."
+5. The text field of each checklist line must use the exact wording from the source point — word for word. Do NOT rephrase, summarise, or rewrite. Copy the source text directly into the text field. The only permitted prefix is "Verify that:" or "Confirm evidence of:" when it aids clarity, but the remainder must be verbatim source text.
 6. Avoid creating multiple nearly-identical lines for the same source point; one clear line per source point.
 7. The sourceRef must be the exact ref string from the source point (e.g. "1.1.1.DS1.a"). The sourceText must contain verbatim text from that source point. Empty sourceText or sourceRef invalidates the line.
 
