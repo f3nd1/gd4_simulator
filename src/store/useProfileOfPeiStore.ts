@@ -55,7 +55,7 @@ United Ceres College (UCC) is a Private Education Institution (PEI) registered w
 
 **Key facts:**
 - Registered name: United Ceres College Pte. Ltd.
-- Registered address: 51 Anson Road, #05-52 Anson Centre, Singapore 079904
+- Registered address: 37 Middle Road, UWEEI Building, #05-00, Singapore 188946
 - CPE Registration No.: [to be inserted]
 - EduTrust Certification: Certified (4-year)
 - ERF Registration: Registered
@@ -180,10 +180,13 @@ export const useProfileOfPeiStore = create<ProfileOfPeiState & ProfileOfPeiActio
       backgroundMarkdown: SEED_BACKGROUND,
       erfEduTrustStatus: [
         { id: "e1", type: "EduTrust Certification", status: "Certified (4-year)", expiryDate: "", remarks: "Awarded by CPE" },
-        { id: "e2", type: "ERF Registration", status: "Registered", expiryDate: "", remarks: "Committee for Private Education" },
+        { id: "e2", type: "ERF Registration (No. 201933634H)", status: "Registered", expiryDate: "08/12/2026", remarks: "Valid from 09/12/2022 to 08/12/2026" },
         { id: "e3", type: "CPE Registration", status: "Registered", expiryDate: "", remarks: "" },
         { id: "e4", type: "Fee Protection Scheme (FPS)", status: "In place", expiryDate: "", remarks: "Insurance scheme provider" },
         { id: "e5", type: "Medical Insurance", status: "In place", expiryDate: "", remarks: "For all student pass holders" },
+        { id: "e6", type: "ISO 27001:2022 Certification", status: "Certified", expiryDate: "", remarks: "Information security management" },
+        { id: "e7", type: "bizSAFE Level 3", status: "Attained", expiryDate: "", remarks: "" },
+        { id: "e8", type: "Data Protection Assured (DPA)", status: "Attained", expiryDate: "", remarks: "PDPC scheme" },
       ],
       keyPersonnel: {
         shareholders: [
@@ -205,12 +208,29 @@ export const useProfileOfPeiStore = create<ProfileOfPeiState & ProfileOfPeiActio
         ],
       },
       facilities: {
-        mainPremisesAddress: "51 Anson Road, Anson Centre",
-        unitNumber: "#05-52",
-        postalCode: "079904",
-        sharedPremisesStatus: "Sole occupier of rented unit within a commercial building",
-        facilitiesSummary: "Please update from https://unitedceres.edu.sg/campus-and-facilities/ — classrooms, computer labs, student lounge, admin offices, etc.",
-        remarks: "",
+        mainPremisesAddress: "37 Middle Road, UWEEI Building",
+        unitNumber: "#05-00",
+        postalCode: "188946",
+        sharedPremisesStatus: "Sole occupier of rented floor within commercial building",
+        facilitiesSummary: `Strategically located near the Central Business District, directly across from the Singapore National Library.
+
+**Classrooms / Teaching Rooms:**
+
+| Room | Floor Area (m²) | Seating Capacity |
+|---|---|---|
+| Room 1 | 30.50 | 20 |
+| Room 2 | 22.50 | 20 |
+| Room 4 | 37.83 | 25 |
+
+**Other Spaces:**
+- Student Lounge — rest and self-study area for students
+- Hallway — circulation and common area
+
+**Equipment:** Each classroom is equipped with teaching equipment (projectors/screens, whiteboards) and configured for a comfortable learning environment. The college also maintains learning materials and consultation spaces to support learners and educators.
+
+**Telephone:** (65) 8699 3609
+**Email:** enquiry@unitedceres.edu.sg`,
+        remarks: "Certifications in place: ISO 27001:2022 (information security), bizSAFE Level 3, Data Protection Assured (PDPC)",
       },
       financialHealthMarkdown: SEED_FINANCIAL,
       coursesOffered: SEED_COURSES,
