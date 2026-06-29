@@ -6,6 +6,7 @@ import { useAllFindings } from "../hooks/useAllFindings";
 import { buildFinalReport, type ItemReport } from "../lib/finalReport";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
+import { buildSystemPrompt } from "../lib/ai/skills";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import { composeSchoolContext } from "../store/useWorkspaceStore";
@@ -41,7 +42,7 @@ export function FinalReport() {
     try {
       const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(schoolContext) });
       const sys =
-        "You are writing the executive summary of a GD4 internal audit readiness report for a Singapore PEI. Be concise, specific and honest — do not soften gaps. Respond with JSON only: {\"summary\": string, \"criterionNarratives\": Record<string, string>}. The summary should be 4-6 sentences covering: overall readiness, highest-risk regulatory findings (Category A), strongest criteria, most critical gap to close, and whether 4-Year (Star) is realistically attainable from the current position. For criterionNarratives, write one specific sentence per criterion (C1–C7) stating its band, what's strong, and what the key gap is.";
+        "You are writing the executive summary of a GD4 internal audit readiness report for a Singapore PEI. Be concise, specific and honest — do not soften gaps. Respond with JSON only: {\"summary\": string, \"criterionNarratives\": Record<string, string>}. The summary should be 4-6 sentences covering: overall readiness, highest-risk regulatory findings (Category A), strongest criteria, most critical gap to close, and whether 4-Year (Star) is realistically attainable from the current position. For criterionNarratives, write one specific sentence per criterion (C1–C7) stating its band, what's strong, and what the key gap is." + buildSystemPrompt("bandRecommend");
 
       // Build richer user prompt with Category A/B findings
       const catAFindings = findings
