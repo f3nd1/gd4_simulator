@@ -189,7 +189,7 @@ function labelSkill(raw: string, content: string): string {
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("findingWriter");
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("evidenceReview", "spreadsheet");
  */
-export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string, criterionId?: string): string {
+export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string, criterionId?: string, criterionSkillContent?: string): string {
   const moduleSkills = MODULE_SKILLS[module];
 
   // Capped skills: BASE + module capped skills, each truncated to SKILL_CAP chars.
@@ -212,8 +212,11 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType | nul
   if (import.meta.env.DEV && fnName) {
     // Lazy import to avoid pulling Zustand into non-React contexts in production.
     const criterionSkill = criterionFilenameFor(criterionId);
+    const criterionBlock = criterionSkillContent?.trim()
+      ? `\n\n=== CRITERION SKILL: ${criterionSkill ?? "unknown"} ===\n${criterionSkillContent.trim()}\n=== END CRITERION SKILL ===`
+      : "";
     import("../../store/useAIDebugLogStore").then(({ useAIDebugLogStore }) => {
-      useAIDebugLogStore.getState().addEntry(fnName, module, result, criterionSkill);
+      useAIDebugLogStore.getState().addEntry(fnName, module, result + criterionBlock, criterionSkill);
     });
   }
 
