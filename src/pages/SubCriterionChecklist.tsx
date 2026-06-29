@@ -177,7 +177,7 @@ function EvidenceGapPanel({ generic, specific, req, itemId }: {
         )
       )}
       <p style={{ fontSize: 10.5, color: "#94a3b8", margin: "8px 0 0" }}>
-        Maturity from Layer 1 (G1–G4) · gap counts from Layer 2 specific lines · internal simulation only.
+        Maturity from G1–G4 generic lines (Maturity assessment) · gap counts from specific testable lines · internal simulation only.
       </p>
     </Card>
   );
@@ -219,6 +219,7 @@ export function SubCriterionChecklist() {
   const [reuseFrom, setReuseFrom] = useState<{ lineId: string; evidenceId: string } | null>(null);
   const [reuseTargetItem, setReuseTargetItem] = useState("");
   const [reuseTargetLine, setReuseTargetLine] = useState("");
+  const [maturityOpen, setMaturityOpen] = useState(false);
 
   const req = GD4_REQUIREMENTS.find((r) => r.id === selectedId)!;
   const sub = GD4_SUB_CRITERIA.find((s) => s.id === req.subCriterionId)!;
@@ -454,27 +455,35 @@ export function SubCriterionChecklist() {
             </div>
           )}
 
-          <h4 style={{ fontSize: 12.5, margin: "12px 0 6px" }}>Layer 1 · Generic maturity check</h4>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
-            {generic.map((g) => (
-              <div key={g.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 9 }}>
-                <div style={{ fontSize: 11.5, fontWeight: 700 }}>{g.id} · {g.lens}</div>
-                <div style={{ fontSize: 11, color: "#6b7280", margin: "3px 0 6px" }}>{g.text}</div>
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <select
-                    value={g.status}
-                    onChange={(e) => setGenericStatus(selectedId, g.id, e.target.value as GenericChecklistLine["status"])}
-                    style={{ ...inputStyle, width: "auto", padding: "4px 6px" }}
-                  >
-                    {GENERIC_OPTIONS.map((o) => <option key={o}>{o}</option>)}
-                  </select>
-                  <Pill s={statusTone(g.status)}>{g.status}</Pill>
-                </div>
+          <div style={{ marginBottom: 12 }}>
+            <button
+              onClick={() => setMaturityOpen((o) => !o)}
+              style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#6b7280", background: "transparent", border: "none", padding: "4px 0", display: "flex", alignItems: "center", gap: 5 }}
+            >
+              <span style={{ fontSize: 10, color: "#94a3b8" }}>{maturityOpen ? "▾" : "▸"}</span>
+              Maturity assessment (advanced)
+            </button>
+            {maturityOpen && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8, marginTop: 8 }}>
+                {generic.map((g) => (
+                  <div key={g.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 9 }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 700 }}>{g.id} · {g.lens}</div>
+                    <div style={{ fontSize: 11, color: "#6b7280", margin: "3px 0 6px" }}>{g.text}</div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <select
+                        value={g.status}
+                        onChange={(e) => setGenericStatus(selectedId, g.id, e.target.value as GenericChecklistLine["status"])}
+                        style={{ ...inputStyle, width: "auto", padding: "4px 6px" }}
+                      >
+                        {GENERIC_OPTIONS.map((o) => <option key={o}>{o}</option>)}
+                      </select>
+                      <Pill s={statusTone(g.status)}>{g.status}</Pill>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-
-          <h4 style={{ fontSize: 12.5, margin: "16px 0 6px" }}>Layer 2 · Specific testable lines</h4>
           <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <button
               onClick={() => generateSpecific(selectedId)}
@@ -502,7 +511,7 @@ export function SubCriterionChecklist() {
             {specific.length > 0 && (
               <button
                 onClick={() => {
-                  if (confirm(`Remove all ${specific.length} Layer 2 line(s) for ${selectedId}? This clears their statuses and attached evidence too, so you can regenerate from scratch.`)) clearSpecificLines(selectedId);
+                  if (confirm(`Remove all ${specific.length} checklist line(s) for ${selectedId}? This clears their statuses and attached evidence too, so you can regenerate from scratch.`)) clearSpecificLines(selectedId);
                 }}
                 style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #e3b7b0", background: "#fff", color: "#b23121", marginLeft: "auto" }}
               >
@@ -847,7 +856,7 @@ export function SubCriterionChecklist() {
               )}
             </>
           ) : (
-            <p style={{ fontSize: 12, color: "#94a3b8" }}>No band yet — add at least one specific (Layer 2) line for this item to compute one.</p>
+            <p style={{ fontSize: 12, color: "#94a3b8" }}>No band yet — add at least one specific checklist line for this item to compute one.</p>
           )}
           <div style={{ marginTop: 10 }}>
             {itemAudit.length === 0 ? (
