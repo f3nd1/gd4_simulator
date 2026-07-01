@@ -598,63 +598,71 @@ export function SubCriterionChecklist() {
             const needsFinding = l.status === "Not met" || (l.status !== "Not Applicable" && l.status !== "Not Started" && suff === "Missing");
             const draft = needsFinding ? buildDraftFinding(req, l) : null;
             const expanded = expandedLine === l.id;
-            const truncated = l.text.length > 80 ? l.text.slice(0, 80) + "…" : l.text;
             const ref = l.sourceType && l.generatedBy === "ai" ? sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined) : l.clause || null;
             return (
-              <div key={l.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 7 }}>
-                {/* Compact row — click anywhere (outside the controls) to expand */}
+              <div key={l.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 6, overflow: "hidden" }}>
+                {/* Row 1 — full text + ref/APSR pills — click to expand evidence panel */}
                 <div
                   onClick={() => toggleEvidence(l.id)}
-                  style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: 9, cursor: "pointer" }}
+                  style={{ display: "flex", gap: 7, alignItems: "flex-start", padding: "8px 10px 5px", cursor: "pointer", background: expanded ? "#fafbff" : "#fff" }}
                 >
-                  <span style={{ color: "#94a3b8", fontSize: 12 }}>{expanded ? "▾" : "▸"}</span>
+                  <span style={{ color: "#94a3b8", fontSize: 11, marginTop: 2, flexShrink: 0 }}>{expanded ? "▾" : "▸"}</span>
                   {l.afiTag && <Pill s="critical">AFI {l.afiTag}</Pill>}
-                  <span style={{ fontSize: 12, flex: 1, minWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.text}>{truncated}</span>
-                  {ref && (
-                    <span
-                      style={{ fontSize: 10, color: "#a8a29e", fontFamily: "ui-monospace,monospace", cursor: l.sourceText ? "help" : "default" }}
-                      title={l.sourceText ? `Source: "${l.sourceText}"` : undefined}
-                    >
-                      {ref}
-                    </span>
-                  )}
-                  {l.apsrDimension && <Pill s="neutral">{l.apsrDimension}</Pill>}
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }} onClick={(e) => e.stopPropagation()}>
-                    <select
-                      value={l.status}
-                      onChange={(e) => setSpecificStatus(selectedId, l.id, e.target.value as SpecificLineStatus)}
-                      style={{ ...inputStyle, width: "auto", padding: "4px 6px" }}
-                    >
-                      {SPECIFIC_OPTIONS.map((o) => <option key={o}>{o}</option>)}
-                    </select>
-                    <Pill s={statusTone(l.status)}>{l.status}</Pill>
-                    {l.generatedBy === "ai" && (
-                      <ThumbsButtons
-                        onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: l.id, aiOutput: `AI verdict: ${l.status}`, humanDecision: `Accepted: ${l.status}`, changed: false, decisionType: "Accepted", reason: "" })}
-                        onReject={() => setLineFeedback({ id: l.id, text: l.text })}
-                      />
+                  <span style={{ fontSize: 12.5, flex: 1, lineHeight: 1.45, color: "#1e293b" }}>{l.text}</span>
+                  <div style={{ display: "flex", gap: 5, alignItems: "center", flexShrink: 0, marginTop: 1 }}>
+                    {ref && (
+                      <span
+                        style={{ fontSize: 9.5, color: "#a8a29e", fontFamily: "ui-monospace,monospace", background: "#f1f5f9", borderRadius: 4, padding: "1px 5px", cursor: l.sourceText ? "help" : "default" }}
+                        title={l.sourceText ? `Source: "${l.sourceText}"` : undefined}
+                      >
+                        {ref}
+                      </span>
                     )}
-                    {l.status !== "Not Applicable" && (
-                      l.evidence.length > 0
-                        ? <Pill s={sufficiencyTone(suff)}>Evidence ({l.evidence.length})</Pill>
-                        : <Pill s="critical">Evidence: Missing</Pill>
-                    )}
-                    {draft && (
-                      l.draftFinding?.savedFindingId ? (
-                        <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none" }}>View finding →</Link>
-                      ) : (
-                        <button
-                          onClick={() => toggleEvidence(l.id)}
-                          style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#9a6b15", border: "none", background: "transparent", padding: "2px 4px" }}
-                        >
-                          View finding
-                        </button>
-                      )
-                    )}
-                    <button onClick={() => removeSpecificLine(selectedId, l.id)} title="Remove line" style={{ cursor: "pointer", fontSize: 11, color: "#b23121", border: "none", background: "transparent" }}>
-                      ✕
-                    </button>
+                    {l.apsrDimension && <Pill s="neutral">{l.apsrDimension}</Pill>}
                   </div>
+                </div>
+                {/* Row 2 — controls (smaller, stop click propagation) */}
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "4px 10px 7px 28px", borderTop: "1px solid #f1f5f9", fontSize: 11 }}
+                >
+                  <select
+                    value={l.status}
+                    onChange={(e) => setSpecificStatus(selectedId, l.id, e.target.value as SpecificLineStatus)}
+                    style={{ ...inputStyle, width: "auto", padding: "3px 5px", fontSize: 11 }}
+                  >
+                    {SPECIFIC_OPTIONS.map((o) => <option key={o}>{o}</option>)}
+                  </select>
+                  <Pill s={statusTone(l.status)}>{l.status}</Pill>
+                  {l.generatedBy === "ai" && (
+                    <ThumbsButtons
+                      onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: l.id, aiOutput: `AI verdict: ${l.status}`, humanDecision: `Accepted: ${l.status}`, changed: false, decisionType: "Accepted", reason: "" })}
+                      onReject={() => setLineFeedback({ id: l.id, text: l.text })}
+                    />
+                  )}
+                  {l.status !== "Not Applicable" && (
+                    <button
+                      onClick={() => toggleEvidence(l.id)}
+                      style={{ cursor: "pointer", fontSize: 11, border: "none", background: "transparent", padding: 0, color: suff === "Present" ? "#15803d" : suff === "Weak" ? "#b45309" : "#b23121", fontWeight: 600 }}
+                    >
+                      {l.evidence.length > 0 ? `Evidence (${l.evidence.length})` : "Evidence: Missing"}
+                    </button>
+                  )}
+                  {draft && (
+                    l.draftFinding?.savedFindingId ? (
+                      <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none" }}>View finding →</Link>
+                    ) : (
+                      <button
+                        onClick={() => toggleEvidence(l.id)}
+                        style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#9a6b15", border: "none", background: "transparent", padding: 0 }}
+                      >
+                        View finding →
+                      </button>
+                    )
+                  )}
+                  <button onClick={() => removeSpecificLine(selectedId, l.id)} title="Remove line" style={{ cursor: "pointer", fontSize: 12, color: "#b23121", border: "none", background: "transparent", marginLeft: "auto", padding: "0 2px" }}>
+                    ×
+                  </button>
                 </div>
 
                 {expanded && (
