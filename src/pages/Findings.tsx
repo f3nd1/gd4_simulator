@@ -65,6 +65,7 @@ export function Findings() {
   const closures = useWorkspaceStore((s) => s.closures);
   const addCustomFinding = useWorkspaceStore((s) => s.addCustomFinding);
   const removeCustomFinding = useWorkspaceStore((s) => s.removeCustomFinding);
+  const clearAllFindings = useWorkspaceStore((s) => s.clearAllFindings);
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
   const raiseAllUnmetFindings = useChecklistModuleStore((s) => s.raiseAllUnmetFindings);
   const scored = useScored();
@@ -455,10 +456,18 @@ export function Findings() {
         <span style={{ fontSize: 12, color: "#6b7280" }}>
           {scored.openAFIs} of {allFindings.length} still open
         </span>
+        {allFindings.length > 0 && (
+          <button
+            onClick={() => { if (confirm(`Remove all ${allFindings.length} finding${allFindings.length !== 1 ? "s" : ""} from the register? This cannot be undone.`)) clearAllFindings(); }}
+            style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}
+          >
+            Remove all
+          </button>
+        )}
         <button
           onClick={generateFromGaps}
           title="Turn every Not-met / unverified checklist line into a finding (deduped). Runs automatically after each folder audit too."
-          style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #c9a24a", background: "#fbf3df", color: "#7a5c12", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}
+          style={{ cursor: "pointer", border: "1px solid #c9a24a", background: "#fbf3df", color: "#7a5c12", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}
         >
           Generate from gaps
         </button>

@@ -124,7 +124,7 @@ export function AFIClosure() {
               <b style={{ color: "#ce9e5d", minWidth: 30 }}>{f.id}</b>
               <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#6b7280", minWidth: 38 }}>{f.gd4ItemId}</span>
               <span style={{ flex: 1, fontSize: 12.5 }}>{f.issue}</span>
-              {f.createdAt && <span style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>{new Date(f.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" })}</span>}
+              {f.createdAt && <span style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>{new Date(f.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>}
               <Pill s={f.severity === "Critical" || f.severity === "High" ? "critical" : f.severity === "Medium" ? "medium" : "neutral"}>{f.severity}</Pill>
               {c.human === "Accepted" ? (
                 <Pill s="good">closed</Pill>
