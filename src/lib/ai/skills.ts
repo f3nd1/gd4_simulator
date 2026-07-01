@@ -31,6 +31,17 @@ function criterionFilenameFor(anyId: string | undefined | null): string | undefi
   return CRITERION_FILENAMES[seg];
 }
 
+// ─── Calibration example type (mirrors CalibrationExample in types/index.ts) ─
+// Defined locally here so skills.ts does not import from the store layer.
+
+export type SkillCalibrationExample = {
+  module: string;
+  field?: string;
+  aiOutput: string;
+  humanCorrection: string;
+  reason: string;
+};
+
 // ─── Raw imports ────────────────────────────────────────────────────────────
 
 import externalAuditorSkill        from "../../data/skills/external-auditor.md?raw";
@@ -189,7 +200,7 @@ function labelSkill(raw: string, content: string): string {
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("findingWriter");
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("evidenceReview", "spreadsheet");
  */
-export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string, criterionId?: string, criterionSkillContent?: string): string {
+export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string, criterionId?: string, criterionSkillContent?: string, calibrationExamples?: SkillCalibrationExample[]): string {
   const moduleSkills = MODULE_SKILLS[module];
 
   // Capped skills: BASE + module capped skills, each truncated to SKILL_CAP chars.
@@ -204,9 +215,24 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType | nul
   const uncappedDocs = moduleSkills.uncapped.map((d) => labelSkill(d, d.trim()));
 
   const allDocs = [...cappedDocs, ...uncappedDocs].filter(Boolean);
-  if (allDocs.length === 0) return "";
+  if (allDocs.length === 0 && (!calibrationExamples || calibrationExamples.length === 0)) return "";
 
-  const result = `\n\n## Auditor knowledge base (apply this expertise to your assessment)\n\n${allDocs.join(SEP)}`;
+  const skillsBlock = allDocs.length > 0
+    ? `\n\n## Auditor knowledge base (apply this expertise to your assessment)\n\n${allDocs.join(SEP)}`
+    : "";
+
+  // Calibration block: examples of how this auditor has previously corrected AI outputs.
+  // Injected so the model can self-calibrate toward this auditor's standards.
+  let calibrationBlock = "";
+  if (calibrationExamples && calibrationExamples.length > 0) {
+    const lines = calibrationExamples.map((ex) => {
+      const fieldPart = ex.field ? `\nField: ${ex.field}` : "";
+      return `---\nModule: ${ex.module}${fieldPart}\nAI said: ${ex.aiOutput.slice(0, 300)}\nAuditor changed to: ${ex.humanCorrection.slice(0, 300)}\nReason: ${ex.reason}`;
+    }).join("\n");
+    calibrationBlock = `\n\n=== CALIBRATION: How this auditor has corrected similar AI outputs ===\n${lines}\n===`;
+  }
+
+  const result = skillsBlock + calibrationBlock;
 
   // Dev-only: log each buildSystemPrompt() call to the AI Debug Log page.
   if (import.meta.env.DEV && fnName) {

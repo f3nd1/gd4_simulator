@@ -731,6 +731,19 @@ export type HumanDecisionEntry = {
   field?: string;
 };
 
+export type CalibrationExample = {
+  id: string;
+  timestamp: string;
+  module: HumanDecisionModule;
+  field?: string;
+  aiInput: string;
+  aiOutput: string;
+  humanCorrection: string;
+  reason: string;
+  used: boolean;
+  included: boolean;
+};
+
 export type ManagementReviewItem = {
   id: string;
   auditCycleId: string;
