@@ -223,8 +223,28 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           }))
         ),
 
-      confirmGenerated: (itemId) =>
-        set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: [...e.specific, ...(e.pendingGenerated || [])], pendingGenerated: [] }))),
+      confirmGenerated: (itemId) => {
+        const pending = get().entries[itemId]?.pendingGenerated || [];
+        const existing = get().entries[itemId]?.specific || [];
+        const aiLines = pending.filter((l) => l.generatedBy === "ai");
+        if (aiLines.length > 0) {
+          const confirmedIds = new Set(pending.map((l) => l.id));
+          const removedCount = aiLines.filter((l) => !confirmedIds.has(l.id)).length;
+          useWorkspaceStore.getState().logHumanDecision({
+            module: "Checklist Line Edit",
+            subjectId: itemId,
+            aiOutput: `AI generated ${aiLines.length} line(s): ${aiLines.map((l) => l.text.slice(0, 60)).join("; ")}`,
+            humanDecision: `Confirmed ${pending.length} line(s)${removedCount > 0 ? `, removed ${removedCount} AI line(s)` : ""}`,
+            changed: removedCount > 0 || pending.some((l, i) => l.text !== aiLines[i]?.text),
+            decisionType: removedCount > 0 ? "Edited" : "Accepted",
+            reason: "",
+            field: itemId,
+          });
+        }
+        const allIds = new Set(existing.map((l) => l.id));
+        const deduped = pending.filter((l) => !allIds.has(l.id));
+        set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: [...e.specific, ...deduped], pendingGenerated: [] })));
+      },
 
       discardGenerated: (itemId) => set((s) => mapEntry(s, itemId, (e) => ({ ...e, pendingGenerated: [] }))),
 
@@ -325,12 +345,28 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           )
         ),
 
-      updateEvidence: (itemId, lineId, evidenceId, patch) =>
+      updateEvidence: (itemId, lineId, evidenceId, patch) => {
+        if ("sufficiency" in patch) {
+          const ev = get().entries[itemId]?.specific.find((l) => l.id === lineId)?.evidence.find((e) => e.id === evidenceId);
+          if (ev && ev.sufficiency !== patch.sufficiency) {
+            useWorkspaceStore.getState().logHumanDecision({
+              module: "Evidence Sufficiency",
+              subjectId: itemId,
+              aiOutput: `AI assessed: ${ev.sufficiency ?? "unset"}`,
+              humanDecision: patch.sufficiency as string,
+              changed: true,
+              decisionType: "Overridden",
+              reason: "",
+              field: lineId,
+            });
+          }
+        }
         set((s) =>
           mapEntry(s, itemId, (e) =>
             mapLine(e, lineId, (l) => ({ ...l, evidence: l.evidence.map((ev) => (ev.id === evidenceId ? { ...ev, ...patch } : ev)) }))
           )
-        ),
+        );
+      },
 
       removeEvidence: (itemId, lineId, evidenceId) =>
         set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, evidence: l.evidence.filter((ev) => ev.id !== evidenceId) })))),

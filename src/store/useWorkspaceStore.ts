@@ -19,6 +19,8 @@ import type {
   Confidence,
   HumanDecisionEntry,
   CalibrationExample,
+  CalibrationMemory,
+  CalibrationMemoryStatus,
   Finding,
   DriveAccessStatus,
   ApsrBreakdown,
@@ -245,6 +247,7 @@ export type WorkspaceState = {
   aiReviewLog: AIReviewLogEntry[];
   humanDecisionLog: HumanDecisionEntry[];
   calibrationExamples: CalibrationExample[];
+  calibrationMemories: CalibrationMemory[];
   samples: SampleRecord[];
   interviewQuestions: InterviewQuestion[];
   managementReviewItems: ManagementReviewItem[];
@@ -407,6 +410,10 @@ export type WorkspaceState = {
   logHumanDecision: (entry: Omit<HumanDecisionEntry, "id" | "timestamp">) => void;
   toggleCalibrationIncluded: (id: string) => void;
   markCalibrationUsed: (ids: string[]) => void;
+  addCalibrationMemory: (memory: Omit<CalibrationMemory, "id" | "timestamp" | "usageCount" | "effectivenessScore">) => string;
+  updateMemoryStatus: (id: string, status: CalibrationMemoryStatus) => void;
+  incrementMemoryUsage: (id: string) => void;
+  updateMemoryEffectiveness: (id: string, score: number) => void;
 
   setBusy: (id: string | null) => void;
 
@@ -553,6 +560,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       aiReviewLog: [],
       humanDecisionLog: [],
       calibrationExamples: [],
+      calibrationMemories: [],
       samples: [],
       interviewQuestions: [],
       managementReviewItems: [],
@@ -769,8 +777,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           folders: seedFolders(),
           itemReviews: {},
           aiReviewLog: [],
-      humanDecisionLog: [],
-      calibrationExamples: [],
+          humanDecisionLog: [],
+          calibrationExamples: [],
+          calibrationMemories: [],
           samples: [],
           interviewQuestions: [],
           managementReviewItems: [],
@@ -789,11 +798,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // confirmation, so a stale "Confirmed" badge can never sit next to a
       // Reviewer input showing a different number — the reviewer must
       // explicitly re-confirm (and re-justify if still required) the new value.
-      setReviewerScore: (itemId, value) =>
-        set((s) => ({
-          reviewer: { ...s.reviewer, [itemId]: value },
-          confirmed: s.confirmed[itemId] != null ? { ...s.confirmed, [itemId]: null } : s.confirmed,
-        })),
+      setReviewerScore: (itemId, value) => {
+        const s = get();
+        const aiBand = aiScore(s.evidence[itemId]);
+        if (aiBand !== value) {
+          get().logHumanDecision({
+            module: "Item Scoring",
+            subjectId: itemId,
+            aiOutput: `AI band: ${aiBand}`,
+            humanDecision: `Reviewer band: ${value}`,
+            changed: true,
+            decisionType: "Overridden",
+            reason: s.justify[itemId] || "",
+            field: "band",
+          });
+        }
+        set((s2) => ({
+          reviewer: { ...s2.reviewer, [itemId]: value },
+          confirmed: s2.confirmed[itemId] != null ? { ...s2.confirmed, [itemId]: null } : s2.confirmed,
+        }));
+      },
 
       setJustify: (itemId, value) => set((s) => ({ justify: { ...s.justify, [itemId]: value } })),
 
@@ -1749,6 +1773,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // Run one full audit per document window, then merge best-of across windows.
             let globalBatchDone = 0;
             const auditCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
+            const auditMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
             const windowResults = await Promise.all(
               docWindows.map((docWindow, wi) =>
                 runLiveFolderAudit(lines, docWindow, analysisSettings, {
@@ -1756,6 +1781,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   standard,
                   criterionId: folder.subCriterionId,
                   calibration: auditCalibration,
+                  memories: auditMemories,
                   onBatchProgress: (current, total) => {
                     globalBatchDone++;
                     setProgress("auditing", {
@@ -1788,7 +1814,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (toChallenge.length) {
                 setProgress("auditing", { stageDetail: "Running strict challenge pass…" });
                 try {
-                  const r2 = await runLiveFolderAudit(lines, docWindows[0], analysisSettings, { strictness, standard, criterionId: folder.subCriterionId, challenge: toChallenge, calibration: auditCalibration });
+                  const r2 = await runLiveFolderAudit(lines, docWindows[0], analysisSettings, { strictness, standard, criterionId: folder.subCriterionId, challenge: toChallenge, calibration: auditCalibration, memories: auditMemories });
                   verdicts = r2.verdicts;
                   parseWarnings = [...parseWarnings, ...r2.parseWarnings];
                   folderWarnings = [...new Set([...folderWarnings, ...r2.folderWarnings])];
@@ -2576,11 +2602,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         if (aiSettings.enabled && aiSettings.apiKey) {
           const stagedCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
+          const stagedMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
           // Stage 2: Policy Adequacy Audit
           if (mode === "policy" || mode === "all") {
             setProgress("policy_audit", { stageDetail: `Checking policy coverage for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, { criterionId, calibration: stagedCalibration });
+              const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories });
               policyRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (result.promptSent) stagedPromptSent = result.promptSent;
@@ -2597,7 +2624,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (mode === "evidence" || mode === "all") {
             setProgress("evidence_audit", { stageDetail: `Checking implementation evidence for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, { criterionId, calibration: stagedCalibration });
+              const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories });
               evidenceRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
@@ -2612,7 +2639,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (mode === "all") {
             setProgress("outcome_review", { stageDetail: `Checking outcome data and review records for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, { criterionId, calibration: stagedCalibration });
+              const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories });
               outcomeRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
@@ -3105,6 +3132,28 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ids.includes(c.id) ? { ...c, used: true } : c
           ),
         })),
+
+      addCalibrationMemory: (memory) => {
+        const id = `MEM-${Date.now()}-${++logCounter}`;
+        const mem: CalibrationMemory = {
+          ...memory,
+          id,
+          timestamp: new Date().toISOString(),
+          usageCount: 0,
+          effectivenessScore: null,
+        };
+        set((s) => ({ calibrationMemories: [mem, ...s.calibrationMemories].slice(0, 500) }));
+        return id;
+      },
+
+      updateMemoryStatus: (id, status) =>
+        set((s) => ({ calibrationMemories: s.calibrationMemories.map((m) => m.id === id ? { ...m, status } : m) })),
+
+      incrementMemoryUsage: (id) =>
+        set((s) => ({ calibrationMemories: s.calibrationMemories.map((m) => m.id === id ? { ...m, usageCount: m.usageCount + 1 } : m) })),
+
+      updateMemoryEffectiveness: (id, score) =>
+        set((s) => ({ calibrationMemories: s.calibrationMemories.map((m) => m.id === id ? { ...m, effectivenessScore: score } : m) })),
 
       setBusy: (id) => set({ busy: id }),
     }),

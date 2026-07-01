@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
+import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
@@ -46,10 +47,13 @@ export function Dashboard() {
     starPath: string;
     immediateActions: string[];
   };
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const analysisRef = useRef<HTMLDivElement | null>(null);
+  const [feedbackTarget, setFeedbackTarget] = useState<{ text: string; field: string } | null>(null);
 
   async function runStrategicAnalysis() {
     setAnalysisBusy(true);
@@ -271,7 +275,15 @@ export function Dashboard() {
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Top 3 priorities</div>
               <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12.5, color: "#374151" }}>
-                {analysisResult.priorities.map((p, i) => <li key={i} style={{ marginBottom: 4, lineHeight: 1.5 }}>{p}</li>)}
+                {analysisResult.priorities.map((p, i) => (
+                  <li key={i} style={{ marginBottom: 4, lineHeight: 1.5 }}>
+                    {p}
+                    <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, verticalAlign: "middle" }}>
+                      <button onClick={() => logHumanDecision({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", field: "priorities", aiOutput: p, humanDecision: p, changed: false, decisionType: "Accepted", reason: "" })} title="AI was helpful" style={{ background: "none", border: "1px solid #d1fae5", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#15803d" }}>👍</button>
+                      <button onClick={() => setFeedbackTarget({ text: p, field: "priorities" })} title="AI was wrong" style={{ background: "none", border: "1px solid #fee2e2", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#b91c1c" }}>👎</button>
+                    </span>
+                  </li>
+                ))}
               </ol>
             </div>
           )}
@@ -279,7 +291,15 @@ export function Dashboard() {
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#b45309", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Systemic issues</div>
               <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12.5, color: "#374151" }}>
-                {analysisResult.systemicIssues.map((s, i) => <li key={i} style={{ marginBottom: 4, lineHeight: 1.5 }}>{s}</li>)}
+                {analysisResult.systemicIssues.map((s, i) => (
+                  <li key={i} style={{ marginBottom: 4, lineHeight: 1.5 }}>
+                    {s}
+                    <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, verticalAlign: "middle" }}>
+                      <button onClick={() => logHumanDecision({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", field: "systemicIssues", aiOutput: s, humanDecision: s, changed: false, decisionType: "Accepted", reason: "" })} title="AI was helpful" style={{ background: "none", border: "1px solid #d1fae5", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#15803d" }}>👍</button>
+                      <button onClick={() => setFeedbackTarget({ text: s, field: "systemicIssues" })} title="AI was wrong" style={{ background: "none", border: "1px solid #fee2e2", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#b91c1c" }}>👎</button>
+                    </span>
+                  </li>
+                ))}
               </ul>
             </div>
           )}
@@ -292,7 +312,15 @@ export function Dashboard() {
           {analysisResult.immediateActions.length > 0 && (
             <div style={{ background: "#fef3c7", border: "1px solid #d97706", borderRadius: 8, padding: "8px 12px" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Immediate action</div>
-              {analysisResult.immediateActions.map((a, i) => <div key={i} style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5 }}>{a}</div>)}
+              {analysisResult.immediateActions.map((a, i) => (
+                <div key={i} style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5 }}>
+                  {a}
+                  <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, verticalAlign: "middle" }}>
+                    <button onClick={() => logHumanDecision({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", field: "immediateActions", aiOutput: a, humanDecision: a, changed: false, decisionType: "Accepted", reason: "" })} title="AI was helpful" style={{ background: "none", border: "1px solid #d1fae5", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#15803d" }}>👍</button>
+                    <button onClick={() => setFeedbackTarget({ text: a, field: "immediateActions" })} title="AI was wrong" style={{ background: "none", border: "1px solid #fee2e2", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#b91c1c" }}>👎</button>
+                  </span>
+                </div>
+              ))}
             </div>
           )}
         </Card>
@@ -501,6 +529,20 @@ export function Dashboard() {
           ))}
         </Card>
       )}
+      <FeedbackModal
+        open={feedbackTarget !== null}
+        aiOutput={feedbackTarget?.text ?? ""}
+        module="Cross-Criterion Analysis"
+        onClose={() => setFeedbackTarget(null)}
+        onSubmit={(feedback) => {
+          if (!feedbackTarget) return;
+          logHumanDecision({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", field: feedbackTarget.field, aiOutput: feedbackTarget.text, humanDecision: feedback.correction || feedbackTarget.text, changed: !!feedback.correction, decisionType: "Overridden", reason: feedback.reason });
+          if (!feedback.correct) {
+            addCalibrationMemory({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", context: feedbackTarget.field, aiOutput: feedbackTarget.text, staffCorrection: feedback.correction, keyLearning: `When assessing ${feedbackTarget.field}, prefer "${feedback.correction.slice(0, 100)}" over "${feedbackTarget.text.slice(0, 100)}"`, status: "active", tokenCount: feedbackTarget.text.length + feedback.correction.length });
+          }
+          setFeedbackTarget(null);
+        }}
+      />
     </div>
   );
 }

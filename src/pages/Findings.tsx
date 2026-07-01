@@ -8,6 +8,7 @@ import { useAllFindings } from "../hooks/useAllFindings";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { Card, filterSelectStyle, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
+import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { GOLD, INK } from "../lib/theme";
 import type { Finding, FindingType, Severity, FindingDimension, GroupedFindingDraft } from "../types";
@@ -97,6 +98,9 @@ export function Findings() {
   const aiSettings = useAISettingsStore((s) => s);
   const aiEnabled = aiSettings.enabled && !!aiSettings.apiKey;
   const pushAIReviewLog = useWorkspaceStore((s) => s.pushAIReviewLog);
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const [draftFeedbackOpen, setDraftFeedbackOpen] = useState(false);
+  const [aiDraftOutput, setAiDraftOutput] = useState<string>("");
 
   // Counts by dimension across the whole register, so the procedure-vs-evidence
   // split is visible at a glance above the table.
@@ -163,6 +167,7 @@ export function Findings() {
         promptSent: result.promptSent,
         usage: result.usage,
       });
+      setAiDraftOutput(`OBSERVATION:\n${result.observation}\n\nCRITERIA:\n${result.criteria}\n\nEFFECT:\n${result.effect}`);
       setForm((f) => ({
         ...f,
         observation: result.observation,
@@ -589,6 +594,12 @@ export function Findings() {
                 {draftBusy ? "Drafting…" : "AI draft finding body"}
               </button>
             )}
+            {aiDraftOutput && !draftBusy && (
+              <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, verticalAlign: "middle" }}>
+                <button onClick={() => logHumanDecision({ module: "Finding Observation", subjectId: form.gd4ItemId, field: "observation/criteria/effect", aiOutput: aiDraftOutput, humanDecision: aiDraftOutput, changed: false, decisionType: "Accepted", reason: "" })} title="AI was helpful" style={{ background: "none", border: "1px solid #d1fae5", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#15803d" }}>👍</button>
+                <button onClick={() => setDraftFeedbackOpen(true)} title="AI was wrong" style={{ background: "none", border: "1px solid #fee2e2", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#b91c1c" }}>👎</button>
+              </span>
+            )}
             {draftError && <span style={{ fontSize: 11.5, color: "#b23121" }}>{draftError}</span>}
           </div>
         </Card>
@@ -739,6 +750,15 @@ export function Findings() {
         <div onClick={() => setDetailFinding(null)} style={{ position: "fixed", inset: 0, zIndex: 199, background: "rgba(0,0,0,0.08)" }} />
       )}
     </Card>
+      <FeedbackModal
+        open={draftFeedbackOpen}
+        aiOutput={aiDraftOutput}
+        module="Finding Observation"
+        onClose={() => setDraftFeedbackOpen(false)}
+        onSubmit={(feedback) => {
+          logHumanDecision({ module: "Finding Observation", subjectId: form.gd4ItemId, field: "observation/criteria/effect", aiOutput: aiDraftOutput, humanDecision: feedback.correction || aiDraftOutput, changed: !!feedback.correction, decisionType: "Overridden", reason: feedback.reason });
+        }}
+      />
     </Fragment>
   );
 }

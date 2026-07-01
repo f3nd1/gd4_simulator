@@ -713,9 +713,17 @@ export type HumanDecisionModule =
   | "AFI Closure"
   | "Grouped Finding"
   | "Line Status"
-  | "Closure Drafting";
+  | "Closure Drafting"
+  | "Evidence Intake"
+  | "Evidence Sufficiency"
+  | "Item Scoring"
+  | "Checklist Line Edit"
+  | "Finding Observation"
+  | "Cross-Criterion Analysis"
+  | "Final Report"
+  | "AI Review Log Feedback";
 
-export type HumanDecisionType = "Accepted" | "Edited" | "Overridden";
+export type HumanDecisionType = "Accepted" | "Edited" | "Overridden" | "Dismissed";
 
 export type HumanDecisionEntry = {
   id: string;
@@ -729,6 +737,7 @@ export type HumanDecisionEntry = {
   decisionType: HumanDecisionType;
   reason: string;
   field?: string;
+  memoryId?: string;
 };
 
 export type CalibrationExample = {
@@ -742,6 +751,23 @@ export type CalibrationExample = {
   reason: string;
   used: boolean;
   included: boolean;
+};
+
+export type CalibrationMemoryStatus = "active" | "pending_review" | "archived";
+
+export type CalibrationMemory = {
+  id: string;
+  timestamp: string;
+  module: HumanDecisionModule;
+  subjectId: string;
+  context: string;
+  aiOutput: string;
+  staffCorrection: string;
+  keyLearning: string;
+  status: CalibrationMemoryStatus;
+  usageCount: number;
+  effectivenessScore: number | null;
+  tokenCount: number;
 };
 
 export type ManagementReviewItem = {

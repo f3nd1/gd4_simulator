@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
@@ -14,6 +14,7 @@ import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { Gauge, HBars, VBars, BAND_COLOR, AttainmentLadder } from "../components/ui/charts";
 import { GOLD, INK, bandTone } from "../lib/theme";
+import { FeedbackModal } from "../components/ui/FeedbackModal";
 
 const SEV_TONE: Record<string, string> = { Critical: "critical", High: "critical", Medium: "medium", Low: "progress" };
 
@@ -31,10 +32,26 @@ export function FinalReport() {
   const report = useMemo(() => buildFinalReport(scored, entries, findings, closures), [scored, entries, findings, closures]);
   const a = useMemo(() => buildAnalytics(scored, entries, findings, folders, closures), [scored, entries, findings, folders, closures]);
 
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [aiCriterionNarratives, setAiCriterionNarratives] = useState<Record<string, string> | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [editedSummary, setEditedSummary] = useState("");
+  const [summaryFeedbackOpen, setSummaryFeedbackOpen] = useState(false);
+  const [summarySaved, setSummarySaved] = useState(false);
+
+  useEffect(() => { if (aiSummary) setEditedSummary(aiSummary); }, [aiSummary]);
+
+  function handleSummaryThumbsUp() {
+    logHumanDecision({ module: "Final Report", subjectId: "executive-summary", aiOutput: aiSummary || "", humanDecision: aiSummary || "", changed: false, decisionType: "Accepted", reason: "" });
+  }
+
+  function handleSummarySaveEdits() {
+    logHumanDecision({ module: "Final Report", subjectId: "executive-summary", field: "summary", aiOutput: aiSummary || "", humanDecision: editedSummary, changed: editedSummary !== aiSummary, decisionType: editedSummary !== aiSummary ? "Edited" : "Accepted", reason: "" });
+    setSummarySaved(true);
+    setTimeout(() => setSummarySaved(false), 2000);
+  }
 
   async function generateSummary() {
     setAiBusy(true);
@@ -132,8 +149,25 @@ export function FinalReport() {
       {aiError && <Card style={{ borderLeft: "3px solid #b23121" }}><div style={{ fontSize: 12.5, color: "#b23121" }}>AI summary failed: {aiError}</div></Card>}
       {aiSummary && (
         <Card>
-          <h3 style={{ marginTop: 0, fontSize: 14 }}>Executive summary (AI)</h3>
-          <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{aiSummary}</p>
+          <h3 style={{ marginTop: 0, fontSize: 14, display: "inline" }}>Executive summary (AI)</h3>
+          <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, verticalAlign: "middle" }}>
+            <button onClick={handleSummaryThumbsUp} title="AI was helpful" style={{ background: "none", border: "1px solid #d1fae5", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#15803d" }}>👍</button>
+            <button onClick={() => setSummaryFeedbackOpen(true)} title="AI was wrong" style={{ background: "none", border: "1px solid #fee2e2", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#b91c1c" }}>👎</button>
+          </span>
+          <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: "8px 0 0" }}>{aiSummary}</p>
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 4 }}>Edit summary (changes are logged):</div>
+            <textarea
+              value={editedSummary}
+              onChange={(e) => setEditedSummary(e.target.value)}
+              rows={6}
+              style={{ width: "100%", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 13, padding: "8px 10px", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit", lineHeight: 1.6 }}
+            />
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+              <button onClick={handleSummarySaveEdits} style={{ cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}>Save edits</button>
+              {summarySaved && <span style={{ fontSize: 12, color: "#15803d" }}>Saved</span>}
+            </div>
+          </div>
           {aiCriterionNarratives && Object.keys(aiCriterionNarratives).length > 0 && (
             <div style={{ marginTop: 16 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 8 }}>Criterion-by-criterion breakdown (AI)</div>
@@ -233,6 +267,15 @@ export function FinalReport() {
           </div>
         )}
       </Card>
+      <FeedbackModal
+        open={summaryFeedbackOpen}
+        aiOutput={aiSummary || ""}
+        module="Final Report"
+        onClose={() => setSummaryFeedbackOpen(false)}
+        onSubmit={(feedback) => {
+          logHumanDecision({ module: "Final Report", subjectId: "executive-summary", aiOutput: aiSummary || "", humanDecision: feedback.correction || aiSummary || "", changed: !!feedback.correction, decisionType: "Overridden", reason: feedback.reason });
+        }}
+      />
     </div>
   );
 }

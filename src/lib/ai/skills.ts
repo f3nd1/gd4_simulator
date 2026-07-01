@@ -42,6 +42,15 @@ export type SkillCalibrationExample = {
   reason: string;
 };
 
+export type SkillCalibrationMemory = {
+  module: string;
+  subjectId: string;
+  context: string;
+  aiOutput: string;
+  staffCorrection: string;
+  keyLearning: string;
+};
+
 // ─── Raw imports ────────────────────────────────────────────────────────────
 
 import externalAuditorSkill        from "../../data/skills/external-auditor.md?raw";
@@ -200,7 +209,7 @@ function labelSkill(raw: string, content: string): string {
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("findingWriter");
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("evidenceReview", "spreadsheet");
  */
-export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string, criterionId?: string, criterionSkillContent?: string, calibrationExamples?: SkillCalibrationExample[]): string {
+export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string, criterionId?: string, criterionSkillContent?: string, calibrationExamples?: SkillCalibrationExample[], memories?: SkillCalibrationMemory[]): string {
   const moduleSkills = MODULE_SKILLS[module];
 
   // Capped skills: BASE + module capped skills, each truncated to SKILL_CAP chars.
@@ -215,7 +224,7 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType | nul
   const uncappedDocs = moduleSkills.uncapped.map((d) => labelSkill(d, d.trim()));
 
   const allDocs = [...cappedDocs, ...uncappedDocs].filter(Boolean);
-  if (allDocs.length === 0 && (!calibrationExamples || calibrationExamples.length === 0)) return "";
+  if (allDocs.length === 0 && (!calibrationExamples || calibrationExamples.length === 0) && (!memories || memories.length === 0)) return "";
 
   const skillsBlock = allDocs.length > 0
     ? `\n\n## Auditor knowledge base (apply this expertise to your assessment)\n\n${allDocs.join(SEP)}`
@@ -232,7 +241,15 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType | nul
     calibrationBlock = `\n\n=== CALIBRATION: How this auditor has corrected similar AI outputs ===\n${lines}\n===`;
   }
 
-  const result = skillsBlock + calibrationBlock;
+  let memoriesBlock = "";
+  if (memories && memories.length > 0) {
+    const lines = memories.map((m) =>
+      `[Module: ${m.module} · Subject: ${m.subjectId}]\nContext: ${m.context}\nAI previously said: ${m.aiOutput.slice(0, 300)}\nStaff corrected to: ${m.staffCorrection.slice(0, 300)}\nKey learning: ${m.keyLearning}`
+    ).join("\n\n");
+    memoriesBlock = `\n\n=== LEARNED CORRECTIONS — apply these to your assessment ===\n${lines}\n===`;
+  }
+
+  const result = skillsBlock + calibrationBlock + memoriesBlock;
 
   // Dev-only: log each buildSystemPrompt() call to the AI Debug Log page.
   if (import.meta.env.DEV && fnName) {
