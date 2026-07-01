@@ -2613,6 +2613,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let auditUsage: AIUsage | undefined;
         let stagedPromptSent: string | undefined;
         const truncationNotes: string[] = [];
+        let totalWindowsProcessed = 0;
+        let totalCharsAssessed = 0;
+        let totalCharsAvailable = 0;
+        let allWindowsFullCoverage = true;
 
         const criterionId = folder.subCriterionId;
 
@@ -2623,11 +2627,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (mode === "policy" || mode === "all") {
             setProgress("policy_audit", { stageDetail: `Checking policy coverage for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType });
+              const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, {
+                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
+                onProgress: (detail) => setProgress("policy_audit", { stageDetail: `Policy: ${detail}`, canCancel: true }),
+              });
               policyRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (result.promptSent) stagedPromptSent = result.promptSent;
               if (result.truncationNote) truncationNotes.push(result.truncationNote);
+              if (result.windowsProcessed) totalWindowsProcessed += result.windowsProcessed;
+              if (result.totalCharsAssessed) totalCharsAssessed += result.totalCharsAssessed;
+              if (result.totalCharsAvailable) totalCharsAvailable += result.totalCharsAvailable;
+              if (result.fullCoverage === false) allWindowsFullCoverage = false;
             } catch (err) {
               // Fallback to offline estimate
               policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);
@@ -2641,11 +2652,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (mode === "evidence" || mode === "all") {
             setProgress("evidence_audit", { stageDetail: `Checking implementation evidence for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType });
+              const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, {
+                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
+                onProgress: (detail) => setProgress("evidence_audit", { stageDetail: `Evidence: ${detail}`, canCancel: true }),
+              });
               evidenceRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
               if (result.truncationNote) truncationNotes.push(result.truncationNote);
+              if (result.windowsProcessed) totalWindowsProcessed += result.windowsProcessed;
+              if (result.totalCharsAssessed) totalCharsAssessed += result.totalCharsAssessed;
+              if (result.totalCharsAvailable) totalCharsAvailable += result.totalCharsAvailable;
+              if (result.fullCoverage === false) allWindowsFullCoverage = false;
             } catch (err) {
               evidenceRows = simulateStagedEvidenceAudit(allAuditPoints, evidenceDocText);
             }
@@ -2657,11 +2675,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (mode === "all") {
             setProgress("outcome_review", { stageDetail: `Checking outcome data and review records for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType });
+              const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, {
+                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
+                onProgress: (detail) => setProgress("outcome_review", { stageDetail: `Outcomes: ${detail}`, canCancel: true }),
+              });
               outcomeRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
               if (result.truncationNote) truncationNotes.push(result.truncationNote);
+              if (result.windowsProcessed) totalWindowsProcessed += result.windowsProcessed;
+              if (result.totalCharsAssessed) totalCharsAssessed += result.totalCharsAssessed;
+              if (result.totalCharsAvailable) totalCharsAvailable += result.totalCharsAvailable;
+              if (result.fullCoverage === false) allWindowsFullCoverage = false;
             } catch (err) {
               outcomeRows = simulateStagedOutcomeReview(allAuditPoints, allDocText);
             }
@@ -2812,6 +2837,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         );
         lineParts.push(live ? `Method: EduTrust APSR rubric vs GD4 standard — Approach gates the result, then Processes, Systems & Outcomes, Review (3 AI passes).` : "Method: offline keyword estimate — AI was not used (check AI Settings).");
         if (detectedFileType) lineParts.push(`File type skill injected: ${detectedFileType} (${detectedFileType === "spreadsheet" ? "spreadsheet-evidence.md" : "scanned-document-evidence.md"}).`);
+        if (totalWindowsProcessed > 0 && totalCharsAvailable > 0) {
+          const coveragePct = Math.round((totalCharsAssessed / totalCharsAvailable) * 100);
+          lineParts.push(`Sliding window coverage: ${totalWindowsProcessed} window(s) processed · ${totalCharsAssessed.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} chars assessed (${coveragePct}%) · Full coverage: ${allWindowsFullCoverage ? "Yes" : "No — some content spans multiple windows"}.`);
+        }
         if (truncationNotes.length > 0) lineParts.push(truncationNotes.join("\n"));
         const summary = lineParts.join("\n");
 

@@ -821,6 +821,10 @@ export type StagedPolicyAuditResult = {
   usage?: AIUsage;
   promptSent?: string;
   truncationNote?: string;
+  windowsProcessed?: number;
+  totalCharsAssessed?: number;
+  totalCharsAvailable?: number;
+  fullCoverage?: boolean;
 };
 
 export type StagedEvidenceAuditResult = {
@@ -828,6 +832,10 @@ export type StagedEvidenceAuditResult = {
   usage?: AIUsage;
   promptSent?: string;
   truncationNote?: string;
+  windowsProcessed?: number;
+  totalCharsAssessed?: number;
+  totalCharsAvailable?: number;
+  fullCoverage?: boolean;
 };
 
 export type StagedOutcomeReviewAuditResult = {
@@ -835,9 +843,46 @@ export type StagedOutcomeReviewAuditResult = {
   usage?: AIUsage;
   promptSent?: string;
   truncationNote?: string;
+  windowsProcessed?: number;
+  totalCharsAssessed?: number;
+  totalCharsAvailable?: number;
+  fullCoverage?: boolean;
 };
 
 const STAGED_BATCH_SIZE = 8; // audit points per AI call (each is smaller than a full checklist line)
+
+// Sliding window constants. Windows overlap so evidence that straddles a
+// boundary is not missed. Each window is sent as a separate AI call set and
+// the results merged (best verdict wins across windows).
+const WINDOW_SIZE = 55_000;
+const WINDOW_OVERLAP = 5_000;
+
+type DocWindow = { text: string; start: number; end: number; index: number; total: number };
+
+function buildDocWindows(text: string): DocWindow[] {
+  if (!text || text.length <= WINDOW_SIZE) {
+    return [{ text, start: 0, end: text.length, index: 0, total: 1 }];
+  }
+  const windows: DocWindow[] = [];
+  const step = WINDOW_SIZE - WINDOW_OVERLAP;
+  let start = 0;
+  while (start < text.length) {
+    const end = Math.min(start + WINDOW_SIZE, text.length);
+    windows.push({ text: text.slice(start, end), start, end, index: windows.length, total: 0 });
+    if (end >= text.length) break;
+    start += step;
+  }
+  const total = windows.length;
+  for (const w of windows) w.total = total;
+  return windows;
+}
+
+// Coverage priority: Yes > Partial > No. Returns the better of the two.
+function mergeCoverage(a: StagedCoverageStatus, b: StagedCoverageStatus): StagedCoverageStatus {
+  if (a === "Yes" || b === "Yes") return "Yes";
+  if (a === "Partial" || b === "Partial") return "Partial";
+  return "No";
+}
 
 function buildStagedPointsBlock(auditPoints: FlatAuditPoint[]): string {
   return auditPoints.map((p, i) =>
@@ -848,14 +893,15 @@ function buildStagedPointsBlock(auditPoints: FlatAuditPoint[]): string {
 // Stage 2: Policy Adequacy Audit.
 // Reads POLICY documents only; checks if each FlatAuditPoint has a documented
 // approach. Does NOT look at evidence documents or outcome data.
+// Uses a sliding window so the full text is assessed even when it exceeds one AI call.
 export async function runStagedPolicyAudit(
   auditPoints: FlatAuditPoint[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void } = {}
 ): Promise<StagedPolicyAuditResult> {
   if (auditPoints.length === 0 || !policyDocText.trim()) {
-    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No policy documents provided.", chunkIds: [] })) };
+    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No policy documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
   }
   const domainSkill = domainExpertiseFor(opts.criterionId);
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
@@ -872,62 +918,94 @@ Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leav
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
 
-  const rows: PolicyCoverageRow[] = [];
+  const windows = buildDocWindows(policyDocText);
+  const totalCharsAvailable = policyDocText.length;
+  const fullCoverage = windows.length === 1 || policyDocText.length <= WINDOW_SIZE;
+
+  // Accumulate best verdict per ref across all windows.
+  const bestByRef = new Map<string, { covered: StagedCoverageStatus; note: string; chunkIds: string[] }>();
+
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
+  let totalCharsAssessed = 0;
 
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
     batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
   }
 
-  const DOC_CAP = BATCH_DOC_CAP;
-  const docSlice = policyDocText.slice(0, DOC_CAP);
-  const policyTruncationNote = policyDocText.length > DOC_CAP
-    ? `\n⚠️ Policy content truncated — ${policyDocText.length.toLocaleString()} chars available, ${DOC_CAP.toLocaleString()} chars sent to AI (${(policyDocText.length - DOC_CAP).toLocaleString()} chars not assessed).`
-    : "";
+  for (const win of windows) {
+    totalCharsAssessed += win.end - win.start;
+    const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
+    opts.onProgress?.(`Policy audit — window ${win.index + 1}/${win.total}`);
 
-  for (const batch of batches) {
-    const pointsBlock = buildStagedPointsBlock(batch);
-    const user = `Policy & Procedure documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for APPROACH coverage:\n${pointsBlock}`;
-    if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
-    try {
-      const content = await chatComplete(
-        [{ role: "system", content: system }, { role: "user", content: user }],
-        settings,
-        { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
-      );
-      const parsed = parseJSONObject(content);
-      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-      const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
-      for (const p of batch) {
-        const r = byRef.get(p.ref);
-        const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
-          ? (r!.covered as StagedCoverageStatus) : "No";
-        const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
-        rows.push({ ref: p.ref, pointText: p.text, covered, note: typeof r?.note === "string" ? r.note : "", chunkIds });
+    for (const batch of batches) {
+      const pointsBlock = buildStagedPointsBlock(batch);
+      const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for APPROACH coverage:\n${pointsBlock}`;
+      if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
+      try {
+        const content = await chatComplete(
+          [{ role: "system", content: system }, { role: "user", content: user }],
+          settings,
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+        );
+        const parsed = parseJSONObject(content);
+        const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+        const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+        for (const p of batch) {
+          const r = byRef.get(p.ref);
+          const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
+            ? (r!.covered as StagedCoverageStatus) : "No";
+          const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+          const note = typeof r?.note === "string" ? r.note : "";
+          const prev = bestByRef.get(p.ref);
+          if (!prev) {
+            bestByRef.set(p.ref, { covered, note, chunkIds });
+          } else {
+            const merged = mergeCoverage(prev.covered, covered);
+            // Keep the note from whichever window gave the better verdict.
+            const betterNote = merged !== prev.covered ? note : prev.note;
+            const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
+            bestByRef.set(p.ref, { covered: merged, note: betterNote, chunkIds: mergedChunks });
+          }
+        }
+      } catch {
+        // On error for this window/batch: leave existing best unchanged; if no entry yet, record "No".
+        for (const p of batch) {
+          if (!bestByRef.has(p.ref)) {
+            bestByRef.set(p.ref, { covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
+          }
+        }
       }
-    } catch {
-      // On error, default all batch points to "No"
-      for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
     }
   }
-  return { rows, usage, promptSent: firstPromptSent, truncationNote: policyTruncationNote };
+
+  const rows: PolicyCoverageRow[] = auditPoints.map((p) => {
+    const best = bestByRef.get(p.ref) ?? { covered: "No" as StagedCoverageStatus, note: `No relevant policy evidence found in the ${windows.length} window(s) reviewed.`, chunkIds: [] };
+    return { ref: p.ref, pointText: p.text, covered: best.covered, note: best.note, chunkIds: best.chunkIds };
+  });
+
+  const truncationNote = !fullCoverage
+    ? `\n⚠️ Policy content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars assessed of ${totalCharsAvailable.toLocaleString()} chars total (${WINDOW_OVERLAP.toLocaleString()}-char overlap between windows).`
+    : undefined;
+
+  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage };
 }
 
 // Stage 3: Evidence Implementation Audit.
 // Reads EVIDENCE documents only; checks if each FlatAuditPoint has actual
 // implementation evidence. Receives policy results so it can distinguish
 // "policy exists but not implemented" from "nothing at all".
+// Uses a sliding window so the full text is assessed even when it exceeds one AI call.
 export async function runStagedEvidenceAudit(
   auditPoints: FlatAuditPoint[],
   evidenceDocText: string,
   policyRows: PolicyCoverageRow[],
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void } = {}
 ): Promise<StagedEvidenceAuditResult> {
   if (auditPoints.length === 0 || !evidenceDocText.trim()) {
-    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No evidence documents provided.", chunkIds: [] })) };
+    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No evidence documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
   }
   const domainSkill = domainExpertiseFor(opts.criterionId);
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
@@ -945,62 +1023,94 @@ Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leav
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
 
-  const rows: EvidenceCoverageRow[] = [];
+  const windows = buildDocWindows(evidenceDocText);
+  const totalCharsAvailable = evidenceDocText.length;
+  const fullCoverage = windows.length === 1 || evidenceDocText.length <= WINDOW_SIZE;
+
+  const bestByRef = new Map<string, { covered: StagedCoverageStatus; note: string; chunkIds: string[] }>();
+
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
+  let totalCharsAssessed = 0;
+
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
     batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
   }
-  const DOC_CAP = BATCH_DOC_CAP;
-  const docSlice = evidenceDocText.slice(0, DOC_CAP);
-  const evidenceTruncationNote = evidenceDocText.length > DOC_CAP
-    ? `\n⚠️ Evidence content truncated — ${evidenceDocText.length.toLocaleString()} chars available, ${DOC_CAP.toLocaleString()} chars sent to AI (${(evidenceDocText.length - DOC_CAP).toLocaleString()} chars not assessed).`
-    : "";
 
-  for (const batch of batches) {
-    const pointsBlock = batch.map((p, i) => {
-      const pol = policyByRef.get(p.ref);
-      const polNote = pol ? ` [Policy adequacy: ${pol.covered}${pol.covered !== "No" ? ` — "${pol.note.slice(0, 80)}"` : ""}]` : "";
-      return `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}${polNote}`;
-    }).join("\n");
-    const user = `Actual evidence documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for IMPLEMENTATION evidence:\n${pointsBlock}`;
-    if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
-    try {
-      const content = await chatComplete(
-        [{ role: "system", content: system }, { role: "user", content: user }],
-        settings,
-        { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
-      );
-      const parsed = parseJSONObject(content);
-      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-      const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
-      for (const p of batch) {
-        const r = byRef.get(p.ref);
-        const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
-          ? (r!.covered as StagedCoverageStatus) : "No";
-        const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
-        rows.push({ ref: p.ref, pointText: p.text, covered, note: typeof r?.note === "string" ? r.note : "", chunkIds });
+  for (const win of windows) {
+    totalCharsAssessed += win.end - win.start;
+    const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
+    opts.onProgress?.(`Evidence audit — window ${win.index + 1}/${win.total}`);
+
+    for (const batch of batches) {
+      const pointsBlock = batch.map((p, i) => {
+        const pol = policyByRef.get(p.ref);
+        const polNote = pol ? ` [Policy adequacy: ${pol.covered}${pol.covered !== "No" ? ` — "${pol.note.slice(0, 80)}"` : ""}]` : "";
+        return `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}${polNote}`;
+      }).join("\n");
+      const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for IMPLEMENTATION evidence:\n${pointsBlock}`;
+      if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
+      try {
+        const content = await chatComplete(
+          [{ role: "system", content: system }, { role: "user", content: user }],
+          settings,
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+        );
+        const parsed = parseJSONObject(content);
+        const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+        const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+        for (const p of batch) {
+          const r = byRef.get(p.ref);
+          const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
+            ? (r!.covered as StagedCoverageStatus) : "No";
+          const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+          const note = typeof r?.note === "string" ? r.note : "";
+          const prev = bestByRef.get(p.ref);
+          if (!prev) {
+            bestByRef.set(p.ref, { covered, note, chunkIds });
+          } else {
+            const merged = mergeCoverage(prev.covered, covered);
+            const betterNote = merged !== prev.covered ? note : prev.note;
+            const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
+            bestByRef.set(p.ref, { covered: merged, note: betterNote, chunkIds: mergedChunks });
+          }
+        }
+      } catch {
+        for (const p of batch) {
+          if (!bestByRef.has(p.ref)) {
+            bestByRef.set(p.ref, { covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
+          }
+        }
       }
-    } catch {
-      for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
     }
   }
-  return { rows, usage, promptSent: firstPromptSent, truncationNote: evidenceTruncationNote };
+
+  const rows: EvidenceCoverageRow[] = auditPoints.map((p) => {
+    const best = bestByRef.get(p.ref) ?? { covered: "No" as StagedCoverageStatus, note: `No relevant evidence chunk found for this dimension in the ${windows.length} window(s) reviewed.`, chunkIds: [] };
+    return { ref: p.ref, pointText: p.text, covered: best.covered, note: best.note, chunkIds: best.chunkIds };
+  });
+
+  const truncationNote = !fullCoverage
+    ? `\n⚠️ Evidence content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars assessed of ${totalCharsAvailable.toLocaleString()} chars total (${WINDOW_OVERLAP.toLocaleString()}-char overlap between windows).`
+    : undefined;
+
+  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage };
 }
 
 // Stage 4: Outcome & Review Audit.
 // Reads ALL documents; checks for outcome data (Systems & Outcomes) and
 // review/improvement records (Review). Both outcomes and review are assessed
 // together in one call since they both require looking at all documents.
+// Uses a sliding window so the full text is assessed even when it exceeds one AI call.
 export async function runStagedOutcomeReviewAudit(
   auditPoints: FlatAuditPoint[],
   allDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void } = {}
 ): Promise<StagedOutcomeReviewAuditResult> {
   if (auditPoints.length === 0 || !allDocText.trim()) {
-    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "No documents provided.", chunkIds: [] })) };
+    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "No documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
   }
   const domainSkill = domainExpertiseFor(opts.criterionId);
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
@@ -1016,48 +1126,80 @@ Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chu
 Respond with JSON only:
 {"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;
 
-  const rows: OutcomeReviewRow[] = [];
+  const windows = buildDocWindows(allDocText);
+  const totalCharsAvailable = allDocText.length;
+  const fullCoverage = windows.length === 1 || allDocText.length <= WINDOW_SIZE;
+
+  // For outcome/review: OR across windows (true if any window finds evidence).
+  const bestByRef = new Map<string, { outcomeEvident: boolean; reviewEvident: boolean; note: string; chunkIds: string[] }>();
+
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
+  let totalCharsAssessed = 0;
+
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
     batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
   }
-  const DOC_CAP = BATCH_DOC_CAP;
-  const docSlice = allDocText.slice(0, DOC_CAP);
-  const outcomeTruncationNote = allDocText.length > DOC_CAP
-    ? `\n⚠️ Outcome/review content truncated — ${allDocText.length.toLocaleString()} chars available, ${DOC_CAP.toLocaleString()} chars sent to AI (${(allDocText.length - DOC_CAP).toLocaleString()} chars not assessed).`
-    : "";
 
-  for (const batch of batches) {
-    const pointsBlock = buildStagedPointsBlock(batch);
-    const user = `All documents (chunk IDs in headers):\n"""\n${docSlice}\n"""\n\nAssess each audit point for OUTCOME DATA and REVIEW RECORDS:\n${pointsBlock}`;
-    if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
-    try {
-      const content = await chatComplete(
-        [{ role: "system", content: system }, { role: "user", content: user }],
-        settings,
-        { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
-      );
-      const parsed = parseJSONObject(content);
-      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-      const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
-      for (const p of batch) {
-        const r = byRef.get(p.ref);
-        const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
-        rows.push({
-          ref: p.ref, pointText: p.text,
-          outcomeEvident: r?.outcomeEvident === true,
-          reviewEvident: r?.reviewEvident === true,
-          note: typeof r?.note === "string" ? r.note : "",
-          chunkIds,
-        });
+  for (const win of windows) {
+    totalCharsAssessed += win.end - win.start;
+    const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
+    opts.onProgress?.(`Outcome/review audit — window ${win.index + 1}/${win.total}`);
+
+    for (const batch of batches) {
+      const pointsBlock = buildStagedPointsBlock(batch);
+      const user = `All documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for OUTCOME DATA and REVIEW RECORDS:\n${pointsBlock}`;
+      if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
+      try {
+        const content = await chatComplete(
+          [{ role: "system", content: system }, { role: "user", content: user }],
+          settings,
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+        );
+        const parsed = parseJSONObject(content);
+        const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+        const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+        for (const p of batch) {
+          const r = byRef.get(p.ref);
+          const outcomeEvident = r?.outcomeEvident === true;
+          const reviewEvident = r?.reviewEvident === true;
+          const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+          const note = typeof r?.note === "string" ? r.note : "";
+          const prev = bestByRef.get(p.ref);
+          if (!prev) {
+            bestByRef.set(p.ref, { outcomeEvident, reviewEvident, note, chunkIds });
+          } else {
+            const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
+            const newOutcome = prev.outcomeEvident || outcomeEvident;
+            const newReview = prev.reviewEvident || reviewEvident;
+            // Keep note from whichever window found the most (prefer one that found both).
+            const prevScore = (prev.outcomeEvident ? 1 : 0) + (prev.reviewEvident ? 1 : 0);
+            const curScore = (outcomeEvident ? 1 : 0) + (reviewEvident ? 1 : 0);
+            const betterNote = curScore > prevScore ? note : prev.note;
+            bestByRef.set(p.ref, { outcomeEvident: newOutcome, reviewEvident: newReview, note: betterNote, chunkIds: mergedChunks });
+          }
+        }
+      } catch {
+        for (const p of batch) {
+          if (!bestByRef.has(p.ref)) {
+            bestByRef.set(p.ref, { outcomeEvident: false, reviewEvident: false, note: "AI call failed.", chunkIds: [] });
+          }
+        }
       }
-    } catch {
-      for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "AI call failed.", chunkIds: [] });
     }
   }
-  return { rows, usage, promptSent: firstPromptSent, truncationNote: outcomeTruncationNote };
+
+  const rows: OutcomeReviewRow[] = auditPoints.map((p) => {
+    const best = bestByRef.get(p.ref) ?? { outcomeEvident: false, reviewEvident: false, note: `No relevant evidence chunk found for this dimension in the ${windows.length} window(s) reviewed.`, chunkIds: [] };
+    return { ref: p.ref, pointText: p.text, outcomeEvident: best.outcomeEvident, reviewEvident: best.reviewEvident, note: best.note, chunkIds: best.chunkIds };
+  });
+
+  const truncationNote = !fullCoverage
+    ? `\n⚠️ Outcome/review content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars assessed of ${totalCharsAvailable.toLocaleString()} chars total (${WINDOW_OVERLAP.toLocaleString()}-char overlap between windows).`
+    : undefined;
+
+  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage };
 }
 
 // Stage 5: Deterministic APSR verdict builder.
@@ -1076,24 +1218,24 @@ export function buildStagedApsr(
     ? { status: "Meeting", note: policyRow.note, sourceChunkIds: policyRow.chunkIds }
     : policyRow?.covered === "Partial"
       ? { status: "Beginning", note: policyRow.note, sourceChunkIds: policyRow.chunkIds }
-      : { status: "Not evident", note: policyRow?.note || "No policy documentation found for this requirement.", sourceChunkIds: [] };
+      : { status: "Not evident", note: policyRow?.note || "No policy documentation found for this requirement in the documents reviewed.", sourceChunkIds: [] };
 
   // Processes — from evidence coverage only
   const processes: ApsrBreakdown["processes"] = evidenceRow?.covered === "Yes"
     ? { status: "Deployed", note: evidenceRow.note, sourceChunkIds: evidenceRow.chunkIds }
     : evidenceRow?.covered === "Partial"
       ? { status: "Weak", note: evidenceRow.note, sourceChunkIds: evidenceRow.chunkIds }
-      : { status: "Not evident", note: evidenceRow?.note || "No implementation evidence found for this requirement.", sourceChunkIds: [] };
+      : { status: "Not evident", note: evidenceRow?.note || "No implementation evidence found for this requirement in the documents reviewed.", sourceChunkIds: [] };
 
   // Systems & Outcomes — from outcome data
   const systemsOutcomes: ApsrBreakdown["systemsOutcomes"] = outcomeRow?.outcomeEvident
     ? { status: "Evident", note: outcomeRow.note, sourceChunkIds: outcomeRow.chunkIds }
-    : { status: "Not evident", note: outcomeRow?.note || "No outcome data found.", sourceChunkIds: [] };
+    : { status: "Not evident", note: outcomeRow?.note || "No outcome data (KPIs, results, trends) found for this requirement in the documents reviewed.", sourceChunkIds: [] };
 
   // Review — from review records
   const review: ApsrBreakdown["review"] = outcomeRow?.reviewEvident
     ? { status: "Evident", note: outcomeRow.note, sourceChunkIds: outcomeRow.chunkIds }
-    : { status: "Not evident", note: outcomeRow?.note || "No review records found.", sourceChunkIds: [] };
+    : { status: "Not evident", note: outcomeRow?.note || "No review or improvement records found for this requirement in the documents reviewed.", sourceChunkIds: [] };
 
   return { approach, processes, systemsOutcomes, review };
 }
