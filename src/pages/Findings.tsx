@@ -748,32 +748,32 @@ export function Findings() {
         </Link>
       </div>
 
-      {/* Side panel — full finding detail */}
+      {/* Centre modal — full finding detail */}
       {detailFinding && (
-        <div
-          style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 440, maxWidth: "100vw", background: "#fff", boxShadow: "-4px 0 20px rgba(0,0,0,0.12)", zIndex: 200, overflowY: "auto", padding: "16px 20px" }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-            <b style={{ color: "#ce9e5d", fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{detailFinding.id}</b>
-            <Pill s={severityTone(detailFinding.severity)}>{detailFinding.severity}</Pill>
-            {detailFinding.dimension && <Pill s={dimensionTone(detailFinding.dimension)}>{detailFinding.dimension}</Pill>}
-            <Pill s={(closures[detailFinding.id]?.human || "") === "Accepted" ? "good" : "critical"}>{(closures[detailFinding.id]?.human || "") === "Accepted" ? "Closed" : "Open"}</Pill>
-            <button onClick={() => setDetailFinding(null)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", fontSize: 18, color: "#94a3b8", lineHeight: 1, padding: "2px 4px" }} title="Close panel">✕</button>
+        <>
+          <div onClick={() => setDetailFinding(null)} style={{ position: "fixed", inset: 0, zIndex: 199, background: "rgba(0,0,0,0.45)" }} />
+          <div
+            style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: "70vw", maxWidth: "70vw", height: "85vh", background: "#fff", borderRadius: 12, boxShadow: "0 8px 40px rgba(0,0,0,0.22)", zIndex: 200, overflowY: "auto", padding: "20px 24px", display: "flex", flexDirection: "column" }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <b style={{ color: "#ce9e5d", fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{detailFinding.id}</b>
+              <Pill s={severityTone(detailFinding.severity)}>{detailFinding.severity}</Pill>
+              {detailFinding.dimension && <Pill s={dimensionTone(detailFinding.dimension)}>{detailFinding.dimension}</Pill>}
+              <Pill s={(closures[detailFinding.id]?.human || "") === "Accepted" ? "good" : "critical"}>{(closures[detailFinding.id]?.human || "") === "Accepted" ? "Closed" : "Open"}</Pill>
+              <button onClick={() => setDetailFinding(null)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#94a3b8", lineHeight: 1, padding: "2px 4px" }} title="Close">✕</button>
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, lineHeight: 1.4 }}>{detailFinding.issue}</div>
+            <FindingDetail finding={detailFinding} />
+            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+              <Link to="/afi-closure" style={{ fontSize: 12, color: "#15803d", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>
+                Manage closure →
+              </Link>
+              <Link to={`/sub-checklist?item=${detailFinding.gd4ItemId}`} style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
+                View checklist →
+              </Link>
+            </div>
           </div>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, lineHeight: 1.4 }}>{detailFinding.issue}</div>
-          <FindingDetail finding={detailFinding} />
-          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-            <Link to="/afi-closure" style={{ fontSize: 12, color: "#15803d", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>
-              Manage closure →
-            </Link>
-            <Link to={`/sub-checklist?item=${detailFinding.gd4ItemId}`} style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
-              View checklist →
-            </Link>
-          </div>
-        </div>
-      )}
-      {detailFinding && (
-        <div onClick={() => setDetailFinding(null)} style={{ position: "fixed", inset: 0, zIndex: 199, background: "rgba(0,0,0,0.08)" }} />
+        </>
       )}
     </Card>
       <FeedbackModal
