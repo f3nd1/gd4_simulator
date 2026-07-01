@@ -413,6 +413,14 @@ export function Findings() {
               <span style={{ fontSize: 11, color: statusColor, fontWeight: 600 }}>{statusLabel}</span>
               {draft.live && <Pill s="good">AI</Pill>}
               <span style={{ fontSize: 11, color: "#94a3b8" }}>{draft.group.lines.length} line{draft.group.lines.length !== 1 ? "s" : ""}</span>
+              {draft.status === "draft" && (
+                <span onClick={(e) => e.stopPropagation()}>
+                  <ThumbsButtons
+                    onAccept={() => logHumanDecision({ module: "Finding Observation", subjectId: draft.gd4ItemId, field: "grouped-draft", aiOutput: draft.title ?? "", humanDecision: draft.title ?? "", changed: false, decisionType: "Accepted", reason: "" })}
+                    onReject={() => { setDraftFeedbackOpen(true); setAiDraftOutput(draft.title ?? ""); }}
+                  />
+                </span>
+              )}
             </div>
             {isExpanded && (
               <GroupedDraftDetail
