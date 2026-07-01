@@ -72,6 +72,9 @@ export type FindingDraftState = {
   // Discard all pending/error drafts for a sub-criterion.
   discardDrafts: (subCriterionId: string) => void;
 
+  // Discard all pending/error drafts across all sub-criteria.
+  discardAllDrafts: () => void;
+
   // Partial update for editing a draft's fields.
   updateDraftField: (
     subCriterionId: string,
@@ -324,6 +327,16 @@ export const useFindingDraftStore = create<FindingDraftState>()(
               (d) => d.status === "confirmed"
             ),
           },
+        })),
+
+      discardAllDrafts: () =>
+        set((s) => ({
+          draftsBySubCriterion: Object.fromEntries(
+            Object.entries(s.draftsBySubCriterion).map(([id, drafts]) => [
+              id,
+              drafts.filter((d) => d.status === "confirmed"),
+            ])
+          ),
         })),
 
       updateDraftField: (subCriterionId, draftId, patch) =>

@@ -376,11 +376,19 @@ export function Findings() {
         <span style={{ fontSize: 12, color: "#6b7280" }}>
           {pendingGroupedDrafts.length > 0 ? `${pendingGroupedDrafts.length} draft${pendingGroupedDrafts.length !== 1 ? "s" : ""} awaiting review` : "No pending drafts"}
         </span>
+        {pendingGroupedDrafts.length > 0 && (
+          <button
+            onClick={() => { if (confirm(`Remove all ${pendingGroupedDrafts.length} pending draft${pendingGroupedDrafts.length !== 1 ? "s" : ""}?`)) draftStore.discardAllDrafts(); }}
+            style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}
+          >
+            Remove all
+          </button>
+        )}
         <button
           onClick={generateGroupedFindings}
           disabled={draftStoreBusy}
           title="Analyse all failing checklist lines and group them into logical finding drafts. Related gaps (same GD4 source ref + same APSR dimension) are consolidated into one finding."
-          style={{ marginLeft: "auto", cursor: draftStoreBusy ? "not-allowed" : "pointer", border: "1px solid #818cf8", background: "#eef2ff", color: "#3730a3", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12, opacity: draftStoreBusy ? 0.6 : 1 }}
+          style={{ marginLeft: pendingGroupedDrafts.length > 0 ? 0 : "auto", cursor: draftStoreBusy ? "not-allowed" : "pointer", border: "1px solid #818cf8", background: "#eef2ff", color: "#3730a3", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12, opacity: draftStoreBusy ? 0.6 : 1 }}
         >
           {draftStoreBusy ? "Generating…" : pendingGroupedDrafts.length > 0 ? "Regenerate drafts" : "Generate grouped findings"}
         </button>
