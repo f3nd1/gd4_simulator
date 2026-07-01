@@ -887,24 +887,38 @@ function mergeCoverage(a: StagedCoverageStatus, b: StagedCoverageStatus): Staged
   return "No";
 }
 
-// Tracks the specific note each window contributed for one audit-point ref, so
-// the final note can cite every window that found something rather than
+// Tracks the specific note (and the chunk IDs that supported it) each window
+// contributed for one audit-point ref, so the final note can cite every
+// window that found something — with a source citation — rather than
 // silently discarding all but the single "best" window's text.
-type WindowNote = { window: number; note: string };
+type WindowNote = { window: number; note: string; chunkIds: string[] };
 
-function pushWindowNote(parts: WindowNote[], windowIndex: number, note: string): WindowNote[] {
+function pushWindowNote(parts: WindowNote[], windowIndex: number, note: string, chunkIds: string[]): WindowNote[] {
   const trimmed = note.trim();
   if (!trimmed) return parts;
-  return [...parts, { window: windowIndex + 1, note: trimmed }];
+  return [...parts, { window: windowIndex + 1, note: trimmed, chunkIds }];
 }
 
-// Renders the accumulated per-window notes for one ref. A single contributing
-// window renders its note plain (no "Window N:" noise for the common case);
-// multiple contributing windows are concatenated so each is attributable.
-function renderWindowNotes(parts: WindowNote[], fallback: string): string {
+// Renders the accumulated per-window notes for one ref as one numbered,
+// blank-line-separated paragraph per contributing window:
+//   #1 [filename.pdf · C001]: <note text>
+//
+//   #2 [other.pdf · C003]: <note text>
+// `resolveFile` maps a chunk ID back to its source file name (from the
+// evidence file ledger) — when it can't resolve a chunk (or a window cited
+// none), the bracketed citation is simply omitted for that entry.
+function renderWindowNotes(parts: WindowNote[], fallback: string, resolveFile?: (chunkId: string) => string | undefined): string {
   if (parts.length === 0) return fallback;
-  if (parts.length === 1) return parts[0].note;
-  return parts.map((p) => `Window ${p.window}: ${p.note}`).join(" ");
+  return parts.map((p) => {
+    const citation = p.chunkIds
+      .map((cid) => {
+        const file = resolveFile?.(cid);
+        return file ? `${file} · ${cid}` : cid;
+      })
+      .join(", ");
+    const label = citation ? `#${p.window} [${citation}]` : `#${p.window}`;
+    return `${label}:\n${p.note}`;
+  }).join("\n\n");
 }
 
 function buildStagedPointsBlock(auditPoints: FlatAuditPoint[]): string {
@@ -921,7 +935,7 @@ export async function runStagedPolicyAudit(
   auditPoints: FlatAuditPoint[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
 ): Promise<StagedPolicyAuditResult> {
   if (auditPoints.length === 0 || !policyDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No policy documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
@@ -1002,10 +1016,10 @@ Respond with JSON only:
           const note = typeof r?.note === "string" ? r.note : "";
           const prev = bestByRef.get(p.ref);
           if (!prev) {
-            bestByRef.set(p.ref, { covered, notes: covered !== "No" ? pushWindowNote([], win.index, note) : [], chunkIds });
+            bestByRef.set(p.ref, { covered, notes: covered !== "No" ? pushWindowNote([], win.index, note, chunkIds) : [], chunkIds });
           } else {
             const merged = mergeCoverage(prev.covered, covered);
-            const mergedNotes = covered !== "No" ? pushWindowNote(prev.notes, win.index, note) : prev.notes;
+            const mergedNotes = covered !== "No" ? pushWindowNote(prev.notes, win.index, note, chunkIds) : prev.notes;
             const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
             bestByRef.set(p.ref, { covered: merged, notes: mergedNotes, chunkIds: mergedChunks });
           }
@@ -1034,7 +1048,7 @@ Respond with JSON only:
     return {
       ref: p.ref, pointText: p.text,
       covered: best?.covered ?? "No",
-      note: best ? renderWindowNotes(best.notes, fallback) : fallback,
+      note: best ? renderWindowNotes(best.notes, fallback, opts.resolveChunkFile) : fallback,
       chunkIds: best?.chunkIds ?? [],
     };
   });
@@ -1056,7 +1070,7 @@ export async function runStagedEvidenceAudit(
   evidenceDocText: string,
   policyRows: PolicyCoverageRow[],
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
 ): Promise<StagedEvidenceAuditResult> {
   if (auditPoints.length === 0 || !evidenceDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No evidence documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
@@ -1130,10 +1144,10 @@ Respond with JSON only:
           const note = typeof r?.note === "string" ? r.note : "";
           const prev = bestByRef.get(p.ref);
           if (!prev) {
-            bestByRef.set(p.ref, { covered, notes: covered !== "No" ? pushWindowNote([], win.index, note) : [], chunkIds });
+            bestByRef.set(p.ref, { covered, notes: covered !== "No" ? pushWindowNote([], win.index, note, chunkIds) : [], chunkIds });
           } else {
             const merged = mergeCoverage(prev.covered, covered);
-            const mergedNotes = covered !== "No" ? pushWindowNote(prev.notes, win.index, note) : prev.notes;
+            const mergedNotes = covered !== "No" ? pushWindowNote(prev.notes, win.index, note, chunkIds) : prev.notes;
             const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
             bestByRef.set(p.ref, { covered: merged, notes: mergedNotes, chunkIds: mergedChunks });
           }
@@ -1162,7 +1176,7 @@ Respond with JSON only:
     return {
       ref: p.ref, pointText: p.text,
       covered: best?.covered ?? "No",
-      note: best ? renderWindowNotes(best.notes, fallback) : fallback,
+      note: best ? renderWindowNotes(best.notes, fallback, opts.resolveChunkFile) : fallback,
       chunkIds: best?.chunkIds ?? [],
     };
   });
@@ -1183,7 +1197,7 @@ export async function runStagedOutcomeReviewAudit(
   auditPoints: FlatAuditPoint[],
   allDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
 ): Promise<StagedOutcomeReviewAuditResult> {
   if (auditPoints.length === 0 || !allDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "No documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
@@ -1253,12 +1267,12 @@ Respond with JSON only:
           const foundSomething = outcomeEvident || reviewEvident;
           const prev = bestByRef.get(p.ref);
           if (!prev) {
-            bestByRef.set(p.ref, { outcomeEvident, reviewEvident, notes: foundSomething ? pushWindowNote([], win.index, note) : [], chunkIds });
+            bestByRef.set(p.ref, { outcomeEvident, reviewEvident, notes: foundSomething ? pushWindowNote([], win.index, note, chunkIds) : [], chunkIds });
           } else {
             const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
             const newOutcome = prev.outcomeEvident || outcomeEvident;
             const newReview = prev.reviewEvident || reviewEvident;
-            const mergedNotes = foundSomething ? pushWindowNote(prev.notes, win.index, note) : prev.notes;
+            const mergedNotes = foundSomething ? pushWindowNote(prev.notes, win.index, note, chunkIds) : prev.notes;
             bestByRef.set(p.ref, { outcomeEvident: newOutcome, reviewEvident: newReview, notes: mergedNotes, chunkIds: mergedChunks });
           }
         }
@@ -1287,7 +1301,7 @@ Respond with JSON only:
       ref: p.ref, pointText: p.text,
       outcomeEvident: best?.outcomeEvident ?? false,
       reviewEvident: best?.reviewEvident ?? false,
-      note: best ? renderWindowNotes(best.notes, fallback) : fallback,
+      note: best ? renderWindowNotes(best.notes, fallback, opts.resolveChunkFile) : fallback,
       chunkIds: best?.chunkIds ?? [],
     };
   });

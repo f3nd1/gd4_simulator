@@ -974,11 +974,17 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
               <div key={label} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 9px", background: "#fff" }}>
                 <div style={{ fontSize: 11, fontWeight: 700 }}>{label}: {leg.status}</div>
                 {leg.note && (
-                  leg.note.includes("\n")
+                  // A note may be one or more "#N [file · chunk]:\ntext" window
+                  // entries, blank-line separated (renderWindowNotes in
+                  // agentRuntime.ts) — split on the BLANK LINE so each window's
+                  // citation label stays grouped with its own text as one
+                  // bullet, rather than splitting on every single "\n" and
+                  // tearing the label away from its text.
+                  leg.note.includes("\n\n")
                     ? <ul style={{ margin: "2px 0 0 14px", padding: 0, fontSize: 11, color: "#6b7280", lineHeight: 1.45 }}>
-                        {leg.note.split("\n").filter(Boolean).map((b, i) => <li key={i}>{b}</li>)}
+                        {leg.note.split(/\n\n+/).filter(Boolean).map((b, i) => <li key={i} style={{ whiteSpace: "pre-line" }}>{b}</li>)}
                       </ul>
-                    : <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>{leg.note}</div>
+                    : <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, lineHeight: 1.45, whiteSpace: "pre-line" }}>{leg.note}</div>
                 )}
               </div>
             ))}

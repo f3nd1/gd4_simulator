@@ -2657,6 +2657,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let allWindowsFullCoverage = true;
 
         const criterionId = folder.subCriterionId;
+        // Chunk ID → source file name, for the "#N [file · chunk]:" citation the
+        // staged functions attach to each window's contributed note (evidence
+        // file ledger lookup — this is a display concern, not audit logic).
+        const chunkFileNames = new Map(evidenceChunks.map((c) => [c.chunkId, c.fileName]));
+        const resolveChunkFile = (chunkId: string): string | undefined => chunkFileNames.get(chunkId);
 
         if (aiSettings.enabled && aiSettings.apiKey) {
           const stagedCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
@@ -2669,7 +2674,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             setProgress("policy_audit", { stageDetail: `Checking policy coverage for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
               const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, {
-                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
+                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType, resolveChunkFile,
                 shouldStop: shouldStopStage,
                 onProgress: (detail) => {
                   const m = detail.match(/window (\d+)\/(\d+)/);
@@ -2703,7 +2708,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             setProgress("evidence_audit", { stageDetail: `Checking implementation evidence for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
               const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, {
-                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
+                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType, resolveChunkFile,
                 shouldStop: shouldStopStage,
                 onProgress: (detail) => {
                   const m = detail.match(/window (\d+)\/(\d+)/);
@@ -2736,7 +2741,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             setProgress("outcome_review", { stageDetail: `Checking outcome data and review records for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
               const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, {
-                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
+                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType, resolveChunkFile,
                 shouldStop: shouldStopStage,
                 onProgress: (detail) => {
                   const m = detail.match(/window (\d+)\/(\d+)/);
@@ -2884,6 +2889,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }
         }
 
+        // Compacts a note for the one-line-per-gap summary below. A note may now
+        // be a multi-paragraph "#N [file · chunk]:\ntext" citation block (see
+        // renderWindowNotes in agentRuntime.ts) — strip the "#N [...]:" label
+        // and collapse it to a single line BEFORE truncating, so a blind
+        // char-slice never chops a citation bracket in half or leaves a bare
+        // "#1 [Some" hanging in the compact bullet list.
+        const noteSummary = (note: string, maxLen: number): string =>
+          note.replace(/#\d+\s*(\[[^\]]*\])?:\s*/g, "").replace(/\s*\n+\s*/g, " ").trim().slice(0, maxLen);
+
         // Per-line notes for Not met / Partial lines
         const gapNotes = stagedVerdicts
           .filter((v) => v.status !== "Met")
@@ -2891,10 +2905,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           .map((v) => {
             const lineText = lines.find((l) => l.id === v.lineId)?.text ?? v.lineId;
             const dims: string[] = [];
-            if (v.apsr.approach.status !== "Meeting") dims.push(`Approach${v.apsr.approach.note ? `: ${v.apsr.approach.note.slice(0, 80)}` : ""}`);
-            if (v.apsr.processes.status !== "Deployed") dims.push(`Processes${v.apsr.processes.note ? `: ${v.apsr.processes.note.slice(0, 80)}` : ""}`);
-            if (v.apsr.systemsOutcomes.status !== "Evident") dims.push(`Outcomes${v.apsr.systemsOutcomes.note ? `: ${v.apsr.systemsOutcomes.note.slice(0, 80)}` : ""}`);
-            if (v.apsr.review.status !== "Evident") dims.push(`Review${v.apsr.review.note ? `: ${v.apsr.review.note.slice(0, 80)}` : ""}`);
+            if (v.apsr.approach.status !== "Meeting") dims.push(`Approach${v.apsr.approach.note ? `: ${noteSummary(v.apsr.approach.note, 80)}` : ""}`);
+            if (v.apsr.processes.status !== "Deployed") dims.push(`Processes${v.apsr.processes.note ? `: ${noteSummary(v.apsr.processes.note, 80)}` : ""}`);
+            if (v.apsr.systemsOutcomes.status !== "Evident") dims.push(`Outcomes${v.apsr.systemsOutcomes.note ? `: ${noteSummary(v.apsr.systemsOutcomes.note, 80)}` : ""}`);
+            if (v.apsr.review.status !== "Evident") dims.push(`Review${v.apsr.review.note ? `: ${noteSummary(v.apsr.review.note, 80)}` : ""}`);
             const dimStr = dims.length > 0 ? ` [${dims.join(" · ")}]` : "";
             return `  ${v.status === "Not met" ? "✗" : "◐"} ${lineText.slice(0, 100)}${dimStr}`;
           });

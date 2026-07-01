@@ -342,6 +342,15 @@ export function apsrReason(p: ApsrBreakdown): string {
 // when no actual implementation evidence was submitted (a documented policy on
 // its own is NOT evidence), so the note never reads as if a policy proved
 // implementation.
+// A note may itself be a multi-window citation block (one or more
+// "#N [file · chunk]:\ntext" paragraphs, blank-line separated — see
+// renderWindowNotes in agentRuntime.ts). Puts it on its own paragraph rather
+// than fusing it onto the same line as the lead-in sentence, so the "#N"
+// labels and their citations never end up mid-sentence.
+function withNoteParagraph(lead: string, note: string, trailing?: string): string {
+  return [lead, note.trim() || undefined, trailing].filter(Boolean).join("\n\n");
+}
+
 export function apsrAuditNote(p: ApsrBreakdown): string {
   const status = deriveApsrStatus(p);
   let why: string;
@@ -361,31 +370,31 @@ export function apsrAuditNote(p: ApsrBreakdown): string {
 
   // POLICY (Approach)
   if (p.approach.status === "Meeting")
-    parts.push(`POLICY\nThe documented approach covers this requirement.${p.approach.note ? ` ${p.approach.note}` : ""}`);
+    parts.push(withNoteParagraph(`POLICY\nThe documented approach covers this requirement.`, p.approach.note));
   else if (p.approach.status === "Beginning")
-    parts.push(`POLICY\nA documented approach exists but is incomplete or too generic for this requirement.${p.approach.note ? ` ${p.approach.note}` : ""} Make the policy specific and sustainable (who does what, when, repeatable year on year).`);
+    parts.push(withNoteParagraph(`POLICY\nA documented approach exists but is incomplete or too generic for this requirement.`, p.approach.note, `Make the policy specific and sustainable (who does what, when, repeatable year on year).`));
   else
     parts.push(`POLICY\nNo documented approach was found that addresses this requirement — add the policy/procedure for it.`);
 
   // EVIDENCE (Processes)
   if (p.processes.status === "Deployed")
-    parts.push(`EVIDENCE\nImplementation records were found.${p.processes.note ? ` ${p.processes.note}` : ""}`);
+    parts.push(withNoteParagraph(`EVIDENCE\nImplementation records were found.`, p.processes.note));
   else if (p.processes.status === "Weak")
-    parts.push(`EVIDENCE\nImplementation records are weak or partial.${p.processes.note ? ` ${p.processes.note}` : ""} Add dated records (logs, registers, minutes, screenshots) showing it is actually done.`);
+    parts.push(withNoteParagraph(`EVIDENCE\nImplementation records are weak or partial.`, p.processes.note, `Add dated records (logs, registers, minutes, screenshots) showing it is actually done.`));
   else
     parts.push(`EVIDENCE\nNo implementation records were found in the Actual Evidence folder — a documented policy alone is not evidence. Submit dated records showing this is carried out in practice.`);
 
   // OUTCOMES (Systems & Outcomes) — always shown so the section is never silently absent
   if (p.systemsOutcomes.status === "Not evident")
-    parts.push(`OUTCOMES\nNo outcome data or results were found.${p.systemsOutcomes.note ? ` ${p.systemsOutcomes.note}` : ""} Provide measurable results or improvement data to demonstrate this is producing the intended effect.`);
+    parts.push(withNoteParagraph(`OUTCOMES\nNo outcome data or results were found.`, p.systemsOutcomes.note, `Provide measurable results or improvement data to demonstrate this is producing the intended effect.`));
   else
-    parts.push(`OUTCOMES\n${p.systemsOutcomes.status}.${p.systemsOutcomes.note ? ` ${p.systemsOutcomes.note}` : ""}`);
+    parts.push(withNoteParagraph(`OUTCOMES\n${p.systemsOutcomes.status}.`, p.systemsOutcomes.note));
 
   // REVIEW
   if (p.review.status === "Evident")
-    parts.push(`REVIEW\nA review for continual improvement was evident.${p.review.note ? ` ${p.review.note}` : ""}`);
+    parts.push(withNoteParagraph(`REVIEW\nA review for continual improvement was evident.`, p.review.note));
   else
-    parts.push(`REVIEW\nNo formal review for continual improvement was found.${p.review.note ? ` ${p.review.note}` : ""}`);
+    parts.push(withNoteParagraph(`REVIEW\nNo formal review for continual improvement was found.`, p.review.note));
 
   return parts.join("\n\n");
 }
