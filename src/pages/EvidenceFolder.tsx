@@ -1117,6 +1117,7 @@ export function EvidenceFolder() {
   const clearFileTextCache  = useWorkspaceStore((s) => s.clearFileTextCache);
   const fileTextCacheSize   = useWorkspaceStore((s) => Object.keys(s.fileTextCache).length);
   const fileTextCacheEntries = useWorkspaceStore((s) => s.fileTextCache);
+  const auditRunHistory      = useWorkspaceStore((s) => s.auditRunHistory);
   const skipCurrentFile     = useWorkspaceStore((s) => s.skipCurrentFile);
   const busy                = useWorkspaceStore((s) => s.busy);
   const additionalInfo      = useWorkspaceStore((s) => s.additionalInfo);
@@ -1197,6 +1198,23 @@ export function EvidenceFolder() {
     downloadCsv(csv, auditCsvFilename("gd4-audit-ai-summary", run));
   };
 
+  // Build a lookup: cacheKey (fileId:modifiedTime) → { name, path, subCriterionId }
+  // sourced from every run in auditRunHistory so old cache entries get a readable name.
+  const cacheKeyMeta = useMemo(() => {
+    const map: Record<string, { name: string; path: string; subCriterionId: string }> = {};
+    for (const runs of Object.values(auditRunHistory)) {
+      for (const run of runs) {
+        for (const f of run.fileLedger) {
+          if (f.driveFileId) {
+            const key = `${f.driveFileId}:${f.driveModifiedTime ?? ""}`;
+            if (!map[key]) map[key] = { name: f.name, path: f.path, subCriterionId: run.subCriterionId };
+          }
+        }
+      }
+    }
+    return map;
+  }, [auditRunHistory]);
+
   return (
     <>
     {auditProgress && (
@@ -1244,33 +1262,37 @@ export function EvidenceFolder() {
                 </button>
               </div>
               {showCacheList && (
-                <div style={{ borderTop: "1px solid #c4b5fd", maxHeight: 260, overflowY: "auto" }}>
+                <div style={{ borderTop: "1px solid #c4b5fd", maxHeight: 300, overflowY: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                    <thead>
+                    <thead style={{ position: "sticky", top: 0, zIndex: 1 }}>
                       <tr style={{ background: "#ede9fe" }}>
-                        <th style={{ textAlign: "left", padding: "4px 10px", fontWeight: 600, color: "#5b21b6" }}>#</th>
-                        <th style={{ textAlign: "left", padding: "4px 10px", fontWeight: 600, color: "#5b21b6" }}>File name</th>
-                        <th style={{ textAlign: "left", padding: "4px 10px", fontWeight: 600, color: "#5b21b6" }}>Kind</th>
-                        <th style={{ textAlign: "right", padding: "4px 10px", fontWeight: 600, color: "#5b21b6" }}>Chars</th>
-                        <th style={{ textAlign: "left", padding: "4px 10px", fontWeight: 600, color: "#5b21b6" }}>Path</th>
+                        <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>#</th>
+                        <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>File name</th>
+                        <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>Sub-criterion</th>
+                        <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>Kind</th>
+                        <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>Chars</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {Object.entries(fileTextCacheEntries).map(([key, entry], i) => (
-                        <tr key={key} style={{ background: i % 2 === 0 ? "#faf5ff" : "#f5f3ff", borderTop: "1px solid #ede9fe" }}>
-                          <td style={{ padding: "3px 10px", color: "#7c3aed", fontWeight: 700 }}>{i + 1}</td>
-                          <td style={{ padding: "3px 10px", color: "#1e293b", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.fileName}>
-                            {entry.fileName ?? key.split(":")[0]}
-                          </td>
-                          <td style={{ padding: "3px 10px", color: "#6b7280" }}>{entry.fileKind}</td>
-                          <td style={{ padding: "3px 10px", color: "#6b7280", textAlign: "right", fontFamily: "ui-monospace,monospace" }}>
-                            {entry.charCount > 0 ? entry.charCount.toLocaleString() : "—"}
-                          </td>
-                          <td style={{ padding: "3px 10px", color: "#94a3b8", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.filePath}>
-                            {entry.filePath ?? "—"}
-                          </td>
-                        </tr>
-                      ))}
+                      {Object.entries(fileTextCacheEntries).map(([key, entry], i) => {
+                        const meta = cacheKeyMeta[key];
+                        const displayName = entry.fileName ?? meta?.name ?? key.split(":")[0];
+                        const displayPath = entry.filePath ?? meta?.path;
+                        const subCrit = meta?.subCriterionId ?? "—";
+                        return (
+                          <tr key={key} style={{ background: i % 2 === 0 ? "#faf5ff" : "#f5f3ff", borderTop: "1px solid #ede9fe" }}>
+                            <td style={{ padding: "3px 8px", color: "#7c3aed", fontWeight: 700 }}>{i + 1}</td>
+                            <td style={{ padding: "3px 8px", color: "#1e293b", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={displayPath ?? displayName}>
+                              {displayName}
+                            </td>
+                            <td style={{ padding: "3px 8px", color: "#6b7280", whiteSpace: "nowrap" }}>{subCrit}</td>
+                            <td style={{ padding: "3px 8px", color: "#6b7280" }}>{entry.fileKind}</td>
+                            <td style={{ padding: "3px 8px", color: "#6b7280", textAlign: "right", fontFamily: "ui-monospace,monospace" }}>
+                              {entry.charCount > 0 ? entry.charCount.toLocaleString() : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
