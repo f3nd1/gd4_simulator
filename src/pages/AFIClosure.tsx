@@ -18,6 +18,7 @@ export function AFIClosure() {
   const aiEnabled = useAISettingsStore((s) => s.enabled && !!s.apiKey);
   const setClosureHuman = useWorkspaceStore((s) => s.setClosureHuman);
   const removeCustomFinding = useWorkspaceStore((s) => s.removeCustomFinding);
+  const clearAllFindings = useWorkspaceStore((s) => s.clearAllFindings);
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
   const busy = useWorkspaceStore((s) => s.busy);
@@ -67,7 +68,7 @@ export function AFIClosure() {
         </span>
         {findings.length > 0 && (
           <button
-            onClick={() => { if (confirm(`Remove all ${findings.length} finding${findings.length !== 1 ? "s" : ""} shown? This cannot be undone.`)) findings.forEach((f) => removeCustomFinding(f.id)); }}
+            onClick={() => { if (confirm(`Remove all ${findings.length} finding${findings.length !== 1 ? "s" : ""} shown? This cannot be undone.`)) clearAllFindings(); }}
             style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 700, padding: "5px 11px", borderRadius: 8, fontSize: 12 }}
           >
             Remove all

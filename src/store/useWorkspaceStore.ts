@@ -383,6 +383,7 @@ export type WorkspaceState = {
   addCustomFinding: (f: Finding) => void;
   updateCustomFinding: (id: string, patch: Partial<Finding>) => void;
   removeCustomFinding: (id: string) => void;
+  clearAllFindings: () => void;
 
   clearReviewerOverride: (itemId: string) => void;
 
@@ -3066,6 +3067,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return { customFindings: s.customFindings.filter((f) => f.id !== id), closures: remainingClosures };
         });
         useChecklistModuleStore.getState().clearSavedFindingId(id);
+      },
+
+      clearAllFindings: () => {
+        const ids = get().customFindings.map((f) => f.id);
+        set({ customFindings: [], closures: {}, seedFindingsLoaded: false });
+        const cs = useChecklistModuleStore.getState();
+        ids.forEach((id) => cs.clearSavedFindingId(id));
       },
 
       clearReviewerOverride: (itemId) =>
