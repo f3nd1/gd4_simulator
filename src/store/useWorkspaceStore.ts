@@ -263,6 +263,10 @@ export type WorkspaceState = {
   // results the audit checks whether the current value still matches its
   // captured value — if not, it was cancelled and results are discarded.
   auditRunToken: number;
+  // When true, the current staged AI pass should stop processing further windows
+  // and return whatever results it has so far. Reset to false by the store after
+  // each stage completes. Does NOT cancel the whole audit — just the current pass.
+  auditSkipStageFlag: boolean;
   // Live progress state for the active folder audit — updated per-file and
   // per-batch so the UI can show a polished step indicator. Cleared by the
   // user (clearAuditProgress) so the result panel stays visible after completion.
@@ -286,6 +290,7 @@ export type WorkspaceState = {
   // Clears a stranded busy/bulk state so a button stuck on "Auditing…" can be
   // released. Also aborts the currently reading file so the loop exits promptly.
   cancelBusy: () => void;
+  skipCurrentAuditStage: () => void;
   // Clears the extracted-text cache so the next audit re-downloads all files
   // from Drive. Use when files have been updated but Drive modifiedTime hasn't
   // changed (e.g. in-place Google Docs edits that don't bump the timestamp).
@@ -573,6 +578,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       seedFindingsLoaded: false,
       busy: null,
       auditRunToken: 0,
+      auditSkipStageFlag: false,
       auditProgress: null,
       auditScope: "both" as AuditScope,
       auditRunHistory: {},
@@ -598,6 +604,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         _currentFileAbort = null;
         set((s) => ({ busy: null, bulkAuditStatus: null, auditRunToken: s.auditRunToken + 1 }));
       },
+
+      skipCurrentAuditStage: () => set({ auditSkipStageFlag: true }),
 
       clearFileTextCache: () => set({ fileTextCache: {} }),
       skipCurrentFile: () => {
@@ -2623,14 +2631,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (aiSettings.enabled && aiSettings.apiKey) {
           const stagedCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
           const stagedMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
+          const shouldStopStage = () => get().auditSkipStageFlag;
+          const resetSkipFlag = () => set({ auditSkipStageFlag: false });
+
           // Stage 2: Policy Adequacy Audit
           if (mode === "policy" || mode === "all") {
             setProgress("policy_audit", { stageDetail: `Checking policy coverage for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
               const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, {
                 criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
+                shouldStop: shouldStopStage,
                 onProgress: (detail) => setProgress("policy_audit", { stageDetail: `Policy: ${detail}`, canCancel: true }),
               });
+              resetSkipFlag();
               policyRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (result.promptSent) stagedPromptSent = result.promptSent;
@@ -2640,6 +2653,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (result.totalCharsAvailable) totalCharsAvailable += result.totalCharsAvailable;
               if (result.fullCoverage === false) allWindowsFullCoverage = false;
             } catch (err) {
+              resetSkipFlag();
               // Fallback to offline estimate
               policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);
             }
@@ -2654,8 +2668,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             try {
               const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, {
                 criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
+                shouldStop: shouldStopStage,
                 onProgress: (detail) => setProgress("evidence_audit", { stageDetail: `Evidence: ${detail}`, canCancel: true }),
               });
+              resetSkipFlag();
               evidenceRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
@@ -2665,6 +2681,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (result.totalCharsAvailable) totalCharsAvailable += result.totalCharsAvailable;
               if (result.fullCoverage === false) allWindowsFullCoverage = false;
             } catch (err) {
+              resetSkipFlag();
               evidenceRows = simulateStagedEvidenceAudit(allAuditPoints, evidenceDocText);
             }
           } else {
@@ -2677,8 +2694,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             try {
               const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, {
                 criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
+                shouldStop: shouldStopStage,
                 onProgress: (detail) => setProgress("outcome_review", { stageDetail: `Outcomes: ${detail}`, canCancel: true }),
               });
+              resetSkipFlag();
               outcomeRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
@@ -2688,6 +2707,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (result.totalCharsAvailable) totalCharsAvailable += result.totalCharsAvailable;
               if (result.fullCoverage === false) allWindowsFullCoverage = false;
             } catch (err) {
+              resetSkipFlag();
               outcomeRows = simulateStagedOutcomeReview(allAuditPoints, allDocText);
             }
           } else {

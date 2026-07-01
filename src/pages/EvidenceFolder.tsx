@@ -828,6 +828,7 @@ function AuditProgressModal({
   onClose,
   onCancel,
   onSkipFile,
+  onSkipStage,
   onExportFileLedger,
   onExportAISummary,
 }: {
@@ -835,6 +836,7 @@ function AuditProgressModal({
   onClose: () => void;
   onCancel: () => void;
   onSkipFile: () => void;
+  onSkipStage: () => void;
   onExportFileLedger: () => void;
   onExportAISummary: () => void;
 }) {
@@ -904,12 +906,23 @@ function AuditProgressModal({
             </div>
           </div>
           {isRunning ? (
-            <button
-              onClick={onCancel}
-              style={{ cursor: "pointer", border: "1px solid #fca5a5", background: "#fff5f5", borderRadius: 7, fontSize: 11.5, fontWeight: 600, color: "#b23121", padding: "5px 12px", whiteSpace: "nowrap", marginLeft: 8 }}
-            >
-              Cancel audit
-            </button>
+            <div style={{ display: "flex", gap: 6, marginLeft: 8, flexShrink: 0 }}>
+              {currentStep === 2 && (
+                <button
+                  onClick={onSkipStage}
+                  title="Stop the current AI pass early and move to the next stage using results collected so far"
+                  style={{ cursor: "pointer", border: "1px solid #fbbf24", background: "#fffbeb", borderRadius: 7, fontSize: 11.5, fontWeight: 600, color: "#92400e", padding: "5px 12px", whiteSpace: "nowrap" }}
+                >
+                  Skip stage →
+                </button>
+              )}
+              <button
+                onClick={onCancel}
+                style={{ cursor: "pointer", border: "1px solid #fca5a5", background: "#fff5f5", borderRadius: 7, fontSize: 11.5, fontWeight: 600, color: "#b23121", padding: "5px 12px", whiteSpace: "nowrap" }}
+              >
+                Cancel audit
+              </button>
+            </div>
           ) : (
             <button onClick={handleClose} style={{ cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#94a3b8", lineHeight: 1, padding: "0 0 0 8px", marginTop: -2 }}>×</button>
           )}
@@ -920,7 +933,7 @@ function AuditProgressModal({
             <span>⚠</span>
             {currentStep === 1
               ? <span>This file has been reading for over 60 seconds — it may be stuck. Click <b>Skip</b> next to the file name in the list below, or <b>Cancel audit</b> to stop.</span>
-              : <span>The AI has not responded for over 60 seconds — it may be stuck on a large batch. You can <b>Cancel audit</b> to stop and re-run with fewer files.</span>
+              : <span>The AI has not responded for over 60 seconds — it may be stuck. Click <b>Skip stage →</b> to stop this pass and continue with results so far, or <b>Cancel audit</b> to stop completely.</span>
             }
           </div>
         )}
@@ -1180,7 +1193,8 @@ export function EvidenceFolder() {
   const fileTextCacheSize   = useWorkspaceStore((s) => Object.keys(s.fileTextCache).length);
   const fileTextCacheEntries = useWorkspaceStore((s) => s.fileTextCache);
   const auditRunHistory      = useWorkspaceStore((s) => s.auditRunHistory);
-  const skipCurrentFile     = useWorkspaceStore((s) => s.skipCurrentFile);
+  const skipCurrentFile         = useWorkspaceStore((s) => s.skipCurrentFile);
+  const skipCurrentAuditStage   = useWorkspaceStore((s) => s.skipCurrentAuditStage);
   const busy                = useWorkspaceStore((s) => s.busy);
   const additionalInfo      = useWorkspaceStore((s) => s.additionalInfo);
   const setAdditionalInfoLink     = useWorkspaceStore((s) => s.setAdditionalInfoLink);
@@ -1285,6 +1299,7 @@ export function EvidenceFolder() {
         onClose={clearAuditProgress}
         onCancel={() => { cancelBusy(); clearAuditProgress(); }}
         onSkipFile={skipCurrentFile}
+        onSkipStage={skipCurrentAuditStage}
         onExportFileLedger={handleExportFileLedger}
         onExportAISummary={handleExportAISummary}
       />
