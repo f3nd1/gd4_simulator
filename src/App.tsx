@@ -16,6 +16,8 @@ import { Sampling } from "./pages/Sampling";
 import { Interview } from "./pages/Interview";
 import { Findings } from "./pages/Findings";
 import { AFIClosure } from "./pages/AFIClosure";
+import { PPDReview } from "./pages/PPDReview";
+import { PPDImprovementTracker } from "./pages/PPDImprovementTracker";
 import { AIReview } from "./pages/AIReview";
 import { HumanDecisionLog } from "./pages/HumanDecisionLog";
 import { AIDebugLog } from "./pages/AIDebugLog";
@@ -56,6 +58,8 @@ export default function App() {
           <Route path="/interview" element={<Interview />} />
           <Route path="/findings" element={<Findings />} />
           <Route path="/afi-closure" element={<AFIClosure />} />
+          <Route path="/ppd-review" element={<PPDReview />} />
+          <Route path="/ppd-improvement-tracker" element={<PPDImprovementTracker />} />
           <Route path="/ai-review" element={<AIReview />} />
           <Route path="/human-decision-log" element={<HumanDecisionLog />} />
           <Route path="/ai-debug" element={<AIDebugLog />} />

@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus, PPDVerdict, PPDReviewRow } from "../../types";
 import { chatComplete, AIClientError, addUsage, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
@@ -1399,4 +1399,141 @@ export function simulateStagedOutcomeReview(auditPoints: FlatAuditPoint[], allDo
     note: `Offline estimate: outcome keywords ${hasOutcome ? "found" : "not found"}, review keywords ${hasReview ? "found" : "not found"}.`,
     chunkIds: [],
   }));
+}
+
+// ─── PPD Requirements Review ────────────────────────────────────────────────
+// Reads ONLY the Policy & Procedure Document(s) for a sub-criterion and, for
+// EACH GD4 requirement (not FlatAuditPoint — this is requirement-level, not
+// audit-point-level like the staged policy stage), decides whether the PPD
+// documents it, with a suggested rewrite for anything short of Adequate.
+// Orchestration (reading the Policy folder, calling this, logging to the AI
+// Review Log) lives in useWorkspaceStore.runPPDReview — this function only
+// makes the AI call(s), same division of responsibility as every other
+// function in this file.
+
+export type PPDRequirementInput = { gd4ItemId: string; requirementText: string };
+
+export type PPDRequirementsReviewResult = {
+  rows: PPDReviewRow[];
+  usage?: AIUsage;
+  promptSent?: string;
+  windowsProcessed?: number;
+  fullCoverage?: boolean;
+};
+
+const PPD_VERDICT_ORDER: Record<PPDVerdict, number> = { "Not documented": 0, "Partial": 1, "Adequate": 2 };
+
+export async function runPPDRequirementsReview(
+  requirements: PPDRequirementInput[],
+  policyDocText: string,
+  settings: AISettings,
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string) => void; shouldStop?: () => boolean } = {}
+): Promise<PPDRequirementsReviewResult> {
+  if (requirements.length === 0 || !policyDocText.trim()) {
+    return {
+      rows: requirements.map((r) => ({
+        gd4ItemId: r.gd4ItemId,
+        requirementText: r.requirementText,
+        verdict: "Not documented" as PPDVerdict,
+        shortComment: "No Policy & Procedure documents were provided.",
+        fullComment: "No Policy & Procedure documents were found for this sub-criterion, so this requirement cannot be assessed as documented.",
+        chunkIds: [],
+      })),
+    };
+  }
+
+  const domainSkill = domainExpertiseFor(opts.criterionId);
+  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+
+  // Built per actual AI call (inside the window/batch loop below) — see the
+  // comment on the equivalent pattern in runStagedPolicyAudit: buildSystemPrompt()
+  // has a dev-only AI Debug Log side effect, and every real chatComplete() call
+  // should get its own debug-log entry.
+  const buildSystem = (label: string) => `You are reviewing ONLY the Policy & Procedure Document (PPD) for a GD4 EduTrust sub-criterion, requirement by requirement — not implementation evidence, not outcomes. For EACH GD4 requirement given, decide whether the PPD documents it:
+
+"Adequate" = the PPD clearly, specifically and sustainably documents HOW the institution meets this requirement (names who is responsible, what they do, when/how often, and what record is produced).
+"Partial" = the PPD mentions the requirement but is vague, generic, boilerplate, or missing key detail (no named owner, no frequency, not specific to this institution).
+"Not documented" = the PPD does not address this requirement at all.
+
+For each requirement return:
+- verdict: "Adequate" | "Partial" | "Not documented"
+- shortComment: one sentence summarising the verdict
+- fullComment: 2-4 sentences explaining exactly what was found or is missing in the PPD, in factual neutral language (state what exists or is absent, do not use words like "adequate"/"good"/"poor" inside the comment itself — the verdict field already carries that judgement)
+- suggestedRewrite: for Partial or Not documented ONLY — a concrete, institution-ready PPD paragraph the auditor could paste directly into the policy document to close this gap (name the responsible role, frequency, and the record produced). Omit (empty string) for Adequate.
+- chunkIds: the exact chunk ID(s) (e.g. "C001") from document headers that support the verdict. Leave empty if none directly support it — never invent a chunk ID.
+
+Respond with JSON only:
+{"results": [{"gd4ItemId": string, "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "suggestedRewrite": string, "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+
+  const windows = buildDocWindows(policyDocText);
+
+  type BestPPD = { verdict: PPDVerdict; shortComment: string; fullComment: string; suggestedRewrite?: string; chunkIds: string[] };
+  const bestByItem = new Map<string, BestPPD>();
+
+  let usage: AIUsage | undefined;
+  let firstPromptSent: string | undefined;
+  let windowsCompleted = 0;
+
+  const REQ_BATCH_SIZE = 8;
+  const batches: PPDRequirementInput[][] = [];
+  for (let i = 0; i < requirements.length; i += REQ_BATCH_SIZE) {
+    batches.push(requirements.slice(i, i + REQ_BATCH_SIZE));
+  }
+
+  for (const win of windows) {
+    if (opts.shouldStop?.()) break;
+    const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()}]` : "";
+
+    for (const [bi, batch] of batches.entries()) {
+      if (opts.shouldStop?.()) break;
+      opts.onProgress?.(`PPD requirements review — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
+      const pointsBlock = batch.map((r, i) => `[${r.gd4ItemId}] (${i + 1}) ${r.requirementText}`).join("\n");
+      const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess PPD documentation for each GD4 requirement:\n${pointsBlock}`;
+      const system = buildSystem(windows.length > 1 ? `runPPDRequirementsReview (window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview");
+      if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
+      try {
+        const content = await chatComplete(
+          [{ role: "system", content: system }, { role: "user", content: user }],
+          settings,
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+        );
+        const parsed = parseJSONObject(content);
+        const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+        const byItem = new Map(results.map((r) => [String(r.gd4ItemId ?? ""), r]));
+        for (const r of batch) {
+          const res = byItem.get(r.gd4ItemId);
+          const verdict = (["Adequate", "Partial", "Not documented"] as PPDVerdict[]).includes(res?.verdict as PPDVerdict)
+            ? (res!.verdict as PPDVerdict) : "Not documented";
+          const shortComment = typeof res?.shortComment === "string" ? res.shortComment : "";
+          const fullComment = typeof res?.fullComment === "string" ? res.fullComment : "";
+          const suggestedRewrite = typeof res?.suggestedRewrite === "string" && res.suggestedRewrite.trim() ? res.suggestedRewrite : undefined;
+          const chunkIds = Array.isArray(res?.chunkIds) ? (res!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+          const prev = bestByItem.get(r.gd4ItemId);
+          if (!prev || PPD_VERDICT_ORDER[verdict] > PPD_VERDICT_ORDER[prev.verdict]) {
+            bestByItem.set(r.gd4ItemId, { verdict, shortComment, fullComment, suggestedRewrite, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])] });
+          } else {
+            bestByItem.set(r.gd4ItemId, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])] });
+          }
+        }
+      } catch (err) {
+        console.error("[PPDRequirementsReview]", windows.length > 1 ? `window ${win.index + 1}/${win.total}` : "call failed", err instanceof Error ? err.message : String(err));
+      }
+    }
+    windowsCompleted++;
+  }
+
+  const rows: PPDReviewRow[] = requirements.map((r) => {
+    const best = bestByItem.get(r.gd4ItemId);
+    return {
+      gd4ItemId: r.gd4ItemId,
+      requirementText: r.requirementText,
+      verdict: best?.verdict ?? "Not documented",
+      shortComment: best?.shortComment || "No verdict returned by the AI for this requirement.",
+      fullComment: best?.fullComment || "No verdict returned by the AI for this requirement — treat as undocumented until re-run.",
+      suggestedRewrite: best?.suggestedRewrite,
+      chunkIds: best?.chunkIds ?? [],
+    };
+  });
+
+  return { rows, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: windowsCompleted === windows.length };
 }

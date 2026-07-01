@@ -38,14 +38,14 @@ import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit, deriveApsrStatus, type FolderAuditLineVerdict } from "../lib/ai/simulateAI";
-import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP, runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr, simulateStagedPolicyAudit, simulateStagedEvidenceAudit, simulateStagedOutcomeReview } from "../lib/ai/agentRuntime";
+import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP, runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr, simulateStagedPolicyAudit, simulateStagedEvidenceAudit, simulateStagedOutcomeReview, runPPDRequirementsReview, type PPDRequirementInput } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDAcceptedRewrite, PPDRewriteStatus } from "../types";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -299,6 +299,14 @@ export type WorkspaceState = {
   // Persisted "Recheck all evidence" report so it survives navigation and
   // page refreshes. null means the report hasn't been run yet this session.
   evidenceAuditReport: { flags: EvidenceAuditFlag[]; generatedAt: string } | null;
+  // PPD Requirements Review — most recent run per sub-criterion, and every
+  // rewrite the auditor has accepted into the PPD Improvement Tracker.
+  ppdReviewResults: Record<string, PPDReviewResult>;
+  ppdAcceptedRewrites: PPDAcceptedRewrite[];
+  runPPDReview: (subCriterionId: string) => Promise<void>;
+  acceptPPDRewrite: (subCriterionId: string, row: PPDReviewRow) => void;
+  setPPDRewriteStatus: (id: string, status: PPDRewriteStatus) => void;
+  removePPDRewrite: (id: string) => void;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
   // Clears a stranded busy/bulk state so a button stuck on "Auditing…" can be
@@ -606,6 +614,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       additionalInfo: { link: "" },
       schoolContext: { text: "", link: "" },
       evidenceAuditReport: null,
+      ppdReviewResults: {},
+      ppdAcceptedRewrites: [],
       auditJournal: "",
       restoreLog: [],
       activeAuditorId: null,
@@ -644,6 +654,141 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) =>
         set({ evidenceAuditReport: flags === null ? null : { flags, generatedAt: new Date().toLocaleString() } }),
+
+      // PPD Requirements Review: reads ONLY the Policy & Procedure Document(s)
+      // linked to a sub-criterion's evidence folder, then asks the AI
+      // (runPPDRequirementsReview in agentRuntime.ts) whether each GD4
+      // requirement in that sub-criterion is actually documented in the PPD.
+      // Deliberately much leaner than auditFolderStaged: no evidence-folder
+      // reading, no checklist writing, no progress modal — this is a
+      // standalone review, not part of the scored audit pipeline.
+      runPPDReview: async (subCriterionId) => {
+        const s = get();
+        const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
+        if (!folder) return;
+        set({ busy: "ppdreview" + subCriterionId });
+        const runId = `PPD-${subCriterionId}-${Date.now().toString(36).toUpperCase()}`;
+
+        const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>) => {
+          const summary = rows
+            ? `PPD requirements review: ${rows.filter((r) => r.verdict === "Adequate").length} Adequate, ${rows.filter((r) => r.verdict === "Partial").length} Partial, ${rows.filter((r) => r.verdict === "Not documented").length} Not documented (of ${rows.length}).`
+            : `PPD requirements review failed${liveError ? `: ${liveError}` : "."}`;
+          const log: AIReviewLogEntry = {
+            id: `LOG-${Date.now()}-${++logCounter}`,
+            auditCycleId: s.cycle.id,
+            agent: "PPD Requirements Reviewer",
+            reviewType: "Evidence",
+            subjectId: subCriterionId,
+            verdict: summary,
+            confidence: "Medium",
+            keyConcerns: [summary],
+            recommendedAction: "Review each Partial/Not documented requirement's suggested rewrite before accepting it into the PPD Improvement Tracker.",
+            live,
+            liveError,
+            generatedContent: summary,
+            promptSent,
+            createdAt: new Date().toISOString(),
+            runId,
+            model: usage?.model,
+            promptTokens: usage?.promptTokens,
+            completionTokens: usage?.completionTokens,
+            totalTokens: usage?.totalTokens,
+          };
+          set((st) => ({
+            ppdReviewResults: rows
+              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames } }
+              : st.ppdReviewResults,
+            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
+            busy: null,
+          }));
+        };
+
+        try {
+          const requirements: PPDRequirementInput[] = GD4_REQUIREMENTS
+            .filter((r) => r.subCriterionId === subCriterionId)
+            .map((r) => ({ gd4ItemId: r.id, requirementText: r.requirement }));
+          if (requirements.length === 0) { finish(null, false, "No GD4 requirements map to this sub-criterion."); return; }
+
+          const policyId = parseFolderId(folder.policyLink) || parseFolderId(folder.folderLink);
+          const token = useGoogleDriveStore.getState().getValidToken();
+          if (!policyId) { finish(null, false, "No Policy & Procedure folder linked."); return; }
+          if (!token) { finish(null, false, "Not connected to Google Drive."); return; }
+
+          const allFiles = await listFolderFilesRecursive(policyId, token);
+          // If policyLink is a dedicated folder, every file in it is policy;
+          // if it's the shared single-folder convention (folderLink doubling
+          // as both), keep only files under the "Policy & Procedure" subfolder.
+          const policyFiles = parseFolderId(folder.policyLink)
+            ? allFiles
+            : allFiles.filter((f) => classifyFileBucket(f.path) === "policy");
+          if (policyFiles.length === 0) { finish(null, false, "No Policy & Procedure files found in the linked folder."); return; }
+
+          const MAX_PART_CHARS = 24_000;
+          const docParts: string[] = [];
+          const chunkFileNames: Record<string, string> = {};
+          let chunkCounter = 0;
+          for (const file of policyFiles) {
+            const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
+            const cached = get().fileTextCache[cacheKey];
+            let body: string | null;
+            if (cached) {
+              body = cached.text;
+            } else {
+              try {
+                body = await exportFileText(file, token);
+                set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body?.length ?? 0, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
+              } catch {
+                body = null;
+              }
+            }
+            if (!body) continue;
+            const fileName = file.path.split("/").pop() || file.path;
+            const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
+            for (let pi = 0; pi < totalParts; pi++) {
+              const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+              const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
+              const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
+              docParts.push(`[CHUNK:${chunkId}] --- ${file.path}${partLabel} ---\n${chunkBody}`);
+              chunkFileNames[chunkId] = fileName;
+            }
+          }
+          if (docParts.length === 0) { finish(null, false, "No readable text could be extracted from the Policy & Procedure files."); return; }
+          const policyDocText = docParts.join("\n\n=== POLICY & PROCEDURE ===\n\n");
+
+          const aiSettings = useAISettingsStore.getState();
+          if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, "AI is disabled or no API key is configured in Settings."); return; }
+          const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
+
+          const result = await runPPDRequirementsReview(requirements, policyDocText, analysisSettings, { criterionId: subCriterionId });
+          finish(result.rows, true, undefined, result.promptSent, result.usage, chunkFileNames);
+        } catch (err) {
+          finish(null, false, err instanceof Error ? err.message : String(err));
+        }
+      },
+
+      acceptPPDRewrite: (subCriterionId, row) => {
+        if (!row.suggestedRewrite?.trim()) return;
+        const chunkFileNames = get().ppdReviewResults[subCriterionId]?.chunkFileNames;
+        const documentName = (row.chunkIds.length > 0 && chunkFileNames?.[row.chunkIds[0]]) || "Unknown document";
+        const rewrite: PPDAcceptedRewrite = {
+          id: `PPDR-${Date.now().toString(36).toUpperCase()}`,
+          subCriterionId,
+          gd4ItemId: row.gd4ItemId,
+          requirementText: row.requirementText,
+          documentName,
+          originalVerdict: row.verdict,
+          rewriteText: row.suggestedRewrite,
+          status: "To draft",
+          acceptedAt: new Date().toISOString(),
+        };
+        set((s) => ({ ppdAcceptedRewrites: [rewrite, ...s.ppdAcceptedRewrites] }));
+      },
+
+      setPPDRewriteStatus: (id, status) =>
+        set((s) => ({ ppdAcceptedRewrites: s.ppdAcceptedRewrites.map((r) => (r.id === id ? { ...r, status } : r)) })),
+
+      removePPDRewrite: (id) =>
+        set((s) => ({ ppdAcceptedRewrites: s.ppdAcceptedRewrites.filter((r) => r.id !== id) })),
 
       // Fills the workspace with realistic sample evidence ratings plus the
       // workflow-progress fields derived from them (reviewer drafts,
@@ -825,6 +970,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           customFindings: [],
           seedFindingsLoaded: false,
           evidenceAuditReport: null,
+          ppdReviewResults: {},
+          ppdAcceptedRewrites: [],
           auditJournal: "",
         }));
       },

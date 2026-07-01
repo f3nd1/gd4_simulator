@@ -662,6 +662,56 @@ export type AuditProgressState = {
 // Which source folders the audit reads.
 export type AuditScope = "both" | "policy" | "evidence";
 
+// ─── PPD Requirements Review ────────────────────────────────────────────────
+// A read-only-of-policy pass: for each GD4 requirement in a sub-criterion,
+// does the Policy & Procedure Document (PPD) actually document it? Distinct
+// from the staged audit's policy stage (which only asks "Yes/Partial/No" per
+// FlatAuditPoint for banding) — this is requirement-level, produces a full
+// human-readable comment, and drafts a rewrite the auditor can accept into
+// the PPD Improvement Tracker.
+
+export type PPDVerdict = "Adequate" | "Partial" | "Not documented";
+
+export type PPDReviewRow = {
+  gd4ItemId: string;
+  requirementText: string;
+  verdict: PPDVerdict;
+  shortComment: string;
+  fullComment: string;
+  // Only populated for Partial / Not documented rows.
+  suggestedRewrite?: string;
+  chunkIds: string[];
+};
+
+export type PPDReviewResult = {
+  subCriterionId: string;
+  rows: PPDReviewRow[];
+  runAt: string;
+  live: boolean;
+  promptSent?: string;
+  // chunkId -> source file name, so a row's chunkIds can be resolved back to
+  // which PPD document to file an accepted rewrite under.
+  chunkFileNames?: Record<string, string>;
+};
+
+export type PPDRewriteStatus = "To draft" | "Drafted" | "Published to PPD";
+
+// One rewrite the auditor has accepted from a PPD Review run, tracked until
+// it's actually folded into the next PPD revision.
+export type PPDAcceptedRewrite = {
+  id: string;
+  subCriterionId: string;
+  gd4ItemId: string;
+  requirementText: string;
+  // The PPD document this rewrite applies to — derived from the chunk file
+  // name(s) the review cited; "Unknown document" when no chunk was cited.
+  documentName: string;
+  originalVerdict: PPDVerdict;
+  rewriteText: string;
+  status: PPDRewriteStatus;
+  acceptedAt: string;
+};
+
 // One checklist line's AI verdict, stored in an AuditRunRecord for post-run
 // inspection and CSV export.
 export type AuditAISummaryLine = {
