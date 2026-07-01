@@ -17,6 +17,7 @@ import type {
   AIReviewLogEntry,
   AIReviewType,
   Confidence,
+  HumanDecisionEntry,
   Finding,
   DriveAccessStatus,
   ApsrBreakdown,
@@ -241,6 +242,7 @@ export type WorkspaceState = {
   folders: EvidenceFolder[];
   itemReviews: Record<string, ItemAIVerdict>;
   aiReviewLog: AIReviewLogEntry[];
+  humanDecisionLog: HumanDecisionEntry[];
   samples: SampleRecord[];
   interviewQuestions: InterviewQuestion[];
   managementReviewItems: ManagementReviewItem[];
@@ -313,7 +315,7 @@ export type WorkspaceState = {
   seedClosure: (afiId: string, seed: { root?: string; corr?: string; prev?: string }) => void;
   runClosureAI: (afiId: string) => Promise<void>;
   draftClosureActions: (afiId: string, issue: string, gd4ItemId: string) => Promise<void>;
-  setClosureHuman: (afiId: string, value: "" | "Accepted") => void;
+  setClosureHuman: (afiId: string, value: "" | "Accepted", reason?: string) => void;
 
   addAuditor: (a: AuditorProfile) => void;
   updateAuditor: (id: string, patch: Partial<AuditorProfile>) => void;
@@ -399,6 +401,8 @@ export type WorkspaceState = {
     runId?: string;
     usage?: AIUsage;
   }) => void;
+
+  logHumanDecision: (entry: Omit<HumanDecisionEntry, "id" | "timestamp">) => void;
 
   setBusy: (id: string | null) => void;
 
@@ -543,6 +547,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       folders: seedFolders(),
       itemReviews: {},
       aiReviewLog: [],
+      humanDecisionLog: [],
       samples: [],
       interviewQuestions: [],
       managementReviewItems: [],
@@ -759,6 +764,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           folders: seedFolders(),
           itemReviews: {},
           aiReviewLog: [],
+      humanDecisionLog: [],
           samples: [],
           interviewQuestions: [],
           managementReviewItems: [],
@@ -859,7 +865,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set({ itemReviews: { ...s.itemReviews, [itemId]: verdict }, aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200), busy: null });
       },
 
-      setClosureField: (afiId, field, value) => set((s) => ({ closures: { ...s.closures, [afiId]: { ...(s.closures[afiId] || {}), [field]: value } } })),
+      setClosureField: (afiId, field, value) => {
+        if (field === "root" || field === "corr" || field === "prev") {
+          const c = get().closures[afiId] || {};
+          const prev = (c[field] as string | undefined) ?? "";
+          // Only log when there was prior AI-drafted content being changed
+          if (prev && value !== prev) {
+            get().logHumanDecision({
+              module: "Closure Drafting",
+              subjectId: afiId,
+              aiOutput: prev,
+              humanDecision: value,
+              changed: true,
+              decisionType: "Edited",
+              reason: "",
+              field,
+            });
+          }
+        }
+        set((s) => ({ closures: { ...s.closures, [afiId]: { ...(s.closures[afiId] || {}), [field]: value } } }));
+      },
 
       seedClosure: (afiId, seed) =>
         set((s) => {
@@ -971,7 +996,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
       },
 
-      setClosureHuman: (afiId, value) => set((s) => ({ closures: { ...s.closures, [afiId]: { ...(s.closures[afiId] || {}), human: value } } })),
+      setClosureHuman: (afiId, value, reason = "") => {
+        const s = get();
+        const c = s.closures[afiId] || {};
+        const aiVerdict = c.ai ?? "";
+        const changed = value !== aiVerdict;
+        get().logHumanDecision({
+          module: "AFI Closure",
+          subjectId: afiId,
+          aiOutput: aiVerdict ? `AI verdict: ${aiVerdict}${c.aiReason ? ` — ${c.aiReason}` : ""}` : "No AI verdict yet",
+          humanDecision: value || "(cleared)",
+          changed,
+          decisionType: !aiVerdict ? "Accepted" : changed ? "Overridden" : "Accepted",
+          reason,
+          field: "human",
+        });
+        set((s) => ({ closures: { ...s.closures, [afiId]: { ...(s.closures[afiId] || {}), human: value } } }));
+      },
 
       addAuditor: (a) => set((s) => ({ auditors: [...s.auditors, a] })),
       updateAuditor: (id, patch) => set((s) => ({ auditors: s.auditors.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
@@ -3013,6 +3054,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             totalTokens: entry.usage?.totalTokens,
           };
           return { aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200) };
+        }),
+
+      logHumanDecision: (entry) =>
+        set((s) => {
+          const log: HumanDecisionEntry = {
+            id: `HDL-${Date.now()}-${++logCounter}`,
+            timestamp: new Date().toISOString(),
+            ...entry,
+          };
+          return { humanDecisionLog: [log, ...s.humanDecisionLog].slice(0, 500) };
         }),
 
       setBusy: (id) => set({ busy: id }),

@@ -322,6 +322,9 @@ export type GroupedFindingDraft = {
   };
   evidenceStatusSummary?: string;
   live?: boolean;
+  // Snapshot of the original AI-generated text, captured at generation time so
+  // the Human Decision Log can record what changed before confirm.
+  aiSnapshot?: { title?: string; observation?: string; criteria?: string; effect?: string; rootCause?: string; corrective?: string; preventive?: string };
 };
 
 export type GenericChecklistLine = {
@@ -704,6 +707,28 @@ export type AIReviewLogEntry = {
   auxPromptTokens?: number;
   auxCompletionTokens?: number;
   auxTotalTokens?: number;
+};
+
+export type HumanDecisionModule =
+  | "AFI Closure"
+  | "Grouped Finding"
+  | "Line Status"
+  | "Closure Drafting";
+
+export type HumanDecisionType = "Accepted" | "Edited" | "Overridden";
+
+export type HumanDecisionEntry = {
+  id: string;
+  timestamp: string;
+  module: HumanDecisionModule;
+  subjectId: string;
+  aiRunId?: string;
+  aiOutput: string;
+  humanDecision: string;
+  changed: boolean;
+  decisionType: HumanDecisionType;
+  reason: string;
+  field?: string;
 };
 
 export type ManagementReviewItem = {

@@ -27,6 +27,7 @@ export function AFIClosure() {
   const [dateFilter, setDateFilter] = useState<"all" | "7d" | "30d" | "90d">("all");
   const [draftErrors, setDraftErrors] = useState<Record<string, string>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [closureReasons, setClosureReasons] = useState<Record<string, string>>({});
 
   const subCritOptions = useMemo(
     () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter)),
@@ -176,8 +177,21 @@ export function AFIClosure() {
                   >
                     {busy === "clx" + f.id ? "Reviewing…" : "AI closure review"}
                   </button>
+                  {/* Reason input — shown when AI has a conflicting verdict */}
+                  {c.ai && c.human !== "Accepted" && (
+                    <input
+                      placeholder="Reason for override (required when overriding AI verdict)"
+                      value={closureReasons[f.id] || ""}
+                      onChange={(e) => setClosureReasons((r) => ({ ...r, [f.id]: e.target.value }))}
+                      style={{ ...inputStyle, width: 260, padding: "5px 8px", fontSize: 11.5 }}
+                    />
+                  )}
                   <button
-                    onClick={() => setClosureHuman(f.id, c.human === "Accepted" ? "" : "Accepted")}
+                    onClick={() => {
+                      const reason = closureReasons[f.id] ?? "";
+                      setClosureHuman(f.id, c.human === "Accepted" ? "" : "Accepted", reason);
+                      if (c.human !== "Accepted") setClosureReasons((r) => ({ ...r, [f.id]: "" }));
+                    }}
                     disabled={c.human !== "Accepted" && !c.evid?.trim()}
                     title={c.human !== "Accepted" && !c.evid?.trim() ? "Add a closure evidence link before accepting" : undefined}
                     style={{

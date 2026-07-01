@@ -247,7 +247,22 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       // Also clears any unconfirmed pending lines so the slate is truly clean.
       clearSpecificLines: (itemId) => set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: [], pendingGenerated: [] }))),
 
-      setSpecificStatus: (itemId, lineId, status) => set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, status })))),
+      setSpecificStatus: (itemId, lineId, status) => {
+        const line = get().entries[itemId]?.specific.find((l) => l.id === lineId);
+        if (line && line.generatedBy === "ai" && line.status !== status && line.status !== "Not Started") {
+          useWorkspaceStore.getState().logHumanDecision({
+            module: "Line Status",
+            subjectId: itemId,
+            aiOutput: `AI set: ${line.status}`,
+            humanDecision: status,
+            changed: true,
+            decisionType: "Overridden",
+            reason: "",
+            field: lineId,
+          });
+        }
+        set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, status }))));
+      },
 
       // Drafts evidence metadata (title/type/date/sufficiency/auditorNote)
       // from a pasted link alone, so the human only has to supply the key

@@ -190,6 +190,15 @@ export const useFindingDraftStore = create<FindingDraftState>()(
                           apsrBullets: result.apsrBullets,
                           evidenceStatusSummary: result.evidenceStatusSummary,
                           live: result.live,
+                          aiSnapshot: {
+                            title: result.title,
+                            observation: result.observation,
+                            criteria: result.criteria,
+                            effect: result.effect,
+                            rootCause: result.rootCause,
+                            corrective: result.corrective,
+                            preventive: result.preventive,
+                          },
                         }
                       : d
                   ),
@@ -256,6 +265,30 @@ export const useFindingDraftStore = create<FindingDraftState>()(
           groupedFindingId: draftId,
           createdFromAuditRunId: draft.auditRunId,
         };
+
+        // Log human decision: compare confirmed text against AI snapshot
+        if (draft.aiSnapshot) {
+          const snap = draft.aiSnapshot;
+          const changedFields: string[] = [];
+          const fields = ["title", "observation", "criteria", "effect", "rootCause", "corrective", "preventive"] as const;
+          for (const f of fields) {
+            const ai = snap[f] ?? "";
+            const human = (draft[f] ?? "") as string;
+            if (ai && human !== ai) changedFields.push(f);
+          }
+          const changed = changedFields.length > 0;
+          useWorkspaceStore.getState().logHumanDecision({
+            module: "Grouped Finding",
+            subjectId: draft.gd4ItemId,
+            aiRunId: draft.auditRunId,
+            aiOutput: [snap.title, snap.observation].filter(Boolean).join(" · ").slice(0, 300),
+            humanDecision: [draft.title, draft.observation].filter(Boolean).join(" · ").slice(0, 300),
+            changed,
+            decisionType: changed ? "Edited" : "Accepted",
+            reason: "",
+            field: changed ? changedFields.join(", ") : undefined,
+          });
+        }
 
         useWorkspaceStore.getState().addCustomFinding(finding);
 
