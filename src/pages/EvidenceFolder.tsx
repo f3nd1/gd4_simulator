@@ -426,6 +426,8 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
   const batch = p.batchCurrent ?? 0;
   const total = p.batchTotal ?? 1;
   const isStrict = p.stageDetail?.includes("strict") || p.stageDetail?.includes("challenge");
+  const [aiFileSearch, setAiFileSearch] = useState("");
+  const [aiFileSort, setAiFileSort] = useState<"name" | "status" | "size">("name");
 
   const files = p.filesFound ?? [];
   const totalNew     = files.filter((f) => f.processingMode === "new").length;
@@ -493,21 +495,54 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
             {/* Files being sent to AI in this pass */}
             {files.length > 0 && (
               <div style={{ marginBottom: 8 }}>
-                <div style={{ fontSize: 10.5, color: "#64748b", marginBottom: 3 }}>
-                  📤 Sending <b>{files.length}</b> file{files.length !== 1 ? "s" : ""} to AI
-                  {p.chunksCount != null && <> · <b>{p.chunksCount}</b> chunks</>}
+                <div style={{ fontSize: 10.5, color: "#64748b", marginBottom: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <span>📤 Sending <b>{files.length}</b> file{files.length !== 1 ? "s" : ""} to AI</span>
+                  {p.chunksCount != null && <span>· <b>{p.chunksCount}</b> chunks</span>}
+                  <input
+                    value={aiFileSearch}
+                    onChange={(e) => setAiFileSearch(e.target.value)}
+                    placeholder="Search files…"
+                    style={{ marginLeft: "auto", fontSize: 10, padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", outline: "none", width: 120 }}
+                  />
+                  <select
+                    value={aiFileSort}
+                    onChange={(e) => setAiFileSort(e.target.value as "name" | "status" | "size")}
+                    style={{ fontSize: 10, padding: "2px 4px", borderRadius: 4, border: "1px solid #cbd5e1", color: "#374151" }}
+                  >
+                    <option value="name">Sort: Name</option>
+                    <option value="status">Sort: Status</option>
+                    <option value="size">Sort: Size</option>
+                  </select>
                 </div>
-                <div style={{ maxHeight: 110, overflowY: "auto", border: "1px solid #dbeafe", borderRadius: 6, background: "#f8fbff" }}>
-                  {files.map((file, fi) => (
-                    <div key={file.path + fi} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px", borderBottom: "1px solid #eff6ff", fontSize: 10 }}>
-                      <span style={{ flexShrink: 0, width: 14, textAlign: "center", color: "#60a5fa" }}>📄</span>
-                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#1e40af" }}>{file.name}</span>
-                      <span style={{ flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{file.fileKind?.toUpperCase()}</span>
-                      {file.charCount != null && file.charCount > 0 && (
-                        <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", color: "#6b7280", fontSize: 9 }}>{file.charCount.toLocaleString()} ch</span>
-                      )}
-                    </div>
-                  ))}
+                <div style={{ maxHeight: 120, overflowY: "auto", border: "1px solid #dbeafe", borderRadius: 6, background: "#f8fbff" }}>
+                  {files
+                    .filter((f) => !aiFileSearch || f.name.toLowerCase().includes(aiFileSearch.toLowerCase()))
+                    .slice()
+                    .sort((a, b) => {
+                      if (aiFileSort === "status") {
+                        const order: Record<string, number> = { cited: 0, audited: 1, not_used: 2, pending: 3 };
+                        return (order[a.auditStatus ?? "pending"] ?? 3) - (order[b.auditStatus ?? "pending"] ?? 3);
+                      }
+                      if (aiFileSort === "size") return (b.charCount ?? 0) - (a.charCount ?? 0);
+                      return a.name.localeCompare(b.name);
+                    })
+                    .map((file, fi) => {
+                      const badge = file.auditStatus === "cited" ? { label: "📎 Cited", color: "#0369a1", bg: "#e0f2fe" }
+                        : file.auditStatus === "not_used" ? { label: "— Not used", color: "#6b7280", bg: "#f3f4f6" }
+                        : file.auditStatus === "audited" ? { label: "🤖 Audited", color: "#1e40af", bg: "#eff6ff" }
+                        : { label: "⏳ Pending", color: "#b45309", bg: "#fffbeb" };
+                      return (
+                        <div key={file.path + fi} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", borderBottom: "1px solid #eff6ff", fontSize: 10 }}>
+                          <span style={{ flexShrink: 0, fontSize: 9, padding: "1px 4px", borderRadius: 3, background: badge.bg, color: badge.color, fontWeight: 600 }}>{badge.label}</span>
+                          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#1e40af" }}>{file.name}</span>
+                          <span style={{ flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{file.fileKind?.toUpperCase()}</span>
+                          {file.charCount != null && file.charCount > 0 && (
+                            <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", color: "#6b7280", fontSize: 9 }}>{file.charCount.toLocaleString()} ch</span>
+                          )}
+                        </div>
+                      );
+                    })
+                  }
                 </div>
               </div>
             )}
@@ -856,14 +891,17 @@ function AuditProgressModal({
   }, [currentStep]);
 
   const [isStuck, setIsStuck] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
   useEffect(() => {
-    if (!isRunning) { setIsStuck(false); return; }
-    const check = () => {
+    if (!isRunning) { setIsStuck(false); setElapsedSec(0); return; }
+    const tick = () => {
       const hb = progress.lastHeartbeatAt;
-      setIsStuck(hb != null && Date.now() - hb > STUCK_THRESHOLD_MS);
+      const elapsed = hb != null ? Math.floor((Date.now() - hb) / 1000) : 0;
+      setElapsedSec(elapsed);
+      setIsStuck(hb != null && elapsed > STUCK_THRESHOLD_MS / 1000);
     };
-    check();
-    const t = setInterval(check, 5000);
+    tick();
+    const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, [isRunning, progress.lastHeartbeatAt]);
 
@@ -928,13 +966,22 @@ function AuditProgressModal({
           )}
         </div>
 
-        {isStuck && (
-          <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#9a3412", marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
-            <span>⚠</span>
-            {currentStep === 1
-              ? <span>This file has been reading for over 60 seconds — it may be stuck. Click <b>Skip</b> next to the file name in the list below, or <b>Cancel audit</b> to stop.</span>
-              : <span>The AI has not responded for over 60 seconds — it may be stuck. Click <b>Skip stage →</b> to stop this pass and continue with results so far, or <b>Cancel audit</b> to stop completely.</span>
-            }
+        {(isStuck || (progress.lastHeartbeatAt != null && elapsedSec > 10 && isRunning)) && (
+          <div style={{ background: isStuck ? "#fff7ed" : "#f8fafc", border: `1px solid ${isStuck ? "#fed7aa" : "#e2e8f0"}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: isStuck ? "#9a3412" : "#475569", marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+            <span>{isStuck ? "⚠" : "⏱"}</span>
+            <span style={{ flex: 1 }}>
+              {isStuck
+                ? (currentStep === 1
+                  ? <>No activity for <b>{elapsedSec}s</b> — file may be stuck. Click <b>Skip</b> next to the file name below, or <b>Cancel audit</b> to stop.</>
+                  : <>AI no response for <b>{elapsedSec}s</b> — may be stuck. Click <b>Skip stage →</b> to stop this pass and continue with results so far, or <b>Cancel audit</b> to stop.</>)
+                : <>Waiting for AI response — <b>{elapsedSec}s</b> elapsed</>
+              }
+            </span>
+            {isStuck && elapsedSec > 0 && (
+              <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", fontSize: 11, background: "#fef3c7", borderRadius: 4, padding: "1px 6px", color: "#92400e" }}>
+                {elapsedSec}s / {STUCK_THRESHOLD_MS / 1000}s
+              </span>
+            )}
           </div>
         )}
 

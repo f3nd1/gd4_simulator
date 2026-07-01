@@ -941,6 +941,7 @@ Respond with JSON only:
     opts.onProgress?.(`Policy audit — window ${win.index + 1}/${win.total}`);
 
     for (const batch of batches) {
+      if (opts.shouldStop?.()) break;
       const pointsBlock = buildStagedPointsBlock(batch);
       const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for APPROACH coverage:\n${pointsBlock}`;
       if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
@@ -1046,6 +1047,7 @@ Respond with JSON only:
     opts.onProgress?.(`Evidence audit — window ${win.index + 1}/${win.total}`);
 
     for (const batch of batches) {
+      if (opts.shouldStop?.()) break;
       const pointsBlock = batch.map((p, i) => {
         const pol = policyByRef.get(p.ref);
         const polNote = pol ? ` [Policy adequacy: ${pol.covered}${pol.covered !== "No" ? ` — "${pol.note.slice(0, 80)}"` : ""}]` : "";
@@ -1151,6 +1153,7 @@ Respond with JSON only:
     opts.onProgress?.(`Outcome/review audit — window ${win.index + 1}/${win.total}`);
 
     for (const batch of batches) {
+      if (opts.shouldStop?.()) break;
       const pointsBlock = buildStagedPointsBlock(batch);
       const user = `All documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for OUTCOME DATA and REVIEW RECORDS:\n${pointsBlock}`;
       if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
