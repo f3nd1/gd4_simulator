@@ -267,6 +267,14 @@ export function SubCriterionChecklist() {
     return item ? auditEvidence([item], entries, folders) : [];
   }, [scored.items, selectedId, entries, folders]);
 
+  // Warns when the sub-criterion's last audit ran in policy-only or
+  // evidence-only mode — verdicts outside that scope are stale from a prior
+  // run (or never assessed), so a partial run must never read as complete.
+  const partialAuditScope = useMemo(() => {
+    const folder = folders.find((f) => f.subCriterionId === req.subCriterionId);
+    return folder?.lastAuditScope && folder.lastAuditScope !== "both" ? folder.lastAuditScope : null;
+  }, [folders, req.subCriterionId]);
+
   // Dedupe for display: the same GD4 source line can end up in `specific`
   // twice (e.g. an audit auto-generated + verdicted copy alongside a freshly
   // regenerated "Not Started" copy), which surfaces as the same line appearing
@@ -464,6 +472,12 @@ export function SubCriterionChecklist() {
             {req.gateSensitive && <Pill s="high">Gate-sensitive</Pill>}
           </div>
           <p style={{ fontSize: 11.5, color: "#6b7280" }}>{sub.title} — {sub.description}</p>
+
+          {partialAuditScope && (
+            <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 11px", marginBottom: 8, fontSize: 12, color: "#9a3412", fontWeight: 600 }}>
+              ⚠️ Last audit ran in {partialAuditScope}-only mode — {partialAuditScope === "policy" ? "evidence and outcomes were not assessed" : "policy was not assessed"}. Run a full audit to get complete results.
+            </div>
+          )}
 
           {req.expectedEvidence.length > 0 && (
             <div style={{ background: "#f0f6ff", borderRadius: 8, padding: "7px 11px", marginBottom: 8, fontSize: 11.5, color: "#374151" }}>

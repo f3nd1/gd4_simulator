@@ -739,6 +739,7 @@ export async function runLiveFindingObservation(
 
 Use [bracketed placeholders] wherever you need specific data (names, dates, counts) that the auditor must fill in. Do not soften or hedge the observation.
 Apply root-cause methodology: distinguish symptom → immediate cause → systemic root cause, and use 5-Why thinking to reach the system-level cause in the observation. State any sample denominator if visible in the APSR notes. Cite the specific regulatory provision (not just the GD4 item) in the criteria section where applicable. In the effect section, name the specific band ceiling and the concrete regulatory or certification consequence using benchmarking reference points.
+Write all finding sections (Observation, Criteria, Effect) in factual, neutral language. State what was found and what the standard requires. Do not characterise evidence as adequate, inadequate, good, or poor — only state what exists or is absent. Avoid phrases like "the policy is adequate" or "well-written" — instead say "a policy document was provided" or "no policy document was found". The reader will judge adequacy — you only state facts.
 Respond with JSON only: {"observation": string, "criteria": string, "effect": string}.${buildSystemPrompt("findingWriter", null, "runLiveFindingObservation", req.id, domainExpertiseFor(req.id))}${buildDomainBlock(domainExpertiseFor(req.id))}`;
 
   const user = `GD4 ${req.id}: ${req.requirement}
@@ -907,16 +908,27 @@ function pushWindowNote(parts: WindowNote[], windowIndex: number, note: string, 
 // `resolveFile` maps a chunk ID back to its source file name (from the
 // evidence file ledger) — when it can't resolve a chunk (or a window cited
 // none), the bracketed citation is simply omitted for that entry.
+// IMPORTANT: `p.note` is used verbatim — never slice/truncate it here or in
+// any caller that assembles the final APSR/checklist/finding text. The only
+// place notes are shortened is the compact one-line "Gap detail" bullet list
+// in useWorkspaceStore.ts (noteSummary()), which is a deliberately abbreviated
+// overview and separate from this full-observation rendering.
 function renderWindowNotes(parts: WindowNote[], fallback: string, resolveFile?: (chunkId: string) => string | undefined): string {
   if (parts.length === 0) return fallback;
-  return parts.map((p) => {
+  // Numbered by POSITION in this contributing list (i + 1), not by
+  // `p.window` (the note's absolute position in the whole sliding-window
+  // sweep). Using the absolute window number meant the very first window to
+  // find nothing (e.g. window 1 covered="No") left a gap: window 2's note
+  // would render as "#2:" with no "#1:" ever appearing. Every list must
+  // start at #1 regardless of which windows actually contributed.
+  return parts.map((p, i) => {
     const citation = p.chunkIds
       .map((cid) => {
         const file = resolveFile?.(cid);
         return file ? `${file} · ${cid}` : cid;
       })
       .join(", ");
-    const label = citation ? `#${p.window} [${citation}]` : `#${p.window}`;
+    const label = citation ? `#${i + 1} [${citation}]` : `#${i + 1}`;
     return `${label}:\n${p.note}`;
   }).join("\n\n");
 }
@@ -957,7 +969,7 @@ export async function runStagedPolicyAudit(
 "No" = the policy document does not address this requirement at all.
 
 IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -1089,7 +1101,7 @@ export async function runStagedEvidenceAudit(
 "No" = no implementation evidence in these documents for this requirement.
 
 IMPORTANT: A policy document, SOP, or procedure does NOT count as implementation evidence, even if it is filed in the evidence folder. Only actual records of doing something count.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -1214,7 +1226,7 @@ outcomeEvident: true if there is actual outcome data, KPIs, results, trends, sur
 
 reviewEvident: true if there are records of a formal review of this requirement's effectiveness — meeting minutes with agenda item, management review records, improvement actions triggered by data review, or evaluation reports. A policy that says "we will review annually" is NOT evidence of a review having happened.
 
-Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;

@@ -1290,6 +1290,7 @@ export function EvidenceFolder() {
   const auditFolderStaged   = useWorkspaceStore((s) => s.auditFolderStaged);
   const cancelBusy          = useWorkspaceStore((s) => s.cancelBusy);
   const clearFileTextCache  = useWorkspaceStore((s) => s.clearFileTextCache);
+  const removeFileTextCacheEntry = useWorkspaceStore((s) => s.removeFileTextCacheEntry);
   const fileTextCacheSize   = useWorkspaceStore((s) => Object.keys(s.fileTextCache).length);
   const fileTextCacheEntries = useWorkspaceStore((s) => s.fileTextCache);
   const auditRunHistory      = useWorkspaceStore((s) => s.auditRunHistory);
@@ -1449,6 +1450,7 @@ export function EvidenceFolder() {
                         <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>Kind</th>
                         <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>Chars</th>
                         <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>Cached</th>
+                        <th style={{ textAlign: "center", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }} />
                       </tr>
                     </thead>
                     <tbody>
@@ -1472,6 +1474,15 @@ export function EvidenceFolder() {
                               {entry.charCount > 0 ? entry.charCount.toLocaleString() : "—"}
                             </td>
                             <td style={{ padding: "3px 8px", color: "#94a3b8", whiteSpace: "nowrap", fontFamily: "ui-monospace,monospace", fontSize: 10 }}>{cachedLabel}</td>
+                            <td style={{ padding: "3px 8px", textAlign: "center" }}>
+                              <button
+                                onClick={() => removeFileTextCacheEntry(key)}
+                                title={`Remove ${displayName} from the cache — the next audit will re-download it from Drive`}
+                                style={{ cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 13, lineHeight: 1, padding: "0 4px" }}
+                              >
+                                ✕
+                              </button>
+                            </td>
                           </tr>
                         );
                       })}

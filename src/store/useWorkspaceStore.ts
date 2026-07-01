@@ -309,6 +309,10 @@ export type WorkspaceState = {
   // from Drive. Use when files have been updated but Drive modifiedTime hasn't
   // changed (e.g. in-place Google Docs edits that don't bump the timestamp).
   clearFileTextCache: () => void;
+  // Removes one cached file's entry (by its "fileId:modifiedTime" cache key)
+  // without touching any other cached file — for re-downloading a single
+  // stale/corrupt cache entry rather than clearing everything.
+  removeFileTextCacheEntry: (key: string) => void;
   // Skips the file currently being read — aborts its Drive download and/or AI
   // description call and moves the loop to the next file. No-op if not reading.
   skipCurrentFile: () => void;
@@ -625,6 +629,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       skipCurrentAuditStage: () => set({ auditSkipStageFlag: true }),
 
       clearFileTextCache: () => set({ fileTextCache: {} }),
+      removeFileTextCacheEntry: (key) =>
+        set((s) => {
+          const { [key]: _removed, ...rest } = s.fileTextCache;
+          return { fileTextCache: rest };
+        }),
       skipCurrentFile: () => {
         // Abort only the current file — loop continues to the next one.
         _currentFileAbort?.();
@@ -1256,7 +1265,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
           const terminalStage = (auditHadError || liveError) ? "error" : "complete";
           set((st) => ({
-            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel } : f)),
+            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel, lastAuditScope: scope } : f)),
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
             auditProgress: st.auditProgress?.folderId === id
@@ -2386,7 +2395,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
           const terminalStage = (auditHadError || liveError) ? "error" : "complete";
           set((st) => ({
-            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `[Staged] ${summary}`, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel } : f)),
+            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `[Staged] ${summary}`, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel, lastAuditScope: scope } : f)),
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
             auditProgress: st.auditProgress?.folderId === id

@@ -486,6 +486,12 @@ export type EvidenceFolder = {
   // "Re-audit only changed folders" to skip folders whose newest file has not
   // changed since this audit ran.
   lastAuditNewestModified?: string;
+  // Which folders the last audit actually read — "policy" or "evidence" means
+  // the OTHER side (and, for the staged path, the outcome/review pass) was
+  // never assessed, so verdicts on lines outside that scope are stale from
+  // whatever ran before. The Sub-Criterion Checklist warns when this isn't
+  // "both" so a partial-mode run is never mistaken for a complete one.
+  lastAuditScope?: AuditScope;
   // Short, human-readable id for the last audit run (e.g. "AR-1.2-K9QZ"),
   // stamped on the audit result row, every checklist evidence item it created,
   // the AI Review Log row and the audit journal entry — so one verdict can be
