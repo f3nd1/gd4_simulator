@@ -702,19 +702,22 @@ export function SubCriterionChecklist() {
                       {l.evidence.length > 0 ? `Evidence (${l.evidence.length})` : "Evidence: Missing"}
                     </button>
                   )}
-                  {draft && (
-                    l.draftFinding?.savedFindingId ? (
-                      <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none" }}>View finding →</Link>
-                    ) : (
-                      <button
-                        onClick={() => toggleEvidence(l.id)}
-                        style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#9a6b15", border: "none", background: "transparent", padding: 0 }}
-                      >
-                        View finding →
-                      </button>
-                    )
-                  )}
-                  {!draft && metEvidence && (
+                  {/* A finding already exists for this line — show the link regardless
+                      of the line's CURRENT status/sufficiency. `needsFinding`/`draft`
+                      only describe whether a NEW draft would be raised right now; a
+                      line can have a previously-saved finding (l.draftFinding.savedFindingId)
+                      even after its status later moved to Met/Partial or its evidence
+                      sufficiency improved, and the link must not disappear in that case. */}
+                  {l.draftFinding?.savedFindingId ? (
+                    <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none" }}>View finding →</Link>
+                  ) : draft ? (
+                    <button
+                      onClick={() => toggleEvidence(l.id)}
+                      style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#9a6b15", border: "none", background: "transparent", padding: 0 }}
+                    >
+                      View finding →
+                    </button>
+                  ) : metEvidence ? (
                     <button
                       onClick={() => toggleEvidence(l.id)}
                       title="Shows which chunks/documents were cited and why this line was rated Met"
@@ -722,7 +725,7 @@ export function SubCriterionChecklist() {
                     >
                       Evidence cited →
                     </button>
-                  )}
+                  ) : null}
                   <button onClick={() => removeSpecificLine(selectedId, l.id)} title="Remove line" style={{ cursor: "pointer", fontSize: 12, color: "#b23121", border: "none", background: "transparent", marginLeft: "auto", padding: "0 2px" }}>
                     ×
                   </button>
