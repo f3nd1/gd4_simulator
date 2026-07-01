@@ -18,6 +18,7 @@ import type {
   AIReviewType,
   Confidence,
   HumanDecisionEntry,
+  CalibrationExample,
   Finding,
   DriveAccessStatus,
   ApsrBreakdown,
@@ -243,6 +244,7 @@ export type WorkspaceState = {
   itemReviews: Record<string, ItemAIVerdict>;
   aiReviewLog: AIReviewLogEntry[];
   humanDecisionLog: HumanDecisionEntry[];
+  calibrationExamples: CalibrationExample[];
   samples: SampleRecord[];
   interviewQuestions: InterviewQuestion[];
   managementReviewItems: ManagementReviewItem[];
@@ -403,6 +405,8 @@ export type WorkspaceState = {
   }) => void;
 
   logHumanDecision: (entry: Omit<HumanDecisionEntry, "id" | "timestamp">) => void;
+  toggleCalibrationIncluded: (id: string) => void;
+  markCalibrationUsed: (ids: string[]) => void;
 
   setBusy: (id: string | null) => void;
 
@@ -548,6 +552,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       itemReviews: {},
       aiReviewLog: [],
       humanDecisionLog: [],
+      calibrationExamples: [],
       samples: [],
       interviewQuestions: [],
       managementReviewItems: [],
@@ -765,6 +770,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           itemReviews: {},
           aiReviewLog: [],
       humanDecisionLog: [],
+      calibrationExamples: [],
           samples: [],
           interviewQuestions: [],
           managementReviewItems: [],
@@ -910,7 +916,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           try {
             const memory = useAgentMemoryStore.getState().memory["closure-reviewer"] || [];
             const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
-            verdict = await runLiveClosureReview(c, settings, memory);
+            const closureCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "AFI Closure").slice(0, 3);
+            verdict = await runLiveClosureReview(c, settings, memory, closureCalibration);
             useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "user", content: `Reviewed closure for ${afiId}.`, createdAt: new Date().toISOString() });
             useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "assistant", content: verdict.reason, createdAt: new Date().toISOString() });
           } catch (err) {
@@ -965,7 +972,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const entry = useChecklistModuleStore.getState().entries[gd4ItemId];
           const auditedLine = entry?.specific.find((l) => l.draftFinding?.savedFindingId === afiId);
           const apsr = auditedLine ? lineApsr(auditedLine) : undefined;
-          const draft = await runLiveClosureDraft({ issue, gd4ItemId }, settings, { standard, apsr: apsr ? apsrReason(apsr) : undefined });
+          const closureDraftCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Closure Drafting").slice(0, 3);
+          const draft = await runLiveClosureDraft({ issue, gd4ItemId }, settings, { standard, apsr: apsr ? apsrReason(apsr) : undefined, calibration: closureDraftCalibration });
           // Record this AI run so every AI use shows in the AI Review Log.
           get().pushAIReviewLog({
             agent: "Closure Drafter",
@@ -1740,12 +1748,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           try {
             // Run one full audit per document window, then merge best-of across windows.
             let globalBatchDone = 0;
+            const auditCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
             const windowResults = await Promise.all(
               docWindows.map((docWindow, wi) =>
                 runLiveFolderAudit(lines, docWindow, analysisSettings, {
                   strictness,
                   standard,
                   criterionId: folder.subCriterionId,
+                  calibration: auditCalibration,
                   onBatchProgress: (current, total) => {
                     globalBatchDone++;
                     setProgress("auditing", {
@@ -1778,7 +1788,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (toChallenge.length) {
                 setProgress("auditing", { stageDetail: "Running strict challenge pass…" });
                 try {
-                  const r2 = await runLiveFolderAudit(lines, docWindows[0], analysisSettings, { strictness, standard, criterionId: folder.subCriterionId, challenge: toChallenge });
+                  const r2 = await runLiveFolderAudit(lines, docWindows[0], analysisSettings, { strictness, standard, criterionId: folder.subCriterionId, challenge: toChallenge, calibration: auditCalibration });
                   verdicts = r2.verdicts;
                   parseWarnings = [...parseWarnings, ...r2.parseWarnings];
                   folderWarnings = [...new Set([...folderWarnings, ...r2.folderWarnings])];
@@ -2565,11 +2575,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const criterionId = folder.subCriterionId;
 
         if (aiSettings.enabled && aiSettings.apiKey) {
+          const stagedCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
           // Stage 2: Policy Adequacy Audit
           if (mode === "policy" || mode === "all") {
             setProgress("policy_audit", { stageDetail: `Checking policy coverage for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, { criterionId });
+              const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, { criterionId, calibration: stagedCalibration });
               policyRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (result.promptSent) stagedPromptSent = result.promptSent;
@@ -2586,7 +2597,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (mode === "evidence" || mode === "all") {
             setProgress("evidence_audit", { stageDetail: `Checking implementation evidence for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, { criterionId });
+              const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, { criterionId, calibration: stagedCalibration });
               evidenceRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
@@ -2601,7 +2612,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (mode === "all") {
             setProgress("outcome_review", { stageDetail: `Checking outcome data and review records for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, { criterionId });
+              const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, { criterionId, calibration: stagedCalibration });
               outcomeRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
@@ -3058,13 +3069,42 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       logHumanDecision: (entry) =>
         set((s) => {
-          const log: HumanDecisionEntry = {
-            id: `HDL-${Date.now()}-${++logCounter}`,
-            timestamp: new Date().toISOString(),
-            ...entry,
-          };
-          return { humanDecisionLog: [log, ...s.humanDecisionLog].slice(0, 500) };
+          const id = `HDL-${Date.now()}-${++logCounter}`;
+          const ts = new Date().toISOString();
+          const log: HumanDecisionEntry = { id, timestamp: ts, ...entry };
+          const next: ReturnType<typeof Object.assign> = { humanDecisionLog: [log, ...s.humanDecisionLog].slice(0, 500) };
+          // Auto-promote to calibration library when there is a reason and a change
+          if (entry.changed && entry.reason.trim()) {
+            const cal: CalibrationExample = {
+              id: `CAL-${Date.now()}-${++logCounter}`,
+              timestamp: ts,
+              module: entry.module,
+              field: entry.field,
+              aiInput: "",
+              aiOutput: entry.aiOutput,
+              humanCorrection: entry.humanDecision,
+              reason: entry.reason,
+              used: false,
+              included: true,
+            };
+            next.calibrationExamples = [cal, ...s.calibrationExamples].slice(0, 200);
+          }
+          return next;
         }),
+
+      toggleCalibrationIncluded: (id) =>
+        set((s) => ({
+          calibrationExamples: s.calibrationExamples.map((c) =>
+            c.id === id ? { ...c, included: !c.included } : c
+          ),
+        })),
+
+      markCalibrationUsed: (ids) =>
+        set((s) => ({
+          calibrationExamples: s.calibrationExamples.map((c) =>
+            ids.includes(c.id) ? { ...c, used: true } : c
+          ),
+        })),
 
       setBusy: (id) => set({ busy: id }),
     }),

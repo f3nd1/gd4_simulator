@@ -9,7 +9,7 @@ import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confi
 import { chatComplete, AIClientError, addUsage, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
-import { buildSystemPrompt, buildDomainBlock } from "./skills";
+import { buildSystemPrompt, buildDomainBlock, type SkillCalibrationExample } from "./skills";
 import { domainExpertiseFor } from "../../data/skills/domainExpertise";
 import type { EvidenceChunk } from "../../types";
 
@@ -247,9 +247,10 @@ ${sourceBlock}${req.gateSensitive ? "\n\nNote: This item is gate-sensitive — a
 export async function runLiveClosureReview(
   closure: { root?: string; corr?: string; prev?: string; evid?: string },
   settings: AISettings,
-  memory: AgentMemoryEntry[]
+  memory: AgentMemoryEntry[],
+  calibration?: SkillCalibrationExample[]
 ): Promise<Omit<SimulatedClosureVerdict, "live"> & { live: true; usage?: AIUsage }> {
-  const system = `You are the Closure Reviewer Agent for an EduTrust GD4 internal audit. Assess whether a corrective/preventive action closure is Acceptable, Partial, should Maintain Finding, or should Escalate, using only the narrative given — never assume evidence that wasn't described, and never let well-written narrative substitute for missing evidence. If no closure evidence link is provided, you must return "Maintain Finding" regardless of how complete or convincing the narrative sounds. Respond with JSON only: {"verdict": "Acceptable" | "Partial" | "Maintain Finding" | "Escalate", "reason": string, "evidenceNeeded": string}.${buildSystemPrompt("afiClosure", null, "runLiveClosureReview")}`;
+  const system = `You are the Closure Reviewer Agent for an EduTrust GD4 internal audit. Assess whether a corrective/preventive action closure is Acceptable, Partial, should Maintain Finding, or should Escalate, using only the narrative given — never assume evidence that wasn't described, and never let well-written narrative substitute for missing evidence. If no closure evidence link is provided, you must return "Maintain Finding" regardless of how complete or convincing the narrative sounds. Respond with JSON only: {"verdict": "Acceptable" | "Partial" | "Maintain Finding" | "Escalate", "reason": string, "evidenceNeeded": string}.${buildSystemPrompt("afiClosure", null, "runLiveClosureReview", undefined, undefined, calibration)}`;
   const user = `Root cause: ${closure.root || "(none provided)"}\nCorrective action: ${closure.corr || "(none provided)"}\nPreventive action: ${closure.prev || "(none provided)"}\nClosure evidence link: ${closure.evid || "(none provided — no evidence is linked)"}`;
 
   let usage: AIUsage | undefined;
@@ -291,10 +292,10 @@ export async function runLiveClosureReview(
 export async function runLiveClosureDraft(
   finding: { issue: string; gd4ItemId: string },
   settings: AISettings,
-  context?: { standard?: string; apsr?: string }
+  context?: { standard?: string; apsr?: string; calibration?: SkillCalibrationExample[] }
 ): Promise<{ root: string; corr: string; prev: string; usage?: AIUsage; promptSent?: string }> {
   const closureDomainSkill = domainExpertiseFor(finding.gd4ItemId);
-  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — use the 5-Why methodology to reach the systemic level (Level 3): distinguish an Approach gap (policy/procedure missing or too generic) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — name the governance, training, data-collection, or review gap as the root cause, not the symptom — then a CORRECTIVE action that fixes this specific gap now (time-bound, names the record/document and responsible role), and a PREVENTIVE action that changes the system so the gap cannot recur (must be different from the corrective action — a new checkpoint, policy section, or standing review item). Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.${buildSystemPrompt("afiClosure", null, "runLiveClosureDraft", finding.gd4ItemId, closureDomainSkill)}${buildDomainBlock(closureDomainSkill)}`;
+  const system = `You are an EduTrust GD4 quality-action assistant. Given an audit finding (and, where provided, the official GD4 requirement it relates to and the APSR breakdown of which rubric dimension fell short), propose: a ROOT CAUSE that names WHY the gap exists — use the 5-Why methodology to reach the systemic level (Level 3): distinguish an Approach gap (policy/procedure missing or too generic) from a Processes gap (documented but not implemented) from a Systems & Outcomes gap (no desired outcomes produced) from a Review gap (no evaluation for continual improvement) — name the governance, training, data-collection, or review gap as the root cause, not the symptom — then a CORRECTIVE action that fixes this specific gap now (time-bound, names the record/document and responsible role), and a PREVENTIVE action that changes the system so the gap cannot recur (must be different from the corrective action — a new checkpoint, policy section, or standing review item). Be concrete and specific to the requirement; reference the actual evidence/records that should exist. These are draft suggestions the auditor will edit and must still evidence — do not claim the finding is closed. Respond with JSON only: {"root": string, "corr": string, "prev": string}.${buildSystemPrompt("afiClosure", null, "runLiveClosureDraft", finding.gd4ItemId, closureDomainSkill, context?.calibration)}${buildDomainBlock(closureDomainSkill)}`;
   const user = `Finding (GD4 ${finding.gd4ItemId}): ${finding.issue}${context?.standard ? `\n\nOfficial GD4 requirement:\n${context.standard}` : ""}${context?.apsr ? `\n\nAPSR assessment of this line:\n${context.apsr}` : ""}`;
   // Higher temperature for drafting (natural, varied narrative) vs deterministic verdicts.
   let usage: AIUsage | undefined;
@@ -368,6 +369,8 @@ export type FolderAuditOpts = {
   // Called as each parallel audit batch completes so the UI can show live
   // batch progress ("Auditing batch 2 of 5"). current is 1-based.
   onBatchProgress?: (current: number, total: number) => void;
+  // Calibration examples from the Human Decision Log to inject into the prompt.
+  calibration?: SkillCalibrationExample[];
 };
 
 // Wall-clock-safe ceiling on how much extracted document text is sent to one
@@ -443,7 +446,7 @@ async function runLiveFolderAuditBatch(
 3. SYSTEMS & OUTCOMES (the desired outcomes derived from that implementation). systemsOutcomes.status: "Evident" if the desired outcomes/results are actually produced, "Limited" if outcomes are limited, "Not evident" if none.
 4. REVIEW (evaluation of the appropriateness, relevance and effectiveness of the approach and process for continual improvement). review.status: "Evident" if there is a real review with improvement action, "Not evident" otherwise.
 Each "note" must be a critical AUDITOR ANALYSIS, not a description or summary of the document. Never merely restate what the document contains. For approach.note: judge HOW WELL the documented approach meets THIS requirement — name specifically which Describe/Show expectations it covers and which it omits or addresses only weakly, say whether it is genuinely specific to this institution or boilerplate/generic, whether it is sustainable (repeatable, with named owners and timing) or ad hoc, and end with ONE concrete improvement the institution should make. For processes/systemsOutcomes/review notes: state what evidence WOULD prove the dimension and what is actually missing, not a paraphrase of any text found. A note that only describes the document's contents is a failure — write the auditor's judgement of its adequacy and gaps.
-For EVERY non-empty positive claim (i.e. status is not "Not evident"), cite the specific chunk ID(s) from the document headers (e.g. "C001", "C002") in "sourceChunkIds" on that dimension. If no chunk directly supports a positive status, leave sourceChunkIds as an empty array — do NOT invent chunk IDs. Also populate the top-level "sources" array with file paths for backward compatibility. Cross-check file types: if a file in the POLICY & PROCEDURE section looks like an operational record, log, attendance sheet, minutes or filled-in form (not a policy/SOP/procedure/plan/framework), or a file in the ACTUAL EVIDENCE section looks like a pure undated policy document with no implementation records, add a one-sentence warning per problematic file to "folderWarnings" (e.g. "Policy folder: 'HR_Attendance_Log_Jan.xlsx' appears to be an attendance record, not a procedure — move to Actual Evidence"). Also flag evidence-timeliness issues: documents dated within 4 weeks of audit, records that don't span the full review period, and any claims about outcomes that lack a stated survey response rate.${STRICTNESS_CLAUSE[strictness] || ""}${buildSystemPrompt("evidenceReview", null, "runLiveFolderAuditBatch", opts.criterionId, domainSkill)}`;
+For EVERY non-empty positive claim (i.e. status is not "Not evident"), cite the specific chunk ID(s) from the document headers (e.g. "C001", "C002") in "sourceChunkIds" on that dimension. If no chunk directly supports a positive status, leave sourceChunkIds as an empty array — do NOT invent chunk IDs. Also populate the top-level "sources" array with file paths for backward compatibility. Cross-check file types: if a file in the POLICY & PROCEDURE section looks like an operational record, log, attendance sheet, minutes or filled-in form (not a policy/SOP/procedure/plan/framework), or a file in the ACTUAL EVIDENCE section looks like a pure undated policy document with no implementation records, add a one-sentence warning per problematic file to "folderWarnings" (e.g. "Policy folder: 'HR_Attendance_Log_Jan.xlsx' appears to be an attendance record, not a procedure — move to Actual Evidence"). Also flag evidence-timeliness issues: documents dated within 4 weeks of audit, records that don't span the full review period, and any claims about outcomes that lack a stated survey response rate.${STRICTNESS_CLAUSE[strictness] || ""}${buildSystemPrompt("evidenceReview", null, "runLiveFolderAuditBatch", opts.criterionId, domainSkill, opts.calibration)}`;
   const challengeRule = opts.challenge
     ? ` This is a SECOND, stricter review pass. Earlier overall verdicts are given; re-examine each and DOWNGRADE any generous rating — in particular, demote approach.status from "Meeting" to "Beginning" unless the documented approach is genuinely specific and sustainable, and demote processes.status unless implementation is explicitly evidenced.`
     : "";
@@ -847,7 +850,7 @@ export async function runStagedPolicyAudit(
   auditPoints: FlatAuditPoint[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[] } = {}
 ): Promise<StagedPolicyAuditResult> {
   if (auditPoints.length === 0 || !policyDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No policy documents provided.", chunkIds: [] })) };
@@ -862,7 +865,7 @@ export async function runStagedPolicyAudit(
 "No" = the policy document does not address this requirement at all.
 
 IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${buildSystemPrompt("evidenceReview", null, "runStagedPolicyAudit", opts.criterionId, domainSkill)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${buildSystemPrompt("evidenceReview", null, "runStagedPolicyAudit", opts.criterionId, domainSkill, opts.calibration)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -916,7 +919,7 @@ export async function runStagedEvidenceAudit(
   evidenceDocText: string,
   policyRows: PolicyCoverageRow[],
   settings: AISettings,
-  opts: { criterionId?: string } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[] } = {}
 ): Promise<StagedEvidenceAuditResult> {
   if (auditPoints.length === 0 || !evidenceDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No evidence documents provided.", chunkIds: [] })) };
@@ -932,7 +935,7 @@ export async function runStagedEvidenceAudit(
 "No" = no implementation evidence in these documents for this requirement.
 
 IMPORTANT: A policy document, SOP, or procedure does NOT count as implementation evidence, even if it is filed in the evidence folder. Only actual records of doing something count.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${buildSystemPrompt("evidenceReview", null, "runStagedEvidenceAudit", opts.criterionId, domainSkill)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${buildSystemPrompt("evidenceReview", null, "runStagedEvidenceAudit", opts.criterionId, domainSkill, opts.calibration)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -986,7 +989,7 @@ export async function runStagedOutcomeReviewAudit(
   auditPoints: FlatAuditPoint[],
   allDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[] } = {}
 ): Promise<StagedOutcomeReviewAuditResult> {
   if (auditPoints.length === 0 || !allDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "No documents provided.", chunkIds: [] })) };
@@ -1000,7 +1003,7 @@ outcomeEvident: true if there is actual outcome data, KPIs, results, trends, sur
 
 reviewEvident: true if there are records of a formal review of this requirement's effectiveness — meeting minutes with agenda item, management review records, improvement actions triggered by data review, or evaluation reports. A policy that says "we will review annually" is NOT evidence of a review having happened.
 
-Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${buildSystemPrompt("evidenceReview", null, "runStagedOutcomeReviewAudit", opts.criterionId, domainSkill)}${domainBlock}
+Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${buildSystemPrompt("evidenceReview", null, "runStagedOutcomeReviewAudit", opts.criterionId, domainSkill, opts.calibration)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;
