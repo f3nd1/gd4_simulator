@@ -1116,6 +1116,7 @@ export function EvidenceFolder() {
   const cancelBusy          = useWorkspaceStore((s) => s.cancelBusy);
   const clearFileTextCache  = useWorkspaceStore((s) => s.clearFileTextCache);
   const fileTextCacheSize   = useWorkspaceStore((s) => Object.keys(s.fileTextCache).length);
+  const fileTextCacheEntries = useWorkspaceStore((s) => s.fileTextCache);
   const skipCurrentFile     = useWorkspaceStore((s) => s.skipCurrentFile);
   const busy                = useWorkspaceStore((s) => s.busy);
   const additionalInfo      = useWorkspaceStore((s) => s.additionalInfo);
@@ -1163,6 +1164,7 @@ export function EvidenceFolder() {
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showHelp, setShowHelp] = useState(false);
+  const [showCacheList, setShowCacheList] = useState(false);
   const [overflowOpen, setOverflowOpen] = useState<string | null>(null);
   const [dismissedAccessNotes, setDismissedAccessNotes] = useState<Set<string>>(new Set());
   const [dismissedAuditResults, setDismissedAuditResults] = useState<Set<string>>(new Set());
@@ -1225,14 +1227,54 @@ export function EvidenceFolder() {
             "View last run" reopens the read-only audit record with full file ledger and AI summary CSVs.
           </p>
           {fileTextCacheSize > 0 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "6px 10px", background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 7 }}>
-              <span style={{ fontSize: 12, color: "#6d28d9" }}>♻ {fileTextCacheSize} file{fileTextCacheSize !== 1 ? "s" : ""} cached from previous audits</span>
-              <button
-                onClick={() => { if (confirm("Clear the file text cache? The next audit will re-download all files from Drive.")) clearFileTextCache(); }}
-                style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", borderRadius: 5, fontSize: 11, padding: "2px 8px", color: "#7c3aed" }}
-              >
-                Clear cache
-              </button>
+            <div style={{ marginBottom: 8, background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 7, overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px" }}>
+                <span style={{ fontSize: 12, color: "#6d28d9" }}>♻ {fileTextCacheSize} file{fileTextCacheSize !== 1 ? "s" : ""} cached from previous audits</span>
+                <button
+                  onClick={() => setShowCacheList((v) => !v)}
+                  style={{ cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", borderRadius: 5, fontSize: 11, padding: "2px 8px", color: "#7c3aed" }}
+                >
+                  {showCacheList ? "Hide files" : "View files"}
+                </button>
+                <button
+                  onClick={() => { if (confirm("Clear the file text cache? The next audit will re-download all files from Drive.")) { clearFileTextCache(); setShowCacheList(false); } }}
+                  style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", borderRadius: 5, fontSize: 11, padding: "2px 8px", color: "#7c3aed" }}
+                >
+                  Clear cache
+                </button>
+              </div>
+              {showCacheList && (
+                <div style={{ borderTop: "1px solid #c4b5fd", maxHeight: 260, overflowY: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ background: "#ede9fe" }}>
+                        <th style={{ textAlign: "left", padding: "4px 10px", fontWeight: 600, color: "#5b21b6" }}>#</th>
+                        <th style={{ textAlign: "left", padding: "4px 10px", fontWeight: 600, color: "#5b21b6" }}>File name</th>
+                        <th style={{ textAlign: "left", padding: "4px 10px", fontWeight: 600, color: "#5b21b6" }}>Kind</th>
+                        <th style={{ textAlign: "right", padding: "4px 10px", fontWeight: 600, color: "#5b21b6" }}>Chars</th>
+                        <th style={{ textAlign: "left", padding: "4px 10px", fontWeight: 600, color: "#5b21b6" }}>Path</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(fileTextCacheEntries).map(([key, entry], i) => (
+                        <tr key={key} style={{ background: i % 2 === 0 ? "#faf5ff" : "#f5f3ff", borderTop: "1px solid #ede9fe" }}>
+                          <td style={{ padding: "3px 10px", color: "#7c3aed", fontWeight: 700 }}>{i + 1}</td>
+                          <td style={{ padding: "3px 10px", color: "#1e293b", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.fileName}>
+                            {entry.fileName ?? key.split(":")[0]}
+                          </td>
+                          <td style={{ padding: "3px 10px", color: "#6b7280" }}>{entry.fileKind}</td>
+                          <td style={{ padding: "3px 10px", color: "#6b7280", textAlign: "right", fontFamily: "ui-monospace,monospace" }}>
+                            {entry.charCount > 0 ? entry.charCount.toLocaleString() : "—"}
+                          </td>
+                          <td style={{ padding: "3px 10px", color: "#94a3b8", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.filePath}>
+                            {entry.filePath ?? "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
           <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", background: "#f8fafc", marginBottom: 10, fontSize: 12 }}>
