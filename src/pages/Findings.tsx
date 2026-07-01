@@ -458,10 +458,10 @@ export function Findings() {
         </span>
         {allFindings.length > 0 && (
           <button
-            onClick={() => { if (confirm(`Remove all ${allFindings.length} finding${allFindings.length !== 1 ? "s" : ""} from the register? This cannot be undone.`)) clearAllFindings(); }}
+            onClick={() => { if (confirm(`Delete all ${allFindings.length} finding${allFindings.length !== 1 ? "s" : ""}?\n\nThis removes them from both the Findings register AND the Quality Action / AFI module (they share the same data). Closure decisions will also be cleared. This cannot be undone.`)) clearAllFindings(); }}
             style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}
           >
-            Remove all
+            Delete all findings
           </button>
         )}
         <button
