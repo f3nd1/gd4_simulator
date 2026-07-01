@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
@@ -5,6 +6,7 @@ import { needsJustification } from "../lib/scoring";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { bandTone, BLUE } from "../lib/theme";
+import { FeedbackModal } from "../components/ui/FeedbackModal";
 
 export function CriterionScorecard() {
   const scored = useScored();
@@ -13,6 +15,10 @@ export function CriterionScorecard() {
   const setReviewerScore = useWorkspaceStore((s) => s.setReviewerScore);
   const setJustify = useWorkspaceStore((s) => s.setJustify);
   const confirmScore = useWorkspaceStore((s) => s.confirmScore);
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
+
+  const [feedbackTarget, setFeedbackTarget] = useState<{ id: string; aiOutput: string } | null>(null);
 
   return (
     <Card>
@@ -40,7 +46,13 @@ export function CriterionScorecard() {
                     <b>{it.id}</b> {it.title}
                     {it.gate && <Pill s="medium">gate</Pill>}
                   </td>
-                  <td>{it.ais}</td>
+                  <td>
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      {it.ais}
+                      <button onClick={() => { logHumanDecision({ module: "Item Scoring", subjectId: it.id, aiOutput: `AI band: ${it.ais}`, humanDecision: "Accepted", changed: false, decisionType: "Accepted", reason: "" }); }} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 13, padding: "0 1px", lineHeight: 1 }} title="Accept AI band">👍</button>
+                      <button onClick={() => setFeedbackTarget({ id: it.id, aiOutput: `AI band recommendation: ${it.ais}` })} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 13, padding: "0 1px", lineHeight: 1 }} title="Reject AI band">👎</button>
+                    </span>
+                  </td>
                   <td>
                     <input
                       type="number"
@@ -96,6 +108,18 @@ export function CriterionScorecard() {
           </div>
         ))}
       </div>
+      <FeedbackModal
+        open={!!feedbackTarget}
+        aiOutput={feedbackTarget?.aiOutput ?? ""}
+        module="Item Scoring"
+        onClose={() => setFeedbackTarget(null)}
+        onSubmit={(fb) => {
+          if (!feedbackTarget) return;
+          const memId = !fb.correct ? addCalibrationMemory({ module: "Item Scoring", subjectId: feedbackTarget.id, context: feedbackTarget.aiOutput, aiOutput: feedbackTarget.aiOutput, staffCorrection: fb.correction, keyLearning: fb.reason, status: "active", tokenCount: 0 }) : undefined;
+          logHumanDecision({ module: "Item Scoring", subjectId: feedbackTarget.id, aiOutput: feedbackTarget.aiOutput, humanDecision: fb.correction || "Rejected", changed: true, decisionType: "Rejected" in fb ? "Overridden" : "Accepted", reason: fb.reason, memoryId: memId ?? undefined });
+          setFeedbackTarget(null);
+        }}
+      />
     </Card>
   );
 }

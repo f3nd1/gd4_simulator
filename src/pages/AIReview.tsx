@@ -77,8 +77,13 @@ function fmtUSD(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
+import { FeedbackModal } from "../components/ui/FeedbackModal";
+
 export function AIReview() {
   const log = useWorkspaceStore((s) => s.aiReviewLog);
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
+  const [reviewFeedback, setReviewFeedback] = useState<{ id: string; aiOutput: string; subjectId: string } | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [expandedTab, setExpandedTab] = useState<Record<string, "output" | "prompt">>({});
   const [agentFilter, setAgentFilter] = useState("");
@@ -331,7 +336,13 @@ export function AIReview() {
                   <td style={{ fontSize: 11, color: "#334155", whiteSpace: "nowrap" }} title={e.totalTokens ? (e.auxTotalTokens ? `Analysis (${e.model || "?"}): ${(e.promptTokens || 0) + (e.completionTokens || 0) || "?"} tok\nUtility (${e.auxModel || "?"}): ${e.auxTotalTokens} tok\nTotal: ${e.totalTokens} tok ≈ ${fmtUSD(costOf(e))}` : `${e.promptTokens ?? "?"} prompt + ${e.completionTokens ?? "?"} completion ≈ ${fmtUSD(costOf(e))}`) : undefined}>
                     {e.totalTokens ? `${e.totalTokens.toLocaleString()}${costOf(e) ? ` · ${fmtUSD(costOf(e))}` : ""}` : "—"}
                   </td>
-                  <td style={{ fontSize: 11.5, color: "#9ca3af" }}>{new Date(e.createdAt).toLocaleString()}</td>
+                  <td style={{ fontSize: 11.5, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                    {new Date(e.createdAt).toLocaleString()}
+                    <span style={{ marginLeft: 6 }}>
+                      <button onClick={(ev) => { ev.stopPropagation(); logHumanDecision({ module: "AI Review Log Feedback", subjectId: e.subjectId || e.id, aiOutput: e.verdict, humanDecision: "Accepted", changed: false, decisionType: "Accepted", reason: "" }); }} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 12, padding: "0 1px" }} title="Mark AI output as correct">👍</button>
+                      <button onClick={(ev) => { ev.stopPropagation(); setReviewFeedback({ id: e.id, aiOutput: `${e.verdict}: ${e.generatedContent?.slice(0, 200) || ""}`, subjectId: e.subjectId || e.id }); }} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 12, padding: "0 1px" }} title="Mark AI output as incorrect">👎</button>
+                    </span>
+                  </td>
                 </tr>
                 {open && (
                   <tr>
@@ -371,6 +382,19 @@ export function AIReview() {
           })}
         </tbody>
       </table>
+
+      <FeedbackModal
+        open={!!reviewFeedback}
+        aiOutput={reviewFeedback?.aiOutput ?? ""}
+        module="AI Review Log Feedback"
+        onClose={() => setReviewFeedback(null)}
+        onSubmit={(fb) => {
+          if (!reviewFeedback) return;
+          const memId = !fb.correct ? addCalibrationMemory({ module: "AI Review Log Feedback", subjectId: reviewFeedback.subjectId, context: reviewFeedback.aiOutput, aiOutput: reviewFeedback.aiOutput, staffCorrection: fb.correction, keyLearning: fb.reason, status: "active", tokenCount: 0 }) : undefined;
+          logHumanDecision({ module: "AI Review Log Feedback", subjectId: reviewFeedback.subjectId, aiOutput: reviewFeedback.aiOutput, humanDecision: fb.correction || "Rejected", changed: true, decisionType: "Overridden", reason: fb.reason, memoryId: memId ?? undefined });
+          setReviewFeedback(null);
+        }}
+      />
 
       {totalPages > 1 && (
         <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>

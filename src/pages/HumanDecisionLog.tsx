@@ -33,7 +33,20 @@ function truncate(s: string, n = 80): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
-const ALL_MODULES: HumanDecisionModule[] = ["AFI Closure", "Grouped Finding", "Line Status", "Closure Drafting"];
+const ALL_MODULES: HumanDecisionModule[] = [
+  "AFI Closure",
+  "Grouped Finding",
+  "Line Status",
+  "Closure Drafting",
+  "Evidence Intake",
+  "Evidence Sufficiency",
+  "Item Scoring",
+  "Checklist Line Edit",
+  "Finding Observation",
+  "Cross-Criterion Analysis",
+  "Final Report",
+  "AI Review Log Feedback",
+];
 const ALL_TYPES: HumanDecisionType[] = ["Accepted", "Edited", "Overridden"];
 
 const selectStyle: React.CSSProperties = {
@@ -130,14 +143,15 @@ function DecisionLogTab({ log }: { log: HumanDecisionEntry[] }) {
         </div>
       ) : (
         <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "140px 130px 1fr 1fr 70px 80px 110px", gap: 0, background: "#f8fafc", borderBottom: "1px solid #e2e8f0", padding: "7px 10px", fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "140px 130px 1fr 1fr 70px 80px 80px 110px", gap: 0, background: "#f8fafc", borderBottom: "1px solid #e2e8f0", padding: "7px 10px", fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>
             <div>Timestamp</div>
             <div>Module</div>
             <div>AI Output</div>
             <div>Human Decision</div>
             <div>Changed?</div>
             <div>Decision</div>
-            <div>Reason</div>
+            <div>Source</div>
+            <div>Memory?</div>
           </div>
 
           {filtered.map((entry, idx) => {
@@ -146,7 +160,7 @@ function DecisionLogTab({ log }: { log: HumanDecisionEntry[] }) {
               <div key={entry.id} style={{ borderBottom: idx < filtered.length - 1 ? "1px solid #f1f5f9" : "none" }}>
                 <div
                   onClick={() => setExpandedId(expanded ? null : entry.id)}
-                  style={{ display: "grid", gridTemplateColumns: "140px 130px 1fr 1fr 70px 80px 110px", gap: 0, padding: "8px 10px", cursor: "pointer", background: expanded ? "#f8fafc" : "white", alignItems: "center" }}
+                  style={{ display: "grid", gridTemplateColumns: "140px 130px 1fr 1fr 70px 80px 80px 110px", gap: 0, padding: "8px 10px", cursor: "pointer", background: expanded ? "#f8fafc" : "white", alignItems: "center" }}
                 >
                   <div style={{ fontSize: 10.5, color: "#64748b" }}>{formatTs(entry.timestamp)}</div>
                   <div>
@@ -168,8 +182,13 @@ function DecisionLogTab({ log }: { log: HumanDecisionEntry[] }) {
                   <div>
                     <Pill s={decisionTone(entry.decisionType)}>{entry.decisionType}</Pill>
                   </div>
-                  <div style={{ fontSize: 10.5, color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.reason}>
-                    {entry.reason || <span style={{ color: "#e2e8f0" }}>—</span>}
+                  <div style={{ fontSize: 10.5, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {entry.module}
+                  </div>
+                  <div>
+                    {entry.memoryId
+                      ? <span style={{ fontSize: 10.5, background: "#ede9fe", color: "#7c3aed", padding: "2px 7px", borderRadius: 999, fontWeight: 700 }}>🧠</span>
+                      : <span style={{ color: "#e2e8f0" }}>—</span>}
                   </div>
                 </div>
 

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
@@ -17,6 +18,8 @@ export function AFIClosure() {
   const aiEnabled = useAISettingsStore((s) => s.enabled && !!s.apiKey);
   const setClosureHuman = useWorkspaceStore((s) => s.setClosureHuman);
   const removeCustomFinding = useWorkspaceStore((s) => s.removeCustomFinding);
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
   const busy = useWorkspaceStore((s) => s.busy);
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
   const scored = useScored();
@@ -28,6 +31,7 @@ export function AFIClosure() {
   const [draftErrors, setDraftErrors] = useState<Record<string, string>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [closureReasons, setClosureReasons] = useState<Record<string, string>>({});
+  const [closureFeedback, setClosureFeedback] = useState<{ id: string; aiOutput: string } | null>(null);
 
   const subCritOptions = useMemo(
     () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter)),
@@ -231,7 +235,11 @@ export function AFIClosure() {
                       fontSize: 12.5,
                     }}
                   >
-                    <b>Closure Reviewer · {c.ai}{c.live ? "" : " (simulated)"}:</b> {c.aiReason} {c.aiNeed && <i>Still needed: {c.aiNeed}</i>}
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                      <span style={{ flex: 1 }}><b>Closure Reviewer · {c.ai}{c.live ? "" : " (simulated)"}:</b> {c.aiReason} {c.aiNeed && <i>Still needed: {c.aiNeed}</i>}</span>
+                      <button onClick={() => logHumanDecision({ module: "AFI Closure", subjectId: f.id, aiOutput: `${c.ai}: ${c.aiReason}`, humanDecision: "Accepted", changed: false, decisionType: "Accepted", reason: "" })} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 14, padding: "0 2px", lineHeight: 1, flexShrink: 0 }} title="Accept AI verdict">👍</button>
+                      <button onClick={() => setClosureFeedback({ id: f.id, aiOutput: `${c.ai}: ${c.aiReason || ""}` })} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 14, padding: "0 2px", lineHeight: 1, flexShrink: 0 }} title="Reject AI verdict">👎</button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -239,6 +247,18 @@ export function AFIClosure() {
           </Card>
         );
       })}
+      <FeedbackModal
+        open={!!closureFeedback}
+        aiOutput={closureFeedback?.aiOutput ?? ""}
+        module="AFI Closure"
+        onClose={() => setClosureFeedback(null)}
+        onSubmit={(fb) => {
+          if (!closureFeedback) return;
+          const memId = !fb.correct ? addCalibrationMemory({ module: "AFI Closure", subjectId: closureFeedback.id, context: closureFeedback.aiOutput, aiOutput: closureFeedback.aiOutput, staffCorrection: fb.correction, keyLearning: fb.reason, status: "active", tokenCount: 0 }) : undefined;
+          logHumanDecision({ module: "AFI Closure", subjectId: closureFeedback.id, aiOutput: closureFeedback.aiOutput, humanDecision: fb.correction || "Rejected", changed: true, decisionType: "Overridden", reason: fb.reason, memoryId: memId ?? undefined });
+          setClosureFeedback(null);
+        }}
+      />
     </Card>
   );
 }

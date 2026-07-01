@@ -215,6 +215,7 @@ export function SubCriterionChecklist() {
   const [pendingAddText, setPendingAddText] = useState("");
   const [expandedLine, setExpandedLine] = useState<string | null>(null);
   const [evidenceDraft, setEvidenceDraft] = useState(emptyEvidenceDraft());
+  const [aiFilledDraft, setAiFilledDraft] = useState<ReturnType<typeof emptyEvidenceDraft> | null>(null);
   const [samplingDraft, setSamplingDraft] = useState<{ population?: number; sampleSize?: number; sampleIds?: string }>({});
   const [reuseFrom, setReuseFrom] = useState<{ lineId: string; evidenceId: string } | null>(null);
   const [reuseTargetItem, setReuseTargetItem] = useState("");
@@ -232,6 +233,7 @@ export function SubCriterionChecklist() {
 
   const scored = useScored();
   const folders = useWorkspaceStore((s) => s.folders);
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const itemAudit = useMemo(() => {
     const item = scored.items.find((i) => i.id === selectedId);
     return item ? auditEvidence([item], entries, folders) : [];
@@ -762,6 +764,7 @@ export function SubCriterionChecklist() {
                         onClick={async () => {
                           const draft = await fillEvidenceFromLink(selectedId, l.id, (evidenceDraft.drive || "").trim());
                           setEvidenceDraft((d) => ({ ...d, title: draft.title, type: draft.type, date: draft.date, sufficiency: draft.sufficiency, auditorNote: draft.auditorNote }));
+                          setAiFilledDraft({ ...evidenceDraft, title: draft.title, type: draft.type, date: draft.date, sufficiency: draft.sufficiency, auditorNote: draft.auditorNote });
                         }}
                         title="Drafts title/type/date/sufficiency/note from the link alone — review every field before adding"
                         style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "4px 9px", borderRadius: 6, border: `1px solid ${BLUE}`, background: "#eaeef6", color: "#4a5a8a" }}
@@ -789,6 +792,13 @@ export function SubCriterionChecklist() {
                       <button
                         onClick={() => {
                           if (!evidenceDraft.title.trim()) return;
+                          if (aiFilledDraft) {
+                            const aiSummary = `title: ${aiFilledDraft.title}; type: ${aiFilledDraft.type}; sufficiency: ${aiFilledDraft.sufficiency}`;
+                            const humanSummary = `title: ${evidenceDraft.title}; type: ${evidenceDraft.type}; sufficiency: ${evidenceDraft.sufficiency}`;
+                            const changed = aiSummary !== humanSummary;
+                            logHumanDecision({ module: "Evidence Intake", subjectId: selectedId, field: "evidence", aiOutput: aiSummary, humanDecision: humanSummary, changed, decisionType: changed ? "Edited" : "Accepted", reason: "" });
+                            setAiFilledDraft(null);
+                          }
                           addEvidence(selectedId, l.id, evidenceDraft);
                           setEvidenceDraft(emptyEvidenceDraft());
                         }}
