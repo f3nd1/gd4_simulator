@@ -577,6 +577,33 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
           {totalReused > 0 && <span style={{ color: "#7c3aed" }}><b>{totalReused}</b> cached</span>}
         </>}
       </div>
+      {/* Files sent to AI — persist after completion so the user can see what was analysed */}
+      {files.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 10.5, color: "#64748b", marginBottom: 3 }}>
+            📤 Files sent to AI
+            {p.chunksCount != null && <> · <b>{p.chunksCount}</b> chunks</>}
+          </div>
+          <div style={{ maxHeight: 110, overflowY: "auto", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>
+            {files.map((file, fi) => {
+              const isCited = file.auditStatus === "cited";
+              const isNotUsed = file.auditStatus === "not_used";
+              return (
+                <div key={file.path + fi} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px", borderBottom: "1px solid #dcfce7", fontSize: 10 }}>
+                  <span style={{ flexShrink: 0, fontSize: 9, padding: "1px 4px", borderRadius: 3, background: isCited ? "#dcfce7" : isNotUsed ? "#f3f4f6" : "#e0f2fe", color: isCited ? "#15803d" : isNotUsed ? "#6b7280" : "#0369a1", fontWeight: 600 }}>
+                    {isCited ? "📎 cited" : isNotUsed ? "— skipped" : "✓"}
+                  </span>
+                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#166534" }}>{file.name}</span>
+                  <span style={{ flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{file.fileKind?.toUpperCase()}</span>
+                  {file.charCount != null && file.charCount > 0 && (
+                    <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", color: "#6b7280", fontSize: 9 }}>{file.charCount.toLocaleString()} ch</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {verdicts.length > 0 && (
         <div>
           <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6 }}>
