@@ -69,6 +69,20 @@ let _currentFileAbort: (() => void) | null = null;
 // approach (policy) from deployed evidence — a band needs both. Files not
 // under a recognised policy subfolder default to evidence (preserves prior
 // behaviour for folders that aren't split into subfolders yet).
+// AI-drafted closure text (root cause / corrective / preventive) comes back
+// as a single run-on paragraph. Break it onto one line per sentence so it
+// reads as a scannable list in the Quality Action / AFI textarea instead of
+// a wall of text. Only applied to what gets written into the closure record
+// — the raw text is still logged verbatim to the AI Review Log.
+function formatDraftedClosureText(text: string): string {
+  return text
+    .trim()
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9(])/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 function classifyFileBucket(path: string): "policy" | "evidence" {
   const topSegment = path.split("/")[0]?.toLowerCase() || "";
   return /polic|procedure/.test(topSegment) ? "policy" : "evidence";
@@ -938,7 +952,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             closures: {
               ...s.closures,
               // Only fill blanks — never clobber the user's own text.
-              [afiId]: { ...c, root: c.root || seed.root, corr: c.corr || seed.corr, prev: c.prev || seed.prev },
+              [afiId]: { ...c, root: c.root?.trim() || seed.root, corr: c.corr?.trim() || seed.corr, prev: c.prev?.trim() || seed.prev },
             },
           };
         }),
@@ -1032,7 +1046,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             return {
               closures: {
                 ...s.closures,
-                [afiId]: { ...c, root: c.root || draft.root, corr: c.corr || draft.corr, prev: c.prev || draft.prev },
+                [afiId]: {
+                  ...c,
+                  root: c.root?.trim() || formatDraftedClosureText(draft.root),
+                  corr: c.corr?.trim() || formatDraftedClosureText(draft.corr),
+                  prev: c.prev?.trim() || formatDraftedClosureText(draft.prev),
+                },
               },
               busy: null,
             };
@@ -2255,7 +2274,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                     { standard, apsr }
                   );
                   // seedClosure only fills blanks — never overwrites user text.
-                  get().seedClosure(finding.id, { root: draft.root, corr: draft.corr, prev: draft.prev });
+                  get().seedClosure(finding.id, {
+                    root: formatDraftedClosureText(draft.root),
+                    corr: formatDraftedClosureText(draft.corr),
+                    prev: formatDraftedClosureText(draft.prev),
+                  });
                   get().pushAIReviewLog({
                     agent: "Closure Drafter",
                     reviewType: "Closure",

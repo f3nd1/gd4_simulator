@@ -7,6 +7,7 @@ import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildGenericLines } from "../data/checklistSeed";
 import { computeBand, lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
+import { apsrAuditNote } from "../lib/ai/simulateAI";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
@@ -32,6 +33,27 @@ function sourceLabel(sourceType: ChecklistSourceType, sourceIndex: number | null
   if (sourceType === "expectedEvidence") return `Expected Evidence ${(sourceIndex ?? 0) + 1}`;
   if (sourceType === "intent") return "Intent";
   return "Requirement";
+}
+
+// One-line "why this was Met" summary for the Evidence strength section —
+// reuses the same VERDICT wording the staged audit already writes into the
+// evidence auditor note (apsrAuditNote), just extracting the first section
+// instead of the full APSR breakdown text.
+function metVerdictSummary(apsr: import("../types").ApsrBreakdown): string {
+  const verdictSection = apsrAuditNote(apsr).split("\n\n")[0] || "";
+  return verdictSection.replace(/^VERDICT\n/, "");
+}
+
+// Every chunk ID cited across the four APSR dimensions, deduped and in a
+// stable order (Approach, Processes, Systems & Outcomes, Review).
+function citedChunkIds(apsr: import("../types").ApsrBreakdown): string[] {
+  const all = [
+    ...(apsr.approach.sourceChunkIds || []),
+    ...(apsr.processes.sourceChunkIds || []),
+    ...(apsr.systemsOutcomes.sourceChunkIds || []),
+    ...(apsr.review.sourceChunkIds || []),
+  ];
+  return Array.from(new Set(all));
 }
 
 const GENERIC_OPTIONS: GenericChecklistLine["status"][] = ["Not Started", "Met", "Partial", "Not met"];
@@ -596,8 +618,16 @@ export function SubCriterionChecklist() {
 
           {sortedSpecific.map((l) => {
             const suff = lineSufficiency(l);
-            const needsFinding = l.status === "Not met" || (l.status !== "Not Applicable" && l.status !== "Not Started" && suff === "Missing");
+            // Excludes "Met" explicitly — a line can only need a draft finding
+            // banner when it isn't Met, even if evidence sufficiency happens to
+            // read "Missing" on an otherwise-Met line (shouldn't normally occur,
+            // but the banner belongs on the gap, not on a Met verdict).
+            const needsFinding = l.status !== "Met" && (l.status === "Not met" || (l.status !== "Not Applicable" && l.status !== "Not Started" && suff === "Missing"));
             const draft = needsFinding ? buildDraftFinding(req, l) : null;
+            // A "Met" line's audit verdict record — the most recent evidence
+            // item that carries an AI-derived APSR breakdown, i.e. it was
+            // actually staged-audited rather than just marked Met by hand.
+            const metEvidence = l.status === "Met" ? [...l.evidence].reverse().find((e) => e.apsr) : undefined;
             const expanded = expandedLine === l.id;
             const ref = l.sourceType && l.generatedBy === "ai" ? sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined) : l.clause || null;
 
@@ -684,6 +714,15 @@ export function SubCriterionChecklist() {
                       </button>
                     )
                   )}
+                  {!draft && metEvidence && (
+                    <button
+                      onClick={() => toggleEvidence(l.id)}
+                      title="Shows which chunks/documents were cited and why this line was rated Met"
+                      style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#15803d", border: "none", background: "transparent", padding: 0 }}
+                    >
+                      Evidence cited →
+                    </button>
+                  )}
                   <button onClick={() => removeSpecificLine(selectedId, l.id)} title="Remove line" style={{ cursor: "pointer", fontSize: 12, color: "#b23121", border: "none", background: "transparent", marginLeft: "auto", padding: "0 2px" }}>
                     ×
                   </button>
@@ -691,6 +730,23 @@ export function SubCriterionChecklist() {
 
                 {expanded && (
                   <div style={{ padding: "0 9px 9px", borderTop: "1px solid #f1f5f9", paddingTop: 8 }}>
+                    {!draft && metEvidence?.apsr && (
+                      <div style={{ marginBottom: 8, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>
+                        <div style={{ fontWeight: 700, color: "#15803d", marginBottom: 4, textTransform: "uppercase", fontSize: 10.5, letterSpacing: 0.3 }}>Evidence strength</div>
+                        <div style={{ marginBottom: 4 }}>{metVerdictSummary(metEvidence.apsr)}</div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                          {l.apsrDimension && <Pill s="good">{l.apsrDimension}</Pill>}
+                          {citedChunkIds(metEvidence.apsr).length > 0 ? (
+                            <span style={{ fontSize: 11, color: "#166534" }}>
+                              Cited: {citedChunkIds(metEvidence.apsr).join(", ")}
+                              {metEvidence.title ? ` (${metEvidence.title})` : ""}
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: 11, color: "#6b7280" }}>No specific chunk citation recorded for this verdict.</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     {draft && (
                       <div style={{ marginBottom: 8, background: "#faf0d9", borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>
                         <b>Draft finding:</b> {draft.issue} <Pill s={draft.severity === "High" ? "high" : "medium"}>{draft.severity}</Pill>
