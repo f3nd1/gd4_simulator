@@ -38,7 +38,26 @@ export function Layout() {
         <main className="px-3 sm:px-6" style={{ flex: 1, paddingTop: 18, paddingBottom: 60, maxWidth: 1180, width: "100%", margin: "0 auto" }}>
           <Outlet />
         </main>
+        <GitFooter />
       </div>
+    </div>
+  );
+}
+
+function GitFooter() {
+  const info = __GIT_INFO__;
+  const pushed = info.ahead === 0;
+  const time = info.isoTime ? new Date(info.isoTime).toLocaleString("en-SG", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  return (
+    <div style={{ fontSize: 11, color: "#aaa", padding: "4px 16px", borderTop: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 10, background: "#f9fafb" }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: pushed ? "#22c55e" : "#f59e0b", flexShrink: 0, display: "inline-block" }} />
+      <span style={{ color: pushed ? "#16a34a" : "#d97706", fontWeight: 600 }}>{pushed ? "Pushed" : `${info.ahead} unpushed commit${info.ahead !== 1 ? "s" : ""}`}</span>
+      <span>·</span>
+      <span style={{ fontFamily: "monospace" }}>{info.hash}</span>
+      <span>·</span>
+      <span>{info.branch}</span>
+      {time && <><span>·</span><span>{time}</span></>}
+      {info.message && <><span>·</span><span style={{ color: "#9ca3af", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{info.message}</span></>}
     </div>
   );
 }

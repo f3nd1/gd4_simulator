@@ -1,9 +1,26 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { execSync } from 'child_process'
+
+function gitInfo() {
+  try {
+    const hash    = execSync('git rev-parse --short HEAD').toString().trim()
+    const branch  = execSync('git rev-parse --abbrev-ref HEAD').toString().trim()
+    const message = execSync('git log -1 --pretty=%s').toString().trim()
+    const isoTime = execSync('git log -1 --pretty=%cI').toString().trim()
+    const ahead   = execSync('git rev-list @{u}..HEAD --count 2>/dev/null || echo 0').toString().trim()
+    return { hash, branch, message, isoTime, ahead: parseInt(ahead, 10) }
+  } catch {
+    return { hash: 'unknown', branch: 'unknown', message: '', isoTime: '', ahead: 0 }
+  }
+}
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __GIT_INFO__: JSON.stringify(gitInfo()),
+  },
   server: {
     host: '0.0.0.0',
     port: 5173,
