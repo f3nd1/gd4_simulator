@@ -475,7 +475,8 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
         {/* Staged audit pass mini-tracker */}
         {stagedInfo && (
           <>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+            {/* Pass pills + window counter */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
               {(["policy_audit", "evidence_audit", "outcome_review"] as const).map((stg, i) => {
                 const stageOrder = ["policy_audit", "evidence_audit", "outcome_review", "apsr_build"];
                 const currentIdx = stageOrder.indexOf(p.stage ?? "");
@@ -491,12 +492,35 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
                   </span>
                 );
               })}
+              {/* Window counter badge */}
+              {p.windowTotal != null && p.windowTotal > 1 && (
+                <span style={{ marginLeft: "auto", fontSize: 10, fontFamily: "ui-monospace,monospace", background: "#f0f4ff", border: "1px solid #c7d2fe", borderRadius: 6, padding: "2px 8px", color: "#3730a3", fontWeight: 600 }}>
+                  Window {p.windowCurrent ?? 1} / {p.windowTotal}
+                </span>
+              )}
             </div>
-            {/* Files being sent to AI in this pass */}
+
+            {/* Window progress bar (only when multi-window) */}
+            {p.windowTotal != null && p.windowTotal > 1 && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ background: "#e0e7ff", borderRadius: 4, height: 5, overflow: "hidden" }}>
+                  <div style={{
+                    height: "100%", borderRadius: 4, background: "#6366f1",
+                    width: `${Math.round(100 * ((p.windowCurrent ?? 1) - 1) / p.windowTotal)}%`,
+                    transition: "width 0.4s ease",
+                  }} />
+                </div>
+                <div style={{ ...muted, marginTop: 3 }}>
+                  All {files.length} file{files.length !== 1 ? "s" : ""} are bundled into {p.windowTotal} text windows for the AI — each window is one AI call. Use <b>Skip stage →</b> to stop this pass early.
+                </div>
+              </div>
+            )}
+
+            {/* Files list */}
             {files.length > 0 && (
               <div style={{ marginBottom: 8 }}>
                 <div style={{ fontSize: 10.5, color: "#64748b", marginBottom: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                  <span>📤 Sending <b>{files.length}</b> file{files.length !== 1 ? "s" : ""} to AI</span>
+                  <span>📤 <b>{files.length}</b> file{files.length !== 1 ? "s" : ""} in this pass</span>
                   {p.chunksCount != null && <span>· <b>{p.chunksCount}</b> chunks</span>}
                   <input
                     value={aiFileSearch}
@@ -948,10 +972,10 @@ function AuditProgressModal({
               {currentStep === 2 && (
                 <button
                   onClick={onSkipStage}
-                  title="Stop the current AI pass early and move to the next stage using results collected so far"
+                  title="Stop the current AI pass early and move to the next pass using results collected so far. Files are processed as bundled text windows — there is no per-file cancel in this stage."
                   style={{ cursor: "pointer", border: "1px solid #fbbf24", background: "#fffbeb", borderRadius: 7, fontSize: 11.5, fontWeight: 600, color: "#92400e", padding: "5px 12px", whiteSpace: "nowrap" }}
                 >
-                  Skip stage →
+                  Skip pass →
                 </button>
               )}
               <button
@@ -973,7 +997,7 @@ function AuditProgressModal({
               {isStuck
                 ? (currentStep === 1
                   ? <>No activity for <b>{elapsedSec}s</b> — file may be stuck. Click <b>Skip</b> next to the file name below, or <b>Cancel audit</b> to stop.</>
-                  : <>AI no response for <b>{elapsedSec}s</b> — may be stuck. Click <b>Skip stage →</b> to stop this pass and continue with results so far, or <b>Cancel audit</b> to stop.</>)
+                  : <>AI no response for <b>{elapsedSec}s</b> — may be stuck. Click <b>Skip pass →</b> to stop this pass and continue with results so far, or <b>Cancel audit</b> to stop.</>)
                 : <>Waiting for AI response — <b>{elapsedSec}s</b> elapsed</>
               }
             </span>
@@ -1027,15 +1051,39 @@ function AuditProgressModal({
           })}
         </div>
 
-        {/* Progress bar */}
-        <div style={{ background: "#f1f5f9", borderRadius: 6, height: 6, overflow: "hidden", marginBottom: 18 }}>
-          <div style={{
-            height: "100%", width: `${pct}%`, borderRadius: 6,
-            background: isError ? "#ef4444" : isDone ? "#22c55e" : "linear-gradient(90deg, #3b82f6 0%, #60a5fa 50%, #93c5fd 100%)",
-            backgroundSize: "200% 100%", transition: "width 0.5s ease",
-            animation: !isDone && !isError ? "audit-shimmer 2s linear infinite" : "none",
-          }} />
+        {/* Primary progress bar — overall stage */}
+        <div style={{ marginBottom: 4 }}>
+          <div style={{ background: "#f1f5f9", borderRadius: 6, height: 7, overflow: "hidden" }}>
+            <div style={{
+              height: "100%", width: `${pct}%`, borderRadius: 6,
+              background: isError ? "#ef4444" : isDone ? "#22c55e" : "linear-gradient(90deg, #3b82f6 0%, #60a5fa 50%, #93c5fd 100%)",
+              backgroundSize: "200% 100%", transition: "width 0.5s ease",
+              animation: !isDone && !isError ? "audit-shimmer 2s linear infinite" : "none",
+            }} />
+          </div>
+          {/* Secondary progress bar — within-stage (file read or AI window) */}
+          {isRunning && (() => {
+            let subPct: number | null = null;
+            let subLabel: string | null = null;
+            if (currentStep === 1 && progress.filesTotal && progress.filesTotal > 1) {
+              subPct = Math.round(100 * (progress.filesRead ?? 0) / progress.filesTotal);
+              subLabel = `File ${progress.filesRead ?? 0} / ${progress.filesTotal}`;
+            } else if (currentStep === 2 && progress.windowTotal && progress.windowTotal > 1) {
+              subPct = Math.round(100 * ((progress.windowCurrent ?? 1) - 1) / progress.windowTotal);
+              subLabel = `AI window ${progress.windowCurrent ?? 1} / ${progress.windowTotal}`;
+            }
+            if (subPct === null) return null;
+            return (
+              <div style={{ marginTop: 3, display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ flex: 1, background: "#e2e8f0", borderRadius: 4, height: 4, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${subPct}%`, borderRadius: 4, background: currentStep === 2 ? "#6366f1" : "#38bdf8", transition: "width 0.3s ease" }} />
+                </div>
+                <span style={{ fontSize: 10, color: "#64748b", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{subLabel}</span>
+              </div>
+            );
+          })()}
         </div>
+        <div style={{ marginBottom: 14 }} />
 
         {/* Detail panel */}
         <div style={{ background: "#f8fafc", borderRadius: 10, padding: "14px 16px", minHeight: 80 }}>

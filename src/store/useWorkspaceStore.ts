@@ -2641,7 +2641,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, {
                 criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
                 shouldStop: shouldStopStage,
-                onProgress: (detail) => setProgress("policy_audit", { stageDetail: `Policy: ${detail}`, canCancel: true }),
+                onProgress: (detail) => {
+                  const m = detail.match(/window (\d+)\/(\d+)/);
+                  setProgress("policy_audit", { stageDetail: `Policy: ${detail}`, canCancel: true, lastHeartbeatAt: Date.now(), ...(m ? { windowCurrent: +m[1], windowTotal: +m[2] } : {}) });
+                },
               });
               resetSkipFlag();
               policyRows = result.rows;
@@ -2672,7 +2675,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, {
                 criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
                 shouldStop: shouldStopStage,
-                onProgress: (detail) => setProgress("evidence_audit", { stageDetail: `Evidence: ${detail}`, canCancel: true }),
+                onProgress: (detail) => {
+                  const m = detail.match(/window (\d+)\/(\d+)/);
+                  setProgress("evidence_audit", { stageDetail: `Evidence: ${detail}`, canCancel: true, lastHeartbeatAt: Date.now(), ...(m ? { windowCurrent: +m[1], windowTotal: +m[2] } : {}) });
+                },
               });
               resetSkipFlag();
               evidenceRows = result.rows;
@@ -2702,7 +2708,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, {
                 criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType,
                 shouldStop: shouldStopStage,
-                onProgress: (detail) => setProgress("outcome_review", { stageDetail: `Outcomes: ${detail}`, canCancel: true }),
+                onProgress: (detail) => {
+                  const m = detail.match(/window (\d+)\/(\d+)/);
+                  setProgress("outcome_review", { stageDetail: `Outcomes: ${detail}`, canCancel: true, lastHeartbeatAt: Date.now(), ...(m ? { windowCurrent: +m[1], windowTotal: +m[2] } : {}) });
+                },
               });
               resetSkipFlag();
               outcomeRows = result.rows;

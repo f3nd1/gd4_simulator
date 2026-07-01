@@ -622,6 +622,9 @@ export type AuditProgressState = {
   aiModel?: string;
   // Total evidence chunks assembled for the AI call.
   chunksCount?: number;
+  // Sliding window progress for staged audit passes.
+  windowCurrent?: number;
+  windowTotal?: number;
   // Per-line AI verdict summary — populated after the AI audit stage completes.
   verdictLines?: AuditAISummaryLine[];
   // Folder-level warnings returned by the AI (e.g. mis-filed documents).
