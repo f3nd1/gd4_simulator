@@ -685,7 +685,7 @@ function CompleteDetail({ p, onExportFileLedger, onExportAISummary }: { p: Audit
   const totalCited   = files.filter((f) => f.auditStatus === "cited").length;
   const totalNotUsed = files.filter((f) => f.auditStatus === "not_used").length;
 
-  const checklistHref = p.subCriterionId ? `#/sub-checklist?item=${p.subCriterionId}` : "#/sub-checklist";
+  const checklistHref = p.subCriterionId ? `#/sub-checklist?item=${p.subCriterionId}.1` : "#/sub-checklist";
   const findingsHref  = p.subCriterionId ? `#/findings?item=${p.subCriterionId}` : "#/findings";
 
   const chipLink: React.CSSProperties = { cursor: "pointer", textDecoration: "none", borderRadius: 6, padding: "5px 11px", fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 };
