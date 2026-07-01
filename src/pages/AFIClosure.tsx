@@ -65,6 +65,14 @@ export function AFIClosure() {
         <span style={{ fontSize: 12, color: "#6b7280" }}>
           {scored.openAFIs} of {allFindings.length} still open
         </span>
+        {findings.length > 0 && (
+          <button
+            onClick={() => { if (confirm(`Remove all ${findings.length} finding${findings.length !== 1 ? "s" : ""} shown? This cannot be undone.`)) findings.forEach((f) => removeCustomFinding(f.id)); }}
+            style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 700, padding: "5px 11px", borderRadius: 8, fontSize: 12 }}
+          >
+            Remove all
+          </button>
+        )}
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
         <select
