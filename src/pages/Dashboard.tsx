@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
+import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
@@ -278,9 +279,8 @@ export function Dashboard() {
                 {analysisResult.priorities.map((p, i) => (
                   <li key={i} style={{ marginBottom: 4, lineHeight: 1.5 }}>
                     {p}
-                    <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, verticalAlign: "middle" }}>
-                      <button onClick={() => logHumanDecision({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", field: "priorities", aiOutput: p, humanDecision: p, changed: false, decisionType: "Accepted", reason: "" })} title="AI was helpful" style={{ background: "none", border: "1px solid #d1fae5", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#15803d" }}>👍</button>
-                      <button onClick={() => setFeedbackTarget({ text: p, field: "priorities" })} title="AI was wrong" style={{ background: "none", border: "1px solid #fee2e2", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#b91c1c" }}>👎</button>
+                    <span style={{ display: "inline-flex", marginLeft: 8, verticalAlign: "middle" }}>
+                      <ThumbsButtons onAccept={() => logHumanDecision({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", field: "priorities", aiOutput: p, humanDecision: p, changed: false, decisionType: "Accepted", reason: "" })} onReject={() => setFeedbackTarget({ text: p, field: "priorities" })} />
                     </span>
                   </li>
                 ))}
@@ -294,9 +294,8 @@ export function Dashboard() {
                 {analysisResult.systemicIssues.map((s, i) => (
                   <li key={i} style={{ marginBottom: 4, lineHeight: 1.5 }}>
                     {s}
-                    <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, verticalAlign: "middle" }}>
-                      <button onClick={() => logHumanDecision({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", field: "systemicIssues", aiOutput: s, humanDecision: s, changed: false, decisionType: "Accepted", reason: "" })} title="AI was helpful" style={{ background: "none", border: "1px solid #d1fae5", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#15803d" }}>👍</button>
-                      <button onClick={() => setFeedbackTarget({ text: s, field: "systemicIssues" })} title="AI was wrong" style={{ background: "none", border: "1px solid #fee2e2", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#b91c1c" }}>👎</button>
+                    <span style={{ display: "inline-flex", marginLeft: 8, verticalAlign: "middle" }}>
+                      <ThumbsButtons onAccept={() => logHumanDecision({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", field: "systemicIssues", aiOutput: s, humanDecision: s, changed: false, decisionType: "Accepted", reason: "" })} onReject={() => setFeedbackTarget({ text: s, field: "systemicIssues" })} />
                     </span>
                   </li>
                 ))}
@@ -315,9 +314,8 @@ export function Dashboard() {
               {analysisResult.immediateActions.map((a, i) => (
                 <div key={i} style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5 }}>
                   {a}
-                  <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, verticalAlign: "middle" }}>
-                    <button onClick={() => logHumanDecision({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", field: "immediateActions", aiOutput: a, humanDecision: a, changed: false, decisionType: "Accepted", reason: "" })} title="AI was helpful" style={{ background: "none", border: "1px solid #d1fae5", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#15803d" }}>👍</button>
-                    <button onClick={() => setFeedbackTarget({ text: a, field: "immediateActions" })} title="AI was wrong" style={{ background: "none", border: "1px solid #fee2e2", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#b91c1c" }}>👎</button>
+                  <span style={{ display: "inline-flex", marginLeft: 8, verticalAlign: "middle" }}>
+                    <ThumbsButtons onAccept={() => logHumanDecision({ module: "Cross-Criterion Analysis", subjectId: "all-criteria", field: "immediateActions", aiOutput: a, humanDecision: a, changed: false, decisionType: "Accepted", reason: "" })} onReject={() => setFeedbackTarget({ text: a, field: "immediateActions" })} />
                   </span>
                 </div>
               ))}

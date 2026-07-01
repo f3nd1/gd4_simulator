@@ -9,6 +9,8 @@ import { buildGenericLines } from "../data/checklistSeed";
 import { computeBand, lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
+import { ThumbsButtons } from "../components/ui/ThumbsButtons";
+import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { GOLD, BLUE, INK, TONE, bandTone } from "../lib/theme";
 import type {
   GD4Requirement,
@@ -234,6 +236,8 @@ export function SubCriterionChecklist() {
   const scored = useScored();
   const folders = useWorkspaceStore((s) => s.folders);
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
+  const [lineFeedback, setLineFeedback] = useState<{ id: string; text: string } | null>(null);
   const itemAudit = useMemo(() => {
     const item = scored.items.find((i) => i.id === selectedId);
     return item ? auditEvidence([item], entries, folders) : [];
@@ -624,6 +628,12 @@ export function SubCriterionChecklist() {
                       {SPECIFIC_OPTIONS.map((o) => <option key={o}>{o}</option>)}
                     </select>
                     <Pill s={statusTone(l.status)}>{l.status}</Pill>
+                    {l.generatedBy === "ai" && (
+                      <ThumbsButtons
+                        onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: l.id, aiOutput: `AI verdict: ${l.status}`, humanDecision: `Accepted: ${l.status}`, changed: false, decisionType: "Accepted", reason: "" })}
+                        onReject={() => setLineFeedback({ id: l.id, text: l.text })}
+                      />
+                    )}
                     {l.status !== "Not Applicable" && (
                       l.evidence.length > 0
                         ? <Pill s={sufficiencyTone(suff)}>Evidence ({l.evidence.length})</Pill>
@@ -887,6 +897,19 @@ export function SubCriterionChecklist() {
           </p>
         </Card>
       </div>
+      <FeedbackModal
+        open={!!lineFeedback}
+        aiOutput={lineFeedback?.text ?? ""}
+        module="Line Status"
+        onClose={() => setLineFeedback(null)}
+        onSubmit={(fb) => {
+          logHumanDecision({ module: "Line Status", subjectId: selectedId, field: lineFeedback?.id, aiOutput: lineFeedback?.text ?? "", humanDecision: (fb.correction || lineFeedback?.text) ?? "", changed: !!fb.correction, decisionType: "Overridden", reason: fb.reason });
+          if (!fb.correct && fb.correction) {
+            addCalibrationMemory({ module: "Line Status", subjectId: selectedId, context: lineFeedback?.text ?? "", aiOutput: lineFeedback?.text ?? "", staffCorrection: fb.correction, keyLearning: fb.reason, status: "active", tokenCount: Math.round((lineFeedback?.text?.length ?? 0) / 4) });
+          }
+          setLineFeedback(null);
+        }}
+      />
     </div>
   );
 }

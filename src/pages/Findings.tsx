@@ -9,6 +9,7 @@ import { useAISettingsStore } from "../store/useAISettingsStore";
 import { Card, filterSelectStyle, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
+import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { GOLD, INK } from "../lib/theme";
 import type { Finding, FindingType, Severity, FindingDimension, GroupedFindingDraft } from "../types";
@@ -594,11 +595,11 @@ export function Findings() {
                 {draftBusy ? "Drafting…" : "AI draft finding body"}
               </button>
             )}
-            {aiDraftOutput && !draftBusy && (
-              <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, verticalAlign: "middle" }}>
-                <button onClick={() => logHumanDecision({ module: "Finding Observation", subjectId: form.gd4ItemId, field: "observation/criteria/effect", aiOutput: aiDraftOutput, humanDecision: aiDraftOutput, changed: false, decisionType: "Accepted", reason: "" })} title="AI was helpful" style={{ background: "none", border: "1px solid #d1fae5", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#15803d" }}>👍</button>
-                <button onClick={() => setDraftFeedbackOpen(true)} title="AI was wrong" style={{ background: "none", border: "1px solid #fee2e2", borderRadius: 5, cursor: "pointer", fontSize: 12, padding: "2px 6px", color: "#b91c1c" }}>👎</button>
-              </span>
+            {aiEnabled && aiDraftOutput && !draftBusy && (
+              <ThumbsButtons
+                onAccept={() => logHumanDecision({ module: "Finding Observation", subjectId: form.gd4ItemId, field: "observation/criteria/effect", aiOutput: aiDraftOutput, humanDecision: aiDraftOutput, changed: false, decisionType: "Accepted", reason: "" })}
+                onReject={() => setDraftFeedbackOpen(true)}
+              />
             )}
             {draftError && <span style={{ fontSize: 11.5, color: "#b23121" }}>{draftError}</span>}
           </div>
