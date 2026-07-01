@@ -929,14 +929,21 @@ export async function runStagedPolicyAudit(
   const domainSkill = domainExpertiseFor(opts.criterionId);
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
 
-  const system = `You are auditing ONLY the POLICY & PROCEDURE documents for a GD4 EduTrust sub-criterion. Your task for each audit point: does this institution's policy documentation DOCUMENT an approach that addresses this requirement? You are assessing APPROACH only — not whether it is implemented, not whether outcomes are achieved.
+  // Built per actual AI call (inside the window/batch loop below) rather than
+  // once for the whole function — buildSystemPrompt() has a dev-only debug-log
+  // side effect, and the debug log is meant to show every real chatComplete()
+  // call. Building it once here (as before) meant only one entry ever appeared
+  // for a stage that can make many real calls across windows. The label is the
+  // only thing that varies between calls; the resulting prompt text sent to the
+  // AI is unchanged from before.
+  const buildSystem = (label: string) => `You are auditing ONLY the POLICY & PROCEDURE documents for a GD4 EduTrust sub-criterion. Your task for each audit point: does this institution's policy documentation DOCUMENT an approach that addresses this requirement? You are assessing APPROACH only — not whether it is implemented, not whether outcomes are achieved.
 
 "Yes" = the policy clearly, specifically, and sustainably documents HOW the institution meets this requirement (names who, what, when, frequency, ownership).
 "Partial" = the policy mentions the requirement but is vague, generic, or incomplete — missing who owns it, missing timing, or using boilerplate language not specific to this institution.
 "No" = the policy document does not address this requirement at all.
 
 IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, "runStagedPolicyAudit", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -971,6 +978,7 @@ Respond with JSON only:
       if (opts.shouldStop?.()) break;
       const pointsBlock = buildStagedPointsBlock(batch);
       const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for APPROACH coverage:\n${pointsBlock}`;
+      const system = buildSystem(windows.length > 1 ? `runStagedPolicyAudit (window ${win.index + 1}/${win.total})` : "runStagedPolicyAudit");
       if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
       try {
         const content = await chatComplete(
@@ -1052,14 +1060,17 @@ export async function runStagedEvidenceAudit(
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
   const policyByRef = new Map(policyRows.map((r) => [r.ref, r]));
 
-  const system = `You are auditing ONLY the ACTUAL EVIDENCE documents for a GD4 EduTrust sub-criterion. Your task: does the evidence show that the institution actually IMPLEMENTS each requirement in practice? You are assessing PROCESSES only — not the documented policy (assessed separately), not outcomes.
+  // See runStagedPolicyAudit's comment on `buildSystem`: built per actual AI
+  // call (inside the loop below) so the debug log gets one entry per real
+  // chatComplete() call instead of a single entry for the whole stage.
+  const buildSystem = (label: string) => `You are auditing ONLY the ACTUAL EVIDENCE documents for a GD4 EduTrust sub-criterion. Your task: does the evidence show that the institution actually IMPLEMENTS each requirement in practice? You are assessing PROCESSES only — not the documented policy (assessed separately), not outcomes.
 
 "Yes" = there are real implementation records, logs, forms, screenshots, registers, or actual operational records showing this was done consistently.
 "Partial" = some implementation evidence exists but it is incomplete, covers only part of the review period, or the sample is too small to be representative.
 "No" = no implementation evidence in these documents for this requirement.
 
 IMPORTANT: A policy document, SOP, or procedure does NOT count as implementation evidence, even if it is filed in the evidence folder. Only actual records of doing something count.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, "runStagedEvidenceAudit", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -1094,6 +1105,7 @@ Respond with JSON only:
         return `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}${polNote}`;
       }).join("\n");
       const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for IMPLEMENTATION evidence:\n${pointsBlock}`;
+      const system = buildSystem(windows.length > 1 ? `runStagedEvidenceAudit (window ${win.index + 1}/${win.total})` : "runStagedEvidenceAudit");
       if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
       try {
         const content = await chatComplete(
@@ -1173,13 +1185,16 @@ export async function runStagedOutcomeReviewAudit(
   const domainSkill = domainExpertiseFor(opts.criterionId);
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
 
-  const system = `You are auditing ALL documents (policy and evidence combined) for outcome data and review/improvement records for a GD4 EduTrust sub-criterion. For each audit point assess:
+  // See runStagedPolicyAudit's comment on `buildSystem`: built per actual AI
+  // call (inside the loop below) so the debug log gets one entry per real
+  // chatComplete() call instead of a single entry for the whole stage.
+  const buildSystem = (label: string) => `You are auditing ALL documents (policy and evidence combined) for outcome data and review/improvement records for a GD4 EduTrust sub-criterion. For each audit point assess:
 
 outcomeEvident: true if there is actual outcome data, KPIs, results, trends, survey data, or performance measurements for this requirement — not just a statement that outcomes will be tracked. The data must cover the review period, name targets or results, and show actual numbers or trends.
 
 reviewEvident: true if there are records of a formal review of this requirement's effectiveness — meeting minutes with agenda item, management review records, improvement actions triggered by data review, or evaluation reports. A policy that says "we will review annually" is NOT evidence of a review having happened.
 
-Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, "runStagedOutcomeReviewAudit", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;
@@ -1211,6 +1226,7 @@ Respond with JSON only:
       if (opts.shouldStop?.()) break;
       const pointsBlock = buildStagedPointsBlock(batch);
       const user = `All documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for OUTCOME DATA and REVIEW RECORDS:\n${pointsBlock}`;
+      const system = buildSystem(windows.length > 1 ? `runStagedOutcomeReviewAudit (window ${win.index + 1}/${win.total})` : "runStagedOutcomeReviewAudit");
       if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
       try {
         const content = await chatComplete(

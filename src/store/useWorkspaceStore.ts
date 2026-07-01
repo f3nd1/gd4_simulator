@@ -2448,8 +2448,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let imagesDescribed = 0;
         let auxUsage: AIUsage | undefined;
         const scanned: string[] = [];
-        const scannedPolicy: string[] = [];
-        const scannedEvidence: string[] = [];
         const skipped: string[] = [];
         const failed: { path: string; reason: string }[] = [];
 
@@ -2499,7 +2497,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: cachedEntry.charCount, processingMode: "reused", ...(cachedEntry.pdfQuality ? { suspectedScannedPdf: cachedEntry.pdfQuality.suspectedScannedPdf, extractedTextQuality: cachedEntry.pdfQuality.extractedTextQuality } : {}) };
             if (cachedEntry.text !== null) {
               scanned.push(file.path);
-              (isPolicy ? scannedPolicy : scannedEvidence).push(file.path);
               const body = cachedEntry.text;
               const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
               for (let pi = 0; pi < totalParts; pi++) {
@@ -2568,7 +2565,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             case "text": {
               const body = fileResult.text;
               scanned.push(file.path);
-              (isPolicy ? scannedPolicy : scannedEvidence).push(file.path);
               const kind = fileKind(file.mimeType);
               set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: kind, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), ...(fileResult.kind === "text" && fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}) } } }));
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}) };
@@ -2586,7 +2582,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
             case "image": {
               scanned.push(file.path);
-              (isPolicy ? scannedPolicy : scannedEvidence).push(file.path);
               const desc = fileResult.description;
               set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: desc, charCount: desc.length, fileKind: "image", fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: desc.length, processingMode: "new" };
@@ -2761,9 +2756,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         // Stage 5: Deterministic APSR Verdict Builder
         setProgress("apsr_build", { stageDetail: "Building APSR verdicts from coverage matrices…" });
-        const policyByRef = new Map(policyRows.map((r) => [r.ref, r]));
-        const evidenceByRef = new Map(evidenceRows.map((r) => [r.ref, r]));
-        const outcomeByRef = new Map(outcomeRows.map((r) => [r.ref, r]));
+        // Checklist lines' sourceRef comes from an AI call (runLiveChecklistGeneration)
+        // that is asked to echo the flatAuditPoint ref verbatim, but LLM output isn't
+        // guaranteed byte-identical — a stray "DS:" prefix, extra whitespace, or a case
+        // difference (e.g. "6.1.1.DS1.A" vs "6.1.1.DS1.a") makes an exact-string Map
+        // lookup miss a ref that genuinely exists in the audit results, silently
+        // dropping the line into the generic "overall coverage" fallback. Normalize
+        // both sides the same way so only a truly nonexistent ref falls through.
+        const normalizeAuditRef = (ref: string): string =>
+          ref.trim().replace(/^(ref|source|gd4|ds|ee|n)\s*[:#]\s*/i, "").replace(/\s+/g, "").toUpperCase();
+        const policyByRef = new Map(policyRows.map((r) => [normalizeAuditRef(r.ref), r]));
+        const evidenceByRef = new Map(evidenceRows.map((r) => [normalizeAuditRef(r.ref), r]));
+        const outcomeByRef = new Map(outcomeRows.map((r) => [normalizeAuditRef(r.ref), r]));
 
         // Overall coverage for lines without sourceRef
         const policyOverall: "Yes" | "Partial" | "No" =
@@ -2777,9 +2781,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         type StagedVerdict = { lineId: string; apsr: ApsrBreakdown; status: "Met" | "Partial" | "Not met" };
         const stagedVerdicts: StagedVerdict[] = lines.map((line) => {
-          const pRow = line.sourceRef ? policyByRef.get(line.sourceRef) : undefined;
-          const eRow = line.sourceRef ? evidenceByRef.get(line.sourceRef) : undefined;
-          const oRow = line.sourceRef ? outcomeByRef.get(line.sourceRef) : undefined;
+          const normRef = line.sourceRef ? normalizeAuditRef(line.sourceRef) : undefined;
+          const pRow = normRef ? policyByRef.get(normRef) : undefined;
+          const eRow = normRef ? evidenceByRef.get(normRef) : undefined;
+          const oRow = normRef ? outcomeByRef.get(normRef) : undefined;
 
           // This checklist line has no sourceRef matching a specific flatAuditPoint
           // ref, so there is no window-level note or chunk citation to inherit —
@@ -2893,11 +2898,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             : "Files read: none — no readable files were found in this folder."
         );
         if (scanned.length > 0) {
-          const nameOnly = (paths: string[]) => paths.map((p) => p.split("/").pop() || p);
+          // Built from fileRecords (every file the folder listing found, one entry
+          // per file, bucket resolved the same way the reading loop resolved it —
+          // not from scannedPolicy/scannedEvidence, which only record files that
+          // actually made it into the doc text and so under-list the folder's true
+          // contents whenever a file was skipped or failed to extract).
+          const nameOnly = (p: string) => p.split("/").pop() || p;
+          const resolvedFileBucket = (rec: AuditFileRecord): "policy" | "evidence" =>
+            rec.bucket === "policy" || (rec.bucket === "auto" && classifyFileBucket(rec.path) === "policy") ? "policy" : "evidence";
+          const describeFile = (rec: AuditFileRecord) =>
+            rec.readStatus === "read" || rec.readStatus === "condensed" ? nameOnly(rec.path)
+            : rec.readStatus === "skipped" ? `${nameOnly(rec.path)} (skipped${rec.skipReason ? `: ${rec.skipReason}` : ""})`
+            : rec.readStatus === "failed" ? `${nameOnly(rec.path)} (failed${rec.failReason ? `: ${rec.failReason}` : ""})`
+            : `${nameOnly(rec.path)} (not read)`;
+          const policyFiles = fileRecords.filter((r) => resolvedFileBucket(r) === "policy");
+          const evidenceFiles = fileRecords.filter((r) => resolvedFileBucket(r) === "evidence");
           lineParts.push(
             `Files assessed:\n` +
-            `  Policy (${scannedPolicy.length}): ${scannedPolicy.length > 0 ? nameOnly(scannedPolicy).join(", ") : "none"}\n` +
-            `  Evidence (${scannedEvidence.length}): ${scannedEvidence.length > 0 ? nameOnly(scannedEvidence).join(", ") : "none"}`
+            `  Policy (${policyFiles.length}): ${policyFiles.length > 0 ? policyFiles.map(describeFile).join(", ") : "none"}\n` +
+            `  Evidence (${evidenceFiles.length}): ${evidenceFiles.length > 0 ? evidenceFiles.map(describeFile).join(", ") : "none"}`
           );
         }
         lineParts.push(live ? `Method: EduTrust APSR rubric vs GD4 standard — Approach gates the result, then Processes, Systems & Outcomes, Review (3 AI passes).` : "Method: offline keyword estimate — AI was not used (check AI Settings).");
