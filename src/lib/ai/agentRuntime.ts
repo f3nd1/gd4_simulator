@@ -887,6 +887,26 @@ function mergeCoverage(a: StagedCoverageStatus, b: StagedCoverageStatus): Staged
   return "No";
 }
 
+// Tracks the specific note each window contributed for one audit-point ref, so
+// the final note can cite every window that found something rather than
+// silently discarding all but the single "best" window's text.
+type WindowNote = { window: number; note: string };
+
+function pushWindowNote(parts: WindowNote[], windowIndex: number, note: string): WindowNote[] {
+  const trimmed = note.trim();
+  if (!trimmed) return parts;
+  return [...parts, { window: windowIndex + 1, note: trimmed }];
+}
+
+// Renders the accumulated per-window notes for one ref. A single contributing
+// window renders its note plain (no "Window N:" noise for the common case);
+// multiple contributing windows are concatenated so each is attributable.
+function renderWindowNotes(parts: WindowNote[], fallback: string): string {
+  if (parts.length === 0) return fallback;
+  if (parts.length === 1) return parts[0].note;
+  return parts.map((p) => `Window ${p.window}: ${p.note}`).join(" ");
+}
+
 function buildStagedPointsBlock(auditPoints: FlatAuditPoint[]): string {
   return auditPoints.map((p, i) =>
     `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}`
@@ -923,14 +943,17 @@ Respond with JSON only:
 
   const windows = buildDocWindows(policyDocText);
   const totalCharsAvailable = policyDocText.length;
-  const fullCoverage = windows.length === 1 || policyDocText.length <= WINDOW_SIZE;
 
-  // Accumulate best verdict per ref across all windows.
-  const bestByRef = new Map<string, { covered: StagedCoverageStatus; note: string; chunkIds: string[] }>();
+  // Accumulate best verdict per ref across all windows. `notes` collects one
+  // entry per window that found specific (non-"No") coverage, so the final
+  // note can cite every contributing window instead of discarding all but
+  // whichever window happened to win the coverage-priority merge.
+  const bestByRef = new Map<string, { covered: StagedCoverageStatus; notes: WindowNote[]; chunkIds: string[] }>();
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
   let totalCharsAssessed = 0;
+  let windowsCompleted = 0;
   const windowErrors: string[] = [];
 
   const batches: FlatAuditPoint[][] = [];
@@ -966,13 +989,12 @@ Respond with JSON only:
           const note = typeof r?.note === "string" ? r.note : "";
           const prev = bestByRef.get(p.ref);
           if (!prev) {
-            bestByRef.set(p.ref, { covered, note, chunkIds });
+            bestByRef.set(p.ref, { covered, notes: covered !== "No" ? pushWindowNote([], win.index, note) : [], chunkIds });
           } else {
             const merged = mergeCoverage(prev.covered, covered);
-            // Keep the note from whichever window gave the better verdict.
-            const betterNote = merged !== prev.covered ? note : prev.note;
+            const mergedNotes = covered !== "No" ? pushWindowNote(prev.notes, win.index, note) : prev.notes;
             const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
-            bestByRef.set(p.ref, { covered: merged, note: betterNote, chunkIds: mergedChunks });
+            bestByRef.set(p.ref, { covered: merged, notes: mergedNotes, chunkIds: mergedChunks });
           }
         }
       } catch (err) {
@@ -983,23 +1005,32 @@ Respond with JSON only:
         console.error("[StagedPolicyAudit]", errNote);
         for (const p of batch) {
           if (!bestByRef.has(p.ref)) {
-            bestByRef.set(p.ref, { covered: "No", note: `AI call failed (window ${win.index + 1}): ${msg.slice(0, 120)}`, chunkIds: [] });
+            bestByRef.set(p.ref, { covered: "No", notes: [], chunkIds: [] });
           }
         }
       }
     }
+    windowsCompleted++;
   }
 
+  const fullCoverage = windowsCompleted === windows.length;
+
   const rows: PolicyCoverageRow[] = auditPoints.map((p) => {
-    const best = bestByRef.get(p.ref) ?? { covered: "No" as StagedCoverageStatus, note: `No relevant policy evidence found in the ${windows.length} window(s) reviewed.`, chunkIds: [] };
-    return { ref: p.ref, pointText: p.text, covered: best.covered, note: best.note, chunkIds: best.chunkIds };
+    const best = bestByRef.get(p.ref);
+    const fallback = `No relevant policy evidence found in the ${windowsCompleted} window(s) reviewed.`;
+    return {
+      ref: p.ref, pointText: p.text,
+      covered: best?.covered ?? "No",
+      note: best ? renderWindowNotes(best.notes, fallback) : fallback,
+      chunkIds: best?.chunkIds ?? [],
+    };
   });
 
   const truncationNote = !fullCoverage
-    ? `Policy content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).`
+    ? `Policy content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`
     : undefined;
 
-  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
+  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
 }
 
 // Stage 3: Evidence Implementation Audit.
@@ -1035,13 +1066,13 @@ Respond with JSON only:
 
   const windows = buildDocWindows(evidenceDocText);
   const totalCharsAvailable = evidenceDocText.length;
-  const fullCoverage = windows.length === 1 || evidenceDocText.length <= WINDOW_SIZE;
 
-  const bestByRef = new Map<string, { covered: StagedCoverageStatus; note: string; chunkIds: string[] }>();
+  const bestByRef = new Map<string, { covered: StagedCoverageStatus; notes: WindowNote[]; chunkIds: string[] }>();
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
   let totalCharsAssessed = 0;
+  let windowsCompleted = 0;
   const windowErrors: string[] = [];
 
   const batches: FlatAuditPoint[][] = [];
@@ -1081,12 +1112,12 @@ Respond with JSON only:
           const note = typeof r?.note === "string" ? r.note : "";
           const prev = bestByRef.get(p.ref);
           if (!prev) {
-            bestByRef.set(p.ref, { covered, note, chunkIds });
+            bestByRef.set(p.ref, { covered, notes: covered !== "No" ? pushWindowNote([], win.index, note) : [], chunkIds });
           } else {
             const merged = mergeCoverage(prev.covered, covered);
-            const betterNote = merged !== prev.covered ? note : prev.note;
+            const mergedNotes = covered !== "No" ? pushWindowNote(prev.notes, win.index, note) : prev.notes;
             const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
-            bestByRef.set(p.ref, { covered: merged, note: betterNote, chunkIds: mergedChunks });
+            bestByRef.set(p.ref, { covered: merged, notes: mergedNotes, chunkIds: mergedChunks });
           }
         }
       } catch (err) {
@@ -1097,23 +1128,32 @@ Respond with JSON only:
         console.error("[StagedEvidenceAudit]", errNote);
         for (const p of batch) {
           if (!bestByRef.has(p.ref)) {
-            bestByRef.set(p.ref, { covered: "No", note: `AI call failed (window ${win.index + 1}): ${msg.slice(0, 120)}`, chunkIds: [] });
+            bestByRef.set(p.ref, { covered: "No", notes: [], chunkIds: [] });
           }
         }
       }
     }
+    windowsCompleted++;
   }
 
+  const fullCoverage = windowsCompleted === windows.length;
+
   const rows: EvidenceCoverageRow[] = auditPoints.map((p) => {
-    const best = bestByRef.get(p.ref) ?? { covered: "No" as StagedCoverageStatus, note: `No relevant evidence chunk found for this dimension in the ${windows.length} window(s) reviewed.`, chunkIds: [] };
-    return { ref: p.ref, pointText: p.text, covered: best.covered, note: best.note, chunkIds: best.chunkIds };
+    const best = bestByRef.get(p.ref);
+    const fallback = `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`;
+    return {
+      ref: p.ref, pointText: p.text,
+      covered: best?.covered ?? "No",
+      note: best ? renderWindowNotes(best.notes, fallback) : fallback,
+      chunkIds: best?.chunkIds ?? [],
+    };
   });
 
   const truncationNote = !fullCoverage
-    ? `Evidence content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).`
+    ? `Evidence content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`
     : undefined;
 
-  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
+  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
 }
 
 // Stage 4: Outcome & Review Audit.
@@ -1146,14 +1186,14 @@ Respond with JSON only:
 
   const windows = buildDocWindows(allDocText);
   const totalCharsAvailable = allDocText.length;
-  const fullCoverage = windows.length === 1 || allDocText.length <= WINDOW_SIZE;
 
   // For outcome/review: OR across windows (true if any window finds evidence).
-  const bestByRef = new Map<string, { outcomeEvident: boolean; reviewEvident: boolean; note: string; chunkIds: string[] }>();
+  const bestByRef = new Map<string, { outcomeEvident: boolean; reviewEvident: boolean; notes: WindowNote[]; chunkIds: string[] }>();
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
   let totalCharsAssessed = 0;
+  let windowsCompleted = 0;
   const windowErrors: string[] = [];
 
   const batches: FlatAuditPoint[][] = [];
@@ -1187,18 +1227,16 @@ Respond with JSON only:
           const reviewEvident = r?.reviewEvident === true;
           const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
           const note = typeof r?.note === "string" ? r.note : "";
+          const foundSomething = outcomeEvident || reviewEvident;
           const prev = bestByRef.get(p.ref);
           if (!prev) {
-            bestByRef.set(p.ref, { outcomeEvident, reviewEvident, note, chunkIds });
+            bestByRef.set(p.ref, { outcomeEvident, reviewEvident, notes: foundSomething ? pushWindowNote([], win.index, note) : [], chunkIds });
           } else {
             const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
             const newOutcome = prev.outcomeEvident || outcomeEvident;
             const newReview = prev.reviewEvident || reviewEvident;
-            // Keep note from whichever window found the most (prefer one that found both).
-            const prevScore = (prev.outcomeEvident ? 1 : 0) + (prev.reviewEvident ? 1 : 0);
-            const curScore = (outcomeEvident ? 1 : 0) + (reviewEvident ? 1 : 0);
-            const betterNote = curScore > prevScore ? note : prev.note;
-            bestByRef.set(p.ref, { outcomeEvident: newOutcome, reviewEvident: newReview, note: betterNote, chunkIds: mergedChunks });
+            const mergedNotes = foundSomething ? pushWindowNote(prev.notes, win.index, note) : prev.notes;
+            bestByRef.set(p.ref, { outcomeEvident: newOutcome, reviewEvident: newReview, notes: mergedNotes, chunkIds: mergedChunks });
           }
         }
       } catch (err) {
@@ -1209,23 +1247,33 @@ Respond with JSON only:
         console.error("[StagedOutcomeReviewAudit]", errNote);
         for (const p of batch) {
           if (!bestByRef.has(p.ref)) {
-            bestByRef.set(p.ref, { outcomeEvident: false, reviewEvident: false, note: `AI call failed (window ${win.index + 1}): ${msg.slice(0, 120)}`, chunkIds: [] });
+            bestByRef.set(p.ref, { outcomeEvident: false, reviewEvident: false, notes: [], chunkIds: [] });
           }
         }
       }
     }
+    windowsCompleted++;
   }
 
+  const fullCoverage = windowsCompleted === windows.length;
+
   const rows: OutcomeReviewRow[] = auditPoints.map((p) => {
-    const best = bestByRef.get(p.ref) ?? { outcomeEvident: false, reviewEvident: false, note: `No relevant evidence chunk found for this dimension in the ${windows.length} window(s) reviewed.`, chunkIds: [] };
-    return { ref: p.ref, pointText: p.text, outcomeEvident: best.outcomeEvident, reviewEvident: best.reviewEvident, note: best.note, chunkIds: best.chunkIds };
+    const best = bestByRef.get(p.ref);
+    const fallback = `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`;
+    return {
+      ref: p.ref, pointText: p.text,
+      outcomeEvident: best?.outcomeEvident ?? false,
+      reviewEvident: best?.reviewEvident ?? false,
+      note: best ? renderWindowNotes(best.notes, fallback) : fallback,
+      chunkIds: best?.chunkIds ?? [],
+    };
   });
 
   const truncationNote = !fullCoverage
-    ? `Outcome/review content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).`
+    ? `Outcome/review content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`
     : undefined;
 
-  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
+  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
 }
 
 // Stage 5: Deterministic APSR verdict builder.

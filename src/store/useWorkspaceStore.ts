@@ -602,7 +602,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // the per-file timeout to fire before releasing the busy state.
         _currentFileAbort?.();
         _currentFileAbort = null;
-        set((s) => ({ busy: null, bulkAuditStatus: null, auditRunToken: s.auditRunToken + 1 }));
+        // Also clear the skip-stage flag — otherwise a stale `true` (set right
+        // before cancel, with no chance for the in-flight stage's reset to run)
+        // would silently cut short the very next audit's first stage.
+        set((s) => ({ busy: null, bulkAuditStatus: null, auditRunToken: s.auditRunToken + 1, auditSkipStageFlag: false }));
       },
 
       skipCurrentAuditStage: () => set({ auditSkipStageFlag: true }),
@@ -2292,7 +2295,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const s = get();
         const folder = s.folders.find((f) => f.id === id);
         if (!folder) return;
-        set({ busy: "folderaudit" + id });
+        // Defensive: a stale true left over from a previous run (e.g. the user
+        // clicked "Skip pass" right as that run ended, or a bulk "Audit All"
+        // sequence moved to the next folder before the reset fired) must never
+        // leak into a fresh run and silently cut its first stage short.
+        set({ busy: "folderaudit" + id, auditSkipStageFlag: false });
         const capturedToken = get().auditRunToken;
         const scope: AuditScope = mode === "policy" ? "policy" : mode === "evidence" ? "evidence" : "both";
 
@@ -2441,6 +2448,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let imagesDescribed = 0;
         let auxUsage: AIUsage | undefined;
         const scanned: string[] = [];
+        const scannedPolicy: string[] = [];
+        const scannedEvidence: string[] = [];
         const skipped: string[] = [];
         const failed: { path: string; reason: string }[] = [];
 
@@ -2490,6 +2499,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: cachedEntry.charCount, processingMode: "reused", ...(cachedEntry.pdfQuality ? { suspectedScannedPdf: cachedEntry.pdfQuality.suspectedScannedPdf, extractedTextQuality: cachedEntry.pdfQuality.extractedTextQuality } : {}) };
             if (cachedEntry.text !== null) {
               scanned.push(file.path);
+              (isPolicy ? scannedPolicy : scannedEvidence).push(file.path);
               const body = cachedEntry.text;
               const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
               for (let pi = 0; pi < totalParts; pi++) {
@@ -2558,6 +2568,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             case "text": {
               const body = fileResult.text;
               scanned.push(file.path);
+              (isPolicy ? scannedPolicy : scannedEvidence).push(file.path);
               const kind = fileKind(file.mimeType);
               set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: kind, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), ...(fileResult.kind === "text" && fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}) } } }));
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}) };
@@ -2575,6 +2586,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
             case "image": {
               scanned.push(file.path);
+              (isPolicy ? scannedPolicy : scannedEvidence).push(file.path);
               const desc = fileResult.description;
               set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: desc, charCount: desc.length, fileKind: "image", fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: desc.length, processingMode: "new" };
@@ -2769,10 +2781,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const eRow = line.sourceRef ? evidenceByRef.get(line.sourceRef) : undefined;
           const oRow = line.sourceRef ? outcomeByRef.get(line.sourceRef) : undefined;
 
-          // If no matching audit point, use overall coverage as fallback
-          const effectivePRow = pRow ?? { ref: "", pointText: "", covered: policyOverall, note: "Aggregated from all audit points (no direct source ref match).", chunkIds: [] };
-          const effectiveERow = eRow ?? { ref: "", pointText: "", covered: evidenceOverall, note: "Aggregated from all audit points.", chunkIds: [] };
-          const effectiveORow = oRow ?? { ref: "", pointText: "", outcomeEvident: outcomeOverall, reviewEvident: reviewOverall, note: "Aggregated from all audit points.", chunkIds: [] };
+          // This checklist line has no sourceRef matching a specific flatAuditPoint
+          // ref, so there is no window-level note or chunk citation to inherit —
+          // fall back to the folder-wide coverage overall. This is a genuinely
+          // different case from "the AI didn't find anything for this ref": here
+          // there was no ref to look up in the first place.
+          const effectivePRow = pRow ?? { ref: "", pointText: "", covered: policyOverall, note: "No specific audit point maps to this checklist line — using overall policy coverage for the folder.", chunkIds: [] };
+          const effectiveERow = eRow ?? { ref: "", pointText: "", covered: evidenceOverall, note: "No specific audit point maps to this checklist line — using overall evidence coverage for the folder.", chunkIds: [] };
+          const effectiveORow = oRow ?? { ref: "", pointText: "", outcomeEvident: outcomeOverall, reviewEvident: reviewOverall, note: "No specific audit point maps to this checklist line — using overall outcome/review coverage for the folder.", chunkIds: [] };
 
           const apsr = buildStagedApsr(effectivePRow, effectiveERow, effectiveORow);
           const status = deriveApsrStatus(apsr);
@@ -2876,11 +2892,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ? `Files read: ${scanned.length} (policy: ${policyDocParts.length > 0 ? policyDocParts.length : "none"}, evidence: ${evidenceDocParts.length > 0 ? evidenceDocParts.length : "none"}) — ${briefListStaged(scanned)}.`
             : "Files read: none — no readable files were found in this folder."
         );
+        if (scanned.length > 0) {
+          const nameOnly = (paths: string[]) => paths.map((p) => p.split("/").pop() || p);
+          lineParts.push(
+            `Files assessed:\n` +
+            `  Policy (${scannedPolicy.length}): ${scannedPolicy.length > 0 ? nameOnly(scannedPolicy).join(", ") : "none"}\n` +
+            `  Evidence (${scannedEvidence.length}): ${scannedEvidence.length > 0 ? nameOnly(scannedEvidence).join(", ") : "none"}`
+          );
+        }
         lineParts.push(live ? `Method: EduTrust APSR rubric vs GD4 standard — Approach gates the result, then Processes, Systems & Outcomes, Review (3 AI passes).` : "Method: offline keyword estimate — AI was not used (check AI Settings).");
         if (detectedFileType) lineParts.push(`File type skill injected: ${detectedFileType} (${detectedFileType === "spreadsheet" ? "spreadsheet-evidence.md" : "scanned-document-evidence.md"}).`);
         if (totalWindowsProcessed > 0 && totalCharsAvailable > 0) {
           const coveragePct = Math.round((totalCharsAssessed / totalCharsAvailable) * 100);
-          lineParts.push(`Sliding window coverage: ${totalWindowsProcessed} window(s) processed · ${totalCharsAssessed.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} chars assessed (${coveragePct}%) · Full coverage: ${allWindowsFullCoverage ? "Yes" : "No — some content spans multiple windows"}.`);
+          const unassessed = totalCharsAvailable - totalCharsAssessed;
+          lineParts.push(`Sliding window coverage: ${totalWindowsProcessed} window(s) processed · ${totalCharsAssessed.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} chars assessed (${coveragePct}%) · Full coverage: ${allWindowsFullCoverage ? "Yes" : `No — ${unassessed.toLocaleString()} chars unassessed`}.`);
         }
         if (truncationNotes.length > 0) lineParts.push(truncationNotes.join("\n"));
         const summary = lineParts.join("\n");

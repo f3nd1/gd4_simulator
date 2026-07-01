@@ -237,6 +237,7 @@ export function SubCriterionChecklist() {
   const folders = useWorkspaceStore((s) => s.folders);
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
+  const closures = useWorkspaceStore((s) => s.closures);
   const [lineFeedback, setLineFeedback] = useState<{ id: string; text: string } | null>(null);
   const itemAudit = useMemo(() => {
     const item = scored.items.find((i) => i.id === selectedId);
@@ -878,6 +879,23 @@ export function SubCriterionChecklist() {
                         Save sampling
                       </button>
                     </div>
+
+                    {l.draftFinding?.savedFindingId && (
+                      <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 10, paddingTop: 8, borderTop: "1px solid #f1f5f9" }}>
+                        <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 11.5, color: "#4f46e5", fontWeight: 600, textDecoration: "none" }}>
+                          View finding →
+                        </Link>
+                        {closures[l.draftFinding.savedFindingId] ? (
+                          <Link to={`/afi-closure?item=${selectedId}`} style={{ fontSize: 11.5, color: "#9a6b15", fontWeight: 600, textDecoration: "none" }}>
+                            Manage closure →
+                          </Link>
+                        ) : (
+                          <Link to={`/afi-closure?item=${selectedId}`} style={{ fontSize: 11.5, color: "#94a3b8", fontWeight: 600, textDecoration: "none" }}>
+                            Manage closure → <span style={{ fontWeight: 400 }}>(not started)</span>
+                          </Link>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
