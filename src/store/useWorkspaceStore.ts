@@ -2164,8 +2164,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // result appears immediately and the finding enrichment arrives seconds
         // later. Only runs when AI is live (no point enriching offline drafts).
         if (live && autoRaised > 0) {
+          const currentSubCriterionId = folder.subCriterionId;
           const newFindings = get().customFindings.filter(
-            (f) => !preRaiseFindingIds.has(f.id) && f.source === "Checklist"
+            (f) => !preRaiseFindingIds.has(f.id) && f.source === "Checklist" &&
+              GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId)?.subCriterionId === currentSubCriterionId
           );
           if (newFindings.length > 0) {
             (async () => {
@@ -2832,7 +2834,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         });
 
         if (live && autoRaised > 0) {
-          const newFindings = get().customFindings.filter((f) => !preRaiseFindingIds.has(f.id) && f.source === "Checklist");
+          const currentSubCriterionIdStaged = folder.subCriterionId;
+          const newFindings = get().customFindings.filter(
+            (f) => !preRaiseFindingIds.has(f.id) && f.source === "Checklist" &&
+              GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId)?.subCriterionId === currentSubCriterionIdStaged
+          );
           if (newFindings.length > 0) {
             (async () => {
               const entries = useChecklistModuleStore.getState().entries;
