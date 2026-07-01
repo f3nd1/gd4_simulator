@@ -424,6 +424,8 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           corrective: draft.corrective,
           preventive: draft.preventive,
           apsr: lineApsr(line),
+          findingType: draft.findingType,
+          ncSeverity: draft.ncSeverity,
         };
         useWorkspaceStore.getState().addCustomFinding(finding);
         set((st) => mapEntry(st, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, draftFinding: { ...draft, savedFindingId: finding.id } }))));

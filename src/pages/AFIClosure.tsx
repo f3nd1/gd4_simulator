@@ -9,6 +9,7 @@ import { Card, inputStyle, filterSelectStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { BLUE, TONE } from "../lib/theme";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { resolveFindingType, findingTypeTone } from "../lib/findingClassification";
 
 export function AFIClosure() {
   const closures = useWorkspaceStore((s) => s.closures);
@@ -122,6 +123,7 @@ export function AFIClosure() {
               style={{ width: "100%", cursor: "pointer", border: "none", background: "transparent", font: "inherit", padding: "11px 14px", display: "flex", gap: 10, alignItems: "center", textAlign: "left" }}
             >
               <b style={{ color: "#ce9e5d", minWidth: 30 }}>{f.id}</b>
+              <Pill s={findingTypeTone(resolveFindingType(f))}>{resolveFindingType(f)}</Pill>
               <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#6b7280", minWidth: 38 }}>{f.gd4ItemId}</span>
               <span style={{ flex: 1, fontSize: 12.5 }}>{f.issue}</span>
               {f.createdAt && <span style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>{new Date(f.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>}

@@ -138,6 +138,16 @@ export type FindingType = "Observation" | "Improvement Action" | "Quality Action
 export type Severity = "Low" | "Medium" | "High" | "Critical";
 export type FindingStatus = "Open" | "In Progress" | "Submitted for Review" | "Closed" | "Escalated";
 
+// Checklist-line-status-driven classification (NC/OFI/OBS + Major/Minor).
+// Deliberately named `findingType`/`ncSeverity` rather than reusing the
+// existing `type`/`severity` fields above — those already carry unrelated,
+// widely-used semantics (manual finding category; Low/Medium/High/Critical
+// severity feeding Dashboard/reports/scoring displays), and giving them a
+// second, incompatible meaning would either break TypeScript or silently
+// corrupt every one of those existing call sites.
+export type FindingTypeCode = "NC" | "OFI" | "OBS";
+export type NcSeverity = "Major" | "Minor";
+
 // Which side of the rubric a finding sits on, mapped from the APSR dimension
 // that fell short: Approach → "Procedure" (the documented policy), Processes →
 // "Evidence" (implementation records), Systems & Outcomes → "Outcomes", Review
@@ -183,6 +193,14 @@ export type Finding = {
   corrective?: string;
   preventive?: string;
   apsr?: ApsrBreakdown;
+  // Checklist-line-status classification — set automatically when a finding
+  // is raised from a checklist line (see confirmDraftFinding). Optional so
+  // findings raised before this existed, and non-checklist findings (manual
+  // form, seed data, grouped AI writer), keep working unchanged; resolve with
+  // resolveFindingType()/resolveNcSeverity() (lib/findingClassification.ts)
+  // for a defaulted read — NC / Minor-if-NC / null-otherwise.
+  findingType?: FindingTypeCode;
+  ncSeverity?: NcSeverity | null;
   // Traceability to the checklist lines that generated this finding via the
   // grouped-finding path (absent on single-line / manual findings).
   linkedChecklistLineIds?: string[];
@@ -272,6 +290,10 @@ export type DraftFindingInfo = {
   // Risk category — same meaning as on Finding.
   riskCategory?: "A" | "B" | "C" | "D";
   auditRunId?: string;
+  // NC/OFI/OBS classification — same meaning as on Finding, computed from the
+  // checklist line's status when the draft is built (buildDraftFinding).
+  findingType?: FindingTypeCode;
+  ncSeverity?: NcSeverity | null;
 };
 
 // A set of related failing checklist lines from one GD4 item, grouped by

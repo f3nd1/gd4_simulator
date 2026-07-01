@@ -12,10 +12,11 @@ import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { GOLD, INK } from "../lib/theme";
-import type { Finding, FindingType, Severity, FindingDimension, GroupedFindingDraft } from "../types";
+import type { Finding, FindingType, Severity, FindingDimension, GroupedFindingDraft, NcSeverity } from "../types";
 import { runLiveFindingObservation, AIClientError } from "../lib/ai/agentRuntime";
 import { effectiveSettings } from "../lib/ai/aiClient";
 import { lineApsr, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
+import { resolveFindingType, resolveNcSeverity, findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
 
 const TYPES: (FindingType | "All")[] = ["All", "AFI", "Improvement Action", "Observation", "Quality Action", "Critical Readiness Risk"];
 const SEVERITIES: (Severity | "All")[] = ["All", "Critical", "High", "Medium", "Low"];
@@ -673,6 +674,12 @@ export function Findings() {
             const closedCount = grpFindings.filter((f) => (closures[f.id]?.human || "") === "Accepted").length;
             const openCount = grpFindings.length - closedCount;
             const highestSev = grpFindings.reduce((best, f) => (SEV_ORDER[f.severity] ?? 0) > (SEV_ORDER[best] ?? 0) ? f.severity : best, "Low" as Severity);
+            // NC/OFI/OBS classification is separate from the legacy severity
+            // above — surface the highest NC severity present in the group
+            // ("Major NC" if any line is a Major NC, else "Minor NC" if the
+            // group has NC findings but none are Major, else nothing).
+            const ncSeverities = grpFindings.filter((f) => resolveFindingType(f) === "NC").map((f) => resolveNcSeverity(f));
+            const highestNc: NcSeverity | null = ncSeverities.includes("Major") ? "Major" : ncSeverities.includes("Minor") ? "Minor" : null;
             const statusLabel = closedCount === 0 ? "All open" : openCount === 0 ? "All closed" : "In progress";
             const statusColor = openCount === 0 ? "#15803d" : closedCount > 0 ? "#b45309" : "#b91c1c";
             const earliestDate = grpFindings.reduce<string | undefined>((e, f) => (!e || (f.createdAt && f.createdAt < e)) ? f.createdAt : e, undefined);
@@ -694,6 +701,7 @@ export function Findings() {
                   {sc && <span style={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sc.title}</span>}
                   <span style={{ fontSize: 11.5, color: "#6b7280", whiteSpace: "nowrap" }}>{grpFindings.length} gap{grpFindings.length !== 1 ? "s" : ""}</span>
                   <Pill s={severityTone(highestSev)}>{highestSev}</Pill>
+                  {highestNc && <Pill s={ncSeverityTone(highestNc)}>{highestNc} NC</Pill>}
                   <span style={{ fontSize: 11.5, fontWeight: 600, color: statusColor, whiteSpace: "nowrap" }}>{statusLabel}</span>
                   {earliestStr && <span style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap" }}>from {earliestStr}</span>}
                 </div>
@@ -715,6 +723,8 @@ export function Findings() {
                           <span style={{ fontSize: 12.5, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.issue}>{truncatedIssue}</span>
                           <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap" }}>{f.gd4ItemId}</span>
                           {f.dimension && <Pill s={dimensionTone(f.dimension)}>{f.dimension}</Pill>}
+                          <Pill s={findingTypeTone(resolveFindingType(f))}>{resolveFindingType(f)}</Pill>
+                          {resolveNcSeverity(f) && <Pill s={ncSeverityTone(resolveNcSeverity(f)!)}>{resolveNcSeverity(f)}</Pill>}
                           <Pill s={severityTone(f.severity)}>{f.severity}</Pill>
                           <Pill s={closed ? "good" : "critical"}>{closed ? "Closed" : "Open"}</Pill>
                           <span style={{ whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
@@ -762,7 +772,17 @@ export function Findings() {
               <Pill s={(closures[detailFinding.id]?.human || "") === "Accepted" ? "good" : "critical"}>{(closures[detailFinding.id]?.human || "") === "Accepted" ? "Closed" : "Open"}</Pill>
               <button onClick={() => setDetailFinding(null)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#94a3b8", lineHeight: 1, padding: "2px 4px" }} title="Close">✕</button>
             </div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, lineHeight: 1.4 }}>{detailFinding.issue}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, lineHeight: 1.4 }}>{detailFinding.issue}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Type</span>
+              <Pill s={findingTypeTone(resolveFindingType(detailFinding))}>{resolveFindingType(detailFinding)}</Pill>
+              {resolveNcSeverity(detailFinding) && (
+                <>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3, marginLeft: 4 }}>Severity</span>
+                  <Pill s={ncSeverityTone(resolveNcSeverity(detailFinding)!)}>{resolveNcSeverity(detailFinding)}</Pill>
+                </>
+              )}
+            </div>
             <FindingDetail finding={detailFinding} />
             <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
               <Link to="/afi-closure" style={{ fontSize: 12, color: "#15803d", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>

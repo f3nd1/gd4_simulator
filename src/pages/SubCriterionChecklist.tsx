@@ -8,6 +8,7 @@ import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Req
 import { buildGenericLines } from "../data/checklistSeed";
 import { computeBand, lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
 import { apsrAuditNote } from "../lib/ai/simulateAI";
+import { findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
@@ -618,15 +619,18 @@ export function SubCriterionChecklist() {
 
           {sortedSpecific.map((l) => {
             const suff = lineSufficiency(l);
-            // Excludes "Met" explicitly — a line can only need a draft finding
-            // banner when it isn't Met, even if evidence sufficiency happens to
-            // read "Missing" on an otherwise-Met line (shouldn't normally occur,
-            // but the banner belongs on the gap, not on a Met verdict).
-            const needsFinding = l.status !== "Met" && (l.status === "Not met" || (l.status !== "Not Applicable" && l.status !== "Not Started" && suff === "Missing"));
-            const draft = needsFinding ? buildDraftFinding(req, l) : null;
+            // Every line whose status is Met, Partial or Not met must always
+            // have a findings link/button available — Not Applicable/Not
+            // Started lines aren't actionable, so they're excluded (buildDraftFinding
+            // expects a decided status). draftableStatus is used both for the
+            // draft object itself and to pick the button's label/action below.
+            const draftableStatus = l.status === "Not met" || l.status === "Partial" || l.status === "Met";
+            const draft = draftableStatus ? buildDraftFinding(req, l) : null;
             // A "Met" line's audit verdict record — the most recent evidence
             // item that carries an AI-derived APSR breakdown, i.e. it was
             // actually staged-audited rather than just marked Met by hand.
+            // Purely informational (citation strength), distinct from the
+            // finding-creation button below.
             const metEvidence = l.status === "Met" ? [...l.evidence].reverse().find((e) => e.apsr) : undefined;
             const expanded = expandedLine === l.id;
             const ref = l.sourceType && l.generatedBy === "ai" ? sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined) : l.clause || null;
@@ -702,28 +706,21 @@ export function SubCriterionChecklist() {
                       {l.evidence.length > 0 ? `Evidence (${l.evidence.length})` : "Evidence: Missing"}
                     </button>
                   )}
-                  {/* A finding already exists for this line — show the link regardless
-                      of the line's CURRENT status/sufficiency. `needsFinding`/`draft`
-                      only describe whether a NEW draft would be raised right now; a
-                      line can have a previously-saved finding (l.draftFinding.savedFindingId)
-                      even after its status later moved to Met/Partial or its evidence
-                      sufficiency improved, and the link must not disappear in that case. */}
+                  {/* Every Met/Partial/Not met line always shows exactly one of these:
+                      an existing finding already exists for this line — show the link
+                      regardless of the line's CURRENT status/sufficiency (a line can have
+                      a previously-saved finding even after its status later changed, and
+                      the link must not disappear); otherwise a status-appropriate button
+                      to create one (Not met/Partial -> draft an NC/OFI, Met -> raise an OBS). */}
                   {l.draftFinding?.savedFindingId ? (
                     <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none" }}>View finding →</Link>
                   ) : draft ? (
                     <button
                       onClick={() => toggleEvidence(l.id)}
-                      style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#9a6b15", border: "none", background: "transparent", padding: 0 }}
+                      title={metEvidence && l.status === "Met" ? "Also expands to show which chunks/documents were cited and why this line was rated Met" : undefined}
+                      style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: l.status === "Met" ? "#15803d" : "#9a6b15", border: "none", background: "transparent", padding: 0 }}
                     >
-                      View finding →
-                    </button>
-                  ) : metEvidence ? (
-                    <button
-                      onClick={() => toggleEvidence(l.id)}
-                      title="Shows which chunks/documents were cited and why this line was rated Met"
-                      style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#15803d", border: "none", background: "transparent", padding: 0 }}
-                    >
-                      Evidence cited →
+                      {l.status === "Met" ? "Raise observation →" : "Draft finding →"}
                     </button>
                   ) : null}
                   <button onClick={() => removeSpecificLine(selectedId, l.id)} title="Remove line" style={{ cursor: "pointer", fontSize: 12, color: "#b23121", border: "none", background: "transparent", marginLeft: "auto", padding: "0 2px" }}>
@@ -751,8 +748,10 @@ export function SubCriterionChecklist() {
                       </div>
                     )}
                     {draft && (
-                      <div style={{ marginBottom: 8, background: "#faf0d9", borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>
-                        <b>Draft finding:</b> {draft.issue} <Pill s={draft.severity === "High" ? "high" : "medium"}>{draft.severity}</Pill>
+                      <div style={{ marginBottom: 8, background: draft.findingType === "OBS" ? "#f0fdf4" : "#faf0d9", borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>
+                        <b>{draft.findingType === "OBS" ? "Draft observation:" : "Draft finding:"}</b> {draft.issue}{" "}
+                        {draft.findingType && <Pill s={findingTypeTone(draft.findingType)}>{draft.findingType}</Pill>}
+                        {draft.ncSeverity && <Pill s={ncSeverityTone(draft.ncSeverity)}>{draft.ncSeverity}</Pill>}
                         {l.draftFinding?.savedFindingId ? (
                           <>
                             {" "}<Pill s="good">Saved as {l.draftFinding.savedFindingId}</Pill>
@@ -761,9 +760,9 @@ export function SubCriterionChecklist() {
                         ) : (
                           <button
                             onClick={() => confirmDraftFinding(selectedId, l.id, draft)}
-                            style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, marginLeft: 8, padding: "4px 9px", borderRadius: 6, border: "1px solid #9a6b15", background: "#fff", color: "#9a6b15" }}
+                            style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, marginLeft: 8, padding: "4px 9px", borderRadius: 6, border: `1px solid ${draft.findingType === "OBS" ? "#15803d" : "#9a6b15"}`, background: "#fff", color: draft.findingType === "OBS" ? "#15803d" : "#9a6b15" }}
                           >
-                            Save to findings register
+                            {draft.findingType === "OBS" ? "Save observation" : "Save to findings register"}
                           </button>
                         )}
                       </div>

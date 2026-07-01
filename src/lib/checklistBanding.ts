@@ -18,6 +18,7 @@
 //   This cannot be overridden except by fixing the evidence, because the
 //   band is always recomputed from current state.
 import type { Band, GD4Requirement, GenericChecklistLine, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
+import { findingTypeForStatus, ncSeverityFor } from "./findingClassification";
 
 export function lineSufficiency(line: SpecificChecklistLine): EvidenceSufficiency {
   if (line.evidence.length === 0) return "Missing";
@@ -221,10 +222,51 @@ export function computeRiskCategory(req: GD4Requirement, _dim: FindingDimension)
 }
 
 export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLine): DraftFindingInfo {
+  const apsr = lineApsr(line);
+  const findingType = findingTypeForStatus(line.status as "Met" | "Partial" | "Not met");
+  const ncSeverity = ncSeverityFor(findingType, { gateSensitive: req.gateSensitive, approachStatus: apsr?.approach.status });
+
+  // A "Met" line with real evidence has nothing wrong to root-cause/fix —
+  // raising a finding here is a positive OBS record (what was found, which
+  // evidence supported it), not a gap. Build it directly instead of routing
+  // through the gap-oriented text below, which would read as contradictory
+  // on a genuinely-met line. A "Met" line with NO evidence is still an
+  // unverified claim (existing "Unverified" dimension handling below) —
+  // that's a real gap, not an observation, so it deliberately falls through
+  // rather than taking this branch.
+  if (line.status === "Met" && lineSufficiency(line) !== "Missing") {
+    const evidenceNames = line.evidence.length > 0
+      ? line.evidence.slice(0, 3).map((e) => e.title ?? "").filter(Boolean).join("; ")
+      : "";
+    const apsrNoteLines = apsr
+      ? ([
+          apsr.approach.note ? `Approach: ${apsr.approach.note}` : "",
+          apsr.processes.note ? `Processes: ${apsr.processes.note}` : "",
+          apsr.systemsOutcomes.note ? `Systems & Outcomes: ${apsr.systemsOutcomes.note}` : "",
+          apsr.review.note ? `Review: ${apsr.review.note}` : "",
+        ] as string[]).filter(Boolean)
+      : [];
+    return {
+      gd4ItemId: req.id,
+      clause: line.clause,
+      issue: `GD4 ${req.id} — ${line.text?.slice(0, 120) ?? req.requirement} [Met; evidence confirmed]`,
+      severity: "Low",
+      suggestedAction: "No action required — retain the cited evidence for the next audit cycle.",
+      observation: apsrNoteLines.length
+        ? `${line.text} — status: Met. ${apsrNoteLines.join(". ")}.`
+        : `${line.text} — marked Met${evidenceNames ? `, supported by: ${evidenceNames}` : ""}.`,
+      criteria: `GD4 ${req.id} requires: ${req.requirement}${req.expectedEvidence.length ? ` Expected evidence includes: ${req.expectedEvidence.join("; ")}.` : ""}`,
+      effect: "Positive observation — this requirement is being met and does not limit the sub-criterion's band.",
+      dimension: findingDimension(line),
+      riskCategory: "D",
+      findingType,
+      ncSeverity,
+    };
+  }
+
   const sufficiency = lineSufficiency(line);
   const analysis = buildFindingAnalysis(req, line);
   const dim = findingDimension(line);
-  const apsr = lineApsr(line);
 
   // Build a baseline observation from the APSR notes if available, otherwise
   // from the line status. This is intentionally a template — the auditor should
@@ -281,5 +323,7 @@ export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLi
     preventive: analysis.preventive,
     dimension: dim,
     riskCategory: computeRiskCategory(req, dim),
+    findingType,
+    ncSeverity,
   };
 }
