@@ -81,6 +81,7 @@ import { FeedbackModal } from "../components/ui/FeedbackModal";
 
 export function AIReview() {
   const log = useWorkspaceStore((s) => s.aiReviewLog);
+  const clearAIReviewLog = useWorkspaceStore((s) => s.clearAIReviewLog);
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
   const [reviewFeedback, setReviewFeedback] = useState<{ id: string; aiOutput: string; subjectId: string } | null>(null);
@@ -194,8 +195,17 @@ export function AIReview() {
 
   return (
     <Card>
-      <h3 style={{ marginTop: 0, fontSize: 14 }}>AI agent review log</h3>
-      <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>AI agent review log</h3>
+        <button
+          onClick={() => { if (confirm(`Clear all ${log.length} AI review log entries? This cannot be undone.`)) clearAIReviewLog(); }}
+          disabled={log.length === 0}
+          style={{ marginLeft: "auto", cursor: log.length === 0 ? "not-allowed" : "pointer", border: "1px solid #fca5a5", background: "#fef2f2", color: log.length === 0 ? "#fca5a5" : "#b91c1c", fontWeight: 700, padding: "5px 12px", borderRadius: 7, fontSize: 12 }}
+        >
+          Clear log
+        </button>
+      </div>
+      <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 4 }}>
         Every AI agent run is logged here — Evidence Intelligence scoring, Sub-Criterion Checklist line generation, and AFI
         closure reviews. Agents assist, challenge and recommend; they never finalise a result. Runs are tagged
         <i> simulated</i> when produced by the offline rule-based engine and <i>live</i> when produced by a configured AI call.

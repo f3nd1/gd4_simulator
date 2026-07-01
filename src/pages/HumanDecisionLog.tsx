@@ -378,6 +378,7 @@ function CalibrationLibraryTab({ examples, toggleIncluded }: { examples: Calibra
 
 export function HumanDecisionLog() {
   const log = useWorkspaceStore((s) => s.humanDecisionLog);
+  const clearHumanDecisionLog = useWorkspaceStore((s) => s.clearHumanDecisionLog);
   const calibrationExamples = useWorkspaceStore((s) => s.calibrationExamples);
   const toggleCalibrationIncluded = useWorkspaceStore((s) => s.toggleCalibrationIncluded);
 
@@ -400,7 +401,16 @@ export function HumanDecisionLog() {
   return (
     <div className="grid gap-3">
       <Card>
-        <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 700 }}>Human Decision Log</h2>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Human Decision Log</h2>
+          <button
+            onClick={() => { if (confirm(`Clear all ${log.length} human decision log entries? This cannot be undone.`)) clearHumanDecisionLog(); }}
+            disabled={log.length === 0}
+            style={{ marginLeft: "auto", cursor: log.length === 0 ? "not-allowed" : "pointer", border: "1px solid #fca5a5", background: "#fef2f2", color: log.length === 0 ? "#fca5a5" : "#b91c1c", fontWeight: 700, padding: "5px 12px", borderRadius: 7, fontSize: 12 }}
+          >
+            Clear log
+          </button>
+        </div>
         <p style={{ margin: "0 0 14px", fontSize: 11.5, color: "#6b7280" }}>
           Audit trail of every human override or acceptance of an AI output, and the calibration library built from those decisions.
         </p>

@@ -385,6 +385,8 @@ export type WorkspaceState = {
   removeCustomFinding: (id: string) => void;
   clearAllFindings: () => void;
 
+  clearAIReviewLog: () => void;
+  clearHumanDecisionLog: () => void;
   clearReviewerOverride: (itemId: string) => void;
 
   // Lets other stores (e.g. the checklist module) record an AI run in the
@@ -3146,6 +3148,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }
           return next;
         }),
+
+      clearAIReviewLog: () => set({ aiReviewLog: [] }),
+      clearHumanDecisionLog: () => set({ humanDecisionLog: [] }),
 
       toggleCalibrationIncluded: (id) =>
         set((s) => ({
