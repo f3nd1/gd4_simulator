@@ -825,6 +825,7 @@ export type StagedPolicyAuditResult = {
   totalCharsAssessed?: number;
   totalCharsAvailable?: number;
   fullCoverage?: boolean;
+  windowErrors?: string[];
 };
 
 export type StagedEvidenceAuditResult = {
@@ -836,6 +837,7 @@ export type StagedEvidenceAuditResult = {
   totalCharsAssessed?: number;
   totalCharsAvailable?: number;
   fullCoverage?: boolean;
+  windowErrors?: string[];
 };
 
 export type StagedOutcomeReviewAuditResult = {
@@ -847,6 +849,7 @@ export type StagedOutcomeReviewAuditResult = {
   totalCharsAssessed?: number;
   totalCharsAvailable?: number;
   fullCoverage?: boolean;
+  windowErrors?: string[];
 };
 
 const STAGED_BATCH_SIZE = 8; // audit points per AI call (each is smaller than a full checklist line)
@@ -928,6 +931,7 @@ Respond with JSON only:
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
   let totalCharsAssessed = 0;
+  const windowErrors: string[] = [];
 
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
@@ -971,11 +975,15 @@ Respond with JSON only:
             bestByRef.set(p.ref, { covered: merged, note: betterNote, chunkIds: mergedChunks });
           }
         }
-      } catch {
-        // On error for this window/batch: leave existing best unchanged; if no entry yet, record "No".
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const label = windows.length > 1 ? `Policy window ${win.index + 1}/${win.total}` : "Policy AI call";
+        const errNote = `${label} failed — ${msg}`;
+        windowErrors.push(errNote);
+        console.error("[StagedPolicyAudit]", errNote);
         for (const p of batch) {
           if (!bestByRef.has(p.ref)) {
-            bestByRef.set(p.ref, { covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
+            bestByRef.set(p.ref, { covered: "No", note: `AI call failed (window ${win.index + 1}): ${msg.slice(0, 120)}`, chunkIds: [] });
           }
         }
       }
@@ -988,10 +996,10 @@ Respond with JSON only:
   });
 
   const truncationNote = !fullCoverage
-    ? `\n⚠️ Policy content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars assessed of ${totalCharsAvailable.toLocaleString()} chars total (${WINDOW_OVERLAP.toLocaleString()}-char overlap between windows).`
+    ? `Policy content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).`
     : undefined;
 
-  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage };
+  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
 }
 
 // Stage 3: Evidence Implementation Audit.
@@ -1034,6 +1042,7 @@ Respond with JSON only:
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
   let totalCharsAssessed = 0;
+  const windowErrors: string[] = [];
 
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
@@ -1080,10 +1089,15 @@ Respond with JSON only:
             bestByRef.set(p.ref, { covered: merged, note: betterNote, chunkIds: mergedChunks });
           }
         }
-      } catch {
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const label = windows.length > 1 ? `Evidence window ${win.index + 1}/${win.total}` : "Evidence AI call";
+        const errNote = `${label} failed — ${msg}`;
+        windowErrors.push(errNote);
+        console.error("[StagedEvidenceAudit]", errNote);
         for (const p of batch) {
           if (!bestByRef.has(p.ref)) {
-            bestByRef.set(p.ref, { covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
+            bestByRef.set(p.ref, { covered: "No", note: `AI call failed (window ${win.index + 1}): ${msg.slice(0, 120)}`, chunkIds: [] });
           }
         }
       }
@@ -1096,10 +1110,10 @@ Respond with JSON only:
   });
 
   const truncationNote = !fullCoverage
-    ? `\n⚠️ Evidence content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars assessed of ${totalCharsAvailable.toLocaleString()} chars total (${WINDOW_OVERLAP.toLocaleString()}-char overlap between windows).`
+    ? `Evidence content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).`
     : undefined;
 
-  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage };
+  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
 }
 
 // Stage 4: Outcome & Review Audit.
@@ -1140,6 +1154,7 @@ Respond with JSON only:
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
   let totalCharsAssessed = 0;
+  const windowErrors: string[] = [];
 
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
@@ -1186,10 +1201,15 @@ Respond with JSON only:
             bestByRef.set(p.ref, { outcomeEvident: newOutcome, reviewEvident: newReview, note: betterNote, chunkIds: mergedChunks });
           }
         }
-      } catch {
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const label = windows.length > 1 ? `Outcome/review window ${win.index + 1}/${win.total}` : "Outcome/review AI call";
+        const errNote = `${label} failed — ${msg}`;
+        windowErrors.push(errNote);
+        console.error("[StagedOutcomeReviewAudit]", errNote);
         for (const p of batch) {
           if (!bestByRef.has(p.ref)) {
-            bestByRef.set(p.ref, { outcomeEvident: false, reviewEvident: false, note: "AI call failed.", chunkIds: [] });
+            bestByRef.set(p.ref, { outcomeEvident: false, reviewEvident: false, note: `AI call failed (window ${win.index + 1}): ${msg.slice(0, 120)}`, chunkIds: [] });
           }
         }
       }
@@ -1202,10 +1222,10 @@ Respond with JSON only:
   });
 
   const truncationNote = !fullCoverage
-    ? `\n⚠️ Outcome/review content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars assessed of ${totalCharsAvailable.toLocaleString()} chars total (${WINDOW_OVERLAP.toLocaleString()}-char overlap between windows).`
+    ? `Outcome/review content assessed via ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).`
     : undefined;
 
-  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage };
+  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windows.length, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
 }
 
 // Stage 5: Deterministic APSR verdict builder.

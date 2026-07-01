@@ -2647,14 +2647,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               policyRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (result.promptSent) stagedPromptSent = result.promptSent;
-              if (result.truncationNote) truncationNotes.push(result.truncationNote);
+              if (result.truncationNote) truncationNotes.push(`[Policy] ${result.truncationNote}`);
+              if (result.windowErrors?.length) truncationNotes.push(...result.windowErrors.map((e) => `[Policy] ${e}`));
               if (result.windowsProcessed) totalWindowsProcessed += result.windowsProcessed;
               if (result.totalCharsAssessed) totalCharsAssessed += result.totalCharsAssessed;
               if (result.totalCharsAvailable) totalCharsAvailable += result.totalCharsAvailable;
               if (result.fullCoverage === false) allWindowsFullCoverage = false;
             } catch (err) {
               resetSkipFlag();
-              // Fallback to offline estimate
+              const msg = err instanceof Error ? err.message : String(err);
+              truncationNotes.push(`[Policy stage failed] ${msg}`);
+              console.error("[StagedAudit] Policy stage threw:", msg);
               policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);
             }
           } else {
@@ -2675,13 +2678,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               evidenceRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
-              if (result.truncationNote) truncationNotes.push(result.truncationNote);
+              if (result.truncationNote) truncationNotes.push(`[Evidence] ${result.truncationNote}`);
+              if (result.windowErrors?.length) truncationNotes.push(...result.windowErrors.map((e) => `[Evidence] ${e}`));
               if (result.windowsProcessed) totalWindowsProcessed += result.windowsProcessed;
               if (result.totalCharsAssessed) totalCharsAssessed += result.totalCharsAssessed;
               if (result.totalCharsAvailable) totalCharsAvailable += result.totalCharsAvailable;
               if (result.fullCoverage === false) allWindowsFullCoverage = false;
             } catch (err) {
               resetSkipFlag();
+              const msg = err instanceof Error ? err.message : String(err);
+              truncationNotes.push(`[Evidence stage failed] ${msg}`);
+              console.error("[StagedAudit] Evidence stage threw:", msg);
               evidenceRows = simulateStagedEvidenceAudit(allAuditPoints, evidenceDocText);
             }
           } else {
@@ -2701,19 +2708,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               outcomeRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
-              if (result.truncationNote) truncationNotes.push(result.truncationNote);
+              if (result.truncationNote) truncationNotes.push(`[Outcome/Review] ${result.truncationNote}`);
+              if (result.windowErrors?.length) truncationNotes.push(...result.windowErrors.map((e) => `[Outcome/Review] ${e}`));
               if (result.windowsProcessed) totalWindowsProcessed += result.windowsProcessed;
               if (result.totalCharsAssessed) totalCharsAssessed += result.totalCharsAssessed;
               if (result.totalCharsAvailable) totalCharsAvailable += result.totalCharsAvailable;
               if (result.fullCoverage === false) allWindowsFullCoverage = false;
             } catch (err) {
               resetSkipFlag();
+              const msg = err instanceof Error ? err.message : String(err);
+              truncationNotes.push(`[Outcome/Review stage failed] ${msg}`);
+              console.error("[StagedAudit] Outcome/Review stage threw:", msg);
               outcomeRows = simulateStagedOutcomeReview(allAuditPoints, allDocText);
             }
           } else {
             outcomeRows = allAuditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "Outcome/review stage not run in policy/evidence-only mode.", chunkIds: [] }));
           }
-          live = true;
+          // Mark live only if at least one stage produced real AI usage (tokens consumed).
+          live = auditUsage != null;
         } else {
           // Offline fallback
           policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);
