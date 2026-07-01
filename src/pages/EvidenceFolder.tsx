@@ -918,7 +918,10 @@ function AuditProgressModal({
         {isStuck && (
           <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#9a3412", marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
             <span>⚠</span>
-            <span>This file has been reading for over 60 seconds — it may be stuck. Click <b>Skip</b> next to the file name in the list below, or <b>Cancel audit</b> to stop.</span>
+            {currentStep === 1
+              ? <span>This file has been reading for over 60 seconds — it may be stuck. Click <b>Skip</b> next to the file name in the list below, or <b>Cancel audit</b> to stop.</span>
+              : <span>The AI has not responded for over 60 seconds — it may be stuck on a large batch. You can <b>Cancel audit</b> to stop and re-run with fewer files.</span>
+            }
           </div>
         )}
 
