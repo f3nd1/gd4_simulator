@@ -139,13 +139,14 @@ function DimIcons({ file }: { file: AuditFileRecord }) {
 type FileFilter = "all" | "read" | "cited" | "not_used" | "skipped" | "failed" | "new" | "changed" | "reused";
 type FileSort = "name" | "status" | "type";
 
-function FileRow({ file }: { file: AuditFileRecord }) {
+function FileRow({ file, isReading, onSkipFile }: { file: AuditFileRecord; isReading?: boolean; onSkipFile?: () => void }) {
   const bucketLabel = file.bucket === "policy" ? "Policy" : file.bucket === "evidence" ? "Evid" : "Auto";
   const bucketColor = file.bucket === "policy" ? "#1d4ed8" : file.bucket === "evidence" ? "#15803d" : "#9ca3af";
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderBottom: "1px solid #f1f5f9", fontSize: 11 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderBottom: "1px solid #f1f5f9", fontSize: 11, background: isReading ? "#fffbeb" : undefined }}>
       <span style={{ fontSize: 9, color: bucketColor, background: bucketColor + "18", borderRadius: 3, padding: "1px 4px", flexShrink: 0 }}>{bucketLabel}</span>
-      <span style={{ flex: 1, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.path}>{file.name}</span>
+      <span style={{ flex: 1, color: isReading ? "#92400e" : "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: isReading ? 600 : undefined }} title={file.path}>{file.name}</span>
+      {isReading && <span style={{ fontSize: 9, color: "#92400e", flexShrink: 0 }}>reading…</span>}
       <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.fileKind}</span>
       {file.charCount != null && <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.charCount.toLocaleString()}c</span>}
       {file.suspectedScannedPdf && (
@@ -159,6 +160,15 @@ function FileRow({ file }: { file: AuditFileRecord }) {
       <FileStatusBadge file={file} />
       {file.failReason && <span style={{ fontSize: 9.5, color: "#b91c1c", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.failReason}>{file.failReason}</span>}
       {file.skipReason && file.readStatus === "skipped" && <span style={{ fontSize: 9.5, color: "#9ca3af", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.skipReason}>{file.skipReason}</span>}
+      {isReading && onSkipFile && (
+        <button
+          onClick={onSkipFile}
+          title="Abort reading this file and move on to the next one"
+          style={{ cursor: "pointer", fontSize: 9.5, padding: "2px 6px", borderRadius: 4, border: "1px solid #fbbf24", background: "#fffbeb", color: "#92400e", whiteSpace: "nowrap", flexShrink: 0 }}
+        >
+          Skip
+        </button>
+      )}
     </div>
   );
 }
@@ -245,21 +255,10 @@ function FileLedger({
   return (
     <div>
       {isActive && progress?.currentFileName && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 12, color: "#374151", flex: 1, minWidth: 0 }}>
-            📂 Reading: <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{progress.currentFileName}</span>
-            {progress.currentFileAction && <span style={{ color: "#64748b", marginLeft: 6 }}>— {progress.currentFileAction}</span>}
-            <Dots />
-          </div>
-          {progress.canSkipCurrentFile && onSkipFile && (
-            <button
-              onClick={onSkipFile}
-              title="Abort reading this file and move on to the next one"
-              style={{ cursor: "pointer", fontSize: 10.5, padding: "3px 8px", borderRadius: 5, border: "1px solid #fbbf24", background: "#fffbeb", color: "#92400e", whiteSpace: "nowrap", flexShrink: 0 }}
-            >
-              Skip file
-            </button>
-          )}
+        <div style={{ fontSize: 12, color: "#374151", marginBottom: 8 }}>
+          📂 Reading: <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{progress.currentFileName}</span>
+          {progress.currentFileAction && <span style={{ color: "#64748b", marginLeft: 6 }}>— {progress.currentFileAction}</span>}
+          <Dots />
         </div>
       )}
 
@@ -306,7 +305,14 @@ function FileLedger({
           transition: "max-height 0.2s",
         }}
       >
-        {filtered.map((file) => <FileRow key={file.path} file={file} />)}
+        {filtered.map((file) => (
+          <FileRow
+            key={file.path}
+            file={file}
+            isReading={isActive && file.readStatus === "reading"}
+            onSkipFile={isActive && file.readStatus === "reading" ? onSkipFile : undefined}
+          />
+        ))}
         {filtered.length === 0 && (
           <div style={{ padding: "12px", color: "#94a3b8", fontSize: 11.5, textAlign: "center" }}>
             No files match this filter.
@@ -912,7 +918,7 @@ function AuditProgressModal({
         {isStuck && (
           <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#9a3412", marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
             <span>⚠</span>
-            <span>This file has been reading for over 60 seconds — it may be stuck. Click <b>Skip file</b> or <b>Cancel audit</b> to stop.</span>
+            <span>This file has been reading for over 60 seconds — it may be stuck. Click <b>Skip</b> next to the file name in the list below, or <b>Cancel audit</b> to stop.</span>
           </div>
         )}
 
