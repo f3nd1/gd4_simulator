@@ -599,12 +599,35 @@ export function SubCriterionChecklist() {
             const draft = needsFinding ? buildDraftFinding(req, l) : null;
             const expanded = expandedLine === l.id;
             const ref = l.sourceType && l.generatedBy === "ai" ? sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined) : l.clause || null;
+
+            // Left border colour by status — strongest signal
+            const statusBorder =
+              l.status === "Not met"        ? "#ef4444" :
+              l.status === "Partial"         ? "#f59e0b" :
+              l.status === "Met"             ? "#22c55e" :
+              l.status === "Not Applicable"  ? "#94a3b8" :
+              "#cbd5e1"; // Not Started
+
+            // Row 1 background tint by APSR dimension — subtle orientation cue
+            const dimBg =
+              l.apsrDimension === "Approach"           ? "#f0f6ff" :
+              l.apsrDimension === "Processes"          ? "#f5f3ff" :
+              l.apsrDimension === "Systems & Outcomes" ? "#f0fdf4" :
+              l.apsrDimension === "Review"             ? "#fffbeb" :
+              "#f8fafc";
+
+            const row2Bg =
+              l.status === "Not met"  ? "#fff8f8" :
+              l.status === "Partial"  ? "#fffdf0" :
+              l.status === "Met"      ? "#f6fff9" :
+              "#f8fafc";
+
             return (
-              <div key={l.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 6, overflow: "hidden" }}>
+              <div key={l.id} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${statusBorder}`, borderRadius: 10, marginBottom: 6, overflow: "hidden" }}>
                 {/* Row 1 — full text + ref/APSR pills — click to expand evidence panel */}
                 <div
                   onClick={() => toggleEvidence(l.id)}
-                  style={{ display: "flex", gap: 7, alignItems: "flex-start", padding: "8px 10px 5px", cursor: "pointer", background: expanded ? "#fafbff" : "#fff" }}
+                  style={{ display: "flex", gap: 7, alignItems: "flex-start", padding: "8px 10px 5px", cursor: "pointer", background: expanded ? "#f0f4ff" : dimBg }}
                 >
                   <span style={{ color: "#94a3b8", fontSize: 11, marginTop: 2, flexShrink: 0 }}>{expanded ? "▾" : "▸"}</span>
                   {l.afiTag && <Pill s="critical">AFI {l.afiTag}</Pill>}
@@ -612,7 +635,7 @@ export function SubCriterionChecklist() {
                   <div style={{ display: "flex", gap: 5, alignItems: "center", flexShrink: 0, marginTop: 1 }}>
                     {ref && (
                       <span
-                        style={{ fontSize: 9.5, color: "#a8a29e", fontFamily: "ui-monospace,monospace", background: "#f1f5f9", borderRadius: 4, padding: "1px 5px", cursor: l.sourceText ? "help" : "default" }}
+                        style={{ fontSize: 9.5, color: "#a8a29e", fontFamily: "ui-monospace,monospace", background: "rgba(255,255,255,0.7)", borderRadius: 4, padding: "1px 5px", cursor: l.sourceText ? "help" : "default" }}
                         title={l.sourceText ? `Source: "${l.sourceText}"` : undefined}
                       >
                         {ref}
@@ -624,7 +647,7 @@ export function SubCriterionChecklist() {
                 {/* Row 2 — controls (smaller, stop click propagation) */}
                 <div
                   onClick={(e) => e.stopPropagation()}
-                  style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "4px 10px 7px 28px", borderTop: "1px solid #f1f5f9", fontSize: 11 }}
+                  style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "4px 10px 7px 28px", borderTop: `1px solid ${statusBorder}22`, fontSize: 11, background: row2Bg }}
                 >
                   <select
                     value={l.status}
