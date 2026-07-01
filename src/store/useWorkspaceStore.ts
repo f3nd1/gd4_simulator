@@ -2915,27 +2915,35 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         lineParts.push(`Stages: ${stagesRun}.`);
         if (mode !== "evidence") lineParts.push(`Policy coverage: ${policyRows.length - policyGaps}/${policyRows.length} audit points covered.`);
         if (mode !== "policy") lineParts.push(`Evidence coverage: ${evidenceRows.length - evidenceGaps}/${evidenceRows.length} audit points covered.`);
+        // Split EVERY listed file (not just those that produced chunks) by the
+        // same bucket rule the reading loop used, so both the "Files read" and
+        // "Files assessed" lines count FILES consistently. Previously the
+        // "Files read" parenthetical used policyDocParts/evidenceDocParts —
+        // which are 24k-char CHUNK counts, not file counts — so one policy file
+        // split into 3 chunks read as "policy: 3" here yet "Policy (1)" below.
+        const nameOnly = (p: string) => p.split("/").pop() || p;
+        const resolvedFileBucket = (rec: AuditFileRecord): "policy" | "evidence" =>
+          rec.bucket === "policy" || (rec.bucket === "auto" && classifyFileBucket(rec.path) === "policy") ? "policy" : "evidence";
+        const isReadRec = (rec: AuditFileRecord) => rec.readStatus === "read" || rec.readStatus === "condensed";
+        const policyFiles = fileRecords.filter((r) => resolvedFileBucket(r) === "policy");
+        const evidenceFiles = fileRecords.filter((r) => resolvedFileBucket(r) === "evidence");
+        const policyReadCount = policyFiles.filter(isReadRec).length;
+        const evidenceReadCount = evidenceFiles.filter(isReadRec).length;
         lineParts.push(
           scanned.length
-            ? `Files read: ${scanned.length} (policy: ${policyDocParts.length > 0 ? policyDocParts.length : "none"}, evidence: ${evidenceDocParts.length > 0 ? evidenceDocParts.length : "none"}) — ${briefListStaged(scanned)}.`
+            ? `Files read: ${scanned.length} of ${fileRecords.length} (policy: ${policyReadCount > 0 ? policyReadCount : "none"}, evidence: ${evidenceReadCount > 0 ? evidenceReadCount : "none"}) — ${briefListStaged(scanned)}.`
             : "Files read: none — no readable files were found in this folder."
         );
-        if (scanned.length > 0) {
-          // Built from fileRecords (every file the folder listing found, one entry
-          // per file, bucket resolved the same way the reading loop resolved it —
-          // not from scannedPolicy/scannedEvidence, which only record files that
-          // actually made it into the doc text and so under-list the folder's true
-          // contents whenever a file was skipped or failed to extract).
-          const nameOnly = (p: string) => p.split("/").pop() || p;
-          const resolvedFileBucket = (rec: AuditFileRecord): "policy" | "evidence" =>
-            rec.bucket === "policy" || (rec.bucket === "auto" && classifyFileBucket(rec.path) === "policy") ? "policy" : "evidence";
+        if (fileRecords.length > 0) {
+          // Lists ALL files the folder listing returned, each annotated with its
+          // read outcome (read / skipped / failed / not read), regardless of
+          // whether it produced any chunk — so the count reflects the folder's
+          // true contents, not just what the AI ended up seeing.
           const describeFile = (rec: AuditFileRecord) =>
-            rec.readStatus === "read" || rec.readStatus === "condensed" ? nameOnly(rec.path)
+            isReadRec(rec) ? nameOnly(rec.path)
             : rec.readStatus === "skipped" ? `${nameOnly(rec.path)} (skipped${rec.skipReason ? `: ${rec.skipReason}` : ""})`
             : rec.readStatus === "failed" ? `${nameOnly(rec.path)} (failed${rec.failReason ? `: ${rec.failReason}` : ""})`
             : `${nameOnly(rec.path)} (not read)`;
-          const policyFiles = fileRecords.filter((r) => resolvedFileBucket(r) === "policy");
-          const evidenceFiles = fileRecords.filter((r) => resolvedFileBucket(r) === "evidence");
           lineParts.push(
             `Files assessed:\n` +
             `  Policy (${policyFiles.length}): ${policyFiles.length > 0 ? policyFiles.map(describeFile).join(", ") : "none"}\n` +

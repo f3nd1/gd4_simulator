@@ -880,7 +880,12 @@ function StepDetail({
   }
 }
 
-const STUCK_THRESHOLD_MS = 60_000;
+// A single staged-audit AI call is allowed up to 90s (AUDIT_BATCH_TIMEOUT_MS in
+// agentRuntime.ts) before it times out. The heartbeat only refreshes between
+// those calls, so the threshold must sit ABOVE the per-call ceiling — otherwise
+// a normal, still-running call trips the "stuck" banner and users hit "Skip
+// pass", cutting the sliding-window sweep short before all windows finish.
+const STUCK_THRESHOLD_MS = 100_000;
 
 function AuditProgressModal({
   progress,

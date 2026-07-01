@@ -972,10 +972,15 @@ Respond with JSON only:
     if (opts.shouldStop?.()) break;
     totalCharsAssessed += win.end - win.start;
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
-    opts.onProgress?.(`Policy audit — window ${win.index + 1}/${win.total}`);
 
-    for (const batch of batches) {
+    for (const [bi, batch] of batches.entries()) {
       if (opts.shouldStop?.()) break;
+      // Emit progress before EVERY batch, not just once per window. Each window
+      // makes `batches.length` sequential AI calls; the store uses this callback
+      // to refresh the audit heartbeat, so emitting only once per window let the
+      // stuck-detector fire mid-window during normal (slow) operation, which
+      // misled users into hitting "Skip pass" and cutting the run short.
+      opts.onProgress?.(`Policy audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
       const pointsBlock = buildStagedPointsBlock(batch);
       const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for APPROACH coverage:\n${pointsBlock}`;
       const system = buildSystem(windows.length > 1 ? `runStagedPolicyAudit (window ${win.index + 1}/${win.total})` : "runStagedPolicyAudit");
@@ -1095,10 +1100,11 @@ Respond with JSON only:
     if (opts.shouldStop?.()) break;
     totalCharsAssessed += win.end - win.start;
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
-    opts.onProgress?.(`Evidence audit — window ${win.index + 1}/${win.total}`);
 
-    for (const batch of batches) {
+    for (const [bi, batch] of batches.entries()) {
       if (opts.shouldStop?.()) break;
+      // Per-batch heartbeat — see the note in runStagedPolicyAudit.
+      opts.onProgress?.(`Evidence audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
       const pointsBlock = batch.map((p, i) => {
         const pol = policyByRef.get(p.ref);
         const polNote = pol ? ` [Policy adequacy: ${pol.covered}${pol.covered !== "No" ? ` — "${pol.note.slice(0, 80)}"` : ""}]` : "";
@@ -1220,10 +1226,11 @@ Respond with JSON only:
     if (opts.shouldStop?.()) break;
     totalCharsAssessed += win.end - win.start;
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
-    opts.onProgress?.(`Outcome/review audit — window ${win.index + 1}/${win.total}`);
 
-    for (const batch of batches) {
+    for (const [bi, batch] of batches.entries()) {
       if (opts.shouldStop?.()) break;
+      // Per-batch heartbeat — see the note in runStagedPolicyAudit.
+      opts.onProgress?.(`Outcome/review audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
       const pointsBlock = buildStagedPointsBlock(batch);
       const user = `All documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for OUTCOME DATA and REVIEW RECORDS:\n${pointsBlock}`;
       const system = buildSystem(windows.length > 1 ? `runStagedOutcomeReviewAudit (window ${win.index + 1}/${win.total})` : "runStagedOutcomeReviewAudit");
