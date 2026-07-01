@@ -2228,7 +2228,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               // the AI-enriched finding body from Pass 1 as input so the root cause
               // is specific to what the Folder Audit and Finding Writer actually found.
               const highPriority = get().customFindings.filter(
-                (f) => preRaiseFindingIds.has(f.id) === false && (f.riskCategory === "A" || f.riskCategory === "B")
+                (f) => preRaiseFindingIds.has(f.id) === false && (f.riskCategory === "A" || f.riskCategory === "B") &&
+                  GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId)?.subCriterionId === currentSubCriterionId
               );
               const pass2 = highPriority.map(async (finding) => {
                 try {
