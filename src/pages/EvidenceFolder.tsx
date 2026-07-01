@@ -466,23 +466,49 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
 
         {/* Staged audit pass mini-tracker */}
         {stagedInfo && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-            {(["policy_audit", "evidence_audit", "outcome_review"] as const).map((stg, i) => {
-              const stageOrder = ["policy_audit", "evidence_audit", "outcome_review", "apsr_build"];
-              const currentIdx = stageOrder.indexOf(p.stage ?? "");
-              const isDone = currentIdx > i;
-              const isCurrent = stageOrder.indexOf(stg) === currentIdx;
-              const labels = ["Policy", "Evidence", "Outcomes"];
-              return (
-                <span key={stg} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 10, fontWeight: 600, background: isDone ? "#dcfce7" : isCurrent ? "#dbeafe" : "#f1f5f9", color: isDone ? "#15803d" : isCurrent ? "#1d4ed8" : "#94a3b8", border: isCurrent ? "1px solid #93c5fd" : "1px solid transparent" }}>
-                    {isDone ? "✓ " : isCurrent ? "⏳ " : ""}{labels[i]}
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+              {(["policy_audit", "evidence_audit", "outcome_review"] as const).map((stg, i) => {
+                const stageOrder = ["policy_audit", "evidence_audit", "outcome_review", "apsr_build"];
+                const currentIdx = stageOrder.indexOf(p.stage ?? "");
+                const isDone = currentIdx > i;
+                const isCurrent = stageOrder.indexOf(stg) === currentIdx;
+                const labels = ["Policy", "Evidence", "Outcomes"];
+                return (
+                  <span key={stg} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 10, fontWeight: 600, background: isDone ? "#dcfce7" : isCurrent ? "#dbeafe" : "#f1f5f9", color: isDone ? "#15803d" : isCurrent ? "#1d4ed8" : "#94a3b8", border: isCurrent ? "1px solid #93c5fd" : "1px solid transparent" }}>
+                      {isDone ? "✓ " : isCurrent ? "⏳ " : ""}{labels[i]}
+                    </span>
+                    {i < 2 && <span style={{ color: "#cbd5e1", fontSize: 10 }}>→</span>}
                   </span>
-                  {i < 2 && <span style={{ color: "#cbd5e1", fontSize: 10 }}>→</span>}
-                </span>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+            {/* Files being sent to AI in this pass */}
+            {files.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 10.5, color: "#64748b", marginBottom: 3 }}>
+                  📤 Sending <b>{files.length}</b> file{files.length !== 1 ? "s" : ""} to AI
+                  {p.chunksCount != null && <> · <b>{p.chunksCount}</b> chunks</>}
+                </div>
+                <div style={{ maxHeight: 110, overflowY: "auto", border: "1px solid #dbeafe", borderRadius: 6, background: "#f8fbff" }}>
+                  {files.map((file, fi) => (
+                    <div key={file.path + fi} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px", borderBottom: "1px solid #eff6ff", fontSize: 10 }}>
+                      <span style={{ flexShrink: 0, width: 14, textAlign: "center", color: "#60a5fa" }}>📄</span>
+                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#1e40af" }}>{file.name}</span>
+                      <span style={{ flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{file.fileKind?.toUpperCase()}</span>
+                      {file.charCount != null && file.charCount > 0 && (
+                        <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", color: "#6b7280", fontSize: 9 }}>{file.charCount.toLocaleString()} ch</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {p.stageDetail && (
+              <div style={{ ...muted, marginBottom: 6, fontStyle: "italic" }}>{p.stageDetail}</div>
+            )}
+          </>
         )}
 
         {/* Stats bar */}
@@ -1271,6 +1297,7 @@ export function EvidenceFolder() {
                         <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>Sub-criterion</th>
                         <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>Kind</th>
                         <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>Chars</th>
+                        <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, color: "#5b21b6" }}>Cached</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1279,10 +1306,13 @@ export function EvidenceFolder() {
                         const displayName = entry.fileName ?? meta?.name ?? key.split(":")[0];
                         const displayPath = entry.filePath ?? meta?.path;
                         const subCrit = meta?.subCriterionId ?? "—";
+                        const cachedLabel = entry.cachedAt
+                          ? new Date(entry.cachedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })
+                          : "—";
                         return (
                           <tr key={key} style={{ background: i % 2 === 0 ? "#faf5ff" : "#f5f3ff", borderTop: "1px solid #ede9fe" }}>
                             <td style={{ padding: "3px 8px", color: "#7c3aed", fontWeight: 700 }}>{i + 1}</td>
-                            <td style={{ padding: "3px 8px", color: "#1e293b", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={displayPath ?? displayName}>
+                            <td style={{ padding: "3px 8px", color: "#1e293b", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={displayPath ?? displayName}>
                               {displayName}
                             </td>
                             <td style={{ padding: "3px 8px", color: "#6b7280", whiteSpace: "nowrap" }}>{subCrit}</td>
@@ -1290,6 +1320,7 @@ export function EvidenceFolder() {
                             <td style={{ padding: "3px 8px", color: "#6b7280", textAlign: "right", fontFamily: "ui-monospace,monospace" }}>
                               {entry.charCount > 0 ? entry.charCount.toLocaleString() : "—"}
                             </td>
+                            <td style={{ padding: "3px 8px", color: "#94a3b8", whiteSpace: "nowrap", fontFamily: "ui-monospace,monospace", fontSize: 10 }}>{cachedLabel}</td>
                           </tr>
                         );
                       })}

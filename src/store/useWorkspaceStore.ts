@@ -277,7 +277,7 @@ export type WorkspaceState = {
   lastAuditRuns: Record<string, AuditRunRecord>;
   // Extracted-text cache keyed by "fileId:modifiedTime". Allows unchanged Drive
   // files to skip the download step on repeat audits.
-  fileTextCache: Record<string, { text: string | null; charCount: number; fileKind: string; fileName?: string; filePath?: string; pdfQuality?: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" } }>;
+  fileTextCache: Record<string, { text: string | null; charCount: number; fileKind: string; fileName?: string; filePath?: string; cachedAt?: number; pdfQuality?: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" } }>;
   // Persisted "Recheck all evidence" report so it survives navigation and
   // page refreshes. null means the report hasn't been run yet this session.
   evidenceAuditReport: { flags: EvidenceAuditFlag[]; generatedAt: string } | null;
@@ -1617,6 +1617,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                     fileKind: fileKind(file.mimeType),
                     fileName: file.path.split("/").pop() || file.path,
                     filePath: file.path,
+                    cachedAt: Date.now(),
                     ...(fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}),
                   },
                 },
@@ -2546,7 +2547,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const body = fileResult.text;
               scanned.push(file.path);
               const kind = fileKind(file.mimeType);
-              set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: kind, fileName: file.path.split("/").pop() || file.path, filePath: file.path, ...(fileResult.kind === "text" && fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}) } } }));
+              set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: kind, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), ...(fileResult.kind === "text" && fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}) } } }));
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}) };
               const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
               for (let pi = 0; pi < totalParts; pi++) {
@@ -2563,7 +2564,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             case "image": {
               scanned.push(file.path);
               const desc = fileResult.description;
-              set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: desc, charCount: desc.length, fileKind: "image", fileName: file.path.split("/").pop() || file.path, filePath: file.path } } }));
+              set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: desc, charCount: desc.length, fileKind: "image", fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: desc.length, processingMode: "new" };
               const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
               evidenceChunks.push({ chunkId, filePath: file.path, fileName: file.path.split("/").pop() || file.path, bucket: resolvedBucket, fileKind: "image", text: desc, charCount: desc.length, evidenceType: "Other" });
