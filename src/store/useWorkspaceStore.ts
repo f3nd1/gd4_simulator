@@ -384,6 +384,7 @@ export type WorkspaceState = {
   updateCustomFinding: (id: string, patch: Partial<Finding>) => void;
   removeCustomFinding: (id: string) => void;
   clearAllFindings: () => void;
+  clearAllClosures: () => void;
 
   clearAIReviewLog: () => void;
   clearHumanDecisionLog: () => void;
@@ -3087,6 +3088,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const cs = useChecklistModuleStore.getState();
         ids.forEach((id) => cs.clearSavedFindingId(id));
       },
+
+      clearAllClosures: () => set({ closures: {} }),
 
       clearReviewerOverride: (itemId) =>
         set((s) => {
