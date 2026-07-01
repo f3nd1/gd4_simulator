@@ -381,15 +381,13 @@ export type FolderAuditOpts = {
 // even though every document was already read and summarised. ~32k chars is
 // Store-level condensing budget (chars). The store pre-condenses documents to
 // fit the whole folder into this limit before calling runLiveFolderAudit.
-export const FOLDER_DOC_CAP = 32000;
+export const FOLDER_DOC_CAP = 60_000;
 
-// Per-batch document budget (chars). Each individual OpenAI call sees at most
-// this many chars of docText — deliberately smaller than FOLDER_DOC_CAP so the
-// total input context (system prompt ~5k tokens + doc ~5k tokens) stays under
-// ~12k tokens per call, keeping TTFT fast and output generation well within the
-// timeout ceiling. The store-level condensing means the first 20k chars of a
-// well-condensed docText already covers the key content of all documents.
-const BATCH_DOC_CAP = 20_000;
+// Per-batch document budget (chars). Raised from 20k to 60k so the AI sees the
+// full evidence folder rather than silently discarding the tail. Models with
+// 128k context windows handle this comfortably; total input stays under ~20k tokens
+// (system prompt ~5k + doc ~15k).
+const BATCH_DOC_CAP = 60_000;
 
 // Per-batch timeout. With 4 lines × 4 dims × ≤25-word notes ≈ 400 output
 // tokens, a standard model finishes in ~15–40 s. 90 s leaves a generous buffer
@@ -822,18 +820,21 @@ export type StagedPolicyAuditResult = {
   rows: PolicyCoverageRow[];
   usage?: AIUsage;
   promptSent?: string;
+  truncationNote?: string;
 };
 
 export type StagedEvidenceAuditResult = {
   rows: EvidenceCoverageRow[];
   usage?: AIUsage;
   promptSent?: string;
+  truncationNote?: string;
 };
 
 export type StagedOutcomeReviewAuditResult = {
   rows: OutcomeReviewRow[];
   usage?: AIUsage;
   promptSent?: string;
+  truncationNote?: string;
 };
 
 const STAGED_BATCH_SIZE = 8; // audit points per AI call (each is smaller than a full checklist line)
@@ -851,7 +852,7 @@ export async function runStagedPolicyAudit(
   auditPoints: FlatAuditPoint[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[] } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null } = {}
 ): Promise<StagedPolicyAuditResult> {
   if (auditPoints.length === 0 || !policyDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No policy documents provided.", chunkIds: [] })) };
@@ -866,7 +867,7 @@ export async function runStagedPolicyAudit(
 "No" = the policy document does not address this requirement at all.
 
 IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${buildSystemPrompt("evidenceReview", null, "runStagedPolicyAudit", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, "runStagedPolicyAudit", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -882,6 +883,9 @@ Respond with JSON only:
 
   const DOC_CAP = BATCH_DOC_CAP;
   const docSlice = policyDocText.slice(0, DOC_CAP);
+  const policyTruncationNote = policyDocText.length > DOC_CAP
+    ? `\n⚠️ Policy content truncated — ${policyDocText.length.toLocaleString()} chars available, ${DOC_CAP.toLocaleString()} chars sent to AI (${(policyDocText.length - DOC_CAP).toLocaleString()} chars not assessed).`
+    : "";
 
   for (const batch of batches) {
     const pointsBlock = buildStagedPointsBlock(batch);
@@ -908,7 +912,7 @@ Respond with JSON only:
       for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
     }
   }
-  return { rows, usage, promptSent: firstPromptSent };
+  return { rows, usage, promptSent: firstPromptSent, truncationNote: policyTruncationNote };
 }
 
 // Stage 3: Evidence Implementation Audit.
@@ -920,7 +924,7 @@ export async function runStagedEvidenceAudit(
   evidenceDocText: string,
   policyRows: PolicyCoverageRow[],
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[] } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null } = {}
 ): Promise<StagedEvidenceAuditResult> {
   if (auditPoints.length === 0 || !evidenceDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No evidence documents provided.", chunkIds: [] })) };
@@ -936,7 +940,7 @@ export async function runStagedEvidenceAudit(
 "No" = no implementation evidence in these documents for this requirement.
 
 IMPORTANT: A policy document, SOP, or procedure does NOT count as implementation evidence, even if it is filed in the evidence folder. Only actual records of doing something count.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${buildSystemPrompt("evidenceReview", null, "runStagedEvidenceAudit", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, "runStagedEvidenceAudit", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -950,6 +954,9 @@ Respond with JSON only:
   }
   const DOC_CAP = BATCH_DOC_CAP;
   const docSlice = evidenceDocText.slice(0, DOC_CAP);
+  const evidenceTruncationNote = evidenceDocText.length > DOC_CAP
+    ? `\n⚠️ Evidence content truncated — ${evidenceDocText.length.toLocaleString()} chars available, ${DOC_CAP.toLocaleString()} chars sent to AI (${(evidenceDocText.length - DOC_CAP).toLocaleString()} chars not assessed).`
+    : "";
 
   for (const batch of batches) {
     const pointsBlock = batch.map((p, i) => {
@@ -979,7 +986,7 @@ Respond with JSON only:
       for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, covered: "No", note: "AI call failed — treated as not covered.", chunkIds: [] });
     }
   }
-  return { rows, usage, promptSent: firstPromptSent };
+  return { rows, usage, promptSent: firstPromptSent, truncationNote: evidenceTruncationNote };
 }
 
 // Stage 4: Outcome & Review Audit.
@@ -990,7 +997,7 @@ export async function runStagedOutcomeReviewAudit(
   auditPoints: FlatAuditPoint[],
   allDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[] } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null } = {}
 ): Promise<StagedOutcomeReviewAuditResult> {
   if (auditPoints.length === 0 || !allDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "No documents provided.", chunkIds: [] })) };
@@ -1004,7 +1011,7 @@ outcomeEvident: true if there is actual outcome data, KPIs, results, trends, sur
 
 reviewEvident: true if there are records of a formal review of this requirement's effectiveness — meeting minutes with agenda item, management review records, improvement actions triggered by data review, or evaluation reports. A policy that says "we will review annually" is NOT evidence of a review having happened.
 
-Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${buildSystemPrompt("evidenceReview", null, "runStagedOutcomeReviewAudit", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, "runStagedOutcomeReviewAudit", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;
@@ -1018,6 +1025,9 @@ Respond with JSON only:
   }
   const DOC_CAP = BATCH_DOC_CAP;
   const docSlice = allDocText.slice(0, DOC_CAP);
+  const outcomeTruncationNote = allDocText.length > DOC_CAP
+    ? `\n⚠️ Outcome/review content truncated — ${allDocText.length.toLocaleString()} chars available, ${DOC_CAP.toLocaleString()} chars sent to AI (${(allDocText.length - DOC_CAP).toLocaleString()} chars not assessed).`
+    : "";
 
   for (const batch of batches) {
     const pointsBlock = buildStagedPointsBlock(batch);
@@ -1047,7 +1057,7 @@ Respond with JSON only:
       for (const p of batch) rows.push({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "AI call failed.", chunkIds: [] });
     }
   }
-  return { rows, usage, promptSent: firstPromptSent };
+  return { rows, usage, promptSent: firstPromptSent, truncationNote: outcomeTruncationNote };
 }
 
 // Stage 5: Deterministic APSR verdict builder.

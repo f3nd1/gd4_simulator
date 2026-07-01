@@ -1421,7 +1421,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // split into multiple parts (each with its own chunk ID) so no text is
         // lost. Kept well below BATCH_DOC_CAP so a single chunk never exceeds
         // one document window on its own.
-        const MAX_PART_CHARS = 18_000;
+        const MAX_PART_CHARS = 24_000;
         const pushPart = (path: string, body: string, bucket: TaggedFile["bucket"], kind: string, fileIndex: number) => {
           const isPolicy = bucket === "policy" || (bucket === "auto" && classifyFileBucket(path) === "policy");
           const resolvedBucket: "policy" | "evidence" = isPolicy ? "policy" : "evidence";
@@ -2443,7 +2443,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return "Other";
         };
 
-        const MAX_PART_CHARS = 18_000;
+        const MAX_PART_CHARS = 24_000;
         let policyDocParts: string[] = [];
         let evidenceDocParts: string[] = [];
         const fileRecords: AuditFileRecord[] = taggedFiles.map((file) => ({
@@ -2590,6 +2590,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return;
         }
 
+        // Detect dominant file type from chunks for skill injection
+        const hasSpreadsheet = evidenceChunks.some((c) => c.fileKind === "Excel" || c.fileKind === "CSV");
+        const hasScanned = evidenceChunks.some((c) => (c as { suspectedScannedPdf?: boolean }).suspectedScannedPdf === true);
+        const detectedFileType: "spreadsheet" | "scanned" | null = hasSpreadsheet ? "spreadsheet" : hasScanned ? "scanned" : null;
+
         // Coverage matrices — populated by staged AI calls
         let policyRows: PolicyCoverageRow[] = [];
         let evidenceRows: EvidenceCoverageRow[] = [];
@@ -2597,6 +2602,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let live = false;
         let auditUsage: AIUsage | undefined;
         let stagedPromptSent: string | undefined;
+        const truncationNotes: string[] = [];
 
         const criterionId = folder.subCriterionId;
 
@@ -2607,10 +2613,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (mode === "policy" || mode === "all") {
             setProgress("policy_audit", { stageDetail: `Checking policy coverage for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories });
+              const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType });
               policyRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (result.promptSent) stagedPromptSent = result.promptSent;
+              if (result.truncationNote) truncationNotes.push(result.truncationNote);
             } catch (err) {
               // Fallback to offline estimate
               policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);
@@ -2624,10 +2631,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (mode === "evidence" || mode === "all") {
             setProgress("evidence_audit", { stageDetail: `Checking implementation evidence for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories });
+              const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType });
               evidenceRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
+              if (result.truncationNote) truncationNotes.push(result.truncationNote);
             } catch (err) {
               evidenceRows = simulateStagedEvidenceAudit(allAuditPoints, evidenceDocText);
             }
@@ -2639,10 +2647,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (mode === "all") {
             setProgress("outcome_review", { stageDetail: `Checking outcome data and review records for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
-              const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories });
+              const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, { criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType });
               outcomeRows = result.rows;
               auditUsage = addUsage(auditUsage, result.usage);
               if (!stagedPromptSent && result.promptSent) stagedPromptSent = result.promptSent;
+              if (result.truncationNote) truncationNotes.push(result.truncationNote);
             } catch (err) {
               outcomeRows = simulateStagedOutcomeReview(allAuditPoints, allDocText);
             }
@@ -2792,6 +2801,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             : "Files read: none — no readable files were found in this folder."
         );
         lineParts.push(live ? `Method: EduTrust APSR rubric vs GD4 standard — Approach gates the result, then Processes, Systems & Outcomes, Review (3 AI passes).` : "Method: offline keyword estimate — AI was not used (check AI Settings).");
+        if (detectedFileType) lineParts.push(`File type skill injected: ${detectedFileType} (${detectedFileType === "spreadsheet" ? "spreadsheet-evidence.md" : "scanned-document-evidence.md"}).`);
+        if (truncationNotes.length > 0) lineParts.push(truncationNotes.join("\n"));
         const summary = lineParts.join("\n");
 
         finish(summary, live, undefined, auditUsage, auxUsage, stagedPromptSent);
