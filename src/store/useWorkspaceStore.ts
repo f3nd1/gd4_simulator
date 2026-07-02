@@ -385,9 +385,9 @@ export type WorkspaceState = {
   setAnalysisPath: (subCriterionId: string, path: "A" | "B") => void;
 
   // Running history of the git push/pull info the footer surfaces (from the
-  // build-time __GIT_INFO__ constant). recordChangeLogEntry dedupes by
-  // commitHash so the same commit is never logged twice; the plain-English
-  // summary is derived from the commit message when not supplied.
+  // build-time __GIT_INFO__ constant). recordChangeLogEntry saves EVERY push
+  // (dev deploy history — no commit-hash dedupe); the plain-English summary is
+  // derived from the commit message when not supplied.
   changeLog: ChangeLogEntry[];
   recordChangeLogEntry: (entry: Omit<ChangeLogEntry, "id" | "summary"> & { summary?: string }) => void;
 
@@ -627,6 +627,15 @@ function patternNote(journal: string): string {
 // ---- End audit journal helpers --------------------------------------------
 
 let logCounter = 0;
+
+// Change log is a DEV deploy history: it records every push the app sees and
+// never dedupes them away, so `id` needs a unique suffix per entry (the old
+// commit-hash id collided once per commit). `lastRecordedChangeKey` is an
+// in-memory (per page-load) guard that swallows only React's double-invoked
+// mount effect — it resets on reload, so genuinely reloading/redeploying the
+// same build is logged again rather than suppressed.
+let changeLogCounter = 0;
+let lastRecordedChangeKey = "";
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
@@ -1333,11 +1342,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       recordChangeLogEntry: (entry) =>
         set((s) => {
           if (!entry.commitHash || entry.commitHash === "unknown") return {};
-          if (s.changeLog.some((e) => e.commitHash === entry.commitHash && e.action === entry.action)) return {};
+          // Save EVERY push (dev deploy history) — no commit-hash dedupe, so
+          // re-deploying/reloading the same build is still recorded. The only
+          // thing suppressed is an exact re-fire within the SAME page load
+          // (React's double-invoked mount effect); this guard resets on reload.
+          const key = `${entry.action}:${entry.commitHash}:${entry.timestamp}`;
+          if (key === lastRecordedChangeKey) return {};
+          lastRecordedChangeKey = key;
           const full: ChangeLogEntry = {
-            id: `CL-${entry.commitHash}-${entry.action}`,
-            summary: entry.summary?.trim() || summariseCommitMessage(entry.commitMessage),
             ...entry,
+            id: `CL-${entry.commitHash}-${entry.action}-${Date.now().toString(36)}-${++changeLogCounter}`,
+            summary: entry.summary?.trim() || summariseCommitMessage(entry.commitMessage),
           };
           return { changeLog: [full, ...s.changeLog].slice(0, 500) };
         }),

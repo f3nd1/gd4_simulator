@@ -74,8 +74,9 @@ function GitFooter() {
 
   // Accumulate the git info the footer shows into the Change Log. Only record
   // a commit that has actually been pushed (ahead === 0), since an unpushed
-  // build isn't a "push" event yet; recordChangeLogEntry dedupes by hash so
-  // this fires at most once per commit across all page loads.
+  // build isn't a "push" event yet. recordChangeLogEntry saves every push it
+  // sees (dev deploy history) — reloading/redeploying a build logs it again;
+  // only an exact double-fire within one page load is suppressed.
   const recordChangeLogEntry = useWorkspaceStore((s) => s.recordChangeLogEntry);
   useEffect(() => {
     if (!pushed || !info.hash || info.hash === "unknown") return;

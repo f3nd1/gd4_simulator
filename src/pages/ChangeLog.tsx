@@ -81,7 +81,7 @@ export function ChangeLog() {
 
       {changeLog.length === 0 ? (
         <p style={{ fontSize: 12.5, color: "#94a3b8" }}>
-          No changes recorded yet. Each time the app loads on a pushed build, its commit is logged here.
+          No changes recorded yet. Every push the app loads on is logged here — each deploy of a pushed build adds an entry.
         </p>
       ) : filtered.length === 0 ? (
         <p style={{ fontSize: 12.5, color: "#94a3b8" }}>No entries match the current filter.</p>
