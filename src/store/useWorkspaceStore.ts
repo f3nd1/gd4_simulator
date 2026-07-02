@@ -47,7 +47,7 @@ import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, FindingTypeCode, NcSeverity, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, FindingTypeCode, NcSeverity, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus } from "../types";
 import { findingTypeForStatus } from "../lib/findingClassification";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
@@ -313,8 +313,15 @@ export type WorkspaceState = {
   // combined Met/Partial/Not met verdict. compileEvidenceFindings raises a
   // Finding per row from that verdict — the single Option A findings compile.
   evidenceAssessments: Record<string, EvidenceAssessmentResult>;
+  // Populates evidenceAssessments[sub] by REUSING the Evidence Folder staged
+  // audit's stored per-checklist-line results (matched by GD4 requirement
+  // ref) — no AI calls. Returns true if any audited line was found.
+  deriveEvidenceAssessmentFromAudit: (subCriterionId: string) => boolean;
   runEvidenceAssessment: (subCriterionId: string) => Promise<void>;
   compileEvidenceFindings: (subCriterionId: string) => number;
+  // Live progress for a fresh runEvidenceAssessment (bar + heartbeat on the
+  // Evidence tab); null when no assessment is running.
+  evidenceAssessmentProgress: EvidenceAssessmentProgress | null;
   // Which analysis path a sub-criterion uses: "A" (PPD Requirements Review —
   // default/recommended) or "B" (the existing checklist, unchanged).
   // Missing key means "A" — see ANALYSIS_PATH_DEFAULT.
@@ -636,6 +643,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       evidenceAuditReport: null,
       ppdReviewResults: {},
       evidenceAssessments: {},
+      evidenceAssessmentProgress: null,
       analysisPath: {},
       changeLog: [],
       auditJournal: "",
@@ -808,9 +816,82 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
       },
 
-      // Option A, Evidence tab. Reuses the already-decided PPD verdict per
-      // requirement line (no policy re-read), reads the Actual Evidence folder
-      // fresh, and produces a combined Met/Partial/Not met verdict per line.
+      // Reuse path: builds the Evidence tab from the Evidence Folder staged
+      // audit's already-stored per-checklist-line results (no AI calls),
+      // matched to each PPD requirement line by GD4 ref. Returns true when at
+      // least one audited line was found and stored.
+      deriveEvidenceAssessmentFromAudit: (subCriterionId) => {
+        const s = get();
+        const ppd = s.ppdReviewResults[subCriterionId];
+        if (!ppd || ppd.rows.length === 0 || ppd.rows.some((r) => !r.ref)) return false;
+        const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
+        const normRef = (ref: string) => ref.trim().replace(/\s+/g, "").toUpperCase();
+
+        const entries = useChecklistModuleStore.getState().entries;
+        // Index every audited (has a runId-tagged evidence item) checklist line
+        // by its normalized sourceRef.
+        const lineByRef = new Map<string, { status: SpecificLineStatus; apsr?: ApsrBreakdown; note?: string }>();
+        for (const req of GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId)) {
+          const entry = entries[req.id];
+          if (!entry) continue;
+          for (const line of entry.specific) {
+            if (!line.sourceRef) continue;
+            const auditEv = [...line.evidence].reverse().find((ev) => ev.runId);
+            if (!auditEv) continue;
+            lineByRef.set(normRef(line.sourceRef), { status: line.status, apsr: auditEv.apsr, note: auditEv.auditorNote });
+          }
+        }
+        if (lineByRef.size === 0) return false;
+
+        const statusToVerdict = (st: SpecificLineStatus): EvidenceVerdict | null =>
+          st === "Met" ? "Met" : st === "Partial" ? "Partial" : st === "Not met" ? "Not met" : null;
+
+        const folderUrl = folder?.folderLink || folder?.policyLink || "";
+        let matched = 0;
+        const rows: EvidenceAssessmentRow[] = ppd.rows.map((p) => {
+          const hit = lineByRef.get(normRef(p.ref));
+          const verdict = hit ? statusToVerdict(hit.status) : null;
+          if (hit && verdict) {
+            matched++;
+            const apsr = hit.apsr;
+            const chunkIds = apsr
+              ? [...new Set([...(apsr.approach.sourceChunkIds ?? []), ...(apsr.processes.sourceChunkIds ?? []), ...(apsr.systemsOutcomes.sourceChunkIds ?? []), ...(apsr.review.sourceChunkIds ?? [])])]
+              : [];
+            const comment = apsr ? apsrAuditNote(apsr) : (hit.note || "");
+            const evidenceSummary = apsr ? (apsr.processes.note || apsr.systemsOutcomes.note || "Assessed by the Evidence Folder staged audit.") : (hit.note || "Assessed by the Evidence Folder staged audit.");
+            return {
+              gdRef: p.ref, gd4ItemId: p.gd4ItemId, requirementText: p.requirementText,
+              ppdExtract: p.fullComment || p.shortComment || "", ppdVerdict: p.verdict,
+              evidenceSummary,
+              evidenceFiles: folderUrl ? [{ name: "Actual Evidence folder", url: folderUrl }] : [],
+              evidenceChunkIds: chunkIds,
+              verdict, comment,
+            };
+          }
+          // Line not covered by the staged audit — leave it "Not met" with a note.
+          return {
+            gdRef: p.ref, gd4ItemId: p.gd4ItemId, requirementText: p.requirementText,
+            ppdExtract: p.fullComment || p.shortComment || "", ppdVerdict: p.verdict,
+            evidenceSummary: "Not covered by the Evidence Folder staged audit.",
+            evidenceFiles: [], evidenceChunkIds: [],
+            verdict: "Not met", comment: "This requirement line was not assessed by the staged audit — run an evidence assessment to fill it in.",
+          };
+        });
+        if (matched === 0) return false;
+
+        set((st) => ({
+          evidenceAssessments: {
+            ...st.evidenceAssessments,
+            [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live: true, derivedFromAudit: true },
+          },
+        }));
+        return true;
+      },
+
+      // Fresh path (only needed when no staged-audit result exists). Reuses the
+      // already-decided PPD verdict per requirement line (no policy re-read),
+      // reads the Actual Evidence folder, and produces a combined verdict per
+      // line, with live progress and per-line failure isolation.
       runEvidenceAssessment: async (subCriterionId) => {
         const s = get();
         const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
@@ -846,12 +927,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
           set((st) => ({
             evidenceAssessments: rows
-              ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames } }
+              ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, derivedFromAudit: false } }
               : st.evidenceAssessments,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
+            evidenceAssessmentProgress: null,
           }));
         };
+        const setEvProgress = (detail: string, pct: number) =>
+          set({ evidenceAssessmentProgress: { subCriterionId, pct, detail } });
 
         try {
           if (!ppd || ppd.rows.length === 0) { finish(null, false, "Run the PPD review first — the Evidence tab reuses its per-line verdicts."); return; }
@@ -861,6 +945,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (!evidenceId) { finish(null, false, "No Actual Evidence folder linked."); return; }
           if (!token) { finish(null, false, "Not connected to Google Drive."); return; }
 
+          setEvProgress("Reading the Actual Evidence folder…", 3);
           const allFiles = await listFolderFilesRecursive(evidenceId, token);
           // Dedicated evidence folder -> all files are evidence; shared
           // single-folder convention -> keep only the "Actual Evidence" bucket.
@@ -912,7 +997,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ppdVerdict: r.verdict,
             ppdExtract: r.fullComment || r.shortComment || "",
           }));
-          const result = await runEvidenceAssessment(inputs, evidenceDocText, analysisSettings, { criterionId: subCriterionId });
+          const result = await runEvidenceAssessment(inputs, evidenceDocText, analysisSettings, {
+            criterionId: subCriterionId,
+            onProgress: (detail, pct) => setEvProgress(detail, typeof pct === "number" ? Math.max(3, Math.min(99, pct)) : 50),
+            shouldStop: () => get().busy !== "evidenceassess" + subCriterionId,
+          });
 
           // Merge AI line results with the reused PPD data + resolved file refs.
           const byRef = new Map(result.rows.map((r) => [r.ref, r]));
@@ -937,6 +1026,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               evidenceChunkIds: chunkIds,
               verdict: ev?.verdict ?? "Not met",
               comment: ev?.comment || "",
+              assessmentFailed: ev?.failed,
             };
           });
           finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames);
@@ -955,7 +1045,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!result) return 0;
         let raised = 0;
         const rows = result.rows.map((row) => {
-          if (row.savedFindingId) return row;
+          if (row.savedFindingId || row.assessmentFailed) return row;
           const req = GD4_REQUIREMENTS.find((r) => r.id === row.gd4ItemId);
           const findingType: FindingTypeCode = findingTypeForStatus(row.verdict);
           const ncSeverity: NcSeverity | null = findingType === "NC" ? (req?.gateSensitive ? "Major" : "Minor") : null;
@@ -1196,6 +1286,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           evidenceAuditReport: null,
           ppdReviewResults: {},
           evidenceAssessments: {},
+          evidenceAssessmentProgress: null,
           analysisPath: {},
           auditJournal: "",
         }));

@@ -741,6 +741,9 @@ export type EvidenceAssessmentRow = {
   // Combined PPD-plus-evidence judgement.
   verdict: EvidenceVerdict;
   comment: string;
+  // True when the AI call for this line failed/timed out — the row shows
+  // "Assessment failed — retry" and is skipped by the findings compile.
+  assessmentFailed?: boolean;
   savedFindingId?: string;
 };
 
@@ -751,6 +754,18 @@ export type EvidenceAssessmentResult = {
   live: boolean;
   promptSent?: string;
   chunkFileNames?: Record<string, string>;
+  // True when the rows were reused from the Evidence Folder staged audit's
+  // stored per-line results (no fresh AI calls); false/undefined for a
+  // fresh evidence-tab assessment run.
+  derivedFromAudit?: boolean;
+};
+
+// Lightweight progress for the Evidence tab's fresh assessment run, so the
+// user sees a bar + heartbeat instead of a static "Assessing…" button.
+export type EvidenceAssessmentProgress = {
+  subCriterionId: string;
+  pct: number;      // 0–100
+  detail: string;
 };
 
 // ─── Change Log ─────────────────────────────────────────────────────────────

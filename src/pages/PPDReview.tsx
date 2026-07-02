@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card } from "../components/ui/Card";
@@ -258,14 +258,25 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
 function EvidenceTab({ selectedId }: { selectedId: string }) {
   const busy = useWorkspaceStore((s) => s.busy);
   const runEvidenceAssessment = useWorkspaceStore((s) => s.runEvidenceAssessment);
+  const deriveEvidenceAssessmentFromAudit = useWorkspaceStore((s) => s.deriveEvidenceAssessmentFromAudit);
   const compileEvidenceFindings = useWorkspaceStore((s) => s.compileEvidenceFindings);
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
+  const progress = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
 
   const ppd = ppdReviewResults[selectedId];
   const ppdReady = !!ppd && ppd.rows.length > 0 && !ppd.rows.some((r) => !r.ref);
   const assessment = evidenceAssessments[selectedId];
   const isRunning = busy === "evidenceassess" + selectedId;
+  const runProgress = progress && progress.subCriterionId === selectedId ? progress : null;
+
+  // Fix 1 — reuse the Evidence Folder staged audit's stored per-line results
+  // instead of a fresh AI run. When no evidence-tab result exists yet, try to
+  // populate it from the audit (no AI calls); only if that finds nothing does
+  // the user need to click "Run evidence assessment".
+  useEffect(() => {
+    if (ppdReady && !assessment) deriveEvidenceAssessmentFromAudit(selectedId);
+  }, [ppdReady, assessment, selectedId, deriveEvidenceAssessmentFromAudit]);
 
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [compileMsg, setCompileMsg] = useState<string | null>(null);
@@ -300,7 +311,7 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
         gdRef: p.ref, gd4ItemId: p.gd4ItemId, requirementText: p.requirementText,
         ppdExtract: p.fullComment || p.shortComment || "", ppdVerdict: p.verdict,
         evidenceSummary: "", evidenceFiles: [] as { name: string; url: string }[], evidenceChunkIds: [] as string[],
-        verdict: undefined as EvidenceVerdict | undefined, comment: "", savedFindingId: undefined as string | undefined,
+        verdict: undefined as EvidenceVerdict | undefined, comment: "", assessmentFailed: undefined as boolean | undefined, savedFindingId: undefined as string | undefined,
       }));
 
   return (
@@ -315,8 +326,7 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
         </button>
         {assessment && (
           <div style={{ fontSize: 11.5, color: "#6b7280" }}>
-            Last run {new Date(assessment.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
-            {" · "}{assessment.live ? "Live AI" : "Offline"}
+            {assessment.derivedFromAudit ? "Reused from Evidence Folder audit" : "Last run"} {new Date(assessment.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
             {" · "}{assessment.rows.filter((r) => r.verdict === "Met").length} Met, {assessment.rows.filter((r) => r.verdict === "Partial").length} Partial, {assessment.rows.filter((r) => r.verdict === "Not met").length} Not met
           </div>
         )}
@@ -336,11 +346,30 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
         </Link>
       </div>
 
+      {/* Fix 2 — visible progress bar + heartbeat while a fresh assessment runs. */}
+      {isRunning && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <span style={{ fontSize: 12, color: "#4338ca", fontWeight: 600 }}>{runProgress?.detail ?? "Assessing…"}</span>
+            <span style={{ fontSize: 11, color: "#94a3b8" }}>{runProgress ? `${runProgress.pct}%` : ""}</span>
+          </div>
+          <div style={{ height: 8, background: "#eef2ff", borderRadius: 999, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${runProgress?.pct ?? 5}%`, background: "#4338ca", borderRadius: 999, transition: "width 0.3s" }} />
+          </div>
+        </div>
+      )}
+
+      {assessment?.derivedFromAudit && !isRunning && (
+        <div style={{ fontSize: 12, color: "#166534", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "6px 11px", marginBottom: 8 }}>
+          These verdicts were reused from the Evidence Folder staged audit — no new AI calls were made. Use "Re-run evidence assessment" to reassess against the latest evidence files.
+        </div>
+      )}
+
       {compileMsg && (
         <div style={{ fontSize: 12, color: "#15803d", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "6px 11px", marginBottom: 8 }}>{compileMsg}</div>
       )}
       {!assessment && !isRunning && (
-        <p style={{ fontSize: 12.5, color: "#94a3b8", marginTop: 0 }}>No evidence assessment run yet. The PPD column below is carried over from the PPD Review tab; click "Run evidence assessment" to read the Actual Evidence folder and produce a combined verdict.</p>
+        <p style={{ fontSize: 12.5, color: "#94a3b8", marginTop: 0 }}>No prior evidence result found for this sub-criterion. The PPD column below is carried over from the PPD Review tab; click "Run evidence assessment" to read the Actual Evidence folder and produce a combined verdict.</p>
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: EV_GRID, gap: 10, position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px 8px 0 0", padding: "6px 12px", marginBottom: -1 }}>
@@ -353,7 +382,7 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {rows.map((row) => {
           const expanded = expandedRows.has(row.gdRef);
-          const border = row.verdict ? evVerdictBorderColor(row.verdict) : "#e2e8f0";
+          const border = row.assessmentFailed ? "#9ca3af" : row.verdict ? evVerdictBorderColor(row.verdict) : "#e2e8f0";
           const ppdExtractShort = row.ppdExtract.length > 160 ? `${row.ppdExtract.slice(0, 160)}…` : row.ppdExtract;
           return (
             <div key={row.gdRef} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${border}`, borderRadius: 8, padding: "10px 12px" }}>
@@ -397,7 +426,12 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
 
                 {/* Column 4 — AI verdict (combined) */}
                 <div>
-                  {row.verdict ? (
+                  {row.assessmentFailed ? (
+                    <div>
+                      <Pill s="critical">Assessment failed — retry</Pill>
+                      <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 4 }}>Re-run the evidence assessment to retry this line.</div>
+                    </div>
+                  ) : row.verdict ? (
                     <>
                       <Pill s={evVerdictTone(row.verdict)}>{row.verdict}</Pill>
                       {row.comment && (

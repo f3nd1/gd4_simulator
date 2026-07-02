@@ -1463,7 +1463,7 @@ export async function runPPDRequirementsReview(
 For each requirement return:
 - verdict: "Adequate" | "Partial" | "Not documented"
 - shortComment: one sentence summarising the verdict
-- fullComment: 2-4 sentences explaining exactly what was found or is missing in the PPD, in factual neutral language (state what exists or is absent, do not use words like "adequate"/"good"/"poor" inside the comment itself — the verdict field already carries that judgement)
+- fullComment: MUST have two parts. (1) A reasoned justification of the verdict: if Adequate, state specifically WHAT in the PPD makes it adequate (the named owner, frequency, and record it specifies); if Partial or Not documented, state EXACTLY what is missing (which of owner / frequency / record / institution-specific detail is absent). (2) A direct quoted excerpt from the PPD source that supports the verdict — copy the actual line(s) verbatim in double quotes followed by the supporting chunk ID in parentheses, e.g. "...auditors must be independent of the area they audit..." (C001). For "Not documented" there is no supporting excerpt, so state that no PPD passage addresses this requirement instead of inventing a quote. Keep it factual and neutral: state what the policy says and whether it meets the requirement — do not use words like "good"/"poor"/"excellent".
 - suggestedRewrite: for Partial or Not documented ONLY — a concrete, institution-ready PPD paragraph the auditor could paste directly into the policy document to close this gap (name the responsible role, frequency, and the record produced). Omit (empty string) for Adequate.
 - chunkIds: the exact chunk ID(s) (e.g. "C001") from document headers that support the verdict. Leave empty if none directly support it — never invent a chunk ID.
 
@@ -1585,6 +1585,7 @@ export type EvidenceAssessmentLineResult = {
   verdict: EvidenceVerdict;
   comment: string;
   chunkIds: string[];
+  failed?: boolean;
 };
 
 export type EvidenceAssessmentRunResult = {
@@ -1604,7 +1605,7 @@ export async function runEvidenceAssessment(
   inputs: EvidenceAssessmentInput[],
   evidenceDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string) => void; shouldStop?: () => boolean } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string, pct?: number) => void; shouldStop?: () => boolean } = {}
 ): Promise<EvidenceAssessmentRunResult> {
   if (inputs.length === 0) return { rows: [] };
 
@@ -1634,6 +1635,10 @@ Respond with JSON only:
 
   type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[] };
   const bestByRef = new Map<string, BestEv>();
+  // Refs whose AI call failed/timed out at least once and never succeeded —
+  // surfaced per line as "Assessment failed — retry" so one stuck call cannot
+  // hang the whole tab or silently vanish.
+  const failedRefs = new Set<string>();
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
@@ -1643,12 +1648,19 @@ Respond with JSON only:
   const batches: EvidenceAssessmentInput[][] = [];
   for (let i = 0; i < inputs.length; i += REQ_BATCH_SIZE) batches.push(inputs.slice(i, i + REQ_BATCH_SIZE));
 
+  const totalUnits = Math.max(1, (windows.length || 1) * batches.length);
+  let unitsDone = 0;
+
   for (const win of windows) {
     if (opts.shouldStop?.()) break;
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()}]` : "";
     for (const [bi, batch] of batches.entries()) {
       if (opts.shouldStop?.()) break;
-      opts.onProgress?.(`Evidence assessment — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
+      const firstLine = bi * REQ_BATCH_SIZE + 1;
+      const lastLine = Math.min(inputs.length, firstLine + batch.length - 1);
+      const lineLabel = inputs.length === 1 ? "line 1 of 1" : `lines ${firstLine}–${lastLine} of ${inputs.length}`;
+      const winLabel = windows.length > 1 ? ` · window ${win.index + 1}/${win.total}` : "";
+      opts.onProgress?.(`Assessing ${lineLabel}${winLabel}…`, Math.round((unitsDone / totalUnits) * 100));
       const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText} [PPD verdict: ${r.ppdVerdict}${r.ppdExtract ? ` — "${r.ppdExtract.slice(0, 100)}"` : ""}]`).join("\n");
       const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each requirement line for a COMBINED PPD-plus-evidence verdict:\n${pointsBlock}`;
       const system = buildSystem(windows.length > 1 ? `runEvidenceAssessment (window ${win.index + 1}/${win.total})` : "runEvidenceAssessment");
@@ -1675,10 +1687,15 @@ Respond with JSON only:
           } else {
             bestByRef.set(inp.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])] });
           }
+          failedRefs.delete(inp.ref); // a later window recovered this line
         }
       } catch (err) {
+        // Mark the batch's lines as failed and CONTINUE — one stuck/timed-out
+        // call must not abort the rest of the assessment.
+        for (const inp of batch) if (!bestByRef.has(inp.ref)) failedRefs.add(inp.ref);
         console.error("[EvidenceAssessment]", windows.length > 1 ? `window ${win.index + 1}/${win.total}` : "call failed", err instanceof Error ? err.message : String(err));
       }
+      unitsDone++;
     }
     windowsCompleted++;
   }
@@ -1686,13 +1703,15 @@ Respond with JSON only:
   const rows: EvidenceAssessmentLineResult[] = inputs.map((inp) => {
     const best = bestByRef.get(inp.ref);
     if (best) return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: best.comment || "", chunkIds: best.chunkIds };
+    if (failedRefs.has(inp.ref)) {
+      return { ref: inp.ref, evidenceSummary: "Assessment failed — retry.", verdict: "Not met", comment: "The AI call for this line failed or timed out. Re-run the evidence assessment to retry.", chunkIds: [], failed: true };
+    }
     // No evidence documents at all, or the AI returned nothing: fall back to a
     // deterministic verdict driven by the PPD state alone.
-    const verdict: EvidenceVerdict = "Not met";
     return {
       ref: inp.ref,
       evidenceSummary: noEvidence ? "No Actual Evidence documents were found for this sub-criterion." : "No implementation evidence found for this requirement.",
-      verdict,
+      verdict: "Not met",
       comment: noEvidence
         ? `PPD verdict was "${inp.ppdVerdict}", but no implementation evidence was available to assess.`
         : `No implementation evidence found; PPD verdict was "${inp.ppdVerdict}".`,
