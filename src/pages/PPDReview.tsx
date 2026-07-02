@@ -58,7 +58,15 @@ export function PPDReview() {
     [requirementItems]
   );
 
-  const compilable = result ? result.rows.filter((r) => r.verdict !== "Adequate" && !r.savedFindingId).length : 0;
+  // A result stored before the per-requirement-line refactor keyed its rows
+  // by whole item (one row per GD4 item, no `ref`), so it renders as a single
+  // "Strategic Planning" row instead of the 5 requirement lines. Detect that
+  // old shape (any row missing `ref`) and force a re-run rather than showing
+  // stale, collapsed data.
+  const isStale = !!result && result.rows.some((r) => !r.ref);
+  const liveResult = result && !isStale ? result : undefined;
+
+  const compilable = liveResult ? liveResult.rows.filter((r) => r.verdict !== "Adequate" && !r.savedFindingId).length : 0;
 
   function handleCompile() {
     const n = compilePPDFindings(selectedId);
@@ -104,13 +112,20 @@ export function PPDReview() {
         <p style={{ fontSize: 12.5, color: "#94a3b8" }}>No review run yet for this sub-criterion. Click "Run PPD review" above.</p>
       )}
 
-      {result && (
+      {sub && isStale && !isRunning && (
+        <div style={{ fontSize: 12.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 11px", marginBottom: 8 }}>
+          This review was run before the per-requirement-line update, so it only shows one row for the whole item.
+          Click <b>"Re-run PPD review"</b> above to reassess all {totalLines} requirement line{totalLines === 1 ? "" : "s"} as separate rows.
+        </div>
+      )}
+
+      {liveResult && (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
             <div style={{ fontSize: 11.5, color: "#6b7280" }}>
-              Last run {new Date(result.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
-              {" · "}{result.live ? "Live AI" : "Offline"}
-              {" · "}{result.rows.filter((r) => r.verdict === "Adequate").length} Adequate, {result.rows.filter((r) => r.verdict === "Partial").length} Partial, {result.rows.filter((r) => r.verdict === "Not documented").length} Not documented
+              Last run {new Date(liveResult.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+              {" · "}{liveResult.live ? "Live AI" : "Offline"}
+              {" · "}{liveResult.rows.filter((r) => r.verdict === "Adequate").length} Adequate, {liveResult.rows.filter((r) => r.verdict === "Partial").length} Partial, {liveResult.rows.filter((r) => r.verdict === "Not documented").length} Not documented
             </div>
             <button
               onClick={handleCompile}
@@ -154,10 +169,10 @@ export function PPDReview() {
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {result.rows.map((row) => {
+            {liveResult.rows.map((row) => {
               const expanded = expandedRows.has(row.ref);
               const sourceRef = row.chunkIds.length > 0
-                ? row.chunkIds.map((cid) => result.chunkFileNames?.[cid] ? `${result.chunkFileNames[cid]} · ${cid}` : cid).join(", ")
+                ? row.chunkIds.map((cid) => liveResult.chunkFileNames?.[cid] ? `${liveResult.chunkFileNames[cid]} · ${cid}` : cid).join(", ")
                 : "No chunk cited";
               const extractPreview = row.fullComment || row.shortComment || "(no comment returned)";
               return (
