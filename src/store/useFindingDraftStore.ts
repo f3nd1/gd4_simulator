@@ -75,6 +75,16 @@ export type FindingDraftState = {
   // Discard all pending/error drafts across all sub-criteria.
   discardAllDrafts: () => void;
 
+  // Remove EVERY draft, including confirmed ones — used by createNewCycle,
+  // where the findings the confirmed drafts point at are wiped too.
+  resetAllDrafts: () => void;
+
+  // Downgrade every confirmed draft back to "draft" and drop its
+  // savedFindingId — used by clearAllFindings so drafts don't dangle against
+  // findings that no longer exist; the drafted bodies survive and can be
+  // re-confirmed into the register.
+  downgradeConfirmedDrafts: () => void;
+
   // Partial update for editing a draft's fields.
   updateDraftField: (
     subCriterionId: string,
@@ -335,6 +345,20 @@ export const useFindingDraftStore = create<FindingDraftState>()(
             Object.entries(s.draftsBySubCriterion).map(([id, drafts]) => [
               id,
               drafts.filter((d) => d.status === "confirmed"),
+            ])
+          ),
+        })),
+
+      resetAllDrafts: () => set({ draftsBySubCriterion: {} }),
+
+      downgradeConfirmedDrafts: () =>
+        set((s) => ({
+          draftsBySubCriterion: Object.fromEntries(
+            Object.entries(s.draftsBySubCriterion).map(([id, drafts]) => [
+              id,
+              drafts.map((d) =>
+                d.status === "confirmed" ? { ...d, status: "draft" as FindingDraftStatus, savedFindingId: undefined } : d
+              ),
             ])
           ),
         })),

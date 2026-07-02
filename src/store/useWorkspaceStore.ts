@@ -44,6 +44,10 @@ import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFo
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
+// Static circular import (useFindingDraftStore also imports this store) —
+// same pattern as useChecklistModuleStore; safe because all cross-store
+// usage happens inside actions at runtime, never at module-init time.
+import { useFindingDraftStore } from "./useFindingDraftStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
@@ -1185,6 +1189,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             additionalInfo: s.additionalInfo,
             agentMemory: useAgentMemoryStore.getState().memory,
             auditJournal: s.auditJournal,
+            // Option A state + run history (promptSent truncated — snapshots
+            // are persisted, and full prompts embed school-document text).
+            ppdReviewResults: mapRecordValues(s.ppdReviewResults, truncatePromptSent),
+            evidenceAssessments: mapRecordValues(s.evidenceAssessments, truncatePromptSent),
+            analysisPath: s.analysisPath,
+            auditRunHistory: s.auditRunHistory,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -1240,6 +1250,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             schoolContext: snap.schoolContext ?? s.schoolContext,
             additionalInfo: snap.additionalInfo ?? s.additionalInfo,
             auditJournal: (snap as WorkspaceSnapshot & { auditJournal?: string }).auditJournal ?? s.auditJournal,
+            // Option A state + run history roll back WITH the findings they
+            // reference. Unlike the fields above, snapshots that predate
+            // these fields CLEAR them (?? {}) instead of keeping current
+            // state — keeping it would leave PPD/evidence rows whose
+            // savedFindingIds point at findings that no longer exist after
+            // customFindings rolled back.
+            ppdReviewResults: snap.ppdReviewResults ?? {},
+            evidenceAssessments: snap.evidenceAssessments ?? {},
+            analysisPath: snap.analysisPath ?? {},
+            auditRunHistory: snap.auditRunHistory ?? {},
+            // Derived from the restored history: latest run per folder.
+            lastAuditRuns: Object.fromEntries(
+              Object.entries(snap.auditRunHistory ?? {})
+                .filter(([, runs]) => runs.length > 0)
+                .map(([folderId, runs]) => [folderId, runs[0]])
+            ),
             // Append to the immutable restore audit trail
             restoreLog: [...s.restoreLog, logEntry],
           };
@@ -1267,6 +1293,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             additionalInfo: s.additionalInfo,
             agentMemory: useAgentMemoryStore.getState().memory,
             auditJournal: s.auditJournal,
+            // Option A state + run history (promptSent truncated — snapshots
+            // are persisted, and full prompts embed school-document text).
+            ppdReviewResults: mapRecordValues(s.ppdReviewResults, truncatePromptSent),
+            evidenceAssessments: mapRecordValues(s.evidenceAssessments, truncatePromptSent),
+            analysisPath: s.analysisPath,
+            auditRunHistory: s.auditRunHistory,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -1291,10 +1323,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // checklist data etc. as-is — a true copy), this wipes the workspace
       // back to the exact same blank slate as a fresh install: only the
       // structural/reference data (rubric, department directory, agents,
-      // folder skeleton) survives. Demo data only returns if "Use demo
-      // data" is clicked again afterward.
+      // folder skeleton) AND the saved versions survive. The confirm dialogs
+      // on Draft Workspace / Audit Cycle explicitly promise "saved versions
+      // are not affected" — `versions` is therefore deliberately NOT reset
+      // here (it previously was, silently breaking that promise). Demo data
+      // only returns if "Use demo data" is clicked again afterward.
       createNewCycle: () => {
         useChecklistModuleStore.getState().replaceAllEntries({});
+        // Sibling stores that must not leak the old cycle's context into the
+        // new one: per-agent AI memory (old conversations otherwise keep
+        // feeding new prompts) and grouped finding drafts (their
+        // savedFindingIds point at findings wiped below).
+        useAgentMemoryStore.getState().clearMemory();
+        useFindingDraftStore.getState().resetAllDrafts();
         set(() => ({
           cycle: { ...DEFAULT_CYCLE, id: `cycle-${Date.now()}`, name: "New Audit Cycle", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
           evidence: blankEvidence(),
@@ -1304,7 +1345,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           closures: {},
           auditors: [],
           departments: DEFAULT_DEPARTMENTS,
-          versions: [],
           folders: seedFolders(),
           itemReviews: {},
           aiReviewLog: [],
@@ -1323,6 +1363,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           evidenceAssessmentProgress: null,
           analysisPath: {},
           auditJournal: "",
+          // Old cycle's school briefing and audit-run history must not carry
+          // into a brand-new cycle's AI calls / folder panels.
+          schoolContext: { text: "", link: "" },
+          auditRunHistory: {},
+          lastAuditRuns: {},
         }));
       },
 
@@ -3760,6 +3805,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set({ customFindings: [], closures: {}, seedFindingsLoaded: false });
         const cs = useChecklistModuleStore.getState();
         ids.forEach((id) => cs.clearSavedFindingId(id));
+        // Confirmed grouped drafts pointed at the findings just wiped —
+        // downgrade them back to editable drafts (keeping their bodies)
+        // instead of leaving them dangling with dead savedFindingIds.
+        useFindingDraftStore.getState().downgradeConfirmedDrafts();
       },
 
       clearAllClosures: () => set({ closures: {} }),

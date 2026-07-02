@@ -974,6 +974,16 @@ export type WorkspaceSnapshot = {
   additionalInfo?: { link: string; accessStatus?: DriveAccessStatus; accessNote?: string; accessAt?: string };
   agentMemory?: Record<string, AgentMemoryEntry[]>;
   auditJournal?: string;
+  // Option A state + run history: captured so restoring a version can't
+  // leave PPD-review / evidence-assessment rows whose savedFindingIds point
+  // at findings that no longer exist after customFindings rolled back. On
+  // restore, snapshots WITHOUT these fields (saved before they existed)
+  // clear them rather than keeping current state — stale-but-cleared beats
+  // dangling. Optional for backward compatibility.
+  ppdReviewResults?: Record<string, PPDReviewResult>;
+  evidenceAssessments?: Record<string, EvidenceAssessmentResult>;
+  analysisPath?: Record<string, "A" | "B">;
+  auditRunHistory?: Record<string, AuditRunRecord[]>;
 };
 
 export type VersionEntry = {

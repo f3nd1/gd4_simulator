@@ -63,7 +63,12 @@ export function Interview() {
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Interview simulator</h3>
         <button
-          onClick={() => setInterviewQuestions(generateQuestions(scored.items))}
+          onClick={() => {
+            // Regenerating replaces the whole array — including any readiness
+            // ratings/notes already recorded against the current questions.
+            if (interviewQuestions.length > 0 && !confirm("This will replace your recorded interview outcomes. Continue?")) return;
+            setInterviewQuestions(generateQuestions(scored.items));
+          }}
           style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "7px 12px", borderRadius: 8 }}
         >
           Generate likely auditor questions

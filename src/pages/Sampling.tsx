@@ -40,7 +40,12 @@ export function Sampling() {
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Risk-based sampling</h3>
         <button
-          onClick={() => setSamples(generateSamples(scored.items))}
+          onClick={() => {
+            // Regenerating replaces the whole array — including any tested
+            // outcomes/notes already recorded against the current sample.
+            if (samples.length > 0 && !confirm("This will replace your recorded sampling outcomes. Continue?")) return;
+            setSamples(generateSamples(scored.items));
+          }}
           style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "7px 12px", borderRadius: 8 }}
         >
           Generate sample from gate &amp; weak items
