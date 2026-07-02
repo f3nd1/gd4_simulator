@@ -1415,6 +1415,10 @@ export type PPDRequirementInput = { ref: string; gd4ItemId: string; requirementT
 
 export type PPDRequirementsReviewResult = {
   rows: PPDReviewRow[];
+  // A 2-4 sentence AI synthesis of the whole sub-criterion (strongest areas,
+  // where the gaps are) — a roll-up, not a repeat of the per-line comments.
+  // undefined if the narrative call failed or was skipped.
+  overallNarrative?: string;
   usage?: AIUsage;
   promptSent?: string;
   windowsProcessed?: number;
@@ -1537,5 +1541,29 @@ Respond with JSON only:
     };
   });
 
-  return { rows, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: windowsCompleted === windows.length };
+  // One extra AI call synthesising the whole sub-criterion into a 2-4
+  // sentence roll-up — the per-line verdicts feed it, so no document re-read
+  // is needed. Best-effort: a failure here leaves overallNarrative undefined
+  // and the UI falls back to a deterministic summary. Skipped if the run was
+  // stopped mid-way (partial rows would make a misleading synthesis).
+  let overallNarrative: string | undefined;
+  if (!opts.shouldStop?.()) {
+    opts.onProgress?.("PPD requirements review — overall synthesis");
+    const lineDigest = rows.map((r) => `[${r.ref}] ${r.verdict}: ${r.requirementText} — ${r.shortComment}`).join("\n");
+    const narrativeSystem = `You are writing a short overall roll-up of a PPD (Policy & Procedure Document) requirements review for one GD4 EduTrust sub-criterion. You are given the per-requirement-line verdicts already decided ("Adequate" / "Partial" / "Not documented"). Write a 2-4 sentence synthesis of the sub-criterion AS A WHOLE: whether the PPD documents this sub-criterion's requirements overall, which areas are strongest (documented), and where the gaps are (Partial / Not documented lines). This is a roll-up — do NOT repeat each line's comment verbatim. Keep it factual and neutral: state what is documented and what is missing; do not editorialise with words like "good"/"poor"/"excellent". Respond with JSON only: {"narrative": string}.${buildSystemPrompt("evidenceReview", null, "runPPDRequirementsReview (overall synthesis)", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+    const narrativeUser = `Per-requirement-line verdicts for this sub-criterion:\n${lineDigest}\n\nWrite the overall roll-up narrative.`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: narrativeSystem }, { role: "user", content: narrativeUser }],
+        settings,
+        { temperature: 0.2, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+      );
+      const parsed = parseJSONObject(content);
+      if (typeof parsed.narrative === "string" && parsed.narrative.trim()) overallNarrative = parsed.narrative.trim();
+    } catch (err) {
+      console.error("[PPDRequirementsReview] overall synthesis failed", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return { rows, overallNarrative, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: windowsCompleted === windows.length };
 }

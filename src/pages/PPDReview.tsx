@@ -5,7 +5,7 @@ import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { findingTypeTone } from "../lib/findingClassification";
-import type { PPDVerdict } from "../types";
+import type { PPDVerdict, PPDOverallVerdict } from "../types";
 
 // This page IS Option A's complete output — one row per GD4 requirement
 // LINE (not per whole requirement item), policy only (no Actual Evidence
@@ -19,6 +19,18 @@ function verdictTone(v: PPDVerdict): "good" | "medium" | "critical" {
 
 function verdictBorderColor(v: PPDVerdict): string {
   return v === "Adequate" ? "#22c55e" : v === "Partial" ? "#f59e0b" : "#ef4444";
+}
+
+function overallVerdictTone(v: PPDOverallVerdict): "good" | "medium" | "critical" {
+  return v === "PPD Adequate" ? "good" : v === "PPD Partial" ? "medium" : "critical";
+}
+
+// Palette for the overall panel's tinted background/border, matched to the
+// verdict chip tone.
+function overallPanelColors(v: PPDOverallVerdict): { bg: string; border: string } {
+  if (v === "PPD Adequate") return { bg: "#f0fdf4", border: "#bbf7d0" };
+  if (v === "PPD Partial") return { bg: "#fffbeb", border: "#fde68a" };
+  return { bg: "#fef2f2", border: "#fecaca" };
 }
 
 const GRID_COLUMNS = "1fr 1fr 1fr";
@@ -121,6 +133,38 @@ export function PPDReview() {
 
       {liveResult && (
         <>
+          {/* Overall PPD assessment — reads first, before the per-line table. */}
+          {liveResult.overallVerdict && (() => {
+            const colors = overallPanelColors(liveResult.overallVerdict);
+            const weakRows = liveResult.rows.filter((r) => r.verdict !== "Adequate");
+            return (
+              <div style={{ background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 10, padding: "11px 14px", marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>Overall PPD assessment</span>
+                  <Pill s={overallVerdictTone(liveResult.overallVerdict)}>{liveResult.overallVerdict}</Pill>
+                  {liveResult.overallSummary && <span style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>{liveResult.overallSummary}</span>}
+                </div>
+                {liveResult.overallNarrative && (
+                  <p style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.5, margin: "0 0 6px", whiteSpace: "pre-line" }}>{liveResult.overallNarrative}</p>
+                )}
+                {weakRows.length > 0 && (
+                  <div style={{ fontSize: 12, color: "#374151" }}>
+                    <span style={{ fontWeight: 700 }}>Gaps:</span>
+                    <ul style={{ margin: "3px 0 0", paddingLeft: 18 }}>
+                      {weakRows.map((r) => (
+                        <li key={r.ref} style={{ marginBottom: 1 }}>
+                          <span style={{ fontFamily: "ui-monospace,monospace", fontWeight: 700, color: "#4338ca" }}>{r.ref}</span>
+                          {" — "}
+                          <span>{r.requirementText.length > 80 ? `${r.requirementText.slice(0, 80)}…` : r.requirementText}</span>
+                          {" "}<Pill s={verdictTone(r.verdict)}>{r.verdict}</Pill>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
             <div style={{ fontSize: 11.5, color: "#6b7280" }}>
               Last run {new Date(liveResult.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}

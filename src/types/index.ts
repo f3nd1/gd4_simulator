@@ -675,6 +675,11 @@ export type AuditScope = "both" | "policy" | "evidence";
 
 export type PPDVerdict = "Adequate" | "Partial" | "Not documented";
 
+// Sub-criterion-level roll-up of every requirement line's verdict:
+// all Adequate -> "PPD Adequate"; any Partial (none missing) -> "PPD
+// Partial"; any Not documented -> "PPD Gaps".
+export type PPDOverallVerdict = "PPD Adequate" | "PPD Partial" | "PPD Gaps";
+
 export type PPDReviewRow = {
   // FlatAuditPoint.ref — identifies this specific requirement line (e.g.
   // "1.2.1.DS1"), since a sub-criterion's items each carry several lines.
@@ -702,6 +707,12 @@ export type PPDReviewResult = {
   // chunkId -> source file name, so a row's chunkIds can be resolved back to
   // which PPD document a suggested rewrite applies to.
   chunkFileNames?: Record<string, string>;
+  // Sub-criterion-level roll-up shown in the "Overall PPD assessment" panel
+  // above the per-line table. Verdict/summary are derived deterministically
+  // from the rows; narrative is an AI synthesis of the whole sub-criterion.
+  overallVerdict?: PPDOverallVerdict;
+  overallSummary?: string;
+  overallNarrative?: string;
 };
 
 // One checklist line's AI verdict, stored in an AuditRunRecord for post-run

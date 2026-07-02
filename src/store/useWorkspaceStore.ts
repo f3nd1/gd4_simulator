@@ -45,7 +45,7 @@ import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, FindingTypeCode, NcSeverity } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, FindingTypeCode, NcSeverity } from "../types";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -675,9 +675,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set({ busy: "ppdreview" + subCriterionId });
         const runId = `PPD-${subCriterionId}-${Date.now().toString(36).toUpperCase()}`;
 
-        const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>) => {
+        const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string) => {
+          // Sub-criterion roll-up, derived deterministically from the rows.
+          const adequate = rows ? rows.filter((r) => r.verdict === "Adequate").length : 0;
+          const partial = rows ? rows.filter((r) => r.verdict === "Partial").length : 0;
+          const notDocumented = rows ? rows.filter((r) => r.verdict === "Not documented").length : 0;
+          const overallVerdict: PPDOverallVerdict | undefined = rows
+            ? notDocumented > 0 ? "PPD Gaps" : partial > 0 ? "PPD Partial" : "PPD Adequate"
+            : undefined;
+          const overallSummary = rows
+            ? notDocumented === 0 && partial === 0
+              ? `${adequate} of ${rows.length} requirement line${rows.length === 1 ? "" : "s"} adequately documented`
+              : `${adequate} adequate · ${partial} partial · ${notDocumented} not documented`
+            : undefined;
           const summary = rows
-            ? `PPD requirements review: ${rows.filter((r) => r.verdict === "Adequate").length} Adequate, ${rows.filter((r) => r.verdict === "Partial").length} Partial, ${rows.filter((r) => r.verdict === "Not documented").length} Not documented (of ${rows.length}).`
+            ? `PPD requirements review: ${adequate} Adequate, ${partial} Partial, ${notDocumented} Not documented (of ${rows.length}).`
             : `PPD requirements review failed${liveError ? `: ${liveError}` : "."}`;
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
@@ -702,7 +714,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
           set((st) => ({
             ppdReviewResults: rows
-              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames } }
+              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative } }
               : st.ppdReviewResults,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
@@ -774,7 +786,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
 
           const result = await runPPDRequirementsReview(requirements, policyDocText, analysisSettings, { criterionId: subCriterionId });
-          finish(result.rows, true, undefined, result.promptSent, result.usage, chunkFileNames);
+          finish(result.rows, true, undefined, result.promptSent, result.usage, chunkFileNames, result.overallNarrative);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
         }
