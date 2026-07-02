@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
-import { Card, filterSelectStyle } from "../components/ui/Card";
+import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { PathStepIndicator } from "../components/ui/PathStepIndicator";
-import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import type { PPDVerdict, PPDReviewRow } from "../types";
 
 function verdictTone(v: PPDVerdict): "good" | "medium" | "critical" {
@@ -18,13 +18,11 @@ function verdictBorderColor(v: PPDVerdict): string {
 const GRID_COLUMNS = "1fr 1fr 1fr";
 
 export function PPDReview() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [critFilter, setCritFilter] = useState<string>("All");
-  const [selectedId, setSelectedId] = useState<string>(() => searchParams.get("item") || GD4_SUB_CRITERIA[0]?.id || "");
-  const subCritOptions = useMemo(
-    () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter)),
-    [critFilter]
-  );
+  // The sub-criterion is passed in via the ?item= query param — from the
+  // Evidence Folder page's "Start review"/"View Results" links, or the
+  // Sub-Criterion Checklist's PPD baseline link — never picked manually here.
+  const [searchParams] = useSearchParams();
+  const selectedId = searchParams.get("item") || "";
   const sub = GD4_SUB_CRITERIA.find((s) => s.id === selectedId);
 
   const busy = useWorkspaceStore((s) => s.busy);
@@ -57,60 +55,62 @@ export function PPDReview() {
         <PathStepIndicator
           current={1}
           ppdHref={`/ppd-review?item=${selectedId}`}
-          evidenceHref={`/sub-checklist?item=${firstItemId}`}
-          evidenceEnabled={!!firstItemId}
+          evidenceHref={`/ppd-evidence-checklist?item=${firstItemId}`}
+          evidenceEnabled={!!firstItemId && !!result}
         />
       )}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-        <h3 style={{ margin: 0, fontSize: 14 }}>PPD Requirements Review</h3>
-        <span style={{ fontSize: 12, color: "#6b7280" }}>
-          Checks the Policy & Procedure Document only — does it actually document each GD4 requirement?
-        </span>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>PPD Requirements Review{sub ? ` — ${sub.id}` : ""}</h3>
+        {!sub && (
+          <span style={{ fontSize: 12, color: "#6b7280" }}>
+            Checks the Policy & Procedure Document only — does it actually document each GD4 requirement?
+          </span>
+        )}
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <select
-          value={critFilter}
-          onChange={(e) => { setCritFilter(e.target.value); setSelectedId(""); }}
-          style={filterSelectStyle}
-        >
-          <option value="All">All criteria</option>
-          {GD4_CRITERIA.map((c) => <option key={c.id} value={c.id}>{c.id} — {c.title}</option>)}
-        </select>
-        <select
-          value={selectedId}
-          onChange={(e) => { setSelectedId(e.target.value); setSearchParams({ item: e.target.value }); }}
-          style={filterSelectStyle}
-        >
-          <option value="">Select sub-criterion…</option>
-          {subCritOptions.map((sc) => <option key={sc.id} value={sc.id}>{sc.id} — {sc.title}</option>)}
-        </select>
-        <button
-          disabled={!selectedId || isRunning}
-          onClick={() => runPPDReview(selectedId)}
-          style={{ cursor: !selectedId || isRunning ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #4a5a8a", background: "#eaeef6", color: "#4a5a8a" }}
-        >
-          {isRunning ? "Reviewing…" : "Run PPD review"}
-        </button>
-      </div>
-
-      {sub && (
-        <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: -4 }}>
-          {sub.title} — {sub.description}
-          {!folder?.policyLink && !folder?.folderLink && <span style={{ color: "#b23121" }}> · No Policy & Procedure folder linked yet (Evidence Folder page).</span>}
+      {!sub && (
+        <p style={{ fontSize: 12.5, color: "#94a3b8" }}>
+          No sub-criterion selected. Open this page from the <Link to="/evidence-folder" style={{ color: "#4338ca", fontWeight: 600 }}>Evidence Folder</Link> page's
+          "Start review →" or "View Results →" link for the sub-criterion you want to check.
         </p>
       )}
 
-      {!result && !isRunning && (
+      {sub && (
+        <>
+          <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: -2, marginBottom: 10 }}>
+            {sub.title} — {sub.description}
+            {!folder?.policyLink && !folder?.folderLink && <span style={{ color: "#b23121" }}> · No Policy & Procedure folder linked yet (Evidence Folder page).</span>}
+          </p>
+          <button
+            disabled={isRunning}
+            onClick={() => runPPDReview(selectedId)}
+            style={{ cursor: isRunning ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #4a5a8a", background: "#eaeef6", color: "#4a5a8a", marginBottom: 12 }}
+          >
+            {isRunning ? "Reviewing…" : result ? "Re-run PPD review" : "Run PPD review"}
+          </button>
+        </>
+      )}
+
+      {sub && !result && !isRunning && (
         <p style={{ fontSize: 12.5, color: "#94a3b8" }}>No review run yet for this sub-criterion. Click "Run PPD review" above.</p>
       )}
 
       {result && (
         <>
-          <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
-            Last run {new Date(result.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
-            {" · "}{result.live ? "Live AI" : "Offline"}
-            {" · "}{result.rows.filter((r) => r.verdict === "Adequate").length} Adequate, {result.rows.filter((r) => r.verdict === "Partial").length} Partial, {result.rows.filter((r) => r.verdict === "Not documented").length} Not documented
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <div style={{ fontSize: 11.5, color: "#6b7280" }}>
+              Last run {new Date(result.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+              {" · "}{result.live ? "Live AI" : "Offline"}
+              {" · "}{result.rows.filter((r) => r.verdict === "Adequate").length} Adequate, {result.rows.filter((r) => r.verdict === "Partial").length} Partial, {result.rows.filter((r) => r.verdict === "Not documented").length} Not documented
+            </div>
+            {isOptionA && (
+              <Link
+                to={`/ppd-evidence-checklist?item=${firstItemId}`}
+                style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, textDecoration: "none", padding: "6px 14px", borderRadius: 8, border: "1px solid #4338ca", background: "#4338ca", color: "#fff", whiteSpace: "nowrap" }}
+              >
+                Continue to Evidence Checklist →
+              </Link>
+            )}
           </div>
           {/* Sticky column header, aligned to the same 3-column grid as each row below. */}
           <div

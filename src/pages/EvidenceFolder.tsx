@@ -1323,8 +1323,19 @@ export function EvidenceFolder() {
   const [searchParams] = useSearchParams();
   const focusSub = searchParams.get("sub");
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+  // Collapsed by default — the "Access — Policy/Evidence" and "Audit result"
+  // detail blocks under each sub-criterion row only show once the row is
+  // expanded, keeping the table scannable when many folders are linked.
+  const [expandedSubCritRows, setExpandedSubCritRows] = useState<Set<string>>(new Set());
+  const toggleSubCritRow = (id: string) =>
+    setExpandedSubCritRows((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
   useEffect(() => {
     if (!focusSub) return;
+    setExpandedSubCritRows((prev) => new Set(prev).add(focusSub));
     const row = rowRefs.current[focusSub];
     if (!row) return;
     row.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1607,10 +1618,20 @@ export function EvidenceFolder() {
             const policyDismissKey = `${f.id}:policy:${f.policyAccessAt || ""}`;
             const evidenceDismissKey = `${f.id}:evidence:${f.accessCheckAt || ""}`;
             const lastRun = lastAuditRuns[f.id];
+            const rowExpanded = expandedSubCritRows.has(f.id);
             return (
               <Fragment key={f.id}>
                 <tr className="rowh" ref={(el) => { rowRefs.current[f.subCriterionId] = el; }}>
-                  <td><b>{f.folderName}</b></td>
+                  <td>
+                    <button
+                      onClick={() => toggleSubCritRow(f.id)}
+                      title={rowExpanded ? "Collapse access/audit details" : "Expand access/audit details"}
+                      style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, border: "none", background: "transparent", padding: 0, font: "inherit", textAlign: "left", width: "100%" }}
+                    >
+                      <span style={{ color: "#94a3b8", fontSize: 11, flexShrink: 0, transition: "transform 0.15s", transform: rowExpanded ? "rotate(90deg)" : "none" }}>▸</span>
+                      <b>{f.folderName}</b>
+                    </button>
+                  </td>
                   <td>
                     <select value={f.owner} onChange={(e) => setFolderField(f.id, "owner", e.target.value)} style={{ ...inputStyle, width: 110, padding: "4px 6px" }}>
                       <option value="">(unassigned)</option>
@@ -1772,9 +1793,9 @@ export function EvidenceFolder() {
                 </tr>
 
                 {/* Same-folder warning */}
-                {f.policyLink && f.folderLink && f.policyLink === f.folderLink && (
+                {rowExpanded && f.policyLink && f.folderLink && f.policyLink === f.folderLink && (
                   <tr>
-                    <td colSpan={5} style={{ padding: "0 10px 8px 28px" }}>
+                    <td colSpan={6} style={{ padding: "0 10px 8px 28px" }}>
                       <div style={{ background: "#fff7ed", borderLeft: "3px solid #fb923c", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12, color: "#9a3412" }}>
                         ⚠ The <b>Policy &amp; Procedure</b> and <b>Actual Evidence</b> links point to the <b>same folder</b>. Link two different folders for a proper audit.
                       </div>
@@ -1783,9 +1804,9 @@ export function EvidenceFolder() {
                 )}
 
                 {/* Policy access note */}
-                {f.policyAccessNote && !dismissedAccessNotes.has(policyDismissKey) && (
+                {rowExpanded && f.policyAccessNote && !dismissedAccessNotes.has(policyDismissKey) && (
                   <tr>
-                    <td colSpan={5} style={{ padding: "0 10px 6px 28px" }}>
+                    <td colSpan={6} style={{ padding: "0 10px 6px 28px" }}>
                       <div style={{ background: "#f8fafc", borderLeft: "3px solid #93c5fd", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                           <span style={{ fontSize: 10.5, fontWeight: 700, color: "#3b82f6", textTransform: "uppercase", letterSpacing: 0.4 }}>Access — policy</span>
@@ -1800,9 +1821,9 @@ export function EvidenceFolder() {
                 )}
 
                 {/* Evidence access note */}
-                {f.accessCheckNote && !dismissedAccessNotes.has(evidenceDismissKey) && (
+                {rowExpanded && f.accessCheckNote && !dismissedAccessNotes.has(evidenceDismissKey) && (
                   <tr>
-                    <td colSpan={5} style={{ padding: "0 10px 6px 28px" }}>
+                    <td colSpan={6} style={{ padding: "0 10px 6px 28px" }}>
                       <div style={{ background: "#f8fafc", borderLeft: "3px solid #86efac", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                           <span style={{ fontSize: 10.5, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", letterSpacing: 0.4 }}>Access — evidence</span>
@@ -1817,9 +1838,9 @@ export function EvidenceFolder() {
                 )}
 
                 {/* Audit result (dismissible) */}
-                {f.lastAuditSummary && !dismissedAuditResults.has(auditDismissKey) && (
+                {rowExpanded && f.lastAuditSummary && !dismissedAuditResults.has(auditDismissKey) && (
                   <tr>
-                    <td colSpan={5} style={{ padding: "0 10px 10px 28px" }}>
+                    <td colSpan={6} style={{ padding: "0 10px 10px 28px" }}>
                       <div style={{ background: "#f0fdf4", borderLeft: "3px solid #86c79f", borderRadius: "0 8px 8px 0", padding: "10px 12px", fontSize: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
                           <span style={{ fontSize: 10.5, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.4 }}>Audit result</span>
@@ -1844,8 +1865,15 @@ export function EvidenceFolder() {
                               {expanded[f.id] ? "Show less" : "Show full result"}
                             </button>
                           )}
-                          <Link to={`/sub-checklist?item=${f.subCriterionId}.1`} style={{ fontSize: 11, color: "#2563eb", textDecoration: "none", whiteSpace: "nowrap" }}>
-                            → Sub-Criterion Checklist
+                          <Link
+                            to={
+                              (analysisPath[f.subCriterionId] ?? "A") === "A"
+                                ? `/ppd-review?item=${f.subCriterionId}`
+                                : `/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id ?? ""}`
+                            }
+                            style={{ fontSize: 11, color: "#2563eb", textDecoration: "none", whiteSpace: "nowrap" }}
+                          >
+                            View Results →
                           </Link>
                         </div>
                       </div>

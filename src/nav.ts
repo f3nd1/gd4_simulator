@@ -34,6 +34,8 @@ export const NAV: NavGroup[] = [
     hint: "Attach evidence for each GD4 item — the Sub-Criterion Checklist is the recommended way to do this properly.",
     items: [
       { path: "/evidence-folder", label: "Evidence Folder", hint: "Index of evidence folders per sub-criterion" },
+      { path: "/ppd-review", label: "PPD Requirements Review", hint: "AI check: does the Policy & Procedure Document actually document each GD4 requirement?" },
+      { path: "/ppd-improvement-tracker", label: "PPD Improvement Tracker", hint: "Accepted PPD rewrites, grouped by document, tracked to publication" },
       { path: "/sub-checklist", label: "Sub-Criterion Checklist", hint: "Source of truth for scoring — break each item into testable lines and attach evidence" },
       { path: "/evidence-matrix", label: "Evidence Matrix", hint: "Quick first-draft rating only — not a substitute for the checklist" },
     ],
@@ -64,8 +66,6 @@ export const NAV: NavGroup[] = [
     items: [
       { path: "/findings", label: "Findings", hint: "Raise and track AFIs / quality actions" },
       { path: "/afi-closure", label: "Quality Action / AFI", hint: "Decide whether a finding can be closed" },
-      { path: "/ppd-review", label: "PPD Requirements Review", hint: "AI check: does the Policy & Procedure Document actually document each GD4 requirement?" },
-      { path: "/ppd-improvement-tracker", label: "PPD Improvement Tracker", hint: "Accepted PPD rewrites, grouped by document, tracked to publication" },
       { path: "/ai-review", label: "AI Review Log", hint: "Log of every AI review run, live or simulated" },
       { path: "/ai-debug", label: "AI Debug Log", hint: "Dev-only log of every buildSystemPrompt() call with module and prompt snippet" },
       { path: "/human-decision-log", label: "Human Decision Log", hint: "Audit trail of every human override or acceptance of an AI output" },
