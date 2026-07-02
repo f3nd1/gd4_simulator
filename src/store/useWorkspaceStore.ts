@@ -45,7 +45,7 @@ import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDAcceptedRewrite, PPDRewriteStatus } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, FindingTypeCode, NcSeverity } from "../types";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -299,24 +299,20 @@ export type WorkspaceState = {
   // Persisted "Recheck all evidence" report so it survives navigation and
   // page refreshes. null means the report hasn't been run yet this session.
   evidenceAuditReport: { flags: EvidenceAuditFlag[]; generatedAt: string } | null;
-  // PPD Requirements Review — most recent run per sub-criterion, and every
-  // rewrite the auditor has accepted into the PPD Improvement Tracker.
+  // PPD Requirements Review — most recent run per sub-criterion. This IS
+  // Option A's complete output: one row per GD4 requirement line, policy
+  // only, with an inline suggested rewrite and a "compile to Findings"
+  // action (see compilePPDFindings) — no separate evidence-checklist step.
   ppdReviewResults: Record<string, PPDReviewResult>;
-  ppdAcceptedRewrites: PPDAcceptedRewrite[];
   runPPDReview: (subCriterionId: string) => Promise<void>;
-  acceptPPDRewrite: (subCriterionId: string, row: PPDReviewRow) => void;
-  setPPDRewriteStatus: (id: string, status: PPDRewriteStatus) => void;
-  removePPDRewrite: (id: string) => void;
-  // Which analysis path a sub-criterion uses: "A" (PPD Review, then the
-  // enriched checklist — default/recommended) or "B" (the checklist alone,
-  // unchanged). Missing key means "A" — see ANALYSIS_PATH_DEFAULT.
+  // Raises a Finding for every Partial/Not documented row not yet compiled;
+  // returns the number of NEW findings raised.
+  compilePPDFindings: (subCriterionId: string) => number;
+  // Which analysis path a sub-criterion uses: "A" (PPD Requirements Review —
+  // default/recommended) or "B" (the existing checklist, unchanged).
+  // Missing key means "A" — see ANALYSIS_PATH_DEFAULT.
   analysisPath: Record<string, "A" | "B">;
   setAnalysisPath: (subCriterionId: string, path: "A" | "B") => void;
-  // On Option A, Step 2 (the checklist) is gated behind Step 1 (PPD Review)
-  // unless the user explicitly skips it — tracked per sub-criterion so the
-  // skip doesn't leak across items.
-  ppdStepSkipped: Record<string, boolean>;
-  setPpdStepSkipped: (subCriterionId: string, skipped: boolean) => void;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
   // Clears a stranded busy/bulk state so a button stuck on "Auditing…" can be
@@ -625,9 +621,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       schoolContext: { text: "", link: "" },
       evidenceAuditReport: null,
       ppdReviewResults: {},
-      ppdAcceptedRewrites: [],
       analysisPath: {},
-      ppdStepSkipped: {},
       auditJournal: "",
       restoreLog: [],
       activeAuditorId: null,
@@ -694,7 +688,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             verdict: summary,
             confidence: "Medium",
             keyConcerns: [summary],
-            recommendedAction: "Review each Partial/Not documented requirement's suggested rewrite before accepting it into the PPD Improvement Tracker.",
+            recommendedAction: "Review each Partial/Not documented requirement line's suggested rewrite, then compile findings straight from this page.",
             live,
             liveError,
             generatedContent: summary,
@@ -716,10 +710,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         };
 
         try {
+          // One row per GD4 requirement LINE (FlatAuditPoint), not per whole
+          // requirement item — e.g. 1.2.1 Strategic Planning has 5
+          // Describe/Show lines, so 5 rows. Notes/Expected Evidence bullets
+          // are excluded; those aren't requirement lines an auditor tests.
           const requirements: PPDRequirementInput[] = GD4_REQUIREMENTS
             .filter((r) => r.subCriterionId === subCriterionId)
-            .map((r) => ({ gd4ItemId: r.id, requirementText: r.requirement }));
-          if (requirements.length === 0) { finish(null, false, "No GD4 requirements map to this sub-criterion."); return; }
+            .flatMap((r) =>
+              (r.flatAuditPoints ?? [])
+                .filter((p) => p.sourceType === "describeShow")
+                .map((p) => ({ ref: p.ref, gd4ItemId: r.id, requirementText: p.text }))
+            );
+          if (requirements.length === 0) { finish(null, false, "No GD4 requirement lines map to this sub-criterion."); return; }
 
           const policyId = parseFolderId(folder.policyLink) || parseFolderId(folder.folderLink);
           const token = useGoogleDriveStore.getState().getValidToken();
@@ -778,35 +780,56 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
       },
 
-      acceptPPDRewrite: (subCriterionId, row) => {
-        if (!row.suggestedRewrite?.trim()) return;
-        const chunkFileNames = get().ppdReviewResults[subCriterionId]?.chunkFileNames;
-        const documentName = (row.chunkIds.length > 0 && chunkFileNames?.[row.chunkIds[0]]) || "Unknown document";
-        const rewrite: PPDAcceptedRewrite = {
-          id: `PPDR-${Date.now().toString(36).toUpperCase()}`,
-          subCriterionId,
-          gd4ItemId: row.gd4ItemId,
-          requirementText: row.requirementText,
-          documentName,
-          originalVerdict: row.verdict,
-          rewriteText: row.suggestedRewrite,
-          status: "To draft",
-          acceptedAt: new Date().toISOString(),
-        };
-        set((s) => ({ ppdAcceptedRewrites: [rewrite, ...s.ppdAcceptedRewrites] }));
+      // Raises one Finding per Partial/Not documented row not yet compiled —
+      // Not documented -> NC, Partial -> OFI (same classification the
+      // checklist uses, see findingClassification.ts), scoped to the PPD
+      // requirement line itself. Adequate rows raise nothing. Feeds the same
+      // Findings register / QA-AFI pipeline as the checklist path — no
+      // separate pipeline.
+      compilePPDFindings: (subCriterionId) => {
+        const s = get();
+        const result = s.ppdReviewResults[subCriterionId];
+        if (!result) return 0;
+        let raised = 0;
+        const rows = result.rows.map((row) => {
+          if (row.savedFindingId || row.verdict === "Adequate") return row;
+          const req = GD4_REQUIREMENTS.find((r) => r.id === row.gd4ItemId);
+          const findingType: FindingTypeCode = row.verdict === "Not documented" ? "NC" : "OFI";
+          const ncSeverity: NcSeverity | null = findingType === "NC" ? (req?.gateSensitive ? "Major" : "Minor") : null;
+          const finding: Finding = {
+            id: `PPD-${Date.now().toString(36).toUpperCase()}-${raised}`,
+            auditCycleId: s.cycle.id,
+            gd4ItemId: row.gd4ItemId,
+            issue: `PPD does not adequately document: ${row.requirementText}`,
+            type: "AFI",
+            severity: ncSeverity === "Major" ? "High" : findingType === "OFI" ? "Medium" : "Low",
+            owner: "SQ",
+            dueDate: "",
+            repeatFinding: false,
+            overdue: false,
+            managementDecisionNeeded: ncSeverity === "Major",
+            status: "Open",
+            source: "PPD Review",
+            createdAt: new Date().toISOString(),
+            dimension: "Procedure",
+            clause: row.ref,
+            observation: row.fullComment,
+            criteria: row.requirementText,
+            findingType,
+            ncSeverity,
+          };
+          get().addCustomFinding(finding);
+          raised++;
+          return { ...row, savedFindingId: finding.id };
+        });
+        if (raised > 0) {
+          set((st) => ({ ppdReviewResults: { ...st.ppdReviewResults, [subCriterionId]: { ...result, rows } } }));
+        }
+        return raised;
       },
-
-      setPPDRewriteStatus: (id, status) =>
-        set((s) => ({ ppdAcceptedRewrites: s.ppdAcceptedRewrites.map((r) => (r.id === id ? { ...r, status } : r)) })),
-
-      removePPDRewrite: (id) =>
-        set((s) => ({ ppdAcceptedRewrites: s.ppdAcceptedRewrites.filter((r) => r.id !== id) })),
 
       setAnalysisPath: (subCriterionId, path) =>
         set((s) => ({ analysisPath: { ...s.analysisPath, [subCriterionId]: path } })),
-
-      setPpdStepSkipped: (subCriterionId, skipped) =>
-        set((s) => ({ ppdStepSkipped: { ...s.ppdStepSkipped, [subCriterionId]: skipped } })),
 
       // Fills the workspace with realistic sample evidence ratings plus the
       // workflow-progress fields derived from them (reviewer drafts,
@@ -989,9 +1012,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           seedFindingsLoaded: false,
           evidenceAuditReport: null,
           ppdReviewResults: {},
-          ppdAcceptedRewrites: [],
           analysisPath: {},
-          ppdStepSkipped: {},
           auditJournal: "",
         }));
       },

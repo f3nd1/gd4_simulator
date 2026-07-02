@@ -1403,15 +1403,15 @@ export function simulateStagedOutcomeReview(auditPoints: FlatAuditPoint[], allDo
 
 // ─── PPD Requirements Review ────────────────────────────────────────────────
 // Reads ONLY the Policy & Procedure Document(s) for a sub-criterion and, for
-// EACH GD4 requirement (not FlatAuditPoint — this is requirement-level, not
-// audit-point-level like the staged policy stage), decides whether the PPD
-// documents it, with a suggested rewrite for anything short of Adequate.
-// Orchestration (reading the Policy folder, calling this, logging to the AI
-// Review Log) lives in useWorkspaceStore.runPPDReview — this function only
-// makes the AI call(s), same division of responsibility as every other
-// function in this file.
+// EACH GD4 requirement LINE (one FlatAuditPoint — a Describe/Show bullet,
+// not the whole requirement item), decides whether the PPD documents it,
+// with a suggested rewrite for anything short of Adequate. Orchestration
+// (reading the Policy folder, calling this, logging to the AI Review Log)
+// lives in useWorkspaceStore.runPPDReview — this function only makes the AI
+// call(s), same division of responsibility as every other function in this
+// file.
 
-export type PPDRequirementInput = { gd4ItemId: string; requirementText: string };
+export type PPDRequirementInput = { ref: string; gd4ItemId: string; requirementText: string };
 
 export type PPDRequirementsReviewResult = {
   rows: PPDReviewRow[];
@@ -1432,6 +1432,7 @@ export async function runPPDRequirementsReview(
   if (requirements.length === 0 || !policyDocText.trim()) {
     return {
       rows: requirements.map((r) => ({
+        ref: r.ref,
         gd4ItemId: r.gd4ItemId,
         requirementText: r.requirementText,
         verdict: "Not documented" as PPDVerdict,
@@ -1463,12 +1464,12 @@ For each requirement return:
 - chunkIds: the exact chunk ID(s) (e.g. "C001") from document headers that support the verdict. Leave empty if none directly support it — never invent a chunk ID.
 
 Respond with JSON only:
-{"results": [{"gd4ItemId": string, "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "suggestedRewrite": string, "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+{"results": [{"ref": string, "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "suggestedRewrite": string, "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
 
   const windows = buildDocWindows(policyDocText);
 
   type BestPPD = { verdict: PPDVerdict; shortComment: string; fullComment: string; suggestedRewrite?: string; chunkIds: string[] };
-  const bestByItem = new Map<string, BestPPD>();
+  const bestByRef = new Map<string, BestPPD>();
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
@@ -1487,8 +1488,8 @@ Respond with JSON only:
     for (const [bi, batch] of batches.entries()) {
       if (opts.shouldStop?.()) break;
       opts.onProgress?.(`PPD requirements review — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
-      const pointsBlock = batch.map((r, i) => `[${r.gd4ItemId}] (${i + 1}) ${r.requirementText}`).join("\n");
-      const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess PPD documentation for each GD4 requirement:\n${pointsBlock}`;
+      const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText}`).join("\n");
+      const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess PPD documentation for each GD4 requirement line:\n${pointsBlock}`;
       const system = buildSystem(windows.length > 1 ? `runPPDRequirementsReview (window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview");
       if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
       try {
@@ -1499,20 +1500,20 @@ Respond with JSON only:
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-        const byItem = new Map(results.map((r) => [String(r.gd4ItemId ?? ""), r]));
+        const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
         for (const r of batch) {
-          const res = byItem.get(r.gd4ItemId);
+          const res = byRef.get(r.ref);
           const verdict = (["Adequate", "Partial", "Not documented"] as PPDVerdict[]).includes(res?.verdict as PPDVerdict)
             ? (res!.verdict as PPDVerdict) : "Not documented";
           const shortComment = typeof res?.shortComment === "string" ? res.shortComment : "";
           const fullComment = typeof res?.fullComment === "string" ? res.fullComment : "";
           const suggestedRewrite = typeof res?.suggestedRewrite === "string" && res.suggestedRewrite.trim() ? res.suggestedRewrite : undefined;
           const chunkIds = Array.isArray(res?.chunkIds) ? (res!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
-          const prev = bestByItem.get(r.gd4ItemId);
+          const prev = bestByRef.get(r.ref);
           if (!prev || PPD_VERDICT_ORDER[verdict] > PPD_VERDICT_ORDER[prev.verdict]) {
-            bestByItem.set(r.gd4ItemId, { verdict, shortComment, fullComment, suggestedRewrite, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])] });
+            bestByRef.set(r.ref, { verdict, shortComment, fullComment, suggestedRewrite, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])] });
           } else {
-            bestByItem.set(r.gd4ItemId, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])] });
+            bestByRef.set(r.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])] });
           }
         }
       } catch (err) {
@@ -1523,8 +1524,9 @@ Respond with JSON only:
   }
 
   const rows: PPDReviewRow[] = requirements.map((r) => {
-    const best = bestByItem.get(r.gd4ItemId);
+    const best = bestByRef.get(r.ref);
     return {
+      ref: r.ref,
       gd4ItemId: r.gd4ItemId,
       requirementText: r.requirementText,
       verdict: best?.verdict ?? "Not documented",

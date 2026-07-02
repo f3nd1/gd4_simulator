@@ -174,7 +174,7 @@ export type Finding = {
   status: FindingStatus;
   // Provenance + detailed report, populated when a finding is raised from a
   // checklist line / folder audit (undefined on a plain manual finding).
-  source?: "Audit" | "Checklist" | "Manual" | "Seed" | "ai_audit";
+  source?: "Audit" | "Checklist" | "Manual" | "Seed" | "ai_audit" | "PPD Review";
   auditRunId?: string;  // e.g. "AR-6.3-3YVF" — set when auto-raised from a folder audit run
   dimension?: FindingDimension;
   // Risk category: A = regulatory breach (SSG mandatory requirement, can
@@ -663,16 +663,22 @@ export type AuditProgressState = {
 export type AuditScope = "both" | "policy" | "evidence";
 
 // ─── PPD Requirements Review ────────────────────────────────────────────────
-// A read-only-of-policy pass: for each GD4 requirement in a sub-criterion,
-// does the Policy & Procedure Document (PPD) actually document it? Distinct
-// from the staged audit's policy stage (which only asks "Yes/Partial/No" per
-// FlatAuditPoint for banding) — this is requirement-level, produces a full
-// human-readable comment, and drafts a rewrite the auditor can accept into
-// the PPD Improvement Tracker.
+// A read-only-of-policy pass: for each GD4 requirement LINE (one row per
+// FlatAuditPoint, not per whole requirement item) in a sub-criterion, does
+// the Policy & Procedure Document (PPD) actually document it? Distinct from
+// the staged audit's policy stage (which only asks "Yes/Partial/No" per
+// FlatAuditPoint for banding) — this produces a full human-readable comment
+// and a suggested rewrite, shown inline. This single page IS Option A's
+// complete output — no separate evidence-checklist step and no rewrite
+// tracker; a Partial/Not documented row can be compiled straight into the
+// Findings register (see useWorkspaceStore.compilePPDFindings).
 
 export type PPDVerdict = "Adequate" | "Partial" | "Not documented";
 
 export type PPDReviewRow = {
+  // FlatAuditPoint.ref — identifies this specific requirement line (e.g.
+  // "1.2.1.DS1"), since a sub-criterion's items each carry several lines.
+  ref: string;
   gd4ItemId: string;
   requirementText: string;
   verdict: PPDVerdict;
@@ -681,6 +687,10 @@ export type PPDReviewRow = {
   // Only populated for Partial / Not documented rows.
   suggestedRewrite?: string;
   chunkIds: string[];
+  // Set once this row has been compiled into the Findings register, so the
+  // UI can swap the "Compile" action for a "View finding" link and avoid
+  // raising a duplicate.
+  savedFindingId?: string;
 };
 
 export type PPDReviewResult = {
@@ -690,26 +700,8 @@ export type PPDReviewResult = {
   live: boolean;
   promptSent?: string;
   // chunkId -> source file name, so a row's chunkIds can be resolved back to
-  // which PPD document to file an accepted rewrite under.
+  // which PPD document a suggested rewrite applies to.
   chunkFileNames?: Record<string, string>;
-};
-
-export type PPDRewriteStatus = "To draft" | "Drafted" | "Published to PPD";
-
-// One rewrite the auditor has accepted from a PPD Review run, tracked until
-// it's actually folded into the next PPD revision.
-export type PPDAcceptedRewrite = {
-  id: string;
-  subCriterionId: string;
-  gd4ItemId: string;
-  requirementText: string;
-  // The PPD document this rewrite applies to — derived from the chunk file
-  // name(s) the review cited; "Unknown document" when no chunk was cited.
-  documentName: string;
-  originalVerdict: PPDVerdict;
-  rewriteText: string;
-  status: PPDRewriteStatus;
-  acceptedAt: string;
 };
 
 // One checklist line's AI verdict, stored in an AuditRunRecord for post-run

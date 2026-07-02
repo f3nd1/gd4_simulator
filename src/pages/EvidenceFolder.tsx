@@ -1330,8 +1330,6 @@ export function EvidenceFolder() {
   const lastAuditRuns      = useWorkspaceStore((s) => s.lastAuditRuns);
   const analysisPath       = useWorkspaceStore((s) => s.analysisPath);
   const setAnalysisPath    = useWorkspaceStore((s) => s.setAnalysisPath);
-  const ppdReviewResults   = useWorkspaceStore((s) => s.ppdReviewResults);
-  const ppdStepSkipped     = useWorkspaceStore((s) => s.ppdStepSkipped);
 
   const [checkingAdditional, setCheckingAdditional] = useState(false);
   const [viewingRun, setViewingRun] = useState<AuditRunRecord | null>(null);
@@ -1694,9 +1692,7 @@ export function EvidenceFolder() {
                     {(() => {
                       const path = analysisPath[f.subCriterionId] ?? "A";
                       const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id;
-                      const ppdDone = !!ppdReviewResults[f.subCriterionId];
-                      const ppdSkipped = !!ppdStepSkipped[f.subCriterionId];
-                      const startHref = path === "A" && !ppdDone && !ppdSkipped
+                      const startHref = path === "A"
                         ? `/ppd-review?item=${f.subCriterionId}`
                         : `/sub-checklist?item=${firstItemId ?? ""}`;
                       return (
@@ -1704,7 +1700,7 @@ export function EvidenceFolder() {
                           <div style={{ display: "flex", gap: 4 }}>
                             <button
                               onClick={() => setAnalysisPath(f.subCriterionId, "A")}
-                              title="2-step analysis: check GD4 requirements against the PPD first, then check evidence"
+                              title="PPD Requirements Review: checks the GD4 requirement lines against the PPD only, and compiles findings straight from that page"
                               style={{
                                 cursor: "pointer", textAlign: "left", flex: 1, padding: "5px 7px", borderRadius: 6, fontSize: 10.5, lineHeight: 1.3,
                                 border: `1.5px solid ${path === "A" ? "#7c3aed" : "#e2e8f0"}`,
@@ -1712,8 +1708,8 @@ export function EvidenceFolder() {
                                 color: path === "A" ? "#5b21b6" : "#64748b",
                               }}
                             >
-                              <div style={{ fontWeight: 700 }}>{path === "A" ? "◉" : "○"} Option A · PPD + Evidence</div>
-                              <div style={{ fontWeight: 400, color: "#94a3b8" }}>Recommended — 2-step</div>
+                              <div style={{ fontWeight: 700 }}>{path === "A" ? "◉" : "○"} Option A · PPD Requirements Review</div>
+                              <div style={{ fontWeight: 400, color: "#94a3b8" }}>Recommended — policy only</div>
                             </button>
                             <button
                               onClick={() => setAnalysisPath(f.subCriterionId, "B")}
@@ -1731,7 +1727,7 @@ export function EvidenceFolder() {
                           </div>
                           {firstItemId && (
                             <Link to={startHref} style={{ fontSize: 11, color: "#4338ca", fontWeight: 600, textDecoration: "none" }}>
-                              {path === "A" && !ppdDone && !ppdSkipped ? "Start · Step 1 PPD Review →" : "Start review →"}
+                              Start review →
                             </Link>
                           )}
                         </div>
