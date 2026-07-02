@@ -40,14 +40,15 @@ import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit, deriveApsrStatus, type FolderAuditLineVerdict } from "../lib/ai/simulateAI";
-import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP, runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr, simulateStagedPolicyAudit, simulateStagedEvidenceAudit, simulateStagedOutcomeReview, runPPDRequirementsReview, type PPDRequirementInput } from "../lib/ai/agentRuntime";
+import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP, runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr, simulateStagedPolicyAudit, simulateStagedEvidenceAudit, simulateStagedOutcomeReview, runPPDRequirementsReview, runEvidenceAssessment, type PPDRequirementInput, type EvidenceAssessmentInput } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, FindingTypeCode, NcSeverity } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, FindingTypeCode, NcSeverity, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef } from "../types";
+import { findingTypeForStatus } from "../lib/findingClassification";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -301,15 +302,19 @@ export type WorkspaceState = {
   // Persisted "Recheck all evidence" report so it survives navigation and
   // page refreshes. null means the report hasn't been run yet this session.
   evidenceAuditReport: { flags: EvidenceAuditFlag[]; generatedAt: string } | null;
-  // PPD Requirements Review — most recent run per sub-criterion. This IS
-  // Option A's complete output: one row per GD4 requirement line, policy
-  // only, with an inline suggested rewrite and a "compile to Findings"
-  // action (see compilePPDFindings) — no separate evidence-checklist step.
+  // PPD Requirements Review (Option A, "PPD Review" tab) — most recent run
+  // per sub-criterion: one row per GD4 requirement line, policy only, with an
+  // inline suggested rewrite. The verdict here feeds the Evidence tab's
+  // combined assessment (below) without re-reading the policy.
   ppdReviewResults: Record<string, PPDReviewResult>;
   runPPDReview: (subCriterionId: string) => Promise<void>;
-  // Raises a Finding for every Partial/Not documented row not yet compiled;
-  // returns the number of NEW findings raised.
-  compilePPDFindings: (subCriterionId: string) => number;
+  // Evidence Assessment (Option A, "Evidence" tab) — per requirement line,
+  // reuses the PPD verdict and reads the Actual Evidence folder fresh for a
+  // combined Met/Partial/Not met verdict. compileEvidenceFindings raises a
+  // Finding per row from that verdict — the single Option A findings compile.
+  evidenceAssessments: Record<string, EvidenceAssessmentResult>;
+  runEvidenceAssessment: (subCriterionId: string) => Promise<void>;
+  compileEvidenceFindings: (subCriterionId: string) => number;
   // Which analysis path a sub-criterion uses: "A" (PPD Requirements Review —
   // default/recommended) or "B" (the existing checklist, unchanged).
   // Missing key means "A" — see ANALYSIS_PATH_DEFAULT.
@@ -630,6 +635,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       schoolContext: { text: "", link: "" },
       evidenceAuditReport: null,
       ppdReviewResults: {},
+      evidenceAssessments: {},
       analysisPath: {},
       changeLog: [],
       auditJournal: "",
@@ -802,28 +808,167 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
       },
 
-      // Raises one Finding per Partial/Not documented row not yet compiled —
-      // Not documented -> NC, Partial -> OFI (same classification the
-      // checklist uses, see findingClassification.ts), scoped to the PPD
-      // requirement line itself. Adequate rows raise nothing. Feeds the same
-      // Findings register / QA-AFI pipeline as the checklist path — no
-      // separate pipeline.
-      compilePPDFindings: (subCriterionId) => {
+      // Option A, Evidence tab. Reuses the already-decided PPD verdict per
+      // requirement line (no policy re-read), reads the Actual Evidence folder
+      // fresh, and produces a combined Met/Partial/Not met verdict per line.
+      runEvidenceAssessment: async (subCriterionId) => {
         const s = get();
-        const result = s.ppdReviewResults[subCriterionId];
+        const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
+        if (!folder) return;
+        const ppd = s.ppdReviewResults[subCriterionId];
+        set({ busy: "evidenceassess" + subCriterionId });
+        const runId = `EV-${subCriterionId}-${Date.now().toString(36).toUpperCase()}`;
+
+        const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>) => {
+          const summary = rows
+            ? `Evidence assessment: ${rows.filter((r) => r.verdict === "Met").length} Met, ${rows.filter((r) => r.verdict === "Partial").length} Partial, ${rows.filter((r) => r.verdict === "Not met").length} Not met (of ${rows.length}).`
+            : `Evidence assessment failed${liveError ? `: ${liveError}` : "."}`;
+          const log: AIReviewLogEntry = {
+            id: `LOG-${Date.now()}-${++logCounter}`,
+            auditCycleId: s.cycle.id,
+            agent: "Evidence Assessor",
+            reviewType: "Evidence",
+            subjectId: subCriterionId,
+            verdict: summary,
+            confidence: "Medium",
+            keyConcerns: [summary],
+            recommendedAction: "Review each Partial/Not met line, then compile findings straight from the Evidence tab.",
+            live,
+            liveError,
+            generatedContent: summary,
+            promptSent,
+            createdAt: new Date().toISOString(),
+            runId,
+            model: usage?.model,
+            promptTokens: usage?.promptTokens,
+            completionTokens: usage?.completionTokens,
+            totalTokens: usage?.totalTokens,
+          };
+          set((st) => ({
+            evidenceAssessments: rows
+              ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames } }
+              : st.evidenceAssessments,
+            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
+            busy: null,
+          }));
+        };
+
+        try {
+          if (!ppd || ppd.rows.length === 0) { finish(null, false, "Run the PPD review first — the Evidence tab reuses its per-line verdicts."); return; }
+
+          const evidenceId = parseFolderId(folder.folderLink) || parseFolderId(folder.policyLink);
+          const token = useGoogleDriveStore.getState().getValidToken();
+          if (!evidenceId) { finish(null, false, "No Actual Evidence folder linked."); return; }
+          if (!token) { finish(null, false, "Not connected to Google Drive."); return; }
+
+          const allFiles = await listFolderFilesRecursive(evidenceId, token);
+          // Dedicated evidence folder -> all files are evidence; shared
+          // single-folder convention -> keep only the "Actual Evidence" bucket.
+          const evidenceFiles = parseFolderId(folder.folderLink)
+            ? allFiles
+            : allFiles.filter((f) => classifyFileBucket(f.path) === "evidence");
+
+          const MAX_PART_CHARS = 24_000;
+          const docParts: string[] = [];
+          const chunkFileNames: Record<string, string> = {};
+          const chunkFileRefs: Record<string, EvidenceFileRef> = {};
+          let chunkCounter = 0;
+          for (const file of evidenceFiles) {
+            const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
+            const cached = get().fileTextCache[cacheKey];
+            let body: string | null;
+            if (cached) {
+              body = cached.text;
+            } else {
+              try {
+                body = await exportFileText(file, token);
+                set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body?.length ?? 0, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
+              } catch {
+                body = null;
+              }
+            }
+            if (!body) continue;
+            const fileName = file.path.split("/").pop() || file.path;
+            const fileUrl = `https://drive.google.com/file/d/${file.id}/view`;
+            const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
+            for (let pi = 0; pi < totalParts; pi++) {
+              const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+              const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
+              const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
+              docParts.push(`[CHUNK:${chunkId}] --- ${file.path}${partLabel} ---\n${chunkBody}`);
+              chunkFileNames[chunkId] = fileName;
+              chunkFileRefs[chunkId] = { name: fileName, url: fileUrl };
+            }
+          }
+          const evidenceDocText = docParts.join("\n\n=== ACTUAL EVIDENCE ===\n\n");
+
+          const aiSettings = useAISettingsStore.getState();
+          if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, "AI is disabled or no API key is configured in Settings."); return; }
+          const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
+
+          const inputs: EvidenceAssessmentInput[] = ppd.rows.map((r) => ({
+            ref: r.ref,
+            requirementText: r.requirementText,
+            ppdVerdict: r.verdict,
+            ppdExtract: r.fullComment || r.shortComment || "",
+          }));
+          const result = await runEvidenceAssessment(inputs, evidenceDocText, analysisSettings, { criterionId: subCriterionId });
+
+          // Merge AI line results with the reused PPD data + resolved file refs.
+          const byRef = new Map(result.rows.map((r) => [r.ref, r]));
+          const rows: EvidenceAssessmentRow[] = ppd.rows.map((p) => {
+            const ev = byRef.get(p.ref);
+            const chunkIds = ev?.chunkIds ?? [];
+            // Dedupe file refs by name across the row's cited chunks.
+            const seen = new Set<string>();
+            const evidenceFilesForRow: EvidenceFileRef[] = [];
+            for (const cid of chunkIds) {
+              const ref = chunkFileRefs[cid];
+              if (ref && !seen.has(ref.name)) { seen.add(ref.name); evidenceFilesForRow.push(ref); }
+            }
+            return {
+              gdRef: p.ref,
+              gd4ItemId: p.gd4ItemId,
+              requirementText: p.requirementText,
+              ppdExtract: p.fullComment || p.shortComment || "",
+              ppdVerdict: p.verdict,
+              evidenceSummary: ev?.evidenceSummary || "No implementation evidence found for this requirement.",
+              evidenceFiles: evidenceFilesForRow,
+              evidenceChunkIds: chunkIds,
+              verdict: ev?.verdict ?? "Not met",
+              comment: ev?.comment || "",
+            };
+          });
+          finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames);
+        } catch (err) {
+          finish(null, false, err instanceof Error ? err.message : String(err));
+        }
+      },
+
+      // Raises one Finding per Evidence-tab row not yet compiled, from the
+      // combined verdict — Not met -> NC, Partial -> OFI, Met -> OBS (same
+      // classification the checklist uses, see findingClassification.ts).
+      // Feeds the same Findings register / QA-AFI pipeline as everything else.
+      compileEvidenceFindings: (subCriterionId) => {
+        const s = get();
+        const result = s.evidenceAssessments[subCriterionId];
         if (!result) return 0;
         let raised = 0;
         const rows = result.rows.map((row) => {
-          if (row.savedFindingId || row.verdict === "Adequate") return row;
+          if (row.savedFindingId) return row;
           const req = GD4_REQUIREMENTS.find((r) => r.id === row.gd4ItemId);
-          const findingType: FindingTypeCode = row.verdict === "Not documented" ? "NC" : "OFI";
+          const findingType: FindingTypeCode = findingTypeForStatus(row.verdict);
           const ncSeverity: NcSeverity | null = findingType === "NC" ? (req?.gateSensitive ? "Major" : "Minor") : null;
+          const issue =
+            row.verdict === "Met" ? `Requirement documented and evidenced: ${row.requirementText}`
+            : row.verdict === "Partial" ? `Requirement only partly documented or evidenced: ${row.requirementText}`
+            : `Requirement not documented or evidenced: ${row.requirementText}`;
           const finding: Finding = {
-            id: `PPD-${Date.now().toString(36).toUpperCase()}-${raised}`,
+            id: `EV-${Date.now().toString(36).toUpperCase()}-${raised}`,
             auditCycleId: s.cycle.id,
             gd4ItemId: row.gd4ItemId,
-            issue: `PPD does not adequately document: ${row.requirementText}`,
-            type: "AFI",
+            issue,
+            type: findingType === "OBS" ? "Observation" : "AFI",
             severity: ncSeverity === "Major" ? "High" : findingType === "OFI" ? "Medium" : "Low",
             owner: "SQ",
             dueDate: "",
@@ -833,9 +978,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             status: "Open",
             source: "PPD Review",
             createdAt: new Date().toISOString(),
-            dimension: "Procedure",
-            clause: row.ref,
-            observation: row.fullComment,
+            dimension: "Evidence",
+            clause: row.gdRef,
+            observation: row.comment || row.evidenceSummary,
             criteria: row.requirementText,
             findingType,
             ncSeverity,
@@ -845,7 +990,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return { ...row, savedFindingId: finding.id };
         });
         if (raised > 0) {
-          set((st) => ({ ppdReviewResults: { ...st.ppdReviewResults, [subCriterionId]: { ...result, rows } } }));
+          set((st) => ({ evidenceAssessments: { ...st.evidenceAssessments, [subCriterionId]: { ...result, rows } } }));
         }
         return raised;
       },
@@ -1050,6 +1195,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           seedFindingsLoaded: false,
           evidenceAuditReport: null,
           ppdReviewResults: {},
+          evidenceAssessments: {},
           analysisPath: {},
           auditJournal: "",
         }));

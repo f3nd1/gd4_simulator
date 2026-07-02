@@ -715,6 +715,44 @@ export type PPDReviewResult = {
   overallNarrative?: string;
 };
 
+// ─── Evidence Assessment (Option A, Evidence tab) ───────────────────────────
+// The second tab of the PPD Requirements Review page. Reuses the already-
+// assessed PPD verdict per requirement line (from PPDReviewResult — the
+// policy is NOT re-read) and reads the Actual Evidence folder fresh, then
+// gives a combined verdict per line: documented AND implemented = "Met";
+// documented but not evidenced = "Partial"; neither = "Not met". This tab is
+// where Option A findings are compiled.
+export type EvidenceVerdict = "Met" | "Partial" | "Not met";
+
+export type EvidenceFileRef = { name: string; url: string };
+
+export type EvidenceAssessmentRow = {
+  gdRef: string;              // FlatAuditPoint ref, e.g. "1.2.1.DS1"
+  gd4ItemId: string;
+  requirementText: string;
+  // Reused verbatim from the PPD Review tab's result for this line — not
+  // re-assessed here.
+  ppdExtract: string;
+  ppdVerdict: PPDVerdict;
+  // Read fresh from the Actual Evidence folder.
+  evidenceSummary: string;
+  evidenceFiles: EvidenceFileRef[];
+  evidenceChunkIds: string[];
+  // Combined PPD-plus-evidence judgement.
+  verdict: EvidenceVerdict;
+  comment: string;
+  savedFindingId?: string;
+};
+
+export type EvidenceAssessmentResult = {
+  subCriterionId: string;
+  rows: EvidenceAssessmentRow[];
+  runAt: string;
+  live: boolean;
+  promptSent?: string;
+  chunkFileNames?: Record<string, string>;
+};
+
 // ─── Change Log ─────────────────────────────────────────────────────────────
 // A running history of the git push/pull info the footer surfaces. The footer
 // reads a build-time constant (__GIT_INFO__) that only ever holds the latest

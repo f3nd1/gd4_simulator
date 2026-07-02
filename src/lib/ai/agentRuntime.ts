@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus, PPDVerdict, PPDReviewRow } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict } from "../../types";
 import { chatComplete, AIClientError, addUsage, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
@@ -1566,4 +1566,139 @@ Respond with JSON only:
   }
 
   return { rows, overallNarrative, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: windowsCompleted === windows.length };
+}
+
+// ─── Evidence Assessment (Option A, Evidence tab) ───────────────────────────
+// For each GD4 requirement line: takes the PPD verdict ALREADY decided by the
+// PPD Requirements Review (does NOT re-assess the policy), reads the Actual
+// Evidence documents (sliding window, same mechanism as the staged evidence
+// pass), and returns a combined verdict: documented AND implemented -> "Met";
+// documented but not evidenced -> "Partial"; neither -> "Not met". Same
+// division of responsibility as every other function here — the store does
+// the folder reading/logging, this makes the AI call(s).
+
+export type EvidenceAssessmentInput = { ref: string; requirementText: string; ppdVerdict: PPDVerdict; ppdExtract: string };
+
+export type EvidenceAssessmentLineResult = {
+  ref: string;
+  evidenceSummary: string;
+  verdict: EvidenceVerdict;
+  comment: string;
+  chunkIds: string[];
+};
+
+export type EvidenceAssessmentRunResult = {
+  rows: EvidenceAssessmentLineResult[];
+  usage?: AIUsage;
+  promptSent?: string;
+  windowsProcessed?: number;
+  fullCoverage?: boolean;
+};
+
+// A found > partial > not-found ranking so the best result across sliding
+// windows wins (an earlier window finding nothing must not overwrite a later
+// window that found implementation evidence).
+const EVIDENCE_VERDICT_ORDER: Record<EvidenceVerdict, number> = { "Not met": 0, "Partial": 1, "Met": 2 };
+
+export async function runEvidenceAssessment(
+  inputs: EvidenceAssessmentInput[],
+  evidenceDocText: string,
+  settings: AISettings,
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string) => void; shouldStop?: () => boolean } = {}
+): Promise<EvidenceAssessmentRunResult> {
+  if (inputs.length === 0) return { rows: [] };
+
+  const domainSkill = domainExpertiseFor(opts.criterionId);
+  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+  const noEvidence = !evidenceDocText.trim();
+
+  const buildSystem = (label: string) => `You are assessing a GD4 EduTrust sub-criterion by combining TWO things for each requirement line: (1) the PPD (Policy & Procedure Document) verdict already decided — whether the requirement is documented — which is GIVEN to you, and (2) the ACTUAL EVIDENCE documents provided below, which show whether the institution actually IMPLEMENTS the requirement in practice.
+
+For each requirement line return a COMBINED verdict:
+"Met" = the requirement is documented in the PPD (Adequate or Partial PPD verdict) AND there is real implementation evidence in the evidence documents (records, logs, forms, registers, screenshots, actual operational records).
+"Partial" = documented in the PPD but implementation evidence is missing, thin, or only partial; OR strong evidence exists but the PPD documentation was weak/absent.
+"Not met" = neither adequately documented nor evidenced.
+
+A policy/SOP/procedure filed in the evidence folder does NOT count as implementation evidence — only actual records of doing something count.
+
+For each line return:
+- evidenceSummary: 1-2 sentences on what implementation evidence was found (or that none was found), factual and neutral.
+- verdict: "Met" | "Partial" | "Not met"
+- comment: 1-3 sentences justifying the combined verdict, referencing both the PPD documentation state and the evidence found.
+- chunkIds: exact chunk ID(s) (e.g. "C001") from evidence document headers supporting the evidence finding. Empty if none.
+
+Respond with JSON only:
+{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+
+  const windows = noEvidence ? [] : buildDocWindows(evidenceDocText);
+
+  type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[] };
+  const bestByRef = new Map<string, BestEv>();
+
+  let usage: AIUsage | undefined;
+  let firstPromptSent: string | undefined;
+  let windowsCompleted = 0;
+
+  const REQ_BATCH_SIZE = 8;
+  const batches: EvidenceAssessmentInput[][] = [];
+  for (let i = 0; i < inputs.length; i += REQ_BATCH_SIZE) batches.push(inputs.slice(i, i + REQ_BATCH_SIZE));
+
+  for (const win of windows) {
+    if (opts.shouldStop?.()) break;
+    const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()}]` : "";
+    for (const [bi, batch] of batches.entries()) {
+      if (opts.shouldStop?.()) break;
+      opts.onProgress?.(`Evidence assessment — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
+      const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText} [PPD verdict: ${r.ppdVerdict}${r.ppdExtract ? ` — "${r.ppdExtract.slice(0, 100)}"` : ""}]`).join("\n");
+      const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each requirement line for a COMBINED PPD-plus-evidence verdict:\n${pointsBlock}`;
+      const system = buildSystem(windows.length > 1 ? `runEvidenceAssessment (window ${win.index + 1}/${win.total})` : "runEvidenceAssessment");
+      if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
+      try {
+        const content = await chatComplete(
+          [{ role: "system", content: system }, { role: "user", content: user }],
+          settings,
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+        );
+        const parsed = parseJSONObject(content);
+        const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+        const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+        for (const inp of batch) {
+          const res = byRef.get(inp.ref);
+          const verdict = (["Met", "Partial", "Not met"] as EvidenceVerdict[]).includes(res?.verdict as EvidenceVerdict)
+            ? (res!.verdict as EvidenceVerdict) : "Not met";
+          const evidenceSummary = typeof res?.evidenceSummary === "string" ? res.evidenceSummary : "";
+          const comment = typeof res?.comment === "string" ? res.comment : "";
+          const chunkIds = Array.isArray(res?.chunkIds) ? (res!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+          const prev = bestByRef.get(inp.ref);
+          if (!prev || EVIDENCE_VERDICT_ORDER[verdict] > EVIDENCE_VERDICT_ORDER[prev.verdict]) {
+            bestByRef.set(inp.ref, { evidenceSummary, verdict, comment, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])] });
+          } else {
+            bestByRef.set(inp.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])] });
+          }
+        }
+      } catch (err) {
+        console.error("[EvidenceAssessment]", windows.length > 1 ? `window ${win.index + 1}/${win.total}` : "call failed", err instanceof Error ? err.message : String(err));
+      }
+    }
+    windowsCompleted++;
+  }
+
+  const rows: EvidenceAssessmentLineResult[] = inputs.map((inp) => {
+    const best = bestByRef.get(inp.ref);
+    if (best) return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: best.comment || "", chunkIds: best.chunkIds };
+    // No evidence documents at all, or the AI returned nothing: fall back to a
+    // deterministic verdict driven by the PPD state alone.
+    const verdict: EvidenceVerdict = "Not met";
+    return {
+      ref: inp.ref,
+      evidenceSummary: noEvidence ? "No Actual Evidence documents were found for this sub-criterion." : "No implementation evidence found for this requirement.",
+      verdict,
+      comment: noEvidence
+        ? `PPD verdict was "${inp.ppdVerdict}", but no implementation evidence was available to assess.`
+        : `No implementation evidence found; PPD verdict was "${inp.ppdVerdict}".`,
+      chunkIds: [],
+    };
+  });
+
+  return { rows, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: windows.length === 0 || windowsCompleted === windows.length };
 }
