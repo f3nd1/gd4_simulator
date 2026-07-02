@@ -7,6 +7,7 @@ import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, F
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { useScored } from "../hooks/useScored";
 
 const SUMMARY_CAP = 320;
 
@@ -1330,8 +1331,8 @@ function PathGuidance() {
             thorough, assessor-grade check on the sub-criteria that matter.
           </div>
           <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
-            <b style={{ color: "#1e293b" }}>Option B: Evidence Checklist only (fast screening).</b>{" "}
-            A single pass straight to APSR verdicts. Faster and cheaper, and simpler to review. Best for a quick first
+            <b style={{ color: "#1e293b" }}>Option B: Staged audit (fast screening).</b>{" "}
+            A single pass straight to APSR verdicts on the Sub-Criterion Checklist. Faster and cheaper, and simpler to review. Best for a quick first
             sweep to see where you stand, or when the PPD is already solid and you only need to check implementation.
             It blends policy and evidence into one verdict, so it is less likely to isolate a pure policy-documentation gap.
           </div>
@@ -1369,6 +1370,12 @@ export function EvidenceFolder() {
   const lastAuditRuns      = useWorkspaceStore((s) => s.lastAuditRuns);
   const analysisPath       = useWorkspaceStore((s) => s.analysisPath);
   const setAnalysisPath    = useWorkspaceStore((s) => s.setAnalysisPath);
+  // Per-sub-criterion completion summary (Progress column) — read straight
+  // from the stores the other pages use, so this row agrees with them.
+  const ppdReviewResults    = useWorkspaceStore((s) => s.ppdReviewResults);
+  const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
+  const customFindings      = useWorkspaceStore((s) => s.customFindings);
+  const scored              = useScored();
 
   const [checkingAdditional, setCheckingAdditional] = useState(false);
   const [viewingRun, setViewingRun] = useState<AuditRunRecord | null>(null);
@@ -1411,6 +1418,38 @@ export function EvidenceFolder() {
   const visibleFolders = folders.filter(
     (f) => (!critFilter || f.subCriterionId.split(".")[0] === critFilter) && (!subFilter || f.subCriterionId === subFilter)
   );
+
+  // Fix 4: one at-a-glance completion summary per sub-criterion, from the
+  // same stores the other pages read (so counts always agree across screens).
+  const subCritProgress = useMemo(() => {
+    const map: Record<string, { ppdDone: boolean; evidenceDone: boolean; compileDone: boolean; findingsCount: number; bandLabel: string }> = {};
+    for (const f of folders) {
+      const sc = f.subCriterionId;
+      const itemIds = new Set(GD4_REQUIREMENTS.filter((r) => r.subCriterionId === sc).map((r) => r.id));
+      const ppd = ppdReviewResults[sc];
+      const ev = evidenceAssessments[sc];
+      const ppdDone = !!ppd && ppd.rows.length > 0;
+      // Evidence assessed either via Option A's Evidence tab or an Option B
+      // staged-audit run on this folder.
+      const evidenceDone = (!!ev && ev.rows.length > 0) || !!f.lastAuditAt;
+      // Compile done when any Evidence-tab row or PPD contradiction has been
+      // compiled into the register (Option B auto-raises, so a completed
+      // staged audit also counts).
+      const compileDone =
+        (!!ev && ev.rows.some((r) => r.savedFindingId)) ||
+        (!!ppd?.contradictions && ppd.contradictions.some((c) => c.savedFindingId)) ||
+        (!!f.lastAuditAt && customFindings.some((cf) => itemIds.has(cf.gd4ItemId)));
+      const findingsCount = customFindings.filter((cf) => itemIds.has(cf.gd4ItemId)).length;
+      const startedBands = scored.items.filter((i) => i.subCriterionId === sc && i.started).map((i) => i.band);
+      const bandLabel = startedBands.length === 0
+        ? "–"
+        : Math.min(...startedBands) === Math.max(...startedBands)
+          ? String(startedBands[0])
+          : `${Math.min(...startedBands)}–${Math.max(...startedBands)}`;
+      map[sc] = { ppdDone, evidenceDone, compileDone, findingsCount, bandLabel };
+    }
+    return map;
+  }, [folders, ppdReviewResults, evidenceAssessments, customFindings, scored.items]);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showHelp, setShowHelp] = useState(false);
@@ -1667,7 +1706,7 @@ export function EvidenceFolder() {
 
       <table>
         <thead>
-          <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>Links</th><th>Analysis path</th><th>Action</th></tr>
+          <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>Links</th><th>Analysis path</th><th>Progress</th><th>Action</th></tr>
         </thead>
         <tbody>
           {visibleFolders.map((f) => {
@@ -1732,16 +1771,20 @@ export function EvidenceFolder() {
                   <td onClick={(e) => e.stopPropagation()}>
                     {(() => {
                       const path = analysisPath[f.subCriterionId] ?? "A";
-                      const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id;
-                      const startHref = path === "A"
-                        ? `/ppd-review?item=${f.subCriterionId}`
-                        : `/sub-checklist?item=${firstItemId ?? ""}`;
+                      const prog = subCritProgress[f.subCriterionId];
+                      // Option A's three sub-steps, shown inline so the user
+                      // sees it is a multi-step path BEFORE leaving the row.
+                      const subSteps: Array<{ n: number; label: string; done: boolean }> = [
+                        { n: 1, label: "PPD review", done: !!prog?.ppdDone },
+                        { n: 2, label: "Evidence", done: !!prog?.evidenceDone && !!prog?.ppdDone },
+                        { n: 3, label: "Compile", done: !!prog?.compileDone },
+                      ];
                       return (
                         <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 168 }}>
                           <div style={{ display: "flex", gap: 4 }}>
                             <button
                               onClick={() => setAnalysisPath(f.subCriterionId, "A")}
-                              title="PPD + Evidence, two steps: checks whether the PPD documents each requirement, then checks the evidence against it. Slower, but mirrors how SSG assessors work. Verdicts feed the Sub-Criterion Checklist and the scorecard."
+                              title="Option A (PPD + Evidence), two steps: checks whether the PPD documents each requirement, then checks the evidence against it. Slower, but mirrors how SSG assessors work. Verdicts feed the Sub-Criterion Checklist and the scorecard."
                               style={{
                                 cursor: "pointer", textAlign: "left", flex: 1, padding: "5px 7px", borderRadius: 6, fontSize: 10.5, lineHeight: 1.3,
                                 border: `1.5px solid ${path === "A" ? "#7c3aed" : "#e2e8f0"}`,
@@ -1749,12 +1792,12 @@ export function EvidenceFolder() {
                                 color: path === "A" ? "#5b21b6" : "#64748b",
                               }}
                             >
-                              <div style={{ fontWeight: 700 }}>{path === "A" ? "◉" : "○"} Option A · PPD Requirements Review</div>
+                              <div style={{ fontWeight: 700 }}>{path === "A" ? "◉" : "○"} Option A · PPD + Evidence</div>
                               <div style={{ fontWeight: 400, color: "#94a3b8" }}>Deep, assessor-grade check</div>
                             </button>
                             <button
                               onClick={() => setAnalysisPath(f.subCriterionId, "B")}
-                              title="Sub-Criterion Checklist flow: a single pass straight to APSR verdicts. Faster and cheaper; best for a quick first sweep or when the PPD is already solid."
+                              title="Option B (Staged audit): a single pass straight to APSR verdicts on the Sub-Criterion Checklist. Faster and cheaper; best for a quick first sweep or when the PPD is already solid."
                               style={{
                                 cursor: "pointer", textAlign: "left", flex: 1, padding: "5px 7px", borderRadius: 6, fontSize: 10.5, lineHeight: 1.3,
                                 border: `1.5px solid ${path === "B" ? "#7c3aed" : "#e2e8f0"}`,
@@ -1762,15 +1805,45 @@ export function EvidenceFolder() {
                                 color: path === "B" ? "#5b21b6" : "#64748b",
                               }}
                             >
-                              <div style={{ fontWeight: 700 }}>{path === "B" ? "◉" : "○"} Option B · Checklist only</div>
+                              <div style={{ fontWeight: 700 }}>{path === "B" ? "◉" : "○"} Option B · Staged audit</div>
                               <div style={{ fontWeight: 400, color: "#94a3b8" }}>Fast screening sweep</div>
                             </button>
                           </div>
-                          {firstItemId && (
-                            <Link to={startHref} style={{ fontSize: 11, color: "#4338ca", fontWeight: 600, textDecoration: "none" }}>
-                              Start review →
-                            </Link>
+                          {path === "A" && (
+                            <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 10.5, whiteSpace: "nowrap" }} title="Option A runs in three steps on the PPD Requirements Review page">
+                              {subSteps.map((s, i) => (
+                                <Fragment key={s.n}>
+                                  {i > 0 && <span style={{ color: "#cbd5e1" }}>·</span>}
+                                  <span style={{ color: s.done ? "#15803d" : "#94a3b8", fontWeight: s.done ? 700 : 400 }}>
+                                    {s.done ? "✓" : s.n} {s.label}
+                                  </span>
+                                </Fragment>
+                              ))}
+                            </div>
                           )}
+                        </div>
+                      );
+                    })()}
+                  </td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    {(() => {
+                      const prog = subCritProgress[f.subCriterionId];
+                      if (!prog) return <span style={{ fontSize: 11.5, color: "#94a3b8" }}>–</span>;
+                      const cell = (label: string, done: boolean) => (
+                        <span style={{ whiteSpace: "nowrap", color: done ? "#15803d" : "#94a3b8", fontWeight: done ? 700 : 400 }}>
+                          {label} {done ? "✓" : "–"}
+                        </span>
+                      );
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }} title="Completion summary for this sub-criterion: PPD review run, evidence assessed, findings raised, checklist band">
+                          {cell("PPD", prog.ppdDone)}
+                          {cell("Evidence", prog.evidenceDone)}
+                          <span style={{ whiteSpace: "nowrap", color: prog.findingsCount > 0 ? "#b45309" : "#94a3b8", fontWeight: prog.findingsCount > 0 ? 700 : 400 }}>
+                            Findings {prog.findingsCount}
+                          </span>
+                          <span style={{ whiteSpace: "nowrap", color: prog.bandLabel === "–" ? "#94a3b8" : "#4338ca", fontWeight: prog.bandLabel === "–" ? 400 : 700 }}>
+                            Band {prog.bandLabel}
+                          </span>
                         </div>
                       );
                     })()}
@@ -1786,66 +1859,82 @@ export function EvidenceFolder() {
                         </button>
                       </div>
                     ) : (
-                      <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-                        <button
-                          onClick={() => auditFolderStaged(f.id, "all")}
-                          title="Staged audit: Policy Adequacy → Evidence Implementation → Outcome & Review → Deterministic APSR verdict"
-                          style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", whiteSpace: "nowrap" }}
-                        >
-                          Staged audit
-                        </button>
-                        <button
-                          onClick={() => auditFolderStaged(f.id, "policy")}
-                          title="Check only Policy & Procedure documents for documented approaches"
-                          style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #7c3aed", background: "#faf5ff", color: "#7c3aed", whiteSpace: "nowrap" }}
-                        >
-                          Policy check
-                        </button>
-                        <button
-                          onClick={() => auditFolderStaged(f.id, "evidence")}
-                          title="Check only Actual Evidence documents for implementation records"
-                          style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #7c3aed", background: "#faf5ff", color: "#7c3aed", whiteSpace: "nowrap" }}
-                        >
-                          Evidence check
-                        </button>
-                        {lastRun && (
+                      (() => {
+                        const path = analysisPath[f.subCriterionId] ?? "A";
+                        const overflowItem = (label: string, onClick: () => void, opts?: { disabled?: boolean; title?: string; last?: boolean }) => (
                           <button
-                            onClick={() => setViewingRun(lastRun)}
-                            title={`View run ${lastRun.runId} — ${new Date(lastRun.startedAt).toLocaleDateString()}`}
-                            style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#374151", whiteSpace: "nowrap" }}
+                            key={label}
+                            disabled={opts?.disabled}
+                            title={opts?.title}
+                            onClick={() => { onClick(); setOverflowOpen(null); }}
+                            style={{ display: "block", width: "100%", textAlign: "left", cursor: opts?.disabled ? "wait" : "pointer", fontSize: 12, padding: "8px 12px", border: "none", background: "transparent", color: "#374151", borderBottom: opts?.last ? "none" : "1px solid #f1f5f9" }}
                           >
-                            Last run ↗
+                            {label}
                           </button>
-                        )}
-                        {/* Overflow menu */}
-                        <div id={`overflow-${f.id}`} style={{ position: "relative" }}>
-                          <button
-                            onClick={() => setOverflowOpen(overflowOpen === f.id ? null : f.id)}
-                            title="More actions"
-                            style={{ cursor: "pointer", fontSize: 13, padding: "5px 8px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#fff", color: "#64748b", lineHeight: 1 }}
-                          >
-                            ⋯
-                          </button>
-                          {overflowOpen === f.id && (
-                            <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 14px #0002", zIndex: 30, minWidth: 188, overflow: "hidden" }}>
-                              <button
-                                disabled={busy === `folderaccess:policy:${f.id}`}
-                                onClick={() => { checkFolderAccess(f.id, "policy"); setOverflowOpen(null); }}
-                                style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", fontSize: 12, padding: "8px 12px", border: "none", background: "transparent", color: "#374151", borderBottom: "1px solid #f1f5f9" }}
+                        );
+                        return (
+                          <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                            {/* ONE primary action per row, always matching the selected path. */}
+                            {path === "A" ? (
+                              <Link
+                                to={`/ppd-review?item=${f.subCriterionId}`}
+                                title="Option A (PPD + Evidence): run the PPD review, then the evidence assessment, then compile findings — on the PPD Requirements Review page"
+                                style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", whiteSpace: "nowrap", textDecoration: "none", display: "inline-block" }}
                               >
-                                {busy === `folderaccess:policy:${f.id}` ? "Checking…" : "Check policy access"}
-                              </button>
+                                Start PPD + Evidence review →
+                              </Link>
+                            ) : (
                               <button
-                                disabled={busy === `folderaccess:evidence:${f.id}`}
-                                onClick={() => { checkFolderAccess(f.id, "evidence"); setOverflowOpen(null); }}
-                                style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", fontSize: 12, padding: "8px 12px", border: "none", background: "transparent", color: "#374151" }}
+                                onClick={() => auditFolderStaged(f.id, "all")}
+                                title="Option B (Staged audit): Policy Adequacy → Evidence Implementation → Outcome & Review → deterministic APSR verdicts on the Sub-Criterion Checklist"
+                                style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", whiteSpace: "nowrap" }}
                               >
-                                {busy === `folderaccess:evidence:${f.id}` ? "Checking…" : "Check evidence access"}
+                                Run staged audit (Option B)
                               </button>
+                            )}
+                            {lastRun && (
+                              <button
+                                onClick={() => setViewingRun(lastRun)}
+                                title={`View run ${lastRun.runId} — ${new Date(lastRun.startedAt).toLocaleDateString()}`}
+                                style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#374151", whiteSpace: "nowrap" }}
+                              >
+                                Last run ↗
+                              </button>
+                            )}
+                            {/* Secondary actions live here — never competing solid buttons. */}
+                            <div id={`overflow-${f.id}`} style={{ position: "relative" }}>
+                              <button
+                                onClick={() => setOverflowOpen(overflowOpen === f.id ? null : f.id)}
+                                title="More actions"
+                                style={{ cursor: "pointer", fontSize: 13, padding: "5px 8px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#fff", color: "#64748b", lineHeight: 1 }}
+                              >
+                                ⋯
+                              </button>
+                              {overflowOpen === f.id && (
+                                <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 14px #0002", zIndex: 30, minWidth: 230, overflow: "hidden" }}>
+                                  {path === "A" &&
+                                    overflowItem("Run staged audit (Option B)", () => auditFolderStaged(f.id, "all"), {
+                                      title: "Runs the Option B engine on this folder even though Option A is selected — verdicts land on the Sub-Criterion Checklist",
+                                    })}
+                                  {overflowItem("Policy check only (Option B)", () => auditFolderStaged(f.id, "policy"), {
+                                    title: "Option B partial run: check only Policy & Procedure documents for documented approaches",
+                                  })}
+                                  {overflowItem("Evidence check only (Option B)", () => auditFolderStaged(f.id, "evidence"), {
+                                    title: "Option B partial run: check only Actual Evidence documents for implementation records",
+                                  })}
+                                  {overflowItem(busy === `folderaccess:policy:${f.id}` ? "Checking…" : "Check policy access", () => checkFolderAccess(f.id, "policy"), {
+                                    disabled: busy === `folderaccess:policy:${f.id}`,
+                                  })}
+                                  {overflowItem(busy === `folderaccess:evidence:${f.id}` ? "Checking…" : "Check evidence access", () => checkFolderAccess(f.id, "evidence"), {
+                                    disabled: busy === `folderaccess:evidence:${f.id}`,
+                                    last: true,
+                                  })}
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                      </div>
+                          </div>
+                        );
+                      })()
                     )}
                   </td>
                 </tr>
@@ -1853,7 +1942,7 @@ export function EvidenceFolder() {
                 {/* Same-folder warning */}
                 {rowExpanded && f.policyLink && f.folderLink && f.policyLink === f.folderLink && (
                   <tr>
-                    <td colSpan={6} style={{ padding: "0 10px 8px 28px" }}>
+                    <td colSpan={7} style={{ padding: "0 10px 8px 28px" }}>
                       <div style={{ background: "#fff7ed", borderLeft: "3px solid #fb923c", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12, color: "#9a3412" }}>
                         ⚠ The <b>Policy &amp; Procedure</b> and <b>Actual Evidence</b> links point to the <b>same folder</b>. Link two different folders for a proper audit.
                       </div>
@@ -1864,7 +1953,7 @@ export function EvidenceFolder() {
                 {/* Policy access note */}
                 {rowExpanded && f.policyAccessNote && !dismissedAccessNotes.has(policyDismissKey) && (
                   <tr>
-                    <td colSpan={6} style={{ padding: "0 10px 6px 28px" }}>
+                    <td colSpan={7} style={{ padding: "0 10px 6px 28px" }}>
                       <div style={{ background: "#f8fafc", borderLeft: "3px solid #93c5fd", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                           <span style={{ fontSize: 10.5, fontWeight: 700, color: "#3b82f6", textTransform: "uppercase", letterSpacing: 0.4 }}>Access — policy</span>
@@ -1881,7 +1970,7 @@ export function EvidenceFolder() {
                 {/* Evidence access note */}
                 {rowExpanded && f.accessCheckNote && !dismissedAccessNotes.has(evidenceDismissKey) && (
                   <tr>
-                    <td colSpan={6} style={{ padding: "0 10px 6px 28px" }}>
+                    <td colSpan={7} style={{ padding: "0 10px 6px 28px" }}>
                       <div style={{ background: "#f8fafc", borderLeft: "3px solid #86efac", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                           <span style={{ fontSize: 10.5, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", letterSpacing: 0.4 }}>Access — evidence</span>
@@ -1898,7 +1987,7 @@ export function EvidenceFolder() {
                 {/* Audit result (dismissible) */}
                 {rowExpanded && f.lastAuditSummary && !dismissedAuditResults.has(auditDismissKey) && (
                   <tr>
-                    <td colSpan={6} style={{ padding: "0 10px 10px 28px" }}>
+                    <td colSpan={7} style={{ padding: "0 10px 10px 28px" }}>
                       <div style={{ background: "#f0fdf4", borderLeft: "3px solid #86c79f", borderRadius: "0 8px 8px 0", padding: "10px 12px", fontSize: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
                           <span style={{ fontSize: 10.5, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.4 }}>Audit result</span>
