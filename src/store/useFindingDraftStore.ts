@@ -85,6 +85,11 @@ export type FindingDraftState = {
   // re-confirmed into the register.
   downgradeConfirmedDrafts: () => void;
 
+  // Downgrade only the draft(s) pointing at ONE deleted finding — used by
+  // removeCustomFinding so a single deletion doesn't leave a dead
+  // "View finding" link on its grouped draft.
+  clearSavedFindingId: (findingId: string) => void;
+
   // Partial update for editing a draft's fields.
   updateDraftField: (
     subCriterionId: string,
@@ -350,6 +355,18 @@ export const useFindingDraftStore = create<FindingDraftState>()(
         })),
 
       resetAllDrafts: () => set({ draftsBySubCriterion: {} }),
+
+      clearSavedFindingId: (findingId) =>
+        set((s) => ({
+          draftsBySubCriterion: Object.fromEntries(
+            Object.entries(s.draftsBySubCriterion).map(([id, drafts]) => [
+              id,
+              drafts.map((d) =>
+                d.savedFindingId === findingId ? { ...d, status: "draft" as FindingDraftStatus, savedFindingId: undefined } : d
+              ),
+            ])
+          ),
+        })),
 
       downgradeConfirmedDrafts: () =>
         set((s) => ({

@@ -14,6 +14,7 @@ import type {
 } from "../types";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildDraftFinding, lineSufficiency, lineApsr } from "../lib/checklistBanding";
+import { findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill } from "../lib/ai/agentRuntime";
@@ -408,6 +409,18 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         const s = get();
         const line = s.entries[itemId]?.specific.find((l) => l.id === lineId);
         if (!line || line.draftFinding?.savedFindingId) return;
+        // Composite-key dedupe (gd4ItemId + normalized ref + finding type):
+        // if the register already holds a finding for this exact requirement
+        // gap — whichever pipeline raised it — link the line to it instead of
+        // creating a double.
+        const dedupeKey = findingDedupeKey(draft.gd4ItemId, line.sourceRef ?? draft.clause, draft.findingType);
+        if (dedupeKey) {
+          const existing = useWorkspaceStore.getState().customFindings.find((f) => findingKeyOf(f) === dedupeKey);
+          if (existing) {
+            set((st) => mapEntry(st, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, draftFinding: { ...draft, savedFindingId: existing.id } }))));
+            return;
+          }
+        }
         const finding: Finding = {
           id: newFindingId(),
           auditCycleId: "cycle-1",
@@ -436,6 +449,10 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           apsr: lineApsr(line),
           findingType: draft.findingType,
           ncSeverity: draft.ncSeverity,
+          // Stamp the source ref so the register-wide composite dedupe key
+          // (see lib/gd4Refs.ts) can identify this finding from either
+          // pipeline; clause is the fallback for ref-less manual lines.
+          linkedSourceRefs: line.sourceRef ? [line.sourceRef] : undefined,
         };
         useWorkspaceStore.getState().addCustomFinding(finding);
         set((st) => mapEntry(st, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, draftFinding: { ...draft, savedFindingId: finding.id } }))));
@@ -449,11 +466,17 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       raiseAllUnmetFindings: (auditRunId?) => {
         const entries = get().entries;
         let raised = 0;
-        // Build a set of "gd4ItemId:issue-prefix" keys from already-raised findings
-        // so we can skip near-duplicates even on lines that lost their savedFindingId.
-        const existingKeys = new Set(
-          useWorkspaceStore.getState().customFindings.map((f) => `${f.gd4ItemId}:${f.issue.slice(0, 60)}`)
-        );
+        // Composite keys (gd4ItemId + normalized ref + finding type) of every
+        // finding already in the register — a requirement gap the other
+        // pipeline already raised is skipped, not doubled. The old
+        // "gd4ItemId:issue-prefix" text key is kept only as the fallback for
+        // ref-less manual lines, where no stable composite key exists.
+        const existingKeys = new Set<string>();
+        for (const f of useWorkspaceStore.getState().customFindings) {
+          const k = findingKeyOf(f);
+          if (k) existingKeys.add(k);
+          existingKeys.add(`${f.gd4ItemId}:${f.issue.slice(0, 60)}`);
+        }
         for (const itemId of Object.keys(entries)) {
           const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
           if (!req) continue;
@@ -463,8 +486,10 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
             const warrants = line.status === "Not met" || (markedDone && lineSufficiency(line) === "Missing");
             if (!warrants) continue;
             const draft = buildDraftFinding(req, line);
-            const dupKey = `${itemId}:${draft.issue.slice(0, 60)}`;
-            if (existingKeys.has(dupKey)) continue; // skip near-duplicate
+            const dupKey =
+              findingDedupeKey(itemId, line.sourceRef ?? draft.clause, draft.findingType) ??
+              `${itemId}:${draft.issue.slice(0, 60)}`;
+            if (existingKeys.has(dupKey)) continue; // already raised — skip, don't double
             existingKeys.add(dupKey);
             get().confirmDraftFinding(itemId, line.id, draft, auditRunId);
             // confirmDraftFinding stamps the new finding id onto the line — use

@@ -51,10 +51,11 @@ import { useFindingDraftStore } from "./useFindingDraftStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, FindingTypeCode, NcSeverity, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
 import { findingTypeForStatus } from "../lib/findingClassification";
+import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
-import { computeBand, lineApsr, findingDimension } from "../lib/checklistBanding";
+import { computeBand, lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 
@@ -103,13 +104,26 @@ function classifyFileBucket(path: string): "policy" | "evidence" {
   return /polic|procedure/.test(topSegment) ? "policy" : "evidence";
 }
 
-// Canonical GD4 ref normalizer used at EVERY ref join point (staged-audit row
-// matching, deriveEvidenceAssessmentFromAudit, …). Checklist lines' sourceRef
-// is AI-echoed and can drift in format ("DS: 6.1.1.DS1.a", stray spaces,
-// lower case) — both sides of any comparison must go through this same
-// function or refs that match in one place silently miss in another.
-function normalizeAuditRef(ref: string): string {
-  return ref.trim().replace(/^(ref|source|gd4|ds|ee|n)\s*[:#]\s*/i, "").replace(/\s+/g, "").toUpperCase();
+// Strips savedFindingId back-pointers from PPD-review / evidence-assessment
+// rows when the finding they point at is deleted, so the source row shows
+// "Draft finding" again instead of a dead "View finding" link and can be
+// re-compiled. Returns the original record when nothing matched (no churn).
+function stripFindingBackPointers<R extends { savedFindingId?: string }, T extends { rows: R[] }>(
+  record: Record<string, T>,
+  shouldClear: (findingId: string) => boolean
+): Record<string, T> {
+  let changed = false;
+  const out = Object.fromEntries(
+    Object.entries(record).map(([k, v]) => {
+      if (!v.rows?.some((r) => r.savedFindingId && shouldClear(r.savedFindingId))) return [k, v];
+      changed = true;
+      return [
+        k,
+        { ...v, rows: v.rows.map((r) => (r.savedFindingId && shouldClear(r.savedFindingId) ? { ...r, savedFindingId: undefined } : r)) },
+      ];
+    })
+  );
+  return changed ? out : record;
 }
 
 // promptSent holds the full AI prompt, which embeds large slices of the
@@ -1123,53 +1137,127 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
       },
 
-      // Raises one Finding per Evidence-tab row not yet compiled, from the
-      // combined verdict — Not met -> NC, Partial -> OFI, Met -> OBS (same
-      // classification the checklist uses, see findingClassification.ts).
-      // Feeds the same Findings register / QA-AFI pipeline as everything else.
+      // Compiles the Evidence-tab rows into the Findings register. The staged
+      // audit's auto-raise (raiseAllUnmetFindings) is the CANONICAL raiser —
+      // when a finding with the same composite key (gd4ItemId + normalized
+      // ref + finding type) already exists, Compile is a no-op for that row:
+      // it links the row to the existing finding instead of creating a
+      // second one. Rows the auto-raise didn't cover are routed through the
+      // SAME buildDraftFinding seed path the checklist uses, so every
+      // finding — whichever pipeline raised it — carries the identical
+      // observation/criteria/effect scaffold plus rootCause/corrective/
+      // preventive closure seed.
       compileEvidenceFindings: (subCriterionId) => {
         const s = get();
         const result = s.evidenceAssessments[subCriterionId];
         if (!result) return 0;
         let raised = 0;
+        let changed = false;
+        // Composite keys of every finding already in the register, so a
+        // requirement the staged audit already raised is linked, not doubled.
+        const existingByKey = new Map<string, string>();
+        for (const f of s.customFindings) {
+          const k = findingKeyOf(f);
+          if (k && !existingByKey.has(k)) existingByKey.set(k, f.id);
+        }
         const rows = result.rows.map((row) => {
           // "Not assessed" rows raise nothing — no audit result ever matched
           // this line, so there is no verdict to base a finding on.
           if (row.savedFindingId || row.assessmentFailed || row.verdict === "Not assessed") return row;
           const req = GD4_REQUIREMENTS.find((r) => r.id === row.gd4ItemId);
-          const findingType: FindingTypeCode = findingTypeForStatus(row.verdict);
-          const ncSeverity: NcSeverity | null = findingType === "NC" ? (req?.gateSensitive ? "Major" : "Minor") : null;
-          const issue =
-            row.verdict === "Met" ? `Requirement documented and evidenced: ${row.requirementText}`
-            : row.verdict === "Partial" ? `Requirement only partly documented or evidenced: ${row.requirementText}`
-            : `Requirement not documented or evidenced: ${row.requirementText}`;
-          const finding: Finding = {
-            id: `EV-${Date.now().toString(36).toUpperCase()}-${raised}`,
-            auditCycleId: s.cycle.id,
-            gd4ItemId: row.gd4ItemId,
-            issue,
-            type: findingType === "OBS" ? "Observation" : "AFI",
-            severity: ncSeverity === "Major" ? "High" : findingType === "OFI" ? "Medium" : "Low",
-            owner: "SQ",
-            dueDate: "",
-            repeatFinding: false,
-            overdue: false,
-            managementDecisionNeeded: ncSeverity === "Major",
-            status: "Open",
-            source: "PPD Review",
-            createdAt: new Date().toISOString(),
-            dimension: "Evidence",
-            clause: row.gdRef,
-            observation: row.comment || row.evidenceSummary,
-            criteria: row.requirementText,
-            findingType,
-            ncSeverity,
-          };
-          get().addCustomFinding(finding);
-          raised++;
-          return { ...row, savedFindingId: finding.id };
+          if (!req) return row;
+          const rowStatus: "Met" | "Partial" | "Not met" = row.verdict;
+          const key = findingDedupeKey(row.gd4ItemId, row.gdRef, findingTypeForStatus(rowStatus));
+          if (key && existingByKey.has(key)) {
+            changed = true;
+            return { ...row, savedFindingId: existingByKey.get(key) };
+          }
+          // Prefer the real checklist line for this ref (same match rule as
+          // deriveEvidenceAssessmentFromAudit) so the finding is confirmed
+          // through the one shared checklist path; fall back to a synthetic
+          // line built from the row when no checklist line exists yet.
+          const normRef = normalizeAuditRef(row.gdRef);
+          const checklist = useChecklistModuleStore.getState();
+          const line = checklist.entries[row.gd4ItemId]?.specific.find(
+            (l) => l.sourceRef && normalizeAuditRef(l.sourceRef) === normRef
+          );
+          let findingId: string | undefined;
+          if (line) {
+            if (line.draftFinding?.savedFindingId) {
+              findingId = line.draftFinding.savedFindingId;
+            } else {
+              const draft = buildDraftFinding(req, line);
+              const before = get().customFindings.length;
+              checklist.confirmDraftFinding(row.gd4ItemId, line.id, draft);
+              findingId = useChecklistModuleStore
+                .getState()
+                .entries[row.gd4ItemId]?.specific.find((l) => l.id === line.id)?.draftFinding?.savedFindingId;
+              if (findingId && get().customFindings.length > before) {
+                get().seedClosure(findingId, { root: draft.rootCause, corr: draft.corrective, prev: draft.preventive });
+                raised++;
+              }
+            }
+          } else {
+            const synthetic: SpecificChecklistLine = {
+              id: `EVROW-${row.gdRef}`,
+              text: row.requirementText,
+              clause: row.gdRef,
+              sourceRef: row.gdRef,
+              status: rowStatus,
+              generatedBy: "ai",
+              evidence: row.evidenceFiles.map((f, i) => ({
+                id: `EVROW-${row.gdRef}-E${i}`,
+                title: f.name,
+                type: "Document",
+                owner: "",
+                date: "",
+                approved: false,
+                reviewed: false,
+                sufficiency: "Present" as const,
+              })),
+            };
+            const draft = buildDraftFinding(req, synthetic);
+            const finding: Finding = {
+              id: `EV-${Date.now().toString(36).toUpperCase()}-${raised}`,
+              auditCycleId: s.cycle.id,
+              gd4ItemId: row.gd4ItemId,
+              issue: draft.issue,
+              type: draft.findingType === "OBS" ? "Observation" : "AFI",
+              severity: draft.severity,
+              owner: "SQ",
+              dueDate: "",
+              repeatFinding: false,
+              overdue: false,
+              managementDecisionNeeded: draft.ncSeverity === "Major",
+              status: "Open",
+              source: "PPD Review",
+              createdAt: new Date().toISOString(),
+              dimension: draft.dimension,
+              riskCategory: draft.riskCategory,
+              clause: row.gdRef,
+              observation: row.comment || row.evidenceSummary || draft.observation,
+              criteria: draft.criteria,
+              effect: draft.effect,
+              rootCause: draft.rootCause,
+              corrective: draft.corrective,
+              preventive: draft.preventive,
+              findingType: draft.findingType,
+              ncSeverity: draft.ncSeverity,
+              linkedSourceRefs: [row.gdRef],
+            };
+            get().addCustomFinding(finding);
+            if (draft.rootCause || draft.corrective || draft.preventive) {
+              get().seedClosure(finding.id, { root: draft.rootCause, corr: draft.corrective, prev: draft.preventive });
+            }
+            findingId = finding.id;
+            raised++;
+          }
+          if (!findingId) return row;
+          if (key) existingByKey.set(key, findingId);
+          changed = true;
+          return { ...row, savedFindingId: findingId };
         });
-        if (raised > 0) {
+        if (changed) {
           set((st) => ({ evidenceAssessments: { ...st.evidenceAssessments, [subCriterionId]: { ...result, rows } } }));
         }
         return raised;
@@ -3907,18 +3995,35 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set((s) => ({ customFindings: s.customFindings.map((f) => (f.id === id ? { ...f, ...patch } : f)) })),
 
       removeCustomFinding: (id) => {
-        // Remove the finding and its closure entry, then unblock any checklist
-        // line that was locked to this finding so it can be re-raised later.
+        // Remove the finding and its closure entry, then sweep EVERY store
+        // that holds a savedFindingId back-pointer at it — checklist lines,
+        // Option A evidence-assessment rows, PPD-review rows and grouped
+        // drafts — so no dead "View finding" link survives and every source
+        // row becomes re-compilable ("Draft finding" again).
         set((s) => {
           const { [id]: _dropped, ...remainingClosures } = s.closures;
-          return { customFindings: s.customFindings.filter((f) => f.id !== id), closures: remainingClosures };
+          const match = (fid: string) => fid === id;
+          return {
+            customFindings: s.customFindings.filter((f) => f.id !== id),
+            closures: remainingClosures,
+            evidenceAssessments: stripFindingBackPointers(s.evidenceAssessments, match),
+            ppdReviewResults: stripFindingBackPointers(s.ppdReviewResults, match),
+          };
         });
         useChecklistModuleStore.getState().clearSavedFindingId(id);
+        useFindingDraftStore.getState().clearSavedFindingId(id);
       },
 
       clearAllFindings: () => {
         const ids = get().customFindings.map((f) => f.id);
-        set({ customFindings: [], closures: {}, seedFindingsLoaded: false });
+        set((s) => ({
+          customFindings: [],
+          closures: {},
+          seedFindingsLoaded: false,
+          // Same back-pointer sweep as removeCustomFinding, for every id.
+          evidenceAssessments: stripFindingBackPointers(s.evidenceAssessments, () => true),
+          ppdReviewResults: stripFindingBackPointers(s.ppdReviewResults, () => true),
+        }));
         const cs = useChecklistModuleStore.getState();
         ids.forEach((id) => cs.clearSavedFindingId(id));
         // Confirmed grouped drafts pointed at the findings just wiped —
