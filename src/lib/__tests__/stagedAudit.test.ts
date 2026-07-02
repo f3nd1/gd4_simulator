@@ -139,6 +139,48 @@ describe("simulateStagedOutcomeReview", () => {
   });
 });
 
+// buildStagedApsr requireCitations — uncited positive verdicts downgrade one level
+describe("buildStagedApsr requireCitations", () => {
+  function citedPolicyRow(): PolicyCoverageRow {
+    return { ...makePolicyRow("Yes"), chunkIds: ["C001"] };
+  }
+  function citedEvidenceRow(): EvidenceCoverageRow {
+    return { ...makeEvidenceRow("Yes"), chunkIds: ["C002"] };
+  }
+  function citedOutcomeRow(): OutcomeReviewRow {
+    return { ...makeOutcomeRow(true, true), chunkIds: ["C003"] };
+  }
+
+  it("downgrades uncited positives one level and notes the downgrade", () => {
+    const apsr = buildStagedApsr(makePolicyRow("Yes"), makeEvidenceRow("Yes"), makeOutcomeRow(true, true), { requireCitations: true });
+    expect(apsr.approach.status).toBe("Beginning");
+    expect(apsr.processes.status).toBe("Weak");
+    expect(apsr.systemsOutcomes.status).toBe("Limited");
+    expect(apsr.review.status).toBe("Not evident"); // binary union — one level down is Not evident
+    expect(apsr.approach.note).toContain("Downgraded: no source chunks cited");
+  });
+
+  it("keeps cited positives at full rating", () => {
+    const apsr = buildStagedApsr(citedPolicyRow(), citedEvidenceRow(), citedOutcomeRow(), { requireCitations: true });
+    expect(apsr.approach.status).toBe("Meeting");
+    expect(apsr.processes.status).toBe("Deployed");
+    expect(apsr.systemsOutcomes.status).toBe("Evident");
+    expect(apsr.review.status).toBe("Evident");
+  });
+
+  it("leaves negative verdicts unaffected — no citation required", () => {
+    const apsr = buildStagedApsr(makePolicyRow("No"), makeEvidenceRow("No"), makeOutcomeRow(false, false), { requireCitations: true });
+    expect(apsr.approach.status).toBe("Not evident");
+    expect(apsr.processes.status).toBe("Not evident");
+  });
+
+  it("does not downgrade when requireCitations is off (offline simulate rows never cite)", () => {
+    const apsr = buildStagedApsr(makePolicyRow("Yes"), makeEvidenceRow("Yes"), makeOutcomeRow(true, true));
+    expect(apsr.approach.status).toBe("Meeting");
+    expect(apsr.processes.status).toBe("Deployed");
+  });
+});
+
 // 12. buildStagedApsr → deriveApsrStatus roundtrip
 describe("buildStagedApsr + deriveApsrStatus roundtrip", () => {
   it("full compliance produces Met status", () => {

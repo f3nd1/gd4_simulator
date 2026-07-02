@@ -1331,33 +1331,55 @@ Respond with JSON only:
 // outcome data → Systems & Outcomes, review records → Review.
 // Policy documents cannot satisfy Processes; evidence documents cannot satisfy Approach
 // (unless they contain a procedure, but that classification happens in Stage 2/3).
+//
+// opts.requireCitations (live AI runs): a positive dimension status with no
+// cited chunk IDs is downgraded one level — a verdict that cannot point at
+// the source text that supports it must not carry a full positive rating.
+// Offline keyword simulation never produces chunk IDs, so callers pass this
+// only for live runs (leaving simulate-based rows on the old behaviour would
+// otherwise be impossible).
+export const UNCITED_DOWNGRADE_NOTE = "Downgraded: no source chunks cited to support this verdict.";
+
 export function buildStagedApsr(
   policyRow: PolicyCoverageRow | undefined,
   evidenceRow: EvidenceCoverageRow | undefined,
-  outcomeRow: OutcomeReviewRow | undefined
+  outcomeRow: OutcomeReviewRow | undefined,
+  opts: { requireCitations?: boolean } = {}
 ): ApsrBreakdown {
+  const uncited = (chunkIds: string[] | undefined) => !!opts.requireCitations && (!chunkIds || chunkIds.length === 0);
+  const downgradedNote = (note: string) => `${note ? `${note}\n\n` : ""}${UNCITED_DOWNGRADE_NOTE}`;
+
   // Approach — from policy adequacy only
   const approach: ApsrBreakdown["approach"] = policyRow?.covered === "Yes"
-    ? { status: "Meeting", note: policyRow.note, sourceChunkIds: policyRow.chunkIds }
+    ? uncited(policyRow.chunkIds)
+      ? { status: "Beginning", note: downgradedNote(policyRow.note), sourceChunkIds: [] }
+      : { status: "Meeting", note: policyRow.note, sourceChunkIds: policyRow.chunkIds }
     : policyRow?.covered === "Partial"
       ? { status: "Beginning", note: policyRow.note, sourceChunkIds: policyRow.chunkIds }
       : { status: "Not evident", note: policyRow?.note || "No policy documentation found for this requirement in the documents reviewed.", sourceChunkIds: [] };
 
   // Processes — from evidence coverage only
   const processes: ApsrBreakdown["processes"] = evidenceRow?.covered === "Yes"
-    ? { status: "Deployed", note: evidenceRow.note, sourceChunkIds: evidenceRow.chunkIds }
+    ? uncited(evidenceRow.chunkIds)
+      ? { status: "Weak", note: downgradedNote(evidenceRow.note), sourceChunkIds: [] }
+      : { status: "Deployed", note: evidenceRow.note, sourceChunkIds: evidenceRow.chunkIds }
     : evidenceRow?.covered === "Partial"
       ? { status: "Weak", note: evidenceRow.note, sourceChunkIds: evidenceRow.chunkIds }
       : { status: "Not evident", note: evidenceRow?.note || "No implementation evidence found for this requirement in the documents reviewed.", sourceChunkIds: [] };
 
   // Systems & Outcomes — from outcome data
   const systemsOutcomes: ApsrBreakdown["systemsOutcomes"] = outcomeRow?.outcomeEvident
-    ? { status: "Evident", note: outcomeRow.note, sourceChunkIds: outcomeRow.chunkIds }
+    ? uncited(outcomeRow.chunkIds)
+      ? { status: "Limited", note: downgradedNote(outcomeRow.note), sourceChunkIds: [] }
+      : { status: "Evident", note: outcomeRow.note, sourceChunkIds: outcomeRow.chunkIds }
     : { status: "Not evident", note: outcomeRow?.note || "No outcome data (KPIs, results, trends) found for this requirement in the documents reviewed.", sourceChunkIds: [] };
 
-  // Review — from review records
+  // Review — from review records. Review's union is binary
+  // ("Evident" | "Not evident"), so one level down IS "Not evident".
   const review: ApsrBreakdown["review"] = outcomeRow?.reviewEvident
-    ? { status: "Evident", note: outcomeRow.note, sourceChunkIds: outcomeRow.chunkIds }
+    ? uncited(outcomeRow.chunkIds)
+      ? { status: "Not evident", note: downgradedNote(outcomeRow.note), sourceChunkIds: [] }
+      : { status: "Evident", note: outcomeRow.note, sourceChunkIds: outcomeRow.chunkIds }
     : { status: "Not evident", note: outcomeRow?.note || "No review or improvement records found for this requirement in the documents reviewed.", sourceChunkIds: [] };
 
   return { approach, processes, systemsOutcomes, review };
@@ -1529,13 +1551,18 @@ Respond with JSON only:
 
   const rows: PPDReviewRow[] = requirements.map((r) => {
     const best = bestByRef.get(r.ref);
+    // An "Adequate" verdict that cannot point at any supporting PPD chunk is
+    // downgraded to "Partial" — same uncited-positive rule as buildStagedApsr.
+    const uncitedAdequate = best?.verdict === "Adequate" && (best.chunkIds?.length ?? 0) === 0;
+    const verdict: PPDVerdict = uncitedAdequate ? "Partial" : (best?.verdict ?? "Not documented");
+    const fullComment = best?.fullComment || "No verdict returned by the AI for this requirement — treat as undocumented until re-run.";
     return {
       ref: r.ref,
       gd4ItemId: r.gd4ItemId,
       requirementText: r.requirementText,
-      verdict: best?.verdict ?? "Not documented",
+      verdict,
       shortComment: best?.shortComment || "No verdict returned by the AI for this requirement.",
-      fullComment: best?.fullComment || "No verdict returned by the AI for this requirement — treat as undocumented until re-run.",
+      fullComment: uncitedAdequate ? `${fullComment}\n\n${UNCITED_DOWNGRADE_NOTE}` : fullComment,
       suggestedRewrite: best?.suggestedRewrite,
       chunkIds: best?.chunkIds ?? [],
     };
@@ -1598,8 +1625,10 @@ export type EvidenceAssessmentRunResult = {
 
 // A found > partial > not-found ranking so the best result across sliding
 // windows wins (an earlier window finding nothing must not overwrite a later
-// window that found implementation evidence).
-const EVIDENCE_VERDICT_ORDER: Record<EvidenceVerdict, number> = { "Not met": 0, "Partial": 1, "Met": 2 };
+// window that found implementation evidence). "Not assessed" is a UI-only
+// state (unmatched derive rows) that the AI never returns — ranked lowest so
+// any real verdict would replace it if it ever entered a merge.
+const EVIDENCE_VERDICT_ORDER: Record<EvidenceVerdict, number> = { "Not assessed": -1, "Not met": 0, "Partial": 1, "Met": 2 };
 
 export async function runEvidenceAssessment(
   inputs: EvidenceAssessmentInput[],
@@ -1702,7 +1731,20 @@ Respond with JSON only:
 
   const rows: EvidenceAssessmentLineResult[] = inputs.map((inp) => {
     const best = bestByRef.get(inp.ref);
-    if (best) return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: best.comment || "", chunkIds: best.chunkIds };
+    if (best) {
+      // A "Met" verdict that cannot cite any evidence chunk is downgraded to
+      // "Partial" — same uncited-positive rule as buildStagedApsr.
+      if (best.verdict === "Met" && best.chunkIds.length === 0) {
+        return {
+          ref: inp.ref,
+          evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.",
+          verdict: "Partial",
+          comment: `${best.comment ? `${best.comment}\n\n` : ""}${UNCITED_DOWNGRADE_NOTE}`,
+          chunkIds: [],
+        };
+      }
+      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: best.comment || "", chunkIds: best.chunkIds };
+    }
     if (failedRefs.has(inp.ref)) {
       return { ref: inp.ref, evidenceSummary: "Assessment failed — retry.", verdict: "Not met", comment: "The AI call for this line failed or timed out. Re-run the evidence assessment to retry.", chunkIds: [], failed: true };
     }

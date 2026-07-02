@@ -22,12 +22,12 @@ function ppdVerdictBorderColor(v: PPDVerdict): string {
   return v === "Adequate" ? "#22c55e" : v === "Partial" ? "#f59e0b" : "#ef4444";
 }
 
-function evVerdictTone(v: EvidenceVerdict): "good" | "medium" | "critical" {
-  return v === "Met" ? "good" : v === "Partial" ? "medium" : "critical";
+function evVerdictTone(v: EvidenceVerdict): "good" | "medium" | "critical" | "neutral" {
+  return v === "Met" ? "good" : v === "Partial" ? "medium" : v === "Not assessed" ? "neutral" : "critical";
 }
 
 function evVerdictBorderColor(v: EvidenceVerdict): string {
-  return v === "Met" ? "#22c55e" : v === "Partial" ? "#f59e0b" : "#ef4444";
+  return v === "Met" ? "#22c55e" : v === "Partial" ? "#f59e0b" : v === "Not assessed" ? "#94a3b8" : "#ef4444";
 }
 
 function overallVerdictTone(v: PPDOverallVerdict): "good" | "medium" | "critical" {
@@ -287,7 +287,9 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
       return next;
     });
 
-  const compilable = assessment ? assessment.rows.filter((r) => !r.savedFindingId).length : 0;
+  // Mirrors compileEvidenceFindings' exclusions: already-saved, failed, and
+  // "Not assessed" rows raise nothing, so they don't count as compilable.
+  const compilable = assessment ? assessment.rows.filter((r) => !r.savedFindingId && !r.assessmentFailed && r.verdict !== "Not assessed").length : 0;
 
   function handleCompile() {
     const n = compileEvidenceFindings(selectedId);
@@ -430,6 +432,11 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
                     <div>
                       <Pill s="critical">Assessment failed — retry</Pill>
                       <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 4 }}>Re-run the evidence assessment to retry this line.</div>
+                    </div>
+                  ) : row.verdict === "Not assessed" ? (
+                    <div>
+                      <Pill s="neutral">Not assessed</Pill>
+                      <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 4 }}>No audit result matched this line — run or re-run the evidence assessment.</div>
                     </div>
                   ) : row.verdict ? (
                     <>

@@ -27,6 +27,16 @@ function newLineId(itemId: string) {
   return `${itemId}-L${Date.now()}-${lineCounter}`;
 }
 
+// Monotonic suffix for finding IDs: raiseAllUnmetFindings calls
+// confirmDraftFinding in a synchronous loop, so a bare Date.now() collides
+// within the same millisecond — colliding IDs then corrupt update/delete/
+// closure traceability across unrelated findings.
+let findingCounter = 0;
+function newFindingId() {
+  findingCounter += 1;
+  return `CKL-${Date.now()}-${findingCounter}`;
+}
+
 function emptyEntry(itemId: string): SubCriterionChecklistEntry {
   return { gd4ItemId: itemId, generic: buildGenericLines(), specific: [], pendingGenerated: [] };
 }
@@ -399,7 +409,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         const line = s.entries[itemId]?.specific.find((l) => l.id === lineId);
         if (!line || line.draftFinding?.savedFindingId) return;
         const finding: Finding = {
-          id: `CKL-${Date.now()}`,
+          id: newFindingId(),
           auditCycleId: "cycle-1",
           gd4ItemId: draft.gd4ItemId,
           issue: draft.issue,

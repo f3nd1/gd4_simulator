@@ -4,6 +4,7 @@ import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { useGoogleDriveStore } from "../../store/useGoogleDriveStore";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
+import { useSaveStatusStore } from "../../store/useSaveStatusStore";
 import { flushPendingSaves } from "../../store/supabaseStorage";
 
 export function Layout() {
@@ -36,11 +37,33 @@ export function Layout() {
       <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Header onMenuClick={() => setNavOpen((o) => !o)} />
+        <LocalSaveErrorBanner />
         <main className="px-3 sm:px-6" style={{ flex: 1, paddingTop: 18, paddingBottom: 60, maxWidth: 1180, width: "100%", margin: "0 auto" }}>
           <Outlet />
         </main>
         <GitFooter />
       </div>
+    </div>
+  );
+}
+
+// Non-blocking warning shown when writing the localStorage cache itself
+// failed (e.g. quota exceeded). The app keeps running on in-memory state and
+// the Supabase sync, but the user should know the local safety net is gone.
+function LocalSaveErrorBanner() {
+  const localSaveError = useSaveStatusStore((s) => s.localSaveError);
+  const clearLocalSaveError = useSaveStatusStore((s) => s.clearLocalSaveError);
+  if (!localSaveError) return null;
+  return (
+    <div style={{ background: "#fffbeb", borderBottom: "1px solid #fde68a", color: "#92400e", fontSize: 12.5, fontWeight: 600, padding: "7px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+      <span>⚠ {localSaveError}</span>
+      <button
+        onClick={clearLocalSaveError}
+        style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#92400e", fontSize: 14, lineHeight: 1, padding: "0 2px" }}
+        title="Dismiss"
+      >
+        ×
+      </button>
     </div>
   );
 }

@@ -722,7 +722,11 @@ export type PPDReviewResult = {
 // gives a combined verdict per line: documented AND implemented = "Met";
 // documented but not evidenced = "Partial"; neither = "Not met". This tab is
 // where Option A findings are compiled.
-export type EvidenceVerdict = "Met" | "Partial" | "Not met";
+// "Not assessed" is never returned by the AI — it marks a requirement line
+// that no audit result could be matched to (deriveEvidenceAssessmentFromAudit).
+// Such rows are neutral: excluded from the findings compile and shown as a
+// grey chip prompting the user to run/re-run the evidence assessment.
+export type EvidenceVerdict = "Met" | "Partial" | "Not met" | "Not assessed";
 
 export type EvidenceFileRef = { name: string; url: string };
 

@@ -159,7 +159,11 @@ const BASE_SKILLS: string[] = [externalAuditorSkill, evidenceStandardsSkill, aps
 
 // Per-skill character cap — keeps total token spend predictable.
 // regulatoryReferences is exempt (uncapped) — see note at top of file.
-const SKILL_CAP = 3000;
+// Raised from 3000: at 3000 the base apsr-rubric.md (~4.5k chars) was cut
+// mid-document, so the Systems & Outcomes and Review calibration sections —
+// exactly where over-rating happens — never reached the model. 7000 fits
+// every current skill file uncut (largest is finding-specificity.md at ~6k).
+const SKILL_CAP = 7000;
 
 const SEP = "\n\n---\n\n";
 

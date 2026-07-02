@@ -91,6 +91,15 @@ function classifyFileBucket(path: string): "policy" | "evidence" {
   return /polic|procedure/.test(topSegment) ? "policy" : "evidence";
 }
 
+// Canonical GD4 ref normalizer used at EVERY ref join point (staged-audit row
+// matching, deriveEvidenceAssessmentFromAudit, …). Checklist lines' sourceRef
+// is AI-echoed and can drift in format ("DS: 6.1.1.DS1.a", stray spaces,
+// lower case) — both sides of any comparison must go through this same
+// function or refs that match in one place silently miss in another.
+function normalizeAuditRef(ref: string): string {
+  return ref.trim().replace(/^(ref|source|gd4|ds|ee|n)\s*[:#]\s*/i, "").replace(/\s+/g, "").toUpperCase();
+}
+
 // The full School Context string injected into AI calls: the typed markdown
 // briefing plus whatever was last read from the linked Drive context. Returns
 // "" when the user has switched injection off (cost control), so no context
@@ -825,11 +834,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const ppd = s.ppdReviewResults[subCriterionId];
         if (!ppd || ppd.rows.length === 0 || ppd.rows.some((r) => !r.ref)) return false;
         const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
-        const normRef = (ref: string) => ref.trim().replace(/\s+/g, "").toUpperCase();
 
         const entries = useChecklistModuleStore.getState().entries;
         // Index every audited (has a runId-tagged evidence item) checklist line
-        // by its normalized sourceRef.
+        // by its sourceRef, normalized with the SAME normalizeAuditRef the
+        // staged audit uses — a weaker normalizer here previously let refs
+        // that matched in the staged audit (e.g. "DS: 6.1.1.DS1.a") miss in
+        // this derive, falsely marking assessed lines as unmatched.
         const lineByRef = new Map<string, { status: SpecificLineStatus; apsr?: ApsrBreakdown; note?: string }>();
         for (const req of GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId)) {
           const entry = entries[req.id];
@@ -838,7 +849,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (!line.sourceRef) continue;
             const auditEv = [...line.evidence].reverse().find((ev) => ev.runId);
             if (!auditEv) continue;
-            lineByRef.set(normRef(line.sourceRef), { status: line.status, apsr: auditEv.apsr, note: auditEv.auditorNote });
+            lineByRef.set(normalizeAuditRef(line.sourceRef), { status: line.status, apsr: auditEv.apsr, note: auditEv.auditorNote });
           }
         }
         if (lineByRef.size === 0) return false;
@@ -849,7 +860,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const folderUrl = folder?.folderLink || folder?.policyLink || "";
         let matched = 0;
         const rows: EvidenceAssessmentRow[] = ppd.rows.map((p) => {
-          const hit = lineByRef.get(normRef(p.ref));
+          const hit = lineByRef.get(normalizeAuditRef(p.ref));
           const verdict = hit ? statusToVerdict(hit.status) : null;
           if (hit && verdict) {
             matched++;
@@ -868,13 +879,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               verdict, comment,
             };
           }
-          // Line not covered by the staged audit — leave it "Not met" with a note.
+          // Line not covered by the staged audit — "Not assessed", a neutral
+          // state excluded from the findings compile. Defaulting this to
+          // "Not met" previously compiled false NC findings for requirement
+          // lines that were never actually assessed.
           return {
             gdRef: p.ref, gd4ItemId: p.gd4ItemId, requirementText: p.requirementText,
             ppdExtract: p.fullComment || p.shortComment || "", ppdVerdict: p.verdict,
             evidenceSummary: "Not covered by the Evidence Folder staged audit.",
             evidenceFiles: [], evidenceChunkIds: [],
-            verdict: "Not met", comment: "This requirement line was not assessed by the staged audit — run an evidence assessment to fill it in.",
+            verdict: "Not assessed", comment: "No audit result matched this line — run or re-run the evidence assessment.",
           };
         });
         if (matched === 0) return false;
@@ -1045,7 +1059,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!result) return 0;
         let raised = 0;
         const rows = result.rows.map((row) => {
-          if (row.savedFindingId || row.assessmentFailed) return row;
+          // "Not assessed" rows raise nothing — no audit result ever matched
+          // this line, so there is no verdict to base a finding on.
+          if (row.savedFindingId || row.assessmentFailed || row.verdict === "Not assessed") return row;
           const req = GD4_REQUIREMENTS.find((r) => r.id === row.gd4ItemId);
           const findingType: FindingTypeCode = findingTypeForStatus(row.verdict);
           const ncSeverity: NcSeverity | null = findingType === "NC" ? (req?.gateSensitive ? "Major" : "Minor") : null;
@@ -3262,9 +3278,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // difference (e.g. "6.1.1.DS1.A" vs "6.1.1.DS1.a") makes an exact-string Map
         // lookup miss a ref that genuinely exists in the audit results, silently
         // dropping the line into the generic "overall coverage" fallback. Normalize
-        // both sides the same way so only a truly nonexistent ref falls through.
-        const normalizeAuditRef = (ref: string): string =>
-          ref.trim().replace(/^(ref|source|gd4|ds|ee|n)\s*[:#]\s*/i, "").replace(/\s+/g, "").toUpperCase();
+        // both sides via the shared module-level normalizeAuditRef so only a truly
+        // nonexistent ref falls through.
         const policyByRef = new Map(policyRows.map((r) => [normalizeAuditRef(r.ref), r]));
         const evidenceByRef = new Map(evidenceRows.map((r) => [normalizeAuditRef(r.ref), r]));
         const outcomeByRef = new Map(outcomeRows.map((r) => [normalizeAuditRef(r.ref), r]));
@@ -3295,7 +3310,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const effectiveERow = eRow ?? { ref: "", pointText: "", covered: evidenceOverall, note: "No specific audit point maps to this checklist line — using overall evidence coverage for the folder.", chunkIds: [] };
           const effectiveORow = oRow ?? { ref: "", pointText: "", outcomeEvident: outcomeOverall, reviewEvident: reviewOverall, note: "No specific audit point maps to this checklist line — using overall outcome/review coverage for the folder.", chunkIds: [] };
 
-          const apsr = buildStagedApsr(effectivePRow, effectiveERow, effectiveORow);
+          // requireCitations on live runs only: a positive dimension with no
+          // cited chunks is downgraded one level. Offline keyword simulation
+          // never cites chunks, so applying it there would zero every run.
+          const apsr = buildStagedApsr(effectivePRow, effectiveERow, effectiveORow, { requireCitations: live });
           const status = deriveApsrStatus(apsr);
           return { lineId: line.id, apsr, status };
         });
@@ -3828,6 +3846,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     // Bumped to v2 so existing sessions pick up the new blank-by-default
     // evidence baseline (previously seeded with sample ratings) instead of
     // silently keeping the old pre-filled state cached under v1.
-    { name: "ucc-gd4-workspace:v3", storage: workspaceStorage }
+    //
+    // partialize: fileTextCache holds the full extracted text of every Drive
+    // file ever read — persisting it can blow the localStorage quota and take
+    // ALL persistence down with it. It's a performance cache, so it stays
+    // in-memory only and is rebuilt from Drive on demand after a reload.
+    {
+      name: "ucc-gd4-workspace:v3",
+      storage: workspaceStorage,
+      partialize: (s) => ({ ...s, fileTextCache: {} }),
+    }
   )
 );
