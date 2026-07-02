@@ -357,6 +357,49 @@ export type GenericChecklistLine = {
 };
 
 // Which official GD4 field a generated line traces back to.
+// ─── Run automation modes ────────────────────────────────────────────────────
+// HOW MUCH the human is involved in a run — orthogonal to the Option A/B path
+// (WHAT gets assessed). A run combines both, e.g. "Option A in Hybrid mode".
+// Modes control WHEN results are committed and whether the human is prompted;
+// the assessment engines themselves are identical across modes.
+export type RunMode = "full_auto" | "confidence" | "review" | "hybrid" | "manual";
+
+// One deferred checklist-line commit: the exact write the engine WOULD have
+// made (same shape applyOptionAWrites consumes), held for human review under
+// the gated modes. `reason` says why it was queued (confidence gating).
+export type PendingCommitItem = {
+  id: string;
+  write: ChecklistLineWrite;
+  lineText: string;
+  reason?: string;
+};
+
+// A run whose commits are awaiting review (confidence / review / hybrid).
+export type PendingRun = {
+  subCriterionId: string;
+  path: "A" | "B";
+  runMode: RunMode;
+  runId: string;
+  createdAt: string;
+  items: PendingCommitItem[];
+};
+
+// The universal checklist-line write both engines produce: line status plus
+// one audit evidence item. Applied by useChecklistModuleStore.applyOptionAWrites
+// (matched line updated, or a new line created when none matches the ref).
+export type ChecklistLineWrite = {
+  gd4ItemId: string;
+  existingLineId?: string;
+  newLine?: Pick<SpecificChecklistLine, "text" | "clause" | "sourceRef" | "generatedBy">;
+  status: "Met" | "Partial" | "Not met";
+  evidence: Omit<SubChecklistEvidenceItem, "id">;
+  // Confidence-gating signal computed where the write is built: true when the
+  // AI is low-confidence (no/weak evidence, no citations, unverified quotes,
+  // contradicted promises), so the "confidence" mode queues it for a human.
+  lowConfidence?: boolean;
+  confidenceReason?: string;
+};
+
 export type ChecklistSourceType = "requirement" | "intent" | "describeShow" | "note" | "expectedEvidence";
 
 // A single testable audit point derived from the official GD4 requirement text.
@@ -616,6 +659,9 @@ export type AuditProgressState = {
   subCriterionId: string;
   stage: AuditProgressStage;
   stageDetail?: string;
+  // Automation mode this run is under, so the progress UI always shows how
+  // much will happen automatically.
+  runMode?: RunMode;
   filesRead?: number;
   filesTotal?: number;
   filesSkipped?: number;       // accumulated skip count (unreadable file types)
@@ -933,7 +979,8 @@ export type HumanDecisionModule =
   | "Finding Observation"
   | "Cross-Criterion Analysis"
   | "Final Report"
-  | "AI Review Log Feedback";
+  | "AI Review Log Feedback"
+  | "Run mode gate";
 
 export type HumanDecisionType = "Accepted" | "Edited" | "Overridden" | "Dismissed";
 
@@ -1038,6 +1085,7 @@ export type WorkspaceSnapshot = {
   ppdReviewResults?: Record<string, PPDReviewResult>;
   evidenceAssessments?: Record<string, EvidenceAssessmentResult>;
   analysisPath?: Record<string, "A" | "B">;
+  runMode?: Record<string, RunMode>;
   auditRunHistory?: Record<string, AuditRunRecord[]>;
 };
 

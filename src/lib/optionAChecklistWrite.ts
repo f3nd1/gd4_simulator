@@ -5,20 +5,13 @@
 // computeBand identically. Pure and store-free so it is unit-testable
 // (the stores transitively load pdfjs and cannot be imported under Vitest).
 
-import type { ApsrBreakdown, EvidenceAssessmentRow, PPDReviewRow, SpecificChecklistLine, SubChecklistEvidenceItem } from "../types";
+import type { ApsrBreakdown, ChecklistLineWrite, EvidenceAssessmentRow, PPDReviewRow, SpecificChecklistLine } from "../types";
 import { normalizeAuditRef } from "./gd4Refs";
 
-export type OptionALineWrite = {
-  gd4ItemId: string;
-  // Matched existing checklist line (by normalized GD4 ref) — the write
-  // UPDATES this line. undefined -> no line exists yet and newLine is set.
-  existingLineId?: string;
-  // Line to create when the checklist has no line for this ref yet (Option A
-  // can run before the checklist was ever generated).
-  newLine?: Pick<SpecificChecklistLine, "text" | "clause" | "sourceRef" | "generatedBy">;
-  status: "Met" | "Partial" | "Not met";
-  evidence: Omit<SubChecklistEvidenceItem, "id">;
-};
+// The write shape now lives in types (ChecklistLineWrite) so the pending-
+// commit queue can reference it without importing lib code; the old name is
+// kept as an alias for existing callers.
+export type OptionALineWrite = ChecklistLineWrite;
 
 // APSR from what Option A actually assessed: Approach from the PPD verdict,
 // Processes from the combined evidence verdict. Systems & Outcomes and
@@ -65,7 +58,22 @@ export function buildOptionALineWrites(
     const promiseLines = (row.promiseChecks ?? [])
       .map((p) => `Promise ${p.verdict}: ${p.promiseText}`)
       .join("\n");
+    // Confidence gating signal (used by the "confidence" run mode): gap
+    // verdicts, uncited lines, unverified quotes and contradicted promises
+    // all queue for human review instead of auto-committing.
+    const contradicted = (row.promiseChecks ?? []).filter((p) => p.verdict === "contradicted");
+    const confidence: { lowConfidence: boolean; confidenceReason?: string } =
+      status !== "Met"
+        ? { lowConfidence: true, confidenceReason: `Verdict ${status} — no or weak evidence found; confirm before committing.` }
+        : contradicted.length > 0
+          ? { lowConfidence: true, confidenceReason: `Evidence contradicts the PPD promise: ${contradicted[0].promiseText}.` }
+          : (row.evidenceChunkIds ?? []).length === 0
+            ? { lowConfidence: true, confidenceReason: "No evidence chunks cited for this verdict." }
+            : (row.comment ?? "").includes("unverified")
+              ? { lowConfidence: true, confidenceReason: "A quoted excerpt could not be verified against the source documents." }
+              : { lowConfidence: false };
     writes.push({
+      ...confidence,
       gd4ItemId: row.gd4ItemId,
       existingLineId: existing?.id,
       newLine: existing

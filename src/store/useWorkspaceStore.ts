@@ -51,10 +51,11 @@ import { useFindingDraftStore } from "./useFindingDraftStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, RunMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
 import { findingTypeForStatus } from "../lib/findingClassification";
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { buildOptionALineWrites } from "../lib/optionAChecklistWrite";
+import { DEFAULT_RUN_MODE, partitionWritesByMode, runModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -384,6 +385,28 @@ export type WorkspaceState = {
   analysisPath: Record<string, "A" | "B">;
   setAnalysisPath: (subCriterionId: string, path: "A" | "B") => void;
 
+  // HOW MUCH the human is involved per sub-criterion (orthogonal to the A/B
+  // path). Missing key means the default (confidence gating). Modes only
+  // change WHEN results commit and whether the human is prompted — see
+  // lib/runModes.ts.
+  runMode: Record<string, RunMode>;
+  setRunMode: (subCriterionId: string, mode: RunMode) => void;
+  // Checklist writes held for human review by the gated modes, one pending
+  // run per sub-criterion (a new run replaces the previous pending one).
+  pendingCommits: Record<string, PendingRun>;
+  // Accept ("commit this write, raise its findings") or reject ("drop it,
+  // nothing committed") ONE queued item; an optional status override lets
+  // Hybrid's Edit apply the human's verdict instead of the AI draft.
+  resolvePendingItem: (subCriterionId: string, itemId: string, decision: "accept" | "reject", overrideStatus?: "Met" | "Partial" | "Not met") => void;
+  // Commit every still-queued item of the pending run at once (Review mode's
+  // "Accept all"), then raise findings through the normal deduped pipeline.
+  acceptAllPending: (subCriterionId: string) => void;
+  // Throw the whole pending run away — nothing is committed.
+  discardPendingRun: (subCriterionId: string) => void;
+  // Option A in Full auto: PPD review → evidence assessment → compile
+  // findings, end to end with no stops (each step is the existing engine).
+  runOptionAFullAuto: (subCriterionId: string) => Promise<void>;
+
   // Running history of the git push/pull info the footer surfaces (from the
   // build-time __GIT_INFO__ constant). recordChangeLogEntry saves EVERY push
   // (dev deploy history — no commit-hash dedupe); the plain-English summary is
@@ -678,6 +701,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       evidenceAssessments: {},
       evidenceAssessmentProgress: null,
       analysisPath: {},
+      runMode: {},
+      pendingCommits: {},
       changeLog: [],
       auditJournal: "",
       restoreLog: [],
@@ -1015,8 +1040,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // persist across reloads/versions and feed buildScored/computeBand
           // identically. Idempotent: lines are matched by normalized ref and
           // updated; prior Option A/audit evidence (runId items) is replaced.
+          // GATED by the automation mode: full_auto commits all (and compiles
+          // findings), confidence commits confident lines and queues the
+          // flagged ones, review/hybrid queue everything, manual commits
+          // nothing (results stay on the PPD page as suggestions only).
           if (rows) {
             try {
+              const activeMode: RunMode = get().runMode[subCriterionId] ?? DEFAULT_RUN_MODE;
               const checklist = useChecklistModuleStore.getState();
               const linesByItem = Object.fromEntries(
                 Object.entries(checklist.entries).map(([itemId, e]) => [itemId, e.specific.map((l) => ({ id: l.id, sourceRef: l.sourceRef, clause: l.clause }))])
@@ -1027,7 +1057,30 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 drive: folder.folderLink || folder.policyLink,
                 owner: folder.owner,
               });
-              checklist.applyOptionAWrites(writes);
+              const { commit, queue } = partitionWritesByMode(activeMode, writes);
+              if (commit.length > 0) checklist.applyOptionAWrites(commit);
+              if (activeMode === "full_auto") {
+                // Full auto carries straight on to findings (existing deduped
+                // compile) — no stops.
+                get().compileEvidenceFindings(subCriterionId);
+              }
+              if (queue.length > 0) {
+                const entries = useChecklistModuleStore.getState().entries;
+                const lineTextOf = (w: ChecklistLineWrite): string =>
+                  w.newLine?.text ?? entries[w.gd4ItemId]?.specific.find((l) => l.id === w.existingLineId)?.text ?? w.gd4ItemId;
+                const items: PendingCommitItem[] = queue.map((w, i) => ({
+                  id: `${runId}-Q${i + 1}`,
+                  write: w,
+                  lineText: lineTextOf(w),
+                  reason: w.confidenceReason ?? (activeMode === "confidence" ? "Low confidence" : "Awaiting your review"),
+                }));
+                set((st) => ({
+                  pendingCommits: {
+                    ...st.pendingCommits,
+                    [subCriterionId]: { subCriterionId, path: "A", runMode: activeMode, runId, createdAt: new Date().toISOString(), items },
+                  },
+                }));
+              }
             } catch (err) {
               console.error("[EvidenceAssessment] checklist write-back failed", err instanceof Error ? err.message : String(err));
             }
@@ -1335,6 +1388,104 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setAnalysisPath: (subCriterionId, path) =>
         set((s) => ({ analysisPath: { ...s.analysisPath, [subCriterionId]: path } })),
 
+      setRunMode: (subCriterionId, mode) =>
+        set((s) => ({ runMode: { ...s.runMode, [subCriterionId]: mode } })),
+
+      resolvePendingItem: (subCriterionId, itemId, decision, overrideStatus) => {
+        const run = get().pendingCommits[subCriterionId];
+        const item = run?.items.find((i) => i.id === itemId);
+        if (!run || !item) return;
+        if (decision === "accept") {
+          // Commit through the SAME write path both engines use; an edited
+          // status remaps the evidence sufficiency and records the override.
+          const write = overrideStatus && overrideStatus !== item.write.status
+            ? {
+                ...item.write,
+                status: overrideStatus,
+                evidence: {
+                  ...item.write.evidence,
+                  sufficiency: (overrideStatus === "Met" ? "Present" : overrideStatus === "Partial" ? "Weak" : "Missing") as "Present" | "Weak" | "Missing",
+                  auditorNote: `${item.write.evidence.auditorNote ?? ""}\n\n[Human override: AI drafted ${item.write.status}; reviewer set ${overrideStatus}.]`.trim(),
+                },
+              }
+            : item.write;
+          useChecklistModuleStore.getState().applyOptionAWrites([write]);
+          try { useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId); } catch { /* non-fatal */ }
+          get().logHumanDecision({
+            module: "Run mode gate",
+            subjectId: item.write.gd4ItemId,
+            aiRunId: run.runId,
+            aiOutput: `AI verdict: ${item.write.status} — ${item.lineText.slice(0, 160)}`,
+            humanDecision: overrideStatus && overrideStatus !== item.write.status ? `Edited to ${overrideStatus}` : "Accepted",
+            changed: !!overrideStatus && overrideStatus !== item.write.status,
+            decisionType: overrideStatus && overrideStatus !== item.write.status ? "Edited" : "Accepted",
+            reason: item.reason ?? "",
+          });
+        } else {
+          get().logHumanDecision({
+            module: "Run mode gate",
+            subjectId: item.write.gd4ItemId,
+            aiRunId: run.runId,
+            aiOutput: `AI verdict: ${item.write.status} — ${item.lineText.slice(0, 160)}`,
+            humanDecision: "Rejected — not committed",
+            changed: true,
+            decisionType: "Dismissed",
+            reason: item.reason ?? "",
+          });
+        }
+        set((s) => {
+          const cur = s.pendingCommits[subCriterionId];
+          if (!cur) return {};
+          const items = cur.items.filter((i) => i.id !== itemId);
+          if (items.length === 0) {
+            const { [subCriterionId]: _done, ...rest } = s.pendingCommits;
+            return { pendingCommits: rest };
+          }
+          return { pendingCommits: { ...s.pendingCommits, [subCriterionId]: { ...cur, items } } };
+        });
+      },
+
+      acceptAllPending: (subCriterionId) => {
+        const run = get().pendingCommits[subCriterionId];
+        if (!run || run.items.length === 0) return;
+        useChecklistModuleStore.getState().applyOptionAWrites(run.items.map((i) => i.write));
+        try { useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId); } catch { /* non-fatal */ }
+        get().logHumanDecision({
+          module: "Run mode gate",
+          subjectId: subCriterionId,
+          aiRunId: run.runId,
+          aiOutput: `${run.items.length} queued verdict(s) from run ${run.runId}`,
+          humanDecision: "Accept all",
+          changed: false,
+          decisionType: "Accepted",
+          reason: "",
+        });
+        set((s) => {
+          const { [subCriterionId]: _done, ...rest } = s.pendingCommits;
+          return { pendingCommits: rest };
+        });
+      },
+
+      discardPendingRun: (subCriterionId) =>
+        set((s) => {
+          const { [subCriterionId]: _dropped, ...rest } = s.pendingCommits;
+          return { pendingCommits: rest };
+        }),
+
+      runOptionAFullAuto: async (subCriterionId) => {
+        // Step 1 — PPD review. Stop the chain if it failed or was stopped.
+        await get().runPPDReview(subCriterionId);
+        const ppd = get().ppdReviewResults[subCriterionId];
+        if (!ppd || ppd.rows.length === 0 || ppd.runWarnings?.some((w) => /stopped/i.test(w))) return;
+        // Step 2 — evidence assessment. Its finish() applies the checklist
+        // writes itself under full_auto.
+        await get().runEvidenceAssessment(subCriterionId);
+        const ev = get().evidenceAssessments[subCriterionId];
+        if (!ev || ev.rows.length === 0 || ev.rows.every((r) => r.verdict === "Not assessed")) return;
+        // Step 3 — compile findings (existing deduped pipeline).
+        get().compileEvidenceFindings(subCriterionId);
+      },
+
       // Appends one git push/pull entry to the change log, deduped by
       // commitHash so re-visits / re-renders of the same build don't log the
       // same commit twice. Derives the plain-English summary from the commit
@@ -1411,6 +1562,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ppdReviewResults: s.ppdReviewResults,
             evidenceAssessments: s.evidenceAssessments,
             analysisPath: s.analysisPath,
+            runMode: s.runMode,
             auditRunHistory: s.auditRunHistory,
           };
           const entry: VersionEntry = {
@@ -1476,6 +1628,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ppdReviewResults: snap.ppdReviewResults ?? {},
             evidenceAssessments: snap.evidenceAssessments ?? {},
             analysisPath: snap.analysisPath ?? {},
+            runMode: snap.runMode ?? {},
             auditRunHistory: snap.auditRunHistory ?? {},
             // Derived from the restored history: latest run per folder.
             lastAuditRuns: Object.fromEntries(
@@ -1517,6 +1670,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ppdReviewResults: s.ppdReviewResults,
             evidenceAssessments: s.evidenceAssessments,
             analysisPath: s.analysisPath,
+            runMode: s.runMode,
             auditRunHistory: s.auditRunHistory,
           };
           const entry: VersionEntry = {
@@ -1581,6 +1735,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           evidenceAssessments: {},
           evidenceAssessmentProgress: null,
           analysisPath: {},
+          // runMode is a per-sub-criterion PREFERENCE, kept across cycles;
+          // pendingCommits are the old cycle's uncommitted run state — wiped.
+          pendingCommits: {},
           auditJournal: "",
           // Old cycle's school briefing and audit-run history must not carry
           // into a brand-new cycle's AI calls / folder panels.
@@ -3094,6 +3251,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const s = get();
         const folder = s.folders.find((f) => f.id === id);
         if (!folder) return;
+        // Automation mode for this sub-criterion (NOT the scope `mode` param):
+        // decides whether verdicts commit immediately, queue for review, or
+        // whether the run happens at all (manual).
+        const automationMode: RunMode = s.runMode[folder.subCriterionId] ?? DEFAULT_RUN_MODE;
+        if (automationMode === "manual") {
+          // Manual mode: the AI must not auto-decide anything — no AI calls,
+          // no verdicts. The user enters verdicts in the checklist directly.
+          set((st) => ({
+            folders: st.folders.map((f) => f.id === id ? {
+              ...f,
+              lastAuditSummary: "Manual mode selected — the staged audit was not run and nothing was committed. Enter verdicts directly in the Sub-Criterion Checklist (AI suggestions are available per item), or switch this sub-criterion's mode to run AI assessments.",
+              lastAuditAt: f.lastAuditAt,
+            } : f),
+          }));
+          return;
+        }
         // Defensive: a stale true left over from a previous run (e.g. the user
         // clicked "Skip pass" right as that run ended, or a bulk "Audit All"
         // sequence moved to the next folder before the reset fired) must never
@@ -3131,7 +3304,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         let auditHadError = false;
         const auditStartedAt = Date.now();
-        setProgress("listing", { stageDetail: "Loading GD4 audit points…", status: "running", canCancel: true, startedAt: auditStartedAt, lastHeartbeatAt: auditStartedAt });
+        setProgress("listing", { stageDetail: "Loading GD4 audit points…", status: "running", canCancel: true, startedAt: auditStartedAt, lastHeartbeatAt: auditStartedAt, runMode: automationMode });
 
         try {
         const runId = makeRunId(folder.subCriterionId);
@@ -3655,29 +3828,60 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           truncationNotes.push(`[PARTIAL RUN] ${linesNotAssessed} checklist line(s) were NOT assessed (run stopped/skipped before their audit points were reviewed) — their previous status was left unchanged and no findings were raised for them.`);
         }
 
-        // Stage 6: Write to Sub-Criterion Checklist
-        setProgress("saving", { stageDetail: `Saving ${stagedVerdicts.length} verdicts…`, linesAssessed: stagedVerdicts.length, findingsDetected: stagedVerdicts.filter((v) => v.status === "Not met").length });
+        // Stage 6: Write to Sub-Criterion Checklist — gated by the automation
+        // mode. Every staged verdict becomes the same universal write shape
+        // Option A uses (status + one audit evidence item), then the mode
+        // decides which commit now and which queue for human review.
+        setProgress("saving", { stageDetail: `Saving ${stagedVerdicts.length} verdicts (${runModeLabel(automationMode)})…`, linesAssessed: stagedVerdicts.length, findingsDetected: stagedVerdicts.filter((v) => v.status === "Not met").length });
+        let queuedForReview = 0;
         try {
           const checklist = useChecklistModuleStore.getState();
+          const stagedWrites: Array<{ write: ChecklistLineWrite; lineText: string }> = [];
           for (const v of stagedVerdicts) {
             const itemId = lineOwners.get(v.lineId);
             if (!itemId) continue;
-            checklist.setSpecificStatus(itemId, v.lineId, v.status);
+            const lineText = lines.find((l) => l.id === v.lineId)?.text || v.lineId;
             const baseNote = apsrAuditNote(v.apsr);
             const sourceLines = [`SOURCE TRACE`, `Run: ${runId} (staged audit, ${mode} mode, ${live ? "live AI" : "offline estimate"})`, `Auditor: ${auditorName}`];
-            checklist.replaceAuditEvidence(itemId, v.lineId, {
-              title: `Staged audit ${runId} — ${folder.folderName}`,
-              type: evidenceTypeFromApsr(v.apsr, lines.find((l) => l.id === v.lineId)?.text || ""),
-              drive: folder.folderLink || folder.policyLink,
-              owner: folder.owner,
-              date: new Date().toISOString().slice(0, 10),
-              approved: false,
-              reviewed: false,
-              sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
-              auditorNote: `${baseNote}\n\n${sourceLines.join("\n")}`,
-              apsr: v.apsr,
-              runId,
+            const conf = stagedWriteConfidence(v.status, v.apsr);
+            stagedWrites.push({
+              lineText,
+              write: {
+                gd4ItemId: itemId,
+                existingLineId: v.lineId,
+                status: v.status,
+                lowConfidence: conf.lowConfidence,
+                confidenceReason: conf.reason,
+                evidence: {
+                  title: `Staged audit ${runId} — ${folder.folderName}`,
+                  type: evidenceTypeFromApsr(v.apsr, lineText),
+                  drive: folder.folderLink || folder.policyLink,
+                  owner: folder.owner,
+                  date: new Date().toISOString().slice(0, 10),
+                  approved: false,
+                  reviewed: false,
+                  sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
+                  auditorNote: `${baseNote}\n\n${sourceLines.join("\n")}`,
+                  apsr: v.apsr,
+                  runId,
+                },
+              },
             });
+          }
+          const { commit, queue } = partitionWritesByMode(automationMode, stagedWrites.map((w) => w.write));
+          if (commit.length > 0) checklist.applyOptionAWrites(commit);
+          if (queue.length > 0) {
+            const queueSet = new Set(queue);
+            const items: PendingCommitItem[] = stagedWrites
+              .filter((w) => queueSet.has(w.write))
+              .map((w, i) => ({ id: `${runId}-Q${i + 1}`, write: w.write, lineText: w.lineText, reason: w.write.confidenceReason ?? (automationMode === "confidence" ? "Low confidence" : "Awaiting your review") }));
+            queuedForReview = items.length;
+            set((st) => ({
+              pendingCommits: {
+                ...st.pendingCommits,
+                [folder.subCriterionId]: { subCriterionId: folder.subCriterionId, path: "B", runMode: automationMode, runId, createdAt: new Date().toISOString(), items },
+              },
+            }));
           }
         } catch (err) {
           finish(`Staged audit failed while writing verdicts: ${err instanceof Error ? err.message : String(err)}`, live);
@@ -3686,7 +3890,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const preRaiseFindingIds = new Set(get().customFindings.map((f) => f.id));
         let autoRaised = 0;
-        try { autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings(runId); } catch { /* non-fatal */ }
+        // Findings only auto-raise for verdicts that actually committed;
+        // queued lines raise theirs when the human accepts them.
+        if (automationMode === "full_auto" || automationMode === "confidence") {
+          try { autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings(runId); } catch { /* non-fatal */ }
+        }
 
         // Stage 7: Findings Summary
         setProgress("findings_summary", { stageDetail: `Found ${autoRaised} gap${autoRaised === 1 ? "" : "s"} — raising findings…` });
@@ -3751,7 +3959,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // missed under the detail lines.
         if (fallbackStages.length > 0) lineParts.push(`⚠ OFFLINE FALLBACK — ${fallbackStages.join(", ")} stage(s) failed live AI and used keyword simulation. This run is NOT a full live AI audit.`);
         if (linesNotAssessed > 0) lineParts.push(`⚠ PARTIAL RUN — ${linesNotAssessed} line(s) not assessed (run stopped/skipped early); their previous status was left unchanged.`);
-        lineParts.push(`Run ${runId} · Staged audit (${mode} mode) · Auditor: ${auditorLabel}.`);
+        lineParts.push(`Run ${runId} · Staged audit (${mode} mode) · Automation: ${runModeLabel(automationMode)} · Auditor: ${auditorLabel}.`);
+        if (queuedForReview > 0) lineParts.push(`⏸ ${queuedForReview} verdict${queuedForReview === 1 ? "" : "s"} NOT committed — waiting for your review on the Evidence Folder page ("Needs your review"). Findings for those lines are raised only when you accept them.`);
         if (specialistLabel) lineParts.push(`Specialist lens: ${specialistLabel}.`);
         lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${stagedVerdicts.length} assessed line${stagedVerdicts.length === 1 ? "" : "s"}${linesNotAssessed > 0 ? `; ${linesNotAssessed} not assessed` : ""}).`);
         if (bandPartsStaged.length) lineParts.push(`Band: ${bandPartsStaged.join(", ")}.`);

@@ -8,6 +8,8 @@ import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename,
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { useScored } from "../hooks/useScored";
+import { RUN_MODES, DEFAULT_RUN_MODE, runModeLabel } from "../lib/runModes";
+import type { RunMode } from "../types";
 
 const SUMMARY_CAP = 320;
 
@@ -988,6 +990,14 @@ function AuditProgressModal({
                   {progress.scope === "policy" ? "Policy only" : "Evidence only"}
                 </span>
               )}
+              {progress.runMode && (
+                <span
+                  title={RUN_MODES.find((m) => m.value === progress.runMode)?.desc}
+                  style={{ fontSize: 10, background: "#faf5ff", color: "#7c3aed", border: "1px solid #ddd6fe", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}
+                >
+                  Mode: {runModeLabel(progress.runMode)}
+                </span>
+              )}
               {progress.overallTotal && progress.overallCurrent != null && (
                 <span style={{ background: "#f1f5f9", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>
                   Folder {progress.overallCurrent} of {progress.overallTotal}
@@ -1304,10 +1314,108 @@ const SCOPE_OPTIONS: { value: AuditScope; label: string; desc: string }[] = [
   { value: "evidence", label: "Evidence only",            desc: "Read only the Actual Evidence folder" },
 ];
 
+// Verdicts a gated run (confidence / review / hybrid) held back for human
+// review. Review and confidence modes show the whole batch with Accept all;
+// hybrid presents one gate at a time (approve / edit / reject, then next).
+function PendingReviewPanel() {
+  const pendingCommits = useWorkspaceStore((s) => s.pendingCommits);
+  const resolvePendingItem = useWorkspaceStore((s) => s.resolvePendingItem);
+  const acceptAllPending = useWorkspaceStore((s) => s.acceptAllPending);
+  const discardPendingRun = useWorkspaceStore((s) => s.discardPendingRun);
+  const [edits, setEdits] = useState<Record<string, "Met" | "Partial" | "Not met">>({});
+
+  const runs = Object.values(pendingCommits).filter((r) => r.items.length > 0);
+  if (runs.length === 0) return null;
+
+  const statusTone = (s: string) => (s === "Met" ? "#15803d" : s === "Partial" ? "#b45309" : "#b91c1c");
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+      {runs.map((run) => {
+        const hybrid = run.runMode === "hybrid";
+        const items = hybrid ? run.items.slice(0, 1) : run.items;
+        return (
+          <div key={run.subCriterionId} style={{ border: "1px solid #fbbf24", background: "#fffbeb", borderRadius: 10, padding: "10px 14px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>
+                ⏸ Needs your review ({run.items.length}) — sub-criterion {run.subCriterionId}
+              </span>
+              <Pill s="medium">{runModeLabel(run.runMode)}</Pill>
+              <Pill s="neutral">Option {run.path}</Pill>
+              <span style={{ fontSize: 11, color: "#a16207", fontFamily: "ui-monospace,monospace" }}>{run.runId}</span>
+              <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                {!hybrid && (
+                  <button
+                    onClick={() => acceptAllPending(run.subCriterionId)}
+                    style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "4px 12px", borderRadius: 6, border: "1px solid #15803d", background: "#15803d", color: "#fff" }}
+                  >
+                    Accept all
+                  </button>
+                )}
+                <button
+                  onClick={() => { if (confirm(`Discard all ${run.items.length} queued verdict(s) for ${run.subCriterionId}? Nothing will be committed.`)) discardPendingRun(run.subCriterionId); }}
+                  style={{ cursor: "pointer", fontSize: 11.5, padding: "4px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
+                >
+                  Discard run
+                </button>
+              </span>
+            </div>
+            {hybrid && (
+              <div style={{ fontSize: 11.5, color: "#a16207", marginBottom: 6 }}>
+                Hybrid mode: approve, edit or reject each verdict in turn — {run.items.length} gate{run.items.length === 1 ? "" : "s"} remaining.
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {items.map((item) => {
+                const chosen = edits[item.id] ?? item.write.status;
+                return (
+                  <div key={item.id} style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 11px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
+                      <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5, fontWeight: 700, color: "#4338ca" }}>{item.write.gd4ItemId}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: statusTone(item.write.status) }}>AI: {item.write.status}</span>
+                      {item.reason && <span style={{ fontSize: 11, color: "#a16207" }}>{item.reason}</span>}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.4, marginBottom: 6 }}>{item.lineText}</div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                      <select
+                        value={chosen}
+                        onChange={(e) => setEdits((prev) => ({ ...prev, [item.id]: e.target.value as "Met" | "Partial" | "Not met" }))}
+                        style={{ ...inputStyle, width: 110, padding: "3px 5px", fontSize: 11.5 }}
+                        title="Edit the verdict before accepting"
+                      >
+                        <option value="Met">Met</option>
+                        <option value="Partial">Partial</option>
+                        <option value="Not met">Not met</option>
+                      </select>
+                      <button
+                        onClick={() => resolvePendingItem(run.subCriterionId, item.id, "accept", chosen !== item.write.status ? chosen : undefined)}
+                        style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "4px 12px", borderRadius: 6, border: "1px solid #15803d", background: "#f0fdf4", color: "#15803d" }}
+                      >
+                        {chosen !== item.write.status ? `Accept as ${chosen}` : "Accept"}
+                      </button>
+                      <button
+                        onClick={() => resolvePendingItem(run.subCriterionId, item.id, "reject")}
+                        style={{ cursor: "pointer", fontSize: 11.5, padding: "4px 12px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Guidance for the Analysis path column: which of Option A / Option B to
 // choose. One-line summary always visible; detail behind an expander.
 function PathGuidance() {
   const [open, setOpen] = useState(false);
+  const [modesOpen, setModesOpen] = useState(false);
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#f8fafc", padding: "8px 12px", marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -1315,12 +1423,30 @@ function PathGuidance() {
           Option B for a quick sweep; Option A for the deep, assessor-grade check.
         </span>
         <button
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => { setOpen((v) => !v); setModesOpen(false); }}
           style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#4a5a8a", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, padding: "3px 9px", marginLeft: "auto" }}
         >
-          {open ? "Hide" : "Which should I choose?"}
+          {open ? "Hide" : "Which path?"}
+        </button>
+        <button
+          onClick={() => { setModesOpen((v) => !v); setOpen(false); }}
+          style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#4a5a8a", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, padding: "3px 9px" }}
+        >
+          {modesOpen ? "Hide" : "Which mode?"}
         </button>
       </div>
+      {modesOpen && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 2 }}>
+            The mode sets how much the AI does on its own; the path (Option A/B) sets what gets assessed. A run combines both, for example "Option A in Hybrid mode".
+          </div>
+          {RUN_MODES.map((m) => (
+            <div key={m.value} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 11px", fontSize: 12, color: "#374151", lineHeight: 1.45 }}>
+              <b style={{ color: "#1e293b" }}>{m.label}:</b> {m.desc}
+            </div>
+          ))}
+        </div>
+      )}
       {open && (
         <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr", marginTop: 8 }}>
           <div style={{ background: "#fff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
@@ -1376,6 +1502,10 @@ export function EvidenceFolder() {
   const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
   const customFindings      = useWorkspaceStore((s) => s.customFindings);
   const scored              = useScored();
+  // Automation mode per sub-criterion + the queue of verdicts awaiting review.
+  const runMode             = useWorkspaceStore((s) => s.runMode);
+  const setRunMode          = useWorkspaceStore((s) => s.setRunMode);
+  const runOptionAFullAuto  = useWorkspaceStore((s) => s.runOptionAFullAuto);
 
   const [checkingAdditional, setCheckingAdditional] = useState(false);
   const [viewingRun, setViewingRun] = useState<AuditRunRecord | null>(null);
@@ -1703,6 +1833,7 @@ export function EvidenceFolder() {
       </div>
 
       <PathGuidance />
+      <PendingReviewPanel />
 
       <table>
         <thead>
@@ -1861,6 +1992,9 @@ export function EvidenceFolder() {
                     ) : (
                       (() => {
                         const path = analysisPath[f.subCriterionId] ?? "A";
+                        const modeValue: RunMode = runMode[f.subCriterionId] ?? DEFAULT_RUN_MODE;
+                        const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id;
+                        const primaryStyle: React.CSSProperties = { cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", whiteSpace: "nowrap", textDecoration: "none", display: "inline-block" };
                         const overflowItem = (label: string, onClick: () => void, opts?: { disabled?: boolean; title?: string; last?: boolean }) => (
                           <button
                             key={label}
@@ -1874,24 +2008,53 @@ export function EvidenceFolder() {
                         );
                         return (
                           <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-                            {/* ONE primary action per row, always matching the selected path. */}
-                            {path === "A" ? (
+                            {/* ONE primary action per row, matching the selected path AND mode. */}
+                            {modeValue === "manual" ? (
                               <Link
-                                to={`/ppd-review?item=${f.subCriterionId}`}
-                                title="Option A (PPD + Evidence): run the PPD review, then the evidence assessment, then compile findings — on the PPD Requirements Review page"
-                                style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", whiteSpace: "nowrap", textDecoration: "none", display: "inline-block" }}
+                                to={firstItemId ? `/sub-checklist?item=${firstItemId}` : "/sub-checklist"}
+                                title="Manual mode: the AI decides nothing. Enter each verdict yourself in the Sub-Criterion Checklist; AI suggestions are available per item on request."
+                                style={primaryStyle}
                               >
-                                Start PPD + Evidence review →
+                                Open checklist (manual entry) →
                               </Link>
+                            ) : path === "A" ? (
+                              modeValue === "full_auto" ? (
+                                <button
+                                  onClick={() => runOptionAFullAuto(f.subCriterionId)}
+                                  title="Option A (PPD + Evidence) in Full auto: runs the PPD review, evidence assessment and findings compile end to end with no stops."
+                                  style={primaryStyle}
+                                >
+                                  Run PPD + Evidence (Full auto)
+                                </button>
+                              ) : (
+                                <Link
+                                  to={`/ppd-review?item=${f.subCriterionId}`}
+                                  title={`Option A (PPD + Evidence) in ${runModeLabel(modeValue)}: run the PPD review, then the evidence assessment, then compile findings — on the PPD Requirements Review page`}
+                                  style={primaryStyle}
+                                >
+                                  Start PPD + Evidence review →
+                                </Link>
+                              )
                             ) : (
                               <button
                                 onClick={() => auditFolderStaged(f.id, "all")}
-                                title="Option B (Staged audit): Policy Adequacy → Evidence Implementation → Outcome & Review → deterministic APSR verdicts on the Sub-Criterion Checklist"
-                                style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", whiteSpace: "nowrap" }}
+                                title={`Option B (Staged audit) in ${runModeLabel(modeValue)}: Policy Adequacy → Evidence Implementation → Outcome & Review → deterministic APSR verdicts on the Sub-Criterion Checklist`}
+                                style={primaryStyle}
                               >
-                                Run staged audit (Option B)
+                                {modeValue === "full_auto" ? "Run staged audit (Option B, Full auto)" : "Run staged audit (Option B)"}
                               </button>
                             )}
+                            {/* Automation mode: HOW MUCH the human is involved (separate from the A/B path). */}
+                            <select
+                              value={modeValue}
+                              onChange={(e) => setRunMode(f.subCriterionId, e.target.value as RunMode)}
+                              title={RUN_MODES.find((m) => m.value === modeValue)?.desc}
+                              style={{ ...inputStyle, width: 132, padding: "5px 6px", fontSize: 11 }}
+                            >
+                              {RUN_MODES.map((m) => (
+                                <option key={m.value} value={m.value}>{m.short}</option>
+                              ))}
+                            </select>
                             {lastRun && (
                               <button
                                 onClick={() => setViewingRun(lastRun)}
@@ -1912,14 +2075,14 @@ export function EvidenceFolder() {
                               </button>
                               {overflowOpen === f.id && (
                                 <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 14px #0002", zIndex: 30, minWidth: 230, overflow: "hidden" }}>
-                                  {path === "A" &&
+                                  {modeValue !== "manual" && path === "A" &&
                                     overflowItem("Run staged audit (Option B)", () => auditFolderStaged(f.id, "all"), {
                                       title: "Runs the Option B engine on this folder even though Option A is selected — verdicts land on the Sub-Criterion Checklist",
                                     })}
-                                  {overflowItem("Policy check only (Option B)", () => auditFolderStaged(f.id, "policy"), {
+                                  {modeValue !== "manual" && overflowItem("Policy check only (Option B)", () => auditFolderStaged(f.id, "policy"), {
                                     title: "Option B partial run: check only Policy & Procedure documents for documented approaches",
                                   })}
-                                  {overflowItem("Evidence check only (Option B)", () => auditFolderStaged(f.id, "evidence"), {
+                                  {modeValue !== "manual" && overflowItem("Evidence check only (Option B)", () => auditFolderStaged(f.id, "evidence"), {
                                     title: "Option B partial run: check only Actual Evidence documents for implementation records",
                                   })}
                                   {overflowItem(busy === `folderaccess:policy:${f.id}` ? "Checking…" : "Check policy access", () => checkFolderAccess(f.id, "policy"), {
