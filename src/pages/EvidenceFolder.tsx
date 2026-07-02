@@ -1324,8 +1324,19 @@ function FullAuditOverlay() {
   const progress = useWorkspaceStore((s) => s.fullAuditProgress);
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
   const dismiss = useWorkspaceStore((s) => s.dismissFullAuditProgress);
+  // 1s tick while running so the elapsed indicator visibly moves — a long
+  // AI/Drive step must never look frozen.
+  const [, setTick] = useState(0);
+  const isRunning = progress?.status === "running";
+  useEffect(() => {
+    if (!isRunning) return;
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [isRunning]);
   if (!progress) return null;
   const running = progress.status === "running";
+  const elapsedS = progress.currentStartedAt ? Math.max(0, Math.floor((Date.now() - progress.currentStartedAt) / 1000)) : null;
+  const elapsedLabel = elapsedS == null ? "" : elapsedS >= 60 ? ` ${Math.floor(elapsedS / 60)}m ${elapsedS % 60}s` : ` ${elapsedS}s`;
   const processed = progress.entries.filter((e) => e.status === "done" || e.status === "skipped" || e.status === "error").length;
   const doneCount = progress.entries.filter((e) => e.status === "done").length;
   const skippedCount = progress.entries.filter((e) => e.status === "skipped").length;
@@ -1337,7 +1348,7 @@ function FullAuditOverlay() {
   const toneOf = (s: FullAuditEntry["status"]) =>
     s === "done" ? TONE.good : s === "skipped" ? TONE.medium : s === "error" ? TONE.critical : s === "running" ? TONE.progress : TONE.neutral;
   const statusWord = (e: FullAuditEntry) =>
-    e.status === "running" ? "assessing…" : e.status === "waiting" ? "waiting" : e.status === "done" ? `done${e.note ? ` (${e.note})` : ""}` : e.status === "skipped" ? `skipped${e.note ? ` — ${e.note}` : ""}` : `error${e.note ? ` — ${e.note}` : ""}`;
+    e.status === "running" ? `assessing…${elapsedLabel}` : e.status === "waiting" ? "waiting" : e.status === "done" ? `done${e.note ? ` (${e.note})` : ""}` : e.status === "skipped" ? `skipped${e.note ? ` — ${e.note}` : ""}` : `error${e.note ? ` — ${e.note}` : ""}`;
 
   // Circular percentage ring.
   const R = 44;
@@ -1361,6 +1372,7 @@ function FullAuditOverlay() {
         {running && (
           <div style={{ fontSize: 13, color: "#475569", marginBottom: 6 }}>
             Now: <b>{progress.currentName}</b>
+            {running && elapsedLabel && <span style={{ color: "#94a3b8" }}> — assessing…{elapsedLabel}</span>}
           </div>
         )}
         {!running && progress.summary && (

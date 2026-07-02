@@ -152,7 +152,7 @@ async function driveFetch(url: string, accessToken: string, signal?: AbortSignal
 // excludes Shared/Team Drive items — a folder living in a Shared Drive then
 // looks "denied" (403) or simply not found, even though the connected
 // account genuinely has viewer access to it.
-export async function listFolderFiles(folderId: string, accessToken: string): Promise<DriveFile[]> {
+export async function listFolderFiles(folderId: string, accessToken: string, signal?: AbortSignal): Promise<DriveFile[]> {
   const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
   const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
   const all: DriveFile[] = [];
@@ -163,7 +163,7 @@ export async function listFolderFiles(folderId: string, accessToken: string): Pr
   let pages = 0;
   do {
     const url = pageToken ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}` : baseUrl;
-    const res = await driveFetch(url, accessToken);
+    const res = await driveFetch(url, accessToken, signal);
     const data = await res.json();
     all.push(...((data.files || []) as DriveFile[]));
     pageToken = data.nextPageToken as string | undefined;
@@ -187,14 +187,15 @@ export async function listFolderFilesRecursive(
   folderId: string,
   accessToken: string,
   path = "",
-  depth = 0
+  depth = 0,
+  signal?: AbortSignal
 ): Promise<DriveFileWithPath[]> {
   if (depth > MAX_FOLDER_DEPTH) return [];
-  const entries = await listFolderFiles(folderId, accessToken);
+  const entries = await listFolderFiles(folderId, accessToken, signal);
   const nested = await Promise.all(
     entries.map((entry) => {
       const entryPath = path ? `${path}/${entry.name}` : entry.name;
-      if (entry.mimeType === FOLDER_MIME) return listFolderFilesRecursive(entry.id, accessToken, entryPath, depth + 1);
+      if (entry.mimeType === FOLDER_MIME) return listFolderFilesRecursive(entry.id, accessToken, entryPath, depth + 1, signal);
       return Promise.resolve<DriveFileWithPath[]>([{ ...entry, path: entryPath }]);
     })
   );

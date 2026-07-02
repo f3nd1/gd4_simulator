@@ -56,7 +56,7 @@ import { findingTypeForStatus } from "../lib/findingClassification";
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { buildOptionALineWrites } from "../lib/optionAChecklistWrite";
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
-import { buildFullAuditPlan, fullAuditLabel, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
+import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -77,6 +77,23 @@ let _currentFileAbort: (() => void) | null = null;
 // loop fire further paid calls in the meantime). One run at a time (busy
 // flag), so a single module-level ref is sufficient.
 let _currentRunAbort: AbortController | null = null;
+
+// Combines a run-level abort signal with a hard timeout, without relying on
+// AbortSignal.any (not available in all targets). Used to bound every Drive
+// read in the Option A path — an unbounded fetch here is exactly what froze
+// Full auto on one sub-criterion.
+function timeoutSignal(parent: AbortSignal | undefined, ms: number): AbortSignal {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(new DOMException(`Timed out after ${Math.round(ms / 1000)}s`, "TimeoutError")), ms);
+  const onParent = () => { clearTimeout(timer); ctrl.abort(); };
+  if (parent) {
+    if (parent.aborted) onParent();
+    else parent.addEventListener("abort", onParent, { once: true });
+  }
+  return ctrl.signal;
+}
+const DRIVE_LIST_TIMEOUT_MS = 30_000;   // folder listing
+const DRIVE_FILE_TIMEOUT_MS = 60_000;   // single file export/extraction
 
 // Best-effort evidence-type classification for audit-attached evidence, from
 // the checklist line being satisfied (the folder audit reads many files into
@@ -825,8 +842,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions } }
               : st.ppdReviewResults,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
-            busy: null,
-            ppdReviewProgress: null,
+            // Guarded: a timed-out run's late finish must not clear the NEXT
+            // run's busy flag (the full-audit sweep may already have moved on).
+            busy: st.busy === "ppdreview" + subCriterionId ? null : st.busy,
+            ppdReviewProgress: st.ppdReviewProgress?.subCriterionId === subCriterionId ? null : st.ppdReviewProgress,
           }));
         };
 
@@ -849,7 +868,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (!policyId) { finish(null, false, "No Policy & Procedure folder linked."); return; }
           if (!token) { finish(null, false, "Not connected to Google Drive."); return; }
 
-          const allFiles = await listFolderFilesRecursive(policyId, token);
+          const allFiles = await listFolderFilesRecursive(policyId, token, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS));
           // If policyLink is a dedicated folder, every file in it is policy;
           // if it's the shared single-folder convention (folderLink doubling
           // as both), keep only files under the "Policy & Procedure" subfolder.
@@ -870,7 +889,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               body = cached.text;
             } else {
               try {
-                body = await exportFileText(file, token);
+                body = await exportFileText(file, token, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
                 // Only cache successful extractions — caching `text: null`
                 // made a transient read failure stick until the Drive file's
                 // modifiedTime changed, with no way to retry.
@@ -1048,8 +1067,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, derivedFromAudit: false } }
               : st.evidenceAssessments,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
-            busy: null,
-            evidenceAssessmentProgress: null,
+            // Guarded — see runPPDReview's finish.
+            busy: st.busy === "evidenceassess" + subCriterionId ? null : st.busy,
+            evidenceAssessmentProgress: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? null : st.evidenceAssessmentProgress,
           }));
           // Write the verdicts into the Sub-Criterion Checklist — the same
           // store Option B's staged audit writes to — so Option A results
@@ -1113,7 +1133,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (!token) { finish(null, false, "Not connected to Google Drive."); return; }
 
           setEvProgress("Reading the Actual Evidence folder…", 3);
-          const allFiles = await listFolderFilesRecursive(evidenceId, token);
+          const allFiles = await listFolderFilesRecursive(evidenceId, token, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS));
           // Dedicated evidence folder -> all files are evidence; shared
           // single-folder convention -> keep only the "Actual Evidence" bucket.
           const evidenceFiles = parseFolderId(folder.folderLink)
@@ -1133,7 +1153,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               body = cached.text;
             } else {
               try {
-                body = await exportFileText(file, token);
+                body = await exportFileText(file, token, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
                 // Only cache successful extractions — see runPPDReview.
                 if (body != null) {
                   const text = body;
@@ -1423,45 +1443,45 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const setFull = (patch: Partial<FullAuditProgress>) =>
           set((st) => ({ fullAuditProgress: { ...(st.fullAuditProgress ?? { status: "running", current: 0, total: plan.length, currentSubCriterionId: "", currentName: "" }), ...patch, entries: entries.map((e) => ({ ...e })) } as FullAuditProgress }));
         setFull({ status: "running", total: plan.length, current: 0 });
-        let cancelled = false;
-        for (let i = 0; i < plan.length; i++) {
-          // Cancel bumps auditRunToken (existing abort mechanism) — stop the
-          // sweep before starting the next sub-criterion.
-          if (get().auditRunToken !== startToken) { cancelled = true; break; }
-          const entry = plan[i];
-          entries[i].status = "running";
-          setFull({ current: i + 1, currentSubCriterionId: entry.subCriterionId, currentName: fullAuditLabel(entry.subCriterionId, entry.folderName) });
-          if (!entry.hasLinks) {
+
+        // The resilient loop lives in lib/fullAudit.ts (pure + tested):
+        // every sub-criterion terminates via success, error, per-item timeout
+        // or skip — one stuck assessment can never freeze the sweep.
+        const { cancelled } = await runFullAuditPlan(plan, entries, {
+          run: async (entry) => {
+            if (entry.path === "A") {
+              await get().runOptionAFullAuto(entry.subCriterionId);
+            } else {
+              await get().auditFolderStaged(entry.folderId, "all", undefined, { current: plan.indexOf(entry) + 1, total: plan.length });
+            }
+          },
+          markNoLinks: (entry) => {
             // Never skipped silently: recorded on the folder and in the log.
             set((st) => ({
               folders: st.folders.map((f) => f.id === entry.folderId ? { ...f, lastAuditSummary: "Not assessed / no evidence — no Drive folder links are set for this sub-criterion, so the full audit had nothing to read. Link a Policy & Procedure and/or Actual Evidence folder and re-run." } : f),
             }));
-            entries[i].status = "skipped";
-            entries[i].note = "no folder links";
-            setFull({});
-            continue;
-          }
-          try {
-            if (entry.path === "A") {
-              await get().runOptionAFullAuto(entry.subCriterionId);
-            } else {
-              await get().auditFolderStaged(entry.folderId, "all", undefined, { current: i + 1, total: plan.length });
-            }
-            if (get().auditRunToken !== startToken) { cancelled = true; entries[i].status = "error"; entries[i].note = "cancelled"; break; }
-            entries[i].status = "done";
-            entries[i].note = `Option ${entry.path}`;
-          } catch (err) {
-            entries[i].status = "error";
-            entries[i].note = err instanceof Error ? err.message : String(err);
-          }
-          setFull({});
-        }
+          },
+          // User cancel = auditRunToken bump (the Cancel button's mechanism).
+          cancelled: () => get().auditRunToken !== startToken,
+          // Per-item timeout: abort the hung run's in-flight AI/Drive calls
+          // and release its busy flag — WITHOUT bumping the token, so the
+          // sweep itself continues to the next sub-criterion.
+          abortActiveRun: () => {
+            _currentRunAbort?.abort();
+            _currentFileAbort?.();
+            set({ busy: null, evidenceAssessmentProgress: null, ppdReviewProgress: null });
+          },
+          onUpdate: (current, entry) =>
+            setFull({ current, currentSubCriterionId: entry.subCriterionId, currentName: fullAuditLabel(entry.subCriterionId, entry.folderName), currentStartedAt: entries[current - 1]?.status === "running" ? Date.now() : undefined }),
+        });
+
         const doneCount = entries.filter((e) => e.status === "done").length;
+        const errorCount = entries.filter((e) => e.status === "error").length;
         setFull({
           status: cancelled ? "cancelled" : "complete",
           summary: cancelled
             ? `Cancelled — ${doneCount} of ${linkedCount} linked sub-criteria completed before the stop.`
-            : `Full audit complete — ${doneCount} of ${linkedCount} linked sub-criteria audited; ${plan.length - linkedCount} had no links.`,
+            : `Full audit complete — ${doneCount} of ${linkedCount} linked sub-criteria audited${errorCount > 0 ? `, ${errorCount} errored/timed out` : ""}; ${plan.length - linkedCount} had no links.`,
         });
       },
 
