@@ -91,7 +91,7 @@ const DETAILS: Record<string, Detail> = {
     how: "Audit-trail of what the AI was asked and what it returned.",
   },
   "/ai-debug": {
-    what: "Dev-only log of every system-prompt build: which skills were injected, for which module and function.",
+    what: "A log of every system-prompt build: which skills were injected, for which module and function. In-memory only — cleared on reload.",
     how: "Open a row to verify exactly what guidance reached the model on a given call.",
   },
   "/human-decision-log": {

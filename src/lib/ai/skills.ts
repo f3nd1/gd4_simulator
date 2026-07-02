@@ -257,8 +257,10 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType | nul
 
   const result = skillsBlock + calibrationBlock + memoriesBlock;
 
-  // Dev-only: log each buildSystemPrompt() call to the AI Debug Log page.
-  if (import.meta.env.DEV && fnName) {
+  // Log each buildSystemPrompt() call to the AI Debug Log page (all builds —
+  // the team uses it for development even on deployed builds; the log is
+  // in-memory only and never persisted).
+  if (fnName) {
     // Lazy import to avoid pulling Zustand into non-React contexts in production.
     const criterionSkill = criterionFilenameFor(criterionId);
     const criterionBlock = criterionSkillContent?.trim()

@@ -126,24 +126,6 @@ function stripFindingBackPointers<R extends { savedFindingId?: string }, T exten
   return changed ? out : record;
 }
 
-// promptSent holds the full AI prompt, which embeds large slices of the
-// school's actual documents. It must never be PERSISTED in full (Supabase
-// sits behind an open RLS policy; localStorage growth is quadratic via
-// version snapshots) — persisted copies keep only this short preview. The
-// in-memory value stays complete for the live session.
-const PROMPT_PREVIEW_CHARS = 200;
-function truncatePromptSent<T extends { promptSent?: string }>(entry: T): T {
-  if (!entry.promptSent || entry.promptSent.length <= PROMPT_PREVIEW_CHARS) return entry;
-  return {
-    ...entry,
-    promptSent: `${entry.promptSent.slice(0, PROMPT_PREVIEW_CHARS)}… [prompt truncated for storage — the full prompt is only kept in-memory during the session it was generated in]`,
-  };
-}
-
-function mapRecordValues<T>(record: Record<string, T>, fn: (v: T) => T): Record<string, T> {
-  return Object.fromEntries(Object.entries(record).map(([k, v]) => [k, fn(v)]));
-}
-
 // The full School Context string injected into AI calls: the typed markdown
 // briefing plus whatever was last read from the linked Drive context. Returns
 // "" when the user has switched injection off (cost control), so no context
@@ -1292,15 +1274,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             customFindings: s.customFindings,
             seedFindingsLoaded: s.seedFindingsLoaded,
             itemReviews: s.itemReviews,
-            aiReviewLog: s.aiReviewLog.map(truncatePromptSent),
+            aiReviewLog: s.aiReviewLog,
             schoolContext: s.schoolContext,
             additionalInfo: s.additionalInfo,
             agentMemory: useAgentMemoryStore.getState().memory,
             auditJournal: s.auditJournal,
-            // Option A state + run history (promptSent truncated — snapshots
-            // are persisted, and full prompts embed school-document text).
-            ppdReviewResults: mapRecordValues(s.ppdReviewResults, truncatePromptSent),
-            evidenceAssessments: mapRecordValues(s.evidenceAssessments, truncatePromptSent),
+            // Option A state + run history. promptSent is kept IN FULL for
+            // development — the team inspects full prompts in the AI Review
+            // Log. Note: full prompts embed school-document text and are
+            // persisted (Supabase/localStorage).
+            ppdReviewResults: s.ppdReviewResults,
+            evidenceAssessments: s.evidenceAssessments,
             analysisPath: s.analysisPath,
             auditRunHistory: s.auditRunHistory,
           };
@@ -1396,15 +1380,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             customFindings: s.customFindings,
             seedFindingsLoaded: s.seedFindingsLoaded,
             itemReviews: s.itemReviews,
-            aiReviewLog: s.aiReviewLog.map(truncatePromptSent),
+            aiReviewLog: s.aiReviewLog,
             schoolContext: s.schoolContext,
             additionalInfo: s.additionalInfo,
             agentMemory: useAgentMemoryStore.getState().memory,
             auditJournal: s.auditJournal,
-            // Option A state + run history (promptSent truncated — snapshots
-            // are persisted, and full prompts embed school-document text).
-            ppdReviewResults: mapRecordValues(s.ppdReviewResults, truncatePromptSent),
-            evidenceAssessments: mapRecordValues(s.evidenceAssessments, truncatePromptSent),
+            // Option A state + run history. promptSent is kept IN FULL for
+            // development — the team inspects full prompts in the AI Review
+            // Log. Note: full prompts embed school-document text and are
+            // persisted (Supabase/localStorage).
+            ppdReviewResults: s.ppdReviewResults,
+            evidenceAssessments: s.evidenceAssessments,
             analysisPath: s.analysisPath,
             auditRunHistory: s.auditRunHistory,
           };
@@ -4106,30 +4092,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     // evidence baseline (previously seeded with sample ratings) instead of
     // silently keeping the old pre-filled state cached under v1.
     //
-    // partialize — two exclusions, both privacy/quota-driven:
+    // partialize — one exclusion, quota-driven:
     //  • fileTextCache: full extracted text of every Drive file ever read —
     //    persisting it can blow the localStorage quota and take ALL
     //    persistence down with it. Performance cache, in-memory only.
-    //  • promptSent (AI Review Log entries, PPD review results, evidence
-    //    assessments, and the log copies inside version snapshots): full AI
-    //    prompts embed up to ~24k chars of the school's actual documents
-    //    each. The Supabase table sits behind the open RLS policy Settings
-    //    tells users to create, so persisting them leaks institutional
-    //    document text — only a short preview is stored; the full prompt
-    //    stays available in-memory for the live session.
+    // promptSent is deliberately persisted IN FULL (AI Review Log, PPD
+    // review results, evidence assessments, version snapshots): the team
+    // needs the complete prompts for development. Trade-off accepted at the
+    // user's request: full prompts embed school-document text and are large,
+    // so they land in Supabase/localStorage.
     {
       name: "ucc-gd4-workspace:v3",
       storage: workspaceStorage,
       partialize: (s) => ({
         ...s,
         fileTextCache: {},
-        aiReviewLog: s.aiReviewLog.map(truncatePromptSent),
-        ppdReviewResults: mapRecordValues(s.ppdReviewResults, truncatePromptSent),
-        evidenceAssessments: mapRecordValues(s.evidenceAssessments, truncatePromptSent),
-        versions: s.versions.map((v) => ({
-          ...v,
-          snapshot: { ...v.snapshot, aiReviewLog: v.snapshot.aiReviewLog?.map(truncatePromptSent) },
-        })),
       }),
     }
   )

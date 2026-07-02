@@ -3,19 +3,6 @@ import { useAIDebugLogStore } from "../store/useAIDebugLogStore";
 import { Card } from "../components/ui/Card";
 
 export function AIDebugLog() {
-  if (!import.meta.env.DEV) {
-    return (
-      <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>AI Debug Log</h3>
-        <p style={{ fontSize: 12.5, color: "#6b7280" }}>Debug log is only available in development mode.</p>
-      </Card>
-    );
-  }
-
-  return <AIDebugLogDev />;
-}
-
-function AIDebugLogDev() {
   const entries = useAIDebugLogStore((s) => s.entries);
   const clearLog = useAIDebugLogStore((s) => s.clearLog);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
