@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { partitionWritesByMode, stagedWriteConfidence, DEFAULT_RUN_MODE } from "../runModes";
-import { buildOptionALineWrites } from "../optionAChecklistWrite";
-import type { ChecklistLineWrite, EvidenceAssessmentRow, RunMode } from "../../types";
+import { partitionWritesByMode, DEFAULT_AUDIT_MODE, auditModeLabel, AUDIT_MODES } from "../runModes";
+import { buildFullAuditPlan } from "../fullAudit";
+import type { ChecklistLineWrite } from "../../types";
 
 function write(over: Partial<ChecklistLineWrite>): ChecklistLineWrite {
   return {
@@ -13,27 +13,19 @@ function write(over: Partial<ChecklistLineWrite>): ChecklistLineWrite {
   };
 }
 
-describe("partitionWritesByMode — modes decide WHEN writes commit, not how they are computed", () => {
-  const writes = [write({ existingLineId: "L1" }), write({ existingLineId: "L2", lowConfidence: true, confidenceReason: "uncited" })];
+describe("three-mode gating — modes decide WHEN writes commit, not how they are computed", () => {
+  const writes = [write({ existingLineId: "L1" }), write({ existingLineId: "L2", status: "Not met" })];
 
-  it("full_auto commits everything, queues nothing", () => {
-    const { commit, queue } = partitionWritesByMode("full_auto", writes);
+  it("full-auto commits everything, queues nothing", () => {
+    const { commit, queue } = partitionWritesByMode("full-auto", writes);
     expect(commit).toHaveLength(2);
     expect(queue).toHaveLength(0);
   });
 
-  it("confidence commits confident lines and queues only the low-confidence ones", () => {
-    const { commit, queue } = partitionWritesByMode("confidence", writes);
-    expect(commit.map((w) => w.existingLineId)).toEqual(["L1"]);
-    expect(queue.map((w) => w.existingLineId)).toEqual(["L2"]);
-  });
-
-  it("review and hybrid commit NOTHING — everything queues for the human", () => {
-    for (const mode of ["review", "hybrid"] as RunMode[]) {
-      const { commit, queue } = partitionWritesByMode(mode, writes);
-      expect(commit).toHaveLength(0);
-      expect(queue).toHaveLength(2);
-    }
+  it("hybrid commits NOTHING — every verdict queues as a gate for approval", () => {
+    const { commit, queue } = partitionWritesByMode("hybrid", writes);
+    expect(commit).toHaveLength(0);
+    expect(queue).toHaveLength(2);
   });
 
   it("manual neither commits nor queues — the AI decides nothing", () => {
@@ -42,54 +34,35 @@ describe("partitionWritesByMode — modes decide WHEN writes commit, not how the
     expect(queue).toHaveLength(0);
   });
 
-  it("the default mode is confidence gating", () => {
-    expect(DEFAULT_RUN_MODE).toBe("confidence");
+  it("the default mode is Hybrid, and all three modes have card copy", () => {
+    expect(DEFAULT_AUDIT_MODE).toBe("hybrid");
+    expect(AUDIT_MODES).toHaveLength(3);
+    expect(auditModeLabel("full-auto")).toBe("Full auto");
+    for (const m of AUDIT_MODES) {
+      expect(m.desc.length).toBeGreaterThan(20);
+      expect(m.best).toMatch(/^Best/);
+    }
   });
 });
 
-describe("confidence signals", () => {
-  const apsrCited = {
-    approach: { sourceChunkIds: ["C001"], note: "ok" },
-    processes: { sourceChunkIds: ["C002"], note: "ok" },
-    systemsOutcomes: { sourceChunkIds: [], note: "ok" },
-    review: { sourceChunkIds: [], note: "ok" },
-  };
+describe("buildFullAuditPlan — the full-auto sweep never skips silently", () => {
+  const folders = [
+    { id: "f1", subCriterionId: "1.1", folderName: "Vision", folderLink: "https://drive/x", policyLink: "" },
+    { id: "f2", subCriterionId: "1.2", folderName: "Strategy", folderLink: "", policyLink: "https://drive/y" },
+    { id: "f3", subCriterionId: "2.1", folderName: "Admin", folderLink: "", policyLink: "" },
+  ];
+  const isLink = (l?: string) => !!l && l.startsWith("https://drive/");
 
-  it("staged: Met with citations is confident; gaps, uncited and unverified quotes are not", () => {
-    expect(stagedWriteConfidence("Met", apsrCited).lowConfidence).toBe(false);
-    expect(stagedWriteConfidence("Partial", apsrCited).lowConfidence).toBe(true);
-    expect(stagedWriteConfidence("Not met", apsrCited).lowConfidence).toBe(true);
-    const uncited = { ...apsrCited, approach: { sourceChunkIds: [], note: "ok" }, processes: { sourceChunkIds: [], note: "ok" } };
-    expect(stagedWriteConfidence("Met", uncited).lowConfidence).toBe(true);
-    const unverified = { ...apsrCited, processes: { sourceChunkIds: ["C002"], note: "quote [⚠ unverified quote — not found in source]" } };
-    expect(stagedWriteConfidence("Met", unverified).lowConfidence).toBe(true);
+  it("includes EVERY sub-criterion: linked ones run, unlinked ones are flagged (not dropped)", () => {
+    const plan = buildFullAuditPlan(folders, {}, isLink);
+    expect(plan).toHaveLength(3);
+    expect(plan.filter((p) => p.hasLinks).map((p) => p.subCriterionId)).toEqual(["1.1", "1.2"]);
+    expect(plan.find((p) => p.subCriterionId === "2.1")!.hasLinks).toBe(false);
   });
 
-  function evRow(over: Partial<EvidenceAssessmentRow>): EvidenceAssessmentRow {
-    return {
-      gdRef: "1.2.1.DS1", gd4ItemId: "1.2.1", requirementText: "req", ppdExtract: "", ppdVerdict: "Adequate",
-      evidenceSummary: "found", evidenceFiles: [], evidenceChunkIds: ["C001"], verdict: "Met", comment: "ok (C001)",
-      ...over,
-    };
-  }
-
-  it("Option A writes carry confidence: Met+cited confident; Partial, uncited, and contradicted promises queue", () => {
-    const writes = buildOptionALineWrites(
-      [
-        evRow({}),
-        evRow({ gdRef: "1.2.1.DS2", verdict: "Partial" }),
-        evRow({ gdRef: "1.2.1.DS3", evidenceChunkIds: [] }),
-        evRow({ gdRef: "1.2.1.DS4", promiseChecks: [{ promiseText: "peer reviews", verdict: "contradicted", evidence: "record shows opposite", chunkIds: [] }] }),
-      ],
-      {},
-      [],
-      { runId: "R1" }
-    );
-    expect(writes[0].lowConfidence).toBeFalsy();
-    expect(writes[1].lowConfidence).toBe(true);
-    expect(writes[2].lowConfidence).toBe(true);
-    expect(writes[2].confidenceReason).toContain("No evidence chunks cited");
-    expect(writes[3].lowConfidence).toBe(true);
-    expect(writes[3].confidenceReason).toContain("contradicts");
+  it("respects each row's Option A/B choice and defaults to A when unset", () => {
+    const plan = buildFullAuditPlan(folders, { "1.2": "B" }, isLink);
+    expect(plan.find((p) => p.subCriterionId === "1.1")!.path).toBe("A");
+    expect(plan.find((p) => p.subCriterionId === "1.2")!.path).toBe("B");
   });
 });

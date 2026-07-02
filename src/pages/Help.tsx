@@ -42,6 +42,10 @@ const DETAILS: Record<string, Detail> = {
     what: "Reference text for every GD4 requirement — intent, expected evidence and band descriptors.",
     how: "Look up what each item is asking for before attaching evidence.",
   },
+  "/start-audit": {
+    what: "The upfront choice of how much the AI does for the whole cycle: Full auto (runs and commits everything), Hybrid (stops at every verdict for your approval) or Manual (you decide everything, AI suggests on request).",
+    how: "Pick a mode card, then continue to Evidence Folder. You can come back and change the mode at any time.",
+  },
   "/evidence-folder": {
     what: "One Drive folder per sub-criterion, in two tabs: Policy & Procedure and Actual Evidence. Plus a school-wide Additional info folder.",
     how: "Paste the folder link, 'Check access' to confirm Drive can see it, then 'Run audit' — it reads the files (PDF/Word/text/images/spreadsheets) in three staged passes and routes the results to PPD Review or the checklist depending on the analysis path you chose.",

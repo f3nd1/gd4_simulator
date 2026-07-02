@@ -33,6 +33,7 @@ export const NAV: NavGroup[] = [
     step: 2,
     hint: "Attach evidence for each GD4 item — the Sub-Criterion Checklist is the recommended way to do this properly.",
     items: [
+      { path: "/start-audit", label: "Start Audit", hint: "Choose how much the AI does: Full auto, Hybrid (step by step) or Manual" },
       { path: "/evidence-folder", label: "Evidence Folder", hint: "Index of evidence folders per sub-criterion" },
       { path: "/ppd-review", label: "PPD Requirements Review", hint: "Option A (PPD + Evidence): two tabs — does the PPD document each GD4 requirement line (with suggested rewrites), then a combined PPD-plus-evidence verdict with a compile-to-findings action" },
       { path: "/sub-checklist", label: "Sub-Criterion Checklist", hint: "Source of truth for scoring — break each item into testable lines and attach evidence" },

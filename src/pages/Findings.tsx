@@ -3,6 +3,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useFindingDraftStore } from "../store/useFindingDraftStore";
+import { NextStepBanner } from "../components/ui/Guidance";
+import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { useAISettingsStore } from "../store/useAISettingsStore";
@@ -331,6 +333,13 @@ export function Findings() {
 
   return (
     <Fragment>
+    <NextStepBanner
+      text={nextStepText("findings", {
+        mode: useWorkspaceStore.getState().auditMode,
+        openDrafts: pendingGroupedDrafts.length,
+        openFindings: openFindings.length,
+      })}
+    />
     {/* Cross-module navigation bar */}
     <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
       <Link to="/sub-checklist" style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>

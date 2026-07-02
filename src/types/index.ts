@@ -357,12 +357,16 @@ export type GenericChecklistLine = {
 };
 
 // Which official GD4 field a generated line traces back to.
-// ─── Run automation modes ────────────────────────────────────────────────────
-// HOW MUCH the human is involved in a run — orthogonal to the Option A/B path
-// (WHAT gets assessed). A run combines both, e.g. "Option A in Hybrid mode".
-// Modes control WHEN results are committed and whether the human is prompted;
-// the assessment engines themselves are identical across modes.
-export type RunMode = "full_auto" | "confidence" | "review" | "hybrid" | "manual";
+// ─── Audit modes ─────────────────────────────────────────────────────────────
+// ONE cycle-level choice of how much the AI does, made upfront on the Start
+// Audit page (changeable mid-cycle): full-auto runs and commits everything,
+// hybrid stops at every verdict/finding gate for approval, manual commits
+// nothing automatically. Orthogonal to the per-row Option A/B path (WHAT gets
+// assessed). Modes control WHEN results are committed and whether the human
+// is prompted; the assessment engines themselves are identical across modes.
+export type AuditMode = "full-auto" | "hybrid" | "manual";
+// Alias kept for the pending-commit machinery that predates the rename.
+export type RunMode = AuditMode;
 
 // One deferred checklist-line commit: the exact write the engine WOULD have
 // made (same shape applyOptionAWrites consumes), held for human review under
@@ -1085,7 +1089,7 @@ export type WorkspaceSnapshot = {
   ppdReviewResults?: Record<string, PPDReviewResult>;
   evidenceAssessments?: Record<string, EvidenceAssessmentResult>;
   analysisPath?: Record<string, "A" | "B">;
-  runMode?: Record<string, RunMode>;
+  auditMode?: AuditMode;
   auditRunHistory?: Record<string, AuditRunRecord[]>;
 };
 

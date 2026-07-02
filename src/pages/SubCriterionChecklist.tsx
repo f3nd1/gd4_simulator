@@ -2,6 +2,8 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { NextStepBanner } from "../components/ui/Guidance";
+import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
@@ -345,6 +347,8 @@ export function SubCriterionChecklist() {
   const cameFromRubricBanding = searchParams.get("from") === "rubric-banding";
 
   return (
+    <div>
+    <NextStepBanner text={nextStepText("sub-checklist", { mode: useWorkspaceStore.getState().auditMode })} />
     <div className="grid gap-3" style={{ gridTemplateColumns: menuOpen ? "300px 1fr" : "1fr" }}>
       {menuOpen && (
       <Card style={{ maxHeight: "calc(100vh - 140px)", overflowY: "auto" }}>
@@ -1027,6 +1031,7 @@ export function SubCriterionChecklist() {
           setLineFeedback(null);
         }}
       />
+    </div>
     </div>
   );
 }

@@ -51,11 +51,12 @@ import { useFindingDraftStore } from "./useFindingDraftStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, RunMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
 import { findingTypeForStatus } from "../lib/findingClassification";
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { buildOptionALineWrites } from "../lib/optionAChecklistWrite";
-import { DEFAULT_RUN_MODE, partitionWritesByMode, runModeLabel, stagedWriteConfidence } from "../lib/runModes";
+import { DEFAULT_AUDIT_MODE, partitionWritesByMode, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
+import { buildFullAuditPlan, type FullAuditProgress } from "../lib/fullAudit";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -379,18 +380,28 @@ export type WorkspaceState = {
   // Live progress for a fresh runEvidenceAssessment (bar + heartbeat on the
   // Evidence tab); null when no assessment is running.
   evidenceAssessmentProgress: EvidenceAssessmentProgress | null;
+  // Live heartbeat for the PPD review run (window/batch detail), so the tab
+  // shows real progress instead of a static "Reviewing…" button.
+  ppdReviewProgress: { subCriterionId: string; detail: string } | null;
   // Which analysis path a sub-criterion uses: "A" (PPD Requirements Review —
   // default/recommended) or "B" (the existing checklist, unchanged).
   // Missing key means "A" — see ANALYSIS_PATH_DEFAULT.
   analysisPath: Record<string, "A" | "B">;
   setAnalysisPath: (subCriterionId: string, path: "A" | "B") => void;
 
-  // HOW MUCH the human is involved per sub-criterion (orthogonal to the A/B
-  // path). Missing key means the default (confidence gating). Modes only
-  // change WHEN results commit and whether the human is prompted — see
-  // lib/runModes.ts.
-  runMode: Record<string, RunMode>;
-  setRunMode: (subCriterionId: string, mode: RunMode) => void;
+  // ONE cycle-level choice of how much the AI does (Start Audit page):
+  // full-auto commits everything, hybrid stops at every gate, manual commits
+  // nothing automatically. Changeable mid-cycle. Modes only change WHEN
+  // results commit and whether the human is prompted — see lib/runModes.ts.
+  auditMode: AuditMode;
+  setAuditMode: (mode: AuditMode) => void;
+  // Full-auto sweep: audits every sub-criterion end to end (respecting each
+  // row's Option A/B choice); folders with no links are marked "Not assessed
+  // / no evidence" rather than silently skipped. Progress drives the
+  // full-screen overlay; cancel goes through the existing abort mechanism.
+  fullAuditProgress: FullAuditProgress | null;
+  runFullAudit: () => Promise<void>;
+  dismissFullAuditProgress: () => void;
   // Checklist writes held for human review by the gated modes, one pending
   // run per sub-criterion (a new run replaces the previous pending one).
   pendingCommits: Record<string, PendingRun>;
@@ -700,8 +711,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       ppdReviewResults: {},
       evidenceAssessments: {},
       evidenceAssessmentProgress: null,
+      ppdReviewProgress: null,
       analysisPath: {},
-      runMode: {},
+      auditMode: DEFAULT_AUDIT_MODE,
+      fullAuditProgress: null,
       pendingCommits: {},
       changeLog: [],
       auditJournal: "",
@@ -813,6 +826,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               : st.ppdReviewResults,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
+            ppdReviewProgress: null,
           }));
         };
 
@@ -886,8 +900,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, "AI is disabled or no API key is configured in Settings."); return; }
           const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
 
+          set({ ppdReviewProgress: { subCriterionId, detail: "Starting PPD requirements review…" } });
           const result = await runPPDRequirementsReview(requirements, policyDocText, analysisSettings, {
             criterionId: subCriterionId,
+            onProgress: (detail) => set({ ppdReviewProgress: { subCriterionId, detail } }),
             // Cancel support: cancelBusy() clears busy and aborts the signal.
             shouldStop: () => get().busy !== "ppdreview" + subCriterionId,
             signal: runAbort.signal,
@@ -1040,13 +1056,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // persist across reloads/versions and feed buildScored/computeBand
           // identically. Idempotent: lines are matched by normalized ref and
           // updated; prior Option A/audit evidence (runId items) is replaced.
-          // GATED by the automation mode: full_auto commits all (and compiles
-          // findings), confidence commits confident lines and queues the
-          // flagged ones, review/hybrid queue everything, manual commits
-          // nothing (results stay on the PPD page as suggestions only).
+          // GATED by the cycle audit mode: full-auto commits all (and compiles
+          // findings), hybrid queues everything for per-gate approval, manual
+          // commits nothing (results stay on the PPD page as suggestions only).
           if (rows) {
             try {
-              const activeMode: RunMode = get().runMode[subCriterionId] ?? DEFAULT_RUN_MODE;
+              const activeMode: AuditMode = get().auditMode;
               const checklist = useChecklistModuleStore.getState();
               const linesByItem = Object.fromEntries(
                 Object.entries(checklist.entries).map(([itemId, e]) => [itemId, e.specific.map((l) => ({ id: l.id, sourceRef: l.sourceRef, clause: l.clause }))])
@@ -1059,7 +1074,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               });
               const { commit, queue } = partitionWritesByMode(activeMode, writes);
               if (commit.length > 0) checklist.applyOptionAWrites(commit);
-              if (activeMode === "full_auto") {
+              if (activeMode === "full-auto") {
                 // Full auto carries straight on to findings (existing deduped
                 // compile) — no stops.
                 get().compileEvidenceFindings(subCriterionId);
@@ -1072,7 +1087,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   id: `${runId}-Q${i + 1}`,
                   write: w,
                   lineText: lineTextOf(w),
-                  reason: w.confidenceReason ?? (activeMode === "confidence" ? "Low confidence" : "Awaiting your review"),
+                  reason: w.confidenceReason ?? "Awaiting your approval",
                 }));
                 set((st) => ({
                   pendingCommits: {
@@ -1388,8 +1403,54 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setAnalysisPath: (subCriterionId, path) =>
         set((s) => ({ analysisPath: { ...s.analysisPath, [subCriterionId]: path } })),
 
-      setRunMode: (subCriterionId, mode) =>
-        set((s) => ({ runMode: { ...s.runMode, [subCriterionId]: mode } })),
+      setAuditMode: (mode) => set({ auditMode: mode }),
+
+      dismissFullAuditProgress: () => set({ fullAuditProgress: null }),
+
+      runFullAudit: async () => {
+        if (get().fullAuditProgress?.status === "running" || get().busy) return;
+        const plan = buildFullAuditPlan(get().folders, get().analysisPath, (l) => !!parseFolderId(l || ""));
+        if (plan.length === 0) return;
+        const linkedCount = plan.filter((p) => p.hasLinks).length;
+        const startToken = get().auditRunToken;
+        const log: string[] = [];
+        const setFull = (patch: Partial<FullAuditProgress>) =>
+          set((st) => ({ fullAuditProgress: { ...(st.fullAuditProgress ?? { status: "running", current: 0, total: plan.length, currentSubCriterionId: "", currentName: "", log: [] }), ...patch, log: [...log] } }));
+        setFull({ status: "running", total: plan.length, current: 0 });
+        let cancelled = false;
+        for (let i = 0; i < plan.length; i++) {
+          // Cancel bumps auditRunToken (existing abort mechanism) — stop the
+          // sweep before starting the next sub-criterion.
+          if (get().auditRunToken !== startToken) { cancelled = true; break; }
+          const entry = plan[i];
+          setFull({ current: i + 1, currentSubCriterionId: entry.subCriterionId, currentName: entry.folderName });
+          if (!entry.hasLinks) {
+            // Never skipped silently: recorded on the folder and in the log.
+            set((st) => ({
+              folders: st.folders.map((f) => f.id === entry.folderId ? { ...f, lastAuditSummary: "Not assessed / no evidence — no Drive folder links are set for this sub-criterion, so the full audit had nothing to read. Link a Policy & Procedure and/or Actual Evidence folder and re-run." } : f),
+            }));
+            log.push(`— ${entry.subCriterionId} ${entry.folderName}: not assessed (no folder links)`);
+            setFull({});
+            continue;
+          }
+          try {
+            if (entry.path === "A") {
+              await get().runOptionAFullAuto(entry.subCriterionId);
+            } else {
+              await get().auditFolderStaged(entry.folderId, "all", undefined, { current: i + 1, total: plan.length });
+            }
+            if (get().auditRunToken !== startToken) { cancelled = true; log.push(`✕ ${entry.subCriterionId} ${entry.folderName}: cancelled`); break; }
+            log.push(`✓ ${entry.subCriterionId} ${entry.folderName}: done (Option ${entry.path})`);
+          } catch (err) {
+            log.push(`✗ ${entry.subCriterionId} ${entry.folderName}: failed — ${err instanceof Error ? err.message : String(err)}`);
+          }
+          setFull({});
+        }
+        log.push(cancelled
+          ? `Cancelled — ${log.filter((l) => l.startsWith("✓")).length} of ${linkedCount} linked sub-criteria completed before the stop.`
+          : `Full audit complete — ${log.filter((l) => l.startsWith("✓")).length} of ${linkedCount} linked sub-criteria audited; ${plan.length - linkedCount} had no links.`);
+        setFull({ status: cancelled ? "cancelled" : "complete" });
+      },
 
       resolvePendingItem: (subCriterionId, itemId, decision, overrideStatus) => {
         const run = get().pendingCommits[subCriterionId];
@@ -1562,7 +1623,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ppdReviewResults: s.ppdReviewResults,
             evidenceAssessments: s.evidenceAssessments,
             analysisPath: s.analysisPath,
-            runMode: s.runMode,
+            auditMode: s.auditMode,
             auditRunHistory: s.auditRunHistory,
           };
           const entry: VersionEntry = {
@@ -1628,7 +1689,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ppdReviewResults: snap.ppdReviewResults ?? {},
             evidenceAssessments: snap.evidenceAssessments ?? {},
             analysisPath: snap.analysisPath ?? {},
-            runMode: snap.runMode ?? {},
+            auditMode: snap.auditMode ?? DEFAULT_AUDIT_MODE,
             auditRunHistory: snap.auditRunHistory ?? {},
             // Derived from the restored history: latest run per folder.
             lastAuditRuns: Object.fromEntries(
@@ -1670,7 +1731,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ppdReviewResults: s.ppdReviewResults,
             evidenceAssessments: s.evidenceAssessments,
             analysisPath: s.analysisPath,
-            runMode: s.runMode,
+            auditMode: s.auditMode,
             auditRunHistory: s.auditRunHistory,
           };
           const entry: VersionEntry = {
@@ -1735,7 +1796,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           evidenceAssessments: {},
           evidenceAssessmentProgress: null,
           analysisPath: {},
-          // runMode is a per-sub-criterion PREFERENCE, kept across cycles;
+          // auditMode is a cycle-level PREFERENCE, kept across cycles;
           // pendingCommits are the old cycle's uncommitted run state — wiped.
           pendingCommits: {},
           auditJournal: "",
@@ -3254,7 +3315,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Automation mode for this sub-criterion (NOT the scope `mode` param):
         // decides whether verdicts commit immediately, queue for review, or
         // whether the run happens at all (manual).
-        const automationMode: RunMode = s.runMode[folder.subCriterionId] ?? DEFAULT_RUN_MODE;
+        const automationMode: AuditMode = s.auditMode;
         if (automationMode === "manual") {
           // Manual mode: the AI must not auto-decide anything — no AI calls,
           // no verdicts. The user enters verdicts in the checklist directly.
@@ -3832,7 +3893,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // mode. Every staged verdict becomes the same universal write shape
         // Option A uses (status + one audit evidence item), then the mode
         // decides which commit now and which queue for human review.
-        setProgress("saving", { stageDetail: `Saving ${stagedVerdicts.length} verdicts (${runModeLabel(automationMode)})…`, linesAssessed: stagedVerdicts.length, findingsDetected: stagedVerdicts.filter((v) => v.status === "Not met").length });
+        setProgress("saving", { stageDetail: `Saving ${stagedVerdicts.length} verdicts (${auditModeLabel(automationMode)})…`, linesAssessed: stagedVerdicts.length, findingsDetected: stagedVerdicts.filter((v) => v.status === "Not met").length });
         let queuedForReview = 0;
         try {
           const checklist = useChecklistModuleStore.getState();
@@ -3874,7 +3935,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const queueSet = new Set(queue);
             const items: PendingCommitItem[] = stagedWrites
               .filter((w) => queueSet.has(w.write))
-              .map((w, i) => ({ id: `${runId}-Q${i + 1}`, write: w.write, lineText: w.lineText, reason: w.write.confidenceReason ?? (automationMode === "confidence" ? "Low confidence" : "Awaiting your review") }));
+              .map((w, i) => ({ id: `${runId}-Q${i + 1}`, write: w.write, lineText: w.lineText, reason: w.write.confidenceReason ?? "Awaiting your approval" }));
             queuedForReview = items.length;
             set((st) => ({
               pendingCommits: {
@@ -3892,7 +3953,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let autoRaised = 0;
         // Findings only auto-raise for verdicts that actually committed;
         // queued lines raise theirs when the human accepts them.
-        if (automationMode === "full_auto" || automationMode === "confidence") {
+        if (automationMode === "full-auto") {
           try { autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings(runId); } catch { /* non-fatal */ }
         }
 
@@ -3959,7 +4020,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // missed under the detail lines.
         if (fallbackStages.length > 0) lineParts.push(`⚠ OFFLINE FALLBACK — ${fallbackStages.join(", ")} stage(s) failed live AI and used keyword simulation. This run is NOT a full live AI audit.`);
         if (linesNotAssessed > 0) lineParts.push(`⚠ PARTIAL RUN — ${linesNotAssessed} line(s) not assessed (run stopped/skipped early); their previous status was left unchanged.`);
-        lineParts.push(`Run ${runId} · Staged audit (${mode} mode) · Automation: ${runModeLabel(automationMode)} · Auditor: ${auditorLabel}.`);
+        lineParts.push(`Run ${runId} · Staged audit (${mode} mode) · Mode: ${auditModeLabel(automationMode)} · Auditor: ${auditorLabel}.`);
         if (queuedForReview > 0) lineParts.push(`⏸ ${queuedForReview} verdict${queuedForReview === 1 ? "" : "s"} NOT committed — waiting for your review on the Evidence Folder page ("Needs your review"). Findings for those lines are raised only when you accept them.`);
         if (specialistLabel) lineParts.push(`Specialist lens: ${specialistLabel}.`);
         lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${stagedVerdicts.length} assessed line${stagedVerdicts.length === 1 ? "" : "s"}${linesNotAssessed > 0 ? `; ${linesNotAssessed} not assessed` : ""}).`);

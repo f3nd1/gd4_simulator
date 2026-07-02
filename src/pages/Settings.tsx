@@ -6,6 +6,7 @@ import { useSupabaseSettingsStore } from "../store/useSupabaseSettingsStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScoringConfigStore } from "../store/useScoringConfigStore";
+import { useGuidanceStore } from "../store/useGuidanceStore";
 import { getSupabaseClient, getSupabaseConfig } from "../lib/supabaseClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -36,6 +37,25 @@ async function rehydrateAllFromSupabase() {
 // Suggestions only — the model fields are editable, so any newer id OpenAI
 // releases (e.g. a gpt-5.x) can simply be typed in. Roughly smartest → cheapest.
 const MODELS = ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"];
+
+// Master switch for the guidance layer: next-step banners, guidance
+// tooltips and the first-time walkthroughs all hide together when off.
+function GuidanceToggle() {
+  const enabled = useGuidanceStore((s) => s.enabled);
+  const setEnabled = useGuidanceStore((s) => s.setEnabled);
+  return (
+    <div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        Show guidance and tips
+      </label>
+      <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0 0" }}>
+        When on, the app shows a "what to do now" banner on the main workflow pages, tooltips on key controls, and a
+        short first-time walkthrough on Start Audit and Evidence Folder. Turn it off once you know your way around.
+      </p>
+    </div>
+  );
+}
 
 export function Settings() {
   const { apiKey, model, utilityModel, enabled, setApiKey, setModel, setUtilityModel, setEnabled, clearApiKey } = useAISettingsStore();
@@ -120,6 +140,11 @@ export function Settings() {
           production or shared credentials here. AI output is always advisory — it never sets the official GD4 score or
           band, which is always computed by the deterministic scoring engine.
         </p>
+      </Card>
+
+      <Card>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Guidance</h3>
+        <GuidanceToggle />
       </Card>
 
       <Card>

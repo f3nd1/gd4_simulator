@@ -5,6 +5,7 @@ import { DraftWorkspace } from "./pages/DraftWorkspace";
 import { AuditCycle } from "./pages/AuditCycle";
 import { AuditorCreation } from "./pages/AuditorCreation";
 import { EvidenceFolder } from "./pages/EvidenceFolder";
+import { StartAudit } from "./pages/StartAudit";
 import { GD4ScoringSetup } from "./pages/GD4ScoringSetup";
 import { GD4Library } from "./pages/GD4Library";
 import { EvidenceMatrix } from "./pages/EvidenceMatrix";
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/draft-workspace" element={<DraftWorkspace />} />
           <Route path="/audit-cycle" element={<AuditCycle />} />
           <Route path="/auditors" element={<AuditorCreation />} />
+          <Route path="/start-audit" element={<StartAudit />} />
           <Route path="/evidence-folder" element={<EvidenceFolder />} />
           <Route path="/gd4-scoring-setup" element={<GD4ScoringSetup />} />
           <Route path="/gd4-library" element={<GD4Library />} />

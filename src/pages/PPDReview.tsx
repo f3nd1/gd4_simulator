@@ -4,6 +4,8 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { NextStepBanner } from "../components/ui/Guidance";
+import { nextStepText } from "../lib/guidanceText";
 import { findingTypeForStatus, findingTypeTone } from "../lib/findingClassification";
 import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck } from "../types";
 
@@ -82,6 +84,8 @@ export function PPDReview() {
         </p>
       )}
 
+      {sub && <PpdNextStep selectedId={selectedId} />}
+
       {sub && (
         <>
           <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: -2, marginBottom: 10 }}>
@@ -114,6 +118,23 @@ export function PPDReview() {
   );
 }
 
+// State-aware next-step banner for this sub-criterion.
+function PpdNextStep({ selectedId }: { selectedId: string }) {
+  const auditMode = useWorkspaceStore((s) => s.auditMode);
+  const ppd = useWorkspaceStore((s) => s.ppdReviewResults[selectedId]);
+  const ev = useWorkspaceStore((s) => s.evidenceAssessments[selectedId]);
+  return (
+    <NextStepBanner
+      text={nextStepText("ppd-review", {
+        mode: auditMode,
+        ppdRun: !!ppd && ppd.rows.length > 0,
+        evidenceRun: !!ev && ev.rows.length > 0,
+        findingsCompiled: !!ev && ev.rows.some((r) => r.savedFindingId),
+      })}
+    />
+  );
+}
+
 // ─── PPD Review tab (policy only, 3 columns) ────────────────────────────────
 function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: number }) {
   const busy = useWorkspaceStore((s) => s.busy);
@@ -122,6 +143,7 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
 
   const result = ppdReviewResults[selectedId];
   const isRunning = busy === "ppdreview" + selectedId;
+  const liveProgress = useWorkspaceStore((s) => s.ppdReviewProgress);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const toggleExpanded = (ref: string) =>
     setExpandedRows((prev) => {
@@ -144,6 +166,21 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
       >
         {isRunning ? "Reviewing…" : result ? "Re-run PPD review" : "Run PPD review"}
       </button>
+      {isRunning && (
+        <div style={{ marginBottom: 12, padding: "8px 12px", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#3730a3" }}>PPD review running</span>
+            <span style={{ fontSize: 11, color: "#6366f1" }}>live</span>
+          </div>
+          <div style={{ height: 6, borderRadius: 3, background: "#dbeafe", overflow: "hidden", marginBottom: 6 }}>
+            <div style={{ width: "40%", height: "100%", background: "#6366f1", borderRadius: 3, animation: "ppd-indeterminate 1.4s ease-in-out infinite alternate" }} />
+          </div>
+          <style>{`@keyframes ppd-indeterminate { from { margin-left: 0; } to { margin-left: 60%; } }`}</style>
+          <div style={{ fontSize: 11.5, color: "#475569" }}>
+            {liveProgress?.subCriterionId === selectedId ? liveProgress.detail : "Working…"}
+          </div>
+        </div>
+      )}
 
       {!result && !isRunning && (
         <p style={{ fontSize: 12.5, color: "#94a3b8" }}>No review run yet for this sub-criterion. Click "Run PPD review" above.</p>
