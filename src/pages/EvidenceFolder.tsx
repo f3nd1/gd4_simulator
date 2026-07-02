@@ -751,7 +751,16 @@ function CompleteDetail({ p, onExportFileLedger, onExportAISummary }: { p: Audit
   const totalCited   = files.filter((f) => f.auditStatus === "cited").length;
   const totalNotUsed = files.filter((f) => f.auditStatus === "not_used").length;
 
-  const checklistHref = p.subCriterionId ? `#/sub-checklist?item=${p.subCriterionId}.1` : "#/sub-checklist";
+  // Same Option A/B routing as the main "View results" button — Option A
+  // sends the auditor to PPD Review first, Option B straight to the checklist.
+  const analysisPath = useWorkspaceStore((s) => s.analysisPath);
+  const isOptionA = (analysisPath[p.subCriterionId ?? ""] ?? "A") === "A";
+  const checklistHref = !p.subCriterionId
+    ? "#/sub-checklist"
+    : isOptionA
+      ? `#/ppd-review?item=${p.subCriterionId}`
+      : `#/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === p.subCriterionId)?.id ?? ""}`;
+  const checklistLabel = isOptionA ? "PPD Requirements Review" : "Sub-Criterion Checklist";
   const findingsHref  = p.subCriterionId ? `#/findings?item=${p.subCriterionId}` : "#/findings";
 
   const chipLink: React.CSSProperties = { cursor: "pointer", textDecoration: "none", borderRadius: 6, padding: "5px 11px", fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 };
@@ -787,7 +796,7 @@ function CompleteDetail({ p, onExportFileLedger, onExportAISummary }: { p: Audit
       )}
       <div style={{ ...muted, marginBottom: 8 }}>
         Check the{" "}
-        <a href={checklistHref} style={{ color: "#4f46e5", fontWeight: 600 }}>Sub-Criterion Checklist</a>
+        <a href={checklistHref} style={{ color: "#4f46e5", fontWeight: 600 }}>{checklistLabel}</a>
         {issues > 0 && <> · <a href={findingsHref} style={{ color: "#b45309", fontWeight: 600 }}>Findings register</a></>}
         {" "}to review verdicts and evidence.
       </div>
@@ -910,6 +919,16 @@ function AuditProgressModal({
   const isDone = progress.stage === "complete";
   const isRunning = !isDone && !isError;
   const currentStep = stageToVisualStep(progress.stage);
+
+  // Same Option A/B routing as the folder table's "View Results" link — a
+  // staged audit run applies to either path, only the results destination
+  // differs (PPD Review first for Option A, straight to the checklist for B).
+  const analysisPath = useWorkspaceStore((s) => s.analysisPath);
+  const subCriterionId = progress.subCriterionId ?? "";
+  const viewResultsHref =
+    (analysisPath[subCriterionId] ?? "A") === "A"
+      ? `/ppd-review?item=${subCriterionId}`
+      : `/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === subCriterionId)?.id ?? ""}`;
 
   const [selectedStep, setSelectedStep] = useState<number | null>(null);
   const prevCurrentStep = useRef(currentStep);
@@ -1112,7 +1131,7 @@ function AuditProgressModal({
           <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
             {isDone && (
               <Link
-                to={`/sub-checklist?item=${progress.subCriterionId}.1`}
+                to={viewResultsHref}
                 style={{ flex: 1, cursor: "pointer", padding: "10px", borderRadius: 10, border: "none", background: "#dcfce7", color: "#15803d", fontWeight: 700, fontSize: 13, textAlign: "center", textDecoration: "none", display: "block" }}
               >
                 View results →
@@ -1621,29 +1640,31 @@ export function EvidenceFolder() {
             const rowExpanded = expandedSubCritRows.has(f.id);
             return (
               <Fragment key={f.id}>
-                <tr className="rowh" ref={(el) => { rowRefs.current[f.subCriterionId] = el; }}>
+                <tr
+                  className="rowh"
+                  ref={(el) => { rowRefs.current[f.subCriterionId] = el; }}
+                  onClick={() => toggleSubCritRow(f.id)}
+                  title={rowExpanded ? "Collapse access/audit details" : "Expand access/audit details"}
+                  style={{ cursor: "pointer" }}
+                >
                   <td>
-                    <button
-                      onClick={() => toggleSubCritRow(f.id)}
-                      title={rowExpanded ? "Collapse access/audit details" : "Expand access/audit details"}
-                      style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, border: "none", background: "transparent", padding: 0, font: "inherit", textAlign: "left", width: "100%" }}
-                    >
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span style={{ color: "#94a3b8", fontSize: 11, flexShrink: 0, transition: "transform 0.15s", transform: rowExpanded ? "rotate(90deg)" : "none" }}>▸</span>
                       <b>{f.folderName}</b>
-                    </button>
+                    </div>
                   </td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     <select value={f.owner} onChange={(e) => setFolderField(f.id, "owner", e.target.value)} style={{ ...inputStyle, width: 110, padding: "4px 6px" }}>
                       <option value="">(unassigned)</option>
                       {departments.map((d) => <option key={d.id} value={d.acronym}>{d.acronym}</option>)}
                     </select>
                   </td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     <select value={f.status} onChange={(e) => setFolderField(f.id, "status", e.target.value as FolderStatus)} style={{ ...inputStyle, width: 110, padding: "4px 6px" }}>
                       {STATUSES.map((s) => <option key={s}>{s}</option>)}
                     </select>
                   </td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <span style={{ fontSize: 10, fontWeight: 700, color: "#3b82f6", minWidth: 52, textTransform: "uppercase", letterSpacing: 0.3 }}>Policy</span>
@@ -1669,7 +1690,7 @@ export function EvidenceFolder() {
                       </div>
                     </div>
                   </td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     {(() => {
                       const path = analysisPath[f.subCriterionId] ?? "A";
                       const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id;
@@ -1717,7 +1738,7 @@ export function EvidenceFolder() {
                       );
                     })()}
                   </td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     {isBusy ? (
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <button disabled style={{ cursor: "wait", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #93c5fd", background: "#dbeafe", color: "#1d4ed8", whiteSpace: "nowrap", opacity: 0.8 }}>
