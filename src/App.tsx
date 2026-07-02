@@ -27,6 +27,7 @@ import { Finalisation } from "./pages/Finalisation";
 import { ExportCentre } from "./pages/ExportCentre";
 import { Settings } from "./pages/Settings";
 import { AIMemories } from "./pages/AIMemories";
+import { ChangeLog } from "./pages/ChangeLog";
 import { ProfileOfPei } from "./pages/ProfileOfPei";
 import { FinalReport } from "./pages/FinalReport";
 import { Analytics } from "./pages/Analytics";
@@ -71,6 +72,7 @@ export default function App() {
           <Route path="/export" element={<ExportCentre />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/ai-memories" element={<AIMemories />} />
+          <Route path="/change-log" element={<ChangeLog />} />
         </Route>
       </Routes>
     </HashRouter>

@@ -29,7 +29,9 @@ import type {
   AuditScope,
   AuditRunRecord,
   AuditAISummaryLine,
+  ChangeLogEntry,
 } from "../types";
+import { summariseCommitMessage } from "../lib/changeLogSummary";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
 import { AGENTS } from "../data/agents";
@@ -313,6 +315,13 @@ export type WorkspaceState = {
   // Missing key means "A" — see ANALYSIS_PATH_DEFAULT.
   analysisPath: Record<string, "A" | "B">;
   setAnalysisPath: (subCriterionId: string, path: "A" | "B") => void;
+
+  // Running history of the git push/pull info the footer surfaces (from the
+  // build-time __GIT_INFO__ constant). recordChangeLogEntry dedupes by
+  // commitHash so the same commit is never logged twice; the plain-English
+  // summary is derived from the commit message when not supplied.
+  changeLog: ChangeLogEntry[];
+  recordChangeLogEntry: (entry: Omit<ChangeLogEntry, "id" | "summary"> & { summary?: string }) => void;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
   // Clears a stranded busy/bulk state so a button stuck on "Auditing…" can be
@@ -622,6 +631,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       evidenceAuditReport: null,
       ppdReviewResults: {},
       analysisPath: {},
+      changeLog: [],
       auditJournal: "",
       restoreLog: [],
       activeAuditorId: null,
@@ -842,6 +852,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setAnalysisPath: (subCriterionId, path) =>
         set((s) => ({ analysisPath: { ...s.analysisPath, [subCriterionId]: path } })),
+
+      // Appends one git push/pull entry to the change log, deduped by
+      // commitHash so re-visits / re-renders of the same build don't log the
+      // same commit twice. Derives the plain-English summary from the commit
+      // message when the caller doesn't supply one.
+      recordChangeLogEntry: (entry) =>
+        set((s) => {
+          if (!entry.commitHash || entry.commitHash === "unknown") return {};
+          if (s.changeLog.some((e) => e.commitHash === entry.commitHash && e.action === entry.action)) return {};
+          const full: ChangeLogEntry = {
+            id: `CL-${entry.commitHash}-${entry.action}`,
+            summary: entry.summary?.trim() || summariseCommitMessage(entry.commitMessage),
+            ...entry,
+          };
+          return { changeLog: [full, ...s.changeLog].slice(0, 500) };
+        }),
 
       // Fills the workspace with realistic sample evidence ratings plus the
       // workflow-progress fields derived from them (reviewer drafts,

@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { useGoogleDriveStore } from "../../store/useGoogleDriveStore";
+import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { flushPendingSaves } from "../../store/supabaseStorage";
 
 export function Layout() {
@@ -47,6 +48,23 @@ export function Layout() {
 function GitFooter() {
   const info = __GIT_INFO__;
   const pushed = info.ahead === 0;
+
+  // Accumulate the git info the footer shows into the Change Log. Only record
+  // a commit that has actually been pushed (ahead === 0), since an unpushed
+  // build isn't a "push" event yet; recordChangeLogEntry dedupes by hash so
+  // this fires at most once per commit across all page loads.
+  const recordChangeLogEntry = useWorkspaceStore((s) => s.recordChangeLogEntry);
+  useEffect(() => {
+    if (!pushed || !info.hash || info.hash === "unknown") return;
+    recordChangeLogEntry({
+      timestamp: info.isoTime || new Date().toISOString(),
+      action: "push",
+      commitHash: info.hash,
+      branch: info.branch,
+      commitMessage: info.message,
+    });
+  }, [pushed, info.hash, info.isoTime, info.branch, info.message, recordChangeLogEntry]);
+
   const time = info.isoTime ? new Date(info.isoTime).toLocaleString("en-SG", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
   return (
     <div style={{ fontSize: 11, color: "#aaa", padding: "4px 16px", borderTop: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 10, background: "#f9fafb" }}>

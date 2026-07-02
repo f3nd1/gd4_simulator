@@ -715,6 +715,22 @@ export type PPDReviewResult = {
   overallNarrative?: string;
 };
 
+// ─── Change Log ─────────────────────────────────────────────────────────────
+// A running history of the git push/pull info the footer surfaces. The footer
+// reads a build-time constant (__GIT_INFO__) that only ever holds the latest
+// commit; the Change Log accumulates each distinct commit the app becomes
+// aware of over time (deduped by commitHash) so the user can see what changed.
+export type ChangeLogEntry = {
+  id: string;
+  timestamp: string;        // ISO datetime
+  action: "push" | "pull";
+  commitHash: string;       // short hash, e.g. "30b3994"
+  branch: string;
+  commitMessage: string;    // raw commit message
+  summary: string;          // plain-English description of what changed
+  filesChanged?: string[];
+};
+
 // One checklist line's AI verdict, stored in an AuditRunRecord for post-run
 // inspection and CSV export.
 export type AuditAISummaryLine = {

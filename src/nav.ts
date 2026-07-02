@@ -88,6 +88,7 @@ export const NAV: NavGroup[] = [
     items: [
       { path: "/settings", label: "Settings", hint: "Configure Supabase, OpenAI and Google Drive integrations" },
       { path: "/ai-memories", label: "AI Memories", hint: "Manage calibration memories used to guide AI audit outputs" },
+      { path: "/change-log", label: "Change Log", hint: "History of every push/pull the app recorded, with a plain-English summary of what changed" },
     ],
   },
 ];
