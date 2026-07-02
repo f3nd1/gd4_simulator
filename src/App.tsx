@@ -42,7 +42,6 @@ export default function App() {
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/help" element={<Help />} />
           <Route path="/profile-of-pei" element={<ProfileOfPei />} />
-          <Route path="/school-context" element={<Navigate to="/profile-of-pei" replace />} />
           <Route path="/draft-workspace" element={<DraftWorkspace />} />
           <Route path="/audit-cycle" element={<AuditCycle />} />
           <Route path="/auditors" element={<AuditorCreation />} />

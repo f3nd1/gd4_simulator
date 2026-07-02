@@ -1,9 +1,16 @@
 import { useState, useEffect } from "react";
 import { useProfileOfPeiStore } from "../store/useProfileOfPeiStore";
-import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
+import { CONTEXT_CHAR_CAP } from "../lib/ai/aiClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import type { PeiStatusRow, ShareholderRow, PersonnelRow, AcademicExamBoardRow, PeiCourseRow } from "../types/profileOfPei";
+
+// Last N chars of the audit journal fed into every AI folder audit — display
+// constant only (the injection cap lives with the audit code).
+const JOURNAL_AI_CAP = 2000;
+
+const ACCESS_TONE = { Connected: "good", Error: "critical", "Not Connected": "medium" } as const;
 
 const TABS = [
   "Background",
@@ -339,6 +346,111 @@ function StaffProfileTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Extra AI-context Drive folder — moved from the retired School Context page.
+// All values are read from the store at render time (zustand selectors), and
+// writes go straight to the store on interaction — nothing is copied on mount,
+// so opening this page can never clobber the link, cache or access status.
+// ---------------------------------------------------------------------------
+function ContextDriveCard() {
+  const schoolContext = useWorkspaceStore((s) => s.schoolContext);
+  const setSchoolContextLink = useWorkspaceStore((s) => s.setSchoolContextLink);
+  const readSchoolContextFromDrive = useWorkspaceStore((s) => s.readSchoolContextFromDrive);
+  const [reading, setReading] = useState(false);
+
+  return (
+    <Card>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Extra AI context from Drive</h3>
+        {schoolContext.accessStatus && <Pill s={ACCESS_TONE[schoolContext.accessStatus]}>{schoolContext.accessStatus}</Pill>}
+      </div>
+      <div style={{ fontSize: 11.5, color: "#6b7280", margin: "4px 0 6px" }}>
+        Link a folder of background documents (prospectus, org chart, institutional profile). "Read from Drive" caches
+        its text and appends it to the Background briefing above. Requires Google Drive connected in Settings.
+      </div>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          placeholder="https://drive.google.com/drive/folders/…"
+          value={schoolContext.link || ""}
+          onChange={(e) => setSchoolContextLink(e.target.value)}
+          style={{ ...inputStyle, width: 300, padding: "4px 6px" }}
+        />
+        {schoolContext.link && <a href={schoolContext.link} target="_blank" rel="noreferrer" style={{ fontSize: 11.5 }}>Open</a>}
+        <button
+          disabled={reading}
+          onClick={async () => {
+            setReading(true);
+            try { await readSchoolContextFromDrive(); } finally { setReading(false); }
+          }}
+          style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", whiteSpace: "nowrap" }}
+        >
+          {reading ? "Reading…" : "Read from Drive"}
+        </button>
+      </div>
+      {schoolContext.accessNote && (
+        <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 6 }}>
+          {schoolContext.accessNote}
+          {schoolContext.cachedAt && <span style={{ color: "#94a3b8" }}> — last read {new Date(schoolContext.cachedAt).toLocaleString()}</span>}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Audit Journal — moved verbatim from the retired School Context page. The
+// journal store/state and its injection into AI audit prompts are untouched;
+// only this viewer/clear UI moved. Values are read at render time — no
+// copy-on-mount, so opening the page never wipes or overwrites the journal.
+// ---------------------------------------------------------------------------
+function AuditJournalCard() {
+  const auditJournal = useWorkspaceStore((s) => s.auditJournal);
+  const clearAuditJournal = useWorkspaceStore((s) => s.clearAuditJournal);
+  const [journalExpanded, setJournalExpanded] = useState(false);
+
+  return (
+    <Card>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+        <div>
+          <h3 style={{ marginTop: 0, marginBottom: 2, fontSize: 14 }}>Audit Journal — running findings log</h3>
+          <p style={{ fontSize: 12.5, color: "#6b7280", margin: 0 }}>
+            After each folder audit, a compact entry is added here (bands + gaps + APSR dimension). The last {JOURNAL_AI_CAP.toLocaleString()} characters are fed into every subsequent AI folder audit so it can flag <b>recurring cross-criterion gaps</b> (e.g. "Review not documented in 1.1, 2.3 and 4.4 — systemic gap"). Auto-updated; you can clear it to start fresh.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {auditJournal ? (
+            <Pill s="good">{auditJournal.split("###").length - 1} sub-criteria logged</Pill>
+          ) : (
+            <Pill s="medium">Empty — no audits yet</Pill>
+          )}
+          <button
+            onClick={() => setJournalExpanded((v) => !v)}
+            style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}
+          >
+            {journalExpanded ? "Hide" : "View journal"}
+          </button>
+          {auditJournal && (
+            <button
+              onClick={() => { if (confirm("Clear the audit journal? This only removes the AI's running notepad — your checklist verdicts and findings are unaffected.")) clearAuditJournal(); }}
+              style={{ cursor: "pointer", fontSize: 11, padding: "4px 9px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
+            >
+              Clear journal
+            </button>
+          )}
+        </div>
+      </div>
+      {auditJournal && <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
+        {auditJournal.length.toLocaleString()} chars total · last {Math.min(auditJournal.length, JOURNAL_AI_CAP).toLocaleString()} chars sent to AI per audit call
+      </div>}
+      {journalExpanded && (
+        <pre style={{ margin: 0, padding: "10px 12px", borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: 11.5, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 400, overflowY: "auto", color: auditJournal ? "#1e293b" : "#94a3b8" }}>
+          {auditJournal || "Nothing yet. Run a folder audit to start building the journal."}
+        </pre>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 export function ProfileOfPei() {
@@ -351,11 +463,24 @@ export function ProfileOfPei() {
   const injectionOn = useWorkspaceStore((s) => s.schoolContext.enabled !== false);
   const setSchoolContextEnabled = useWorkspaceStore((s) => s.setSchoolContextEnabled);
   const setSchoolContextText = useWorkspaceStore((s) => s.setSchoolContextText);
+  const schoolContext = useWorkspaceStore((s) => s.schoolContext);
 
-  // Sync background into schoolContext on mount so the context is always up to date
+  // One-time backfill ONLY when the AI context is still empty (fresh
+  // workspace): seed it from the Background tab. Never overwrite an existing
+  // context on page open — the old unconditional copy-on-mount clobbered the
+  // stored context (and anything a restored version had) every time this page
+  // was visited (#24). Ongoing sync happens on EDIT in BackgroundTab instead.
   useEffect(() => {
-    setSchoolContextText(backgroundMarkdown);
+    if (!schoolContext.text.trim() && backgroundMarkdown.trim()) {
+      setSchoolContextText(backgroundMarkdown);
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live sent-size estimate for the injected context (briefing + Drive cache).
+  const composed = composeSchoolContext({ ...schoolContext, enabled: true });
+  const sentChars = Math.min(composed.length, CONTEXT_CHAR_CAP);
+  const approxTokens = Math.ceil(sentChars / 4);
+  const overCap = composed.length > CONTEXT_CHAR_CAP;
 
   const tabContent = [
     <BackgroundTab />,
@@ -394,6 +519,10 @@ export function ProfileOfPei() {
           <span style={{ fontSize: 11.5, color: "#6b7280" }}>
             Background tab content is sent as auditor briefing — not primary GD4 evidence
           </span>
+          <span style={{ fontSize: 11.5, color: overCap ? "#b23121" : "#6b7280", marginLeft: "auto" }}>
+            Sends ~{sentChars.toLocaleString()} chars (~{approxTokens.toLocaleString()} tokens) per AI call
+            {overCap && ` — TRUNCATED: only the first ${CONTEXT_CHAR_CAP.toLocaleString()} of ${composed.length.toLocaleString()} chars are sent`}
+          </span>
         </div>
       </Card>
 
@@ -421,6 +550,10 @@ export function ProfileOfPei() {
         </div>
         {tabContent[tab]}
       </Card>
+
+      {/* Moved from the retired School Context page */}
+      <ContextDriveCard />
+      <AuditJournalCard />
     </div>
   );
 }
