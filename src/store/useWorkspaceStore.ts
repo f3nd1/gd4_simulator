@@ -37,7 +37,7 @@ import { seedFolders } from "../data/folders";
 import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore, needsJustification } from "../lib/scoring";
-import { auditEvidence, type EvidenceAuditFlag } from "../lib/evidenceAudit";
+import type { EvidenceAuditFlag } from "../lib/evidenceAudit";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit, deriveApsrStatus, type FolderAuditLineVerdict } from "../lib/ai/simulateAI";
 import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP, runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr, simulateStagedPolicyAudit, simulateStagedEvidenceAudit, simulateStagedOutcomeReview, runPPDRequirementsReview, runEvidenceAssessment, type PPDRequirementInput, type EvidenceAssessmentInput } from "../lib/ai/agentRuntime";
@@ -104,7 +104,7 @@ function classifyFileBucket(path: string): "policy" | "evidence" {
   return /polic|procedure/.test(topSegment) ? "policy" : "evidence";
 }
 
-// Strips savedFindingId back-pointers from PPD-review / evidence-assessment
+// Strips savedFindingId back-pointers from evidence-assessment
 // rows when the finding they point at is deleted, so the source row shows
 // "Draft finding" again instead of a dead "View finding" link and can be
 // re-compiled. Returns the original record when nothing matched (no churn).
@@ -624,38 +624,6 @@ function patternNote(journal: string): string {
 // ---- End audit journal helpers --------------------------------------------
 
 let logCounter = 0;
-function logAI(
-  push: (e: AIReviewLogEntry) => void,
-  cycleId: string,
-  agent: string,
-  reviewType: AIReviewType,
-  subjectId: string,
-  verdict: string,
-  confidence: Confidence,
-  keyConcerns: string[],
-  recommendedAction: string,
-  evidenceNeeded?: string,
-  suggestedScore?: number,
-  suggestedBand?: number
-) {
-  logCounter += 1;
-  push({
-    id: `LOG-${Date.now()}-${logCounter}`,
-    auditCycleId: cycleId,
-    agent,
-    reviewType,
-    subjectId,
-    verdict,
-    confidence,
-    keyConcerns,
-    recommendedAction,
-    evidenceNeeded,
-    suggestedScore,
-    suggestedBand: suggestedBand as 1 | 2 | 3 | 4 | 5 | undefined,
-    live: false,
-    createdAt: new Date().toISOString(),
-  });
-}
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
@@ -4002,12 +3970,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // row becomes re-compilable ("Draft finding" again).
         set((s) => {
           const { [id]: _dropped, ...remainingClosures } = s.closures;
-          const match = (fid: string) => fid === id;
           return {
             customFindings: s.customFindings.filter((f) => f.id !== id),
             closures: remainingClosures,
-            evidenceAssessments: stripFindingBackPointers(s.evidenceAssessments, match),
-            ppdReviewResults: stripFindingBackPointers(s.ppdReviewResults, match),
+            evidenceAssessments: stripFindingBackPointers(s.evidenceAssessments, (fid) => fid === id),
           };
         });
         useChecklistModuleStore.getState().clearSavedFindingId(id);
@@ -4022,7 +3988,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           seedFindingsLoaded: false,
           // Same back-pointer sweep as removeCustomFinding, for every id.
           evidenceAssessments: stripFindingBackPointers(s.evidenceAssessments, () => true),
-          ppdReviewResults: stripFindingBackPointers(s.ppdReviewResults, () => true),
         }));
         const cs = useChecklistModuleStore.getState();
         ids.forEach((id) => cs.clearSavedFindingId(id));

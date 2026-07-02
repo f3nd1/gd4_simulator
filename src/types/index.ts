@@ -370,7 +370,6 @@ export type FlatAuditPoint = {
   text: string;
   parentText?: string;
   sourceText: string;
-  apsrHint?: "Approach" | "Processes" | "Systems & Outcomes" | "Review";
   originalIndex: number | null;
 };
 
@@ -703,10 +702,6 @@ export type PPDReviewRow = {
   // Only populated for Partial / Not documented rows.
   suggestedRewrite?: string;
   chunkIds: string[];
-  // Set once this row has been compiled into the Findings register, so the
-  // UI can swap the "Compile" action for a "View finding" link and avoid
-  // raising a duplicate.
-  savedFindingId?: string;
 };
 
 export type PPDReviewResult = {

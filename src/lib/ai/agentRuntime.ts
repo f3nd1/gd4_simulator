@@ -11,7 +11,6 @@ import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, 
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
 import { buildSystemPrompt, buildDomainBlock, type SkillCalibrationExample, type SkillCalibrationMemory } from "./skills";
 import { domainExpertiseFor } from "../../data/skills/domainExpertise";
-import type { EvidenceChunk } from "../../types";
 
 export { AIClientError };
 
@@ -762,52 +761,6 @@ Dimension (APSR leg that fell short): ${dimension}`;
   };
 }
 
-// Citation verifier: a second-pass AI call that re-examines the AI-returned
-// verdict for a single checklist line, focusing on whether the cited chunks
-// actually support each positive dimension claim. Stricter than the first pass —
-// it will downgrade positive dimensions when the cited evidence is insufficient.
-// Only called in Strict mode from useWorkspaceStore.ts to avoid doubling costs
-// for every audit run.
-export async function runCitationVerifier(
-  line: { id: string; text: string },
-  verdict: FolderAuditLineVerdict,
-  citedChunks: EvidenceChunk[],
-  settings: AISettings
-): Promise<{ verified: boolean; unsupportedClaims: string[]; recommendedDowngrade: "none" | "Partial" | "Not met"; reason: string; usage?: AIUsage }> {
-  const chunkBlock = citedChunks.length > 0
-    ? citedChunks.map((c) => `[${c.chunkId}] (${c.evidenceType}, ${c.bucket}, ${c.fileKind})\n${c.text.slice(0, 800)}`).join("\n\n---\n\n")
-    : "(no chunks cited — all dimensions lack source evidence)";
-
-  const apsrSummary = verdict.apsr
-    ? [
-        `Approach: ${verdict.apsr.approach.status} (chunks: ${verdict.apsr.approach.sourceChunkIds?.join(", ") || "none"})`,
-        `Processes: ${verdict.apsr.processes.status} (chunks: ${verdict.apsr.processes.sourceChunkIds?.join(", ") || "none"})`,
-        `Systems & Outcomes: ${verdict.apsr.systemsOutcomes.status} (chunks: ${verdict.apsr.systemsOutcomes.sourceChunkIds?.join(", ") || "none"})`,
-        `Review: ${verdict.apsr.review.status} (chunks: ${verdict.apsr.review.sourceChunkIds?.join(", ") || "none"})`,
-      ].join("\n")
-    : "No APSR breakdown available.";
-
-  const system = `You are a strict citation verifier for a GD4 EduTrust audit. You are given a checklist line, the AI's verdict, and the exact chunk texts that were cited as evidence. Your job is to verify whether each cited chunk actually supports its dimension claim. Be strict: a policy chunk does NOT prove implementation; implementation records do NOT prove outcomes; meeting minutes saying only "discussed" do NOT prove review. For each positive dimension, read the cited chunks and decide whether the evidence genuinely supports the claim. Respond with JSON only: {"verified": boolean, "unsupportedClaims": string[], "recommendedDowngrade": "none"|"Partial"|"Not met", "reason": string}.${buildSystemPrompt("evidenceReview", null, "runCitationVerifier")}`;
-
-  const user = `Checklist line [${line.id}]: "${line.text}"\n\nAI verdict:\n${apsrSummary}\nOverall: ${verdict.status}\n\nCited chunks:\n${chunkBlock}`;
-
-  let usage: AIUsage | undefined;
-  const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { onUsage: (u) => { usage = u; } });
-  const parsed = parseJSONObject(content, ["verified", "recommendedDowngrade", "reason"]);
-
-  return {
-    verified: parsed.verified === true,
-    unsupportedClaims: Array.isArray(parsed.unsupportedClaims)
-      ? (parsed.unsupportedClaims as unknown[]).filter((s): s is string => typeof s === "string")
-      : [],
-    recommendedDowngrade: (["none", "Partial", "Not met"] as const).includes(parsed.recommendedDowngrade as "none" | "Partial" | "Not met")
-      ? (parsed.recommendedDowngrade as "none" | "Partial" | "Not met")
-      : "none",
-    reason: (parsed.reason as string) || "",
-    usage,
-  };
-}
-
 // ──────────────────────────────────────────────────────────────────────────────
 // Staged folder audit — three focused AI stages + deterministic APSR builder.
 //
@@ -1376,7 +1329,7 @@ Respond with JSON only:
 // Offline keyword simulation never produces chunk IDs, so callers pass this
 // only for live runs (leaving simulate-based rows on the old behaviour would
 // otherwise be impossible).
-export const UNCITED_DOWNGRADE_NOTE = "Downgraded: no source chunks cited to support this verdict.";
+const UNCITED_DOWNGRADE_NOTE ="Downgraded: no source chunks cited to support this verdict.";
 
 export function buildStagedApsr(
   policyRow: PolicyCoverageRow | undefined,
@@ -1773,8 +1726,8 @@ export async function runEvidenceAssessment(
   const buildSystem = (label: string) => `You are assessing a GD4 EduTrust sub-criterion by combining TWO things for each requirement line: (1) the PPD (Policy & Procedure Document) verdict already decided — whether the requirement is documented — which is GIVEN to you, and (2) the ACTUAL EVIDENCE documents provided below, which show whether the institution actually IMPLEMENTS the requirement in practice.
 
 For each requirement line return a COMBINED verdict:
-"Met" = the requirement is documented in the PPD (Adequate or Partial PPD verdict) AND there is real implementation evidence in the evidence documents (records, logs, forms, registers, screenshots, actual operational records).
-"Partial" = documented in the PPD but implementation evidence is missing, thin, or only partial; OR strong evidence exists but the PPD documentation was weak/absent.
+"Met" = the requirement is FULLY documented in the PPD (Adequate PPD verdict) AND there is real implementation evidence in the evidence documents (records, logs, forms, registers, screenshots, actual operational records). A Partial or Not documented PPD verdict can NEVER combine to "Met" — a weak documented approach gates the whole line (APSR Approach hard-gate), no matter how strong the evidence is.
+"Partial" = documented in the PPD but implementation evidence is missing, thin, or only partial; OR strong evidence exists but the PPD documentation was weak/absent (Partial or Not documented PPD verdict).
 "Not met" = neither adequately documented nor evidenced.
 
 A policy/SOP/procedure filed in the evidence folder does NOT count as implementation evidence — only actual records of doing something count.
@@ -1866,6 +1819,18 @@ Respond with JSON only:
   const rows: EvidenceAssessmentLineResult[] = inputs.map((inp) => {
     const best = bestByRef.get(inp.ref);
     if (best) {
+      // Code-level APSR Approach hard-gate: a line whose PPD verdict is not
+      // "Adequate" is capped at "Partial" whatever the AI combined — the same
+      // facts must not show "Partial" on the PPD tab and "Met" here.
+      if (best.verdict === "Met" && inp.ppdVerdict !== "Adequate") {
+        return {
+          ref: inp.ref,
+          evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.",
+          verdict: "Partial",
+          comment: `${best.comment ? `${best.comment}\n\n` : ""}[Capped at Partial: the PPD verdict for this line is "${inp.ppdVerdict}" — under the APSR Approach hard-gate a line cannot be Met until the documented approach is Adequate, regardless of implementation evidence.]`,
+          chunkIds: best.chunkIds,
+        };
+      }
       // A "Met" verdict that cannot cite any evidence chunk is downgraded to
       // "Partial" — same uncited-positive rule as buildStagedApsr.
       if (best.verdict === "Met" && best.chunkIds.length === 0) {

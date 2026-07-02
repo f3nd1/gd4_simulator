@@ -146,10 +146,9 @@ function simulateFromFlatAuditPoints(req: GD4Requirement): GeneratedChecklistLin
   for (const point of req.flatAuditPoints!) {
     if (point.sourceType === "note" && !isAuditableNote(point.text)) continue;
     const dim =
-      point.apsrHint ??
-      (point.sourceType === "expectedEvidence"
+      point.sourceType === "expectedEvidence"
         ? classifyEvidenceApsr(point.text)
-        : classifyDescribeShowApsr(point.text));
+        : classifyDescribeShowApsr(point.text);
     let text: string;
     if (point.sourceType === "expectedEvidence") {
       const lower = point.text.toLowerCase();

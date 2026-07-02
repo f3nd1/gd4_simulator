@@ -84,12 +84,15 @@ export function Findings() {
   const sortCol = "raised" as const;
   const sortDir = "desc" as const;
   const fromItem = searchParams.get("item"); // e.g. "1.1.1" — jumps to that item's sub-criterion filter
+  const fromSubCrit = searchParams.get("subCrit"); // e.g. "1.2" — pre-selects that sub-criterion directly
   useEffect(() => {
     if (fromItem) {
       const req = GD4_REQUIREMENTS.find((r) => r.id === fromItem);
       if (req) setSubCritFilter(req.subCriterionId);
+    } else if (fromSubCrit) {
+      setSubCritFilter(fromSubCrit);
     }
-  }, [fromItem]);
+  }, [fromItem, fromSubCrit]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [expandedSubCrits, setExpandedSubCrits] = useState<Set<string>>(new Set());

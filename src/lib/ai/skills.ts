@@ -17,11 +17,11 @@
 
 const CRITERION_FILENAMES: Record<string, string> = {
   "1": "criterion-1-leadership-finance.md",
-  "2": "criterion-2-hr-data.md",
-  "3": "criterion-3-agent-due-diligence.md",
+  "2": "criterion-2-corporate-admin.md",
+  "3": "criterion-3-recruitment-agents.md",
   "4": "criterion-4-student-protection.md",
-  "5": "criterion-5-academic-qa.md",
-  "6": "criterion-6-qms.md",
+  "5": "criterion-5-academic.md",
+  "6": "criterion-6-quality-assurance.md",
   "7": "criterion-7-outcomes.md",
 };
 
@@ -123,7 +123,7 @@ type FileType = "scanned" | "spreadsheet";
 
 const MODULE_SKILLS: Record<SkillModule, { capped: string[]; uncapped: string[] }> = {
   checklistScoring: {
-    capped:   [benchmarkingSkill],
+    capped:   [benchmarkingSkill, bandCalibrationSkill],
     uncapped: [],
   },
   evidenceReview: {
@@ -131,15 +131,15 @@ const MODULE_SKILLS: Record<SkillModule, { capped: string[]; uncapped: string[] 
     uncapped: [],
   },
   findingWriter: {
-    capped:   [findingSpecificitySkill, findingWritingSkill],
+    capped:   [findingSpecificitySkill, findingWritingSkill, riskRemediationSkill],
     uncapped: [regulatoryReferencesSkill],
   },
   afiClosure: {
-    capped:   [rootCauseMethodologySkill, findingWritingSkill],
+    capped:   [rootCauseMethodologySkill, findingWritingSkill, riskRemediationSkill],
     uncapped: [],
   },
   bandRecommend: {
-    capped:   [benchmarkingSkill],
+    capped:   [benchmarkingSkill, bandCalibrationSkill, consultantInsightsSkill],
     uncapped: [regulatoryReferencesSkill],
   },
   evidenceTracking: {
@@ -154,8 +154,10 @@ const MODULE_SKILLS: Record<SkillModule, { capped: string[]; uncapped: string[] 
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-// BASE layer — injected for every call.
-const BASE_SKILLS: string[] = [externalAuditorSkill, evidenceStandardsSkill, apsrRubricSkill];
+// BASE layer — injected for every call. sg-pei-context.md carries the SSG
+// hard requirements (FPS, contracts, mandatory refund table) — regulatory
+// context every assessment needs, so it lives in BASE, not a module.
+const BASE_SKILLS: string[] = [externalAuditorSkill, evidenceStandardsSkill, apsrRubricSkill, sgPeiContextSkill];
 
 // Per-skill character cap — keeps total token spend predictable.
 // regulatoryReferences is exempt (uncapped) — see note at top of file.

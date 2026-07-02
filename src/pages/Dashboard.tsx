@@ -489,7 +489,7 @@ export function Dashboard() {
                 <tr key={w.id} className="rowh">
                   <td style={{ fontSize: 12, fontWeight: 700 }}>{i + 1}</td>
                   <td>
-                    <Link to={`/sub-criterion-checklist?item=${encodeURIComponent(w.id)}`} style={{ fontSize: 12.5, fontWeight: 600, color: INK }}>
+                    <Link to={`/sub-checklist?item=${encodeURIComponent(w.id)}`} style={{ fontSize: 12.5, fontWeight: 600, color: INK }}>
                       <b>{w.id}</b> {w.title.slice(0, 55)}{w.title.length > 55 ? "…" : ""}
                     </Link>
                   </td>

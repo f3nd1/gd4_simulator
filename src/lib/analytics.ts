@@ -3,6 +3,7 @@
 // status, and evidence/audit progress. Pure — derived from existing state.
 import type { Scored } from "./scoring";
 import type { SubCriterionChecklistEntry, Finding, EvidenceFolder } from "../types";
+import { resolveFindingType } from "./findingClassification";
 
 export type Analytics = {
   total: number;
@@ -17,12 +18,6 @@ export type Analytics = {
   progress: { foldersTotal: number; foldersLinked: number; foldersAudited: number; itemsTotal: number; itemsWithChecklist: number; itemsScored: number };
   lineStatus: { met: number; partial: number; notMet: number; na: number; notStarted: number };
 };
-
-function avgBand(scored: Scored, pred: (i: Scored["items"][number]) => boolean): number {
-  const g = scored.items.filter(pred);
-  if (!g.length) return 0;
-  return Math.round((g.reduce((a, i) => a + i.band, 0) / g.length) * 10) / 10;
-}
 
 export function buildAnalytics(
   scored: Scored,
@@ -39,9 +34,13 @@ export function buildAnalytics(
 
   const sev = { Critical: 0, High: 0, Medium: 0, Low: 0 } as Record<string, number>;
   let findingsClosed = 0;
+  let findingsOpen = 0;
   for (const f of findings) {
     sev[f.severity] = (sev[f.severity] || 0) + 1;
     if ((closures[f.id]?.human || "") === "Accepted") findingsClosed++;
+    // Positive observations (OBS / risk category D — "no action required")
+    // are not open issues; counting them overstated the open figure.
+    else if (resolveFindingType(f) !== "OBS" && f.riskCategory !== "D") findingsOpen++;
   }
 
   const lineStatus = { met: 0, partial: 0, notMet: 0, na: 0, notStarted: 0 };
@@ -65,18 +64,17 @@ export function buildAnalytics(
     gatePass: scored.gatePass,
     itemsByBand,
     bandByCriterion: scored.crits.map((c) => ({ id: c.id, title: c.title, band: c.band })),
-    gates: [
-      { id: "Sub-criterion 4.2", avgBand: avgBand(scored, (i) => i.subCriterionId === "4.2"), pass: avgBand(scored, (i) => i.subCriterionId === "4.2") >= 3 },
-      { id: "Sub-criterion 4.6", avgBand: avgBand(scored, (i) => i.subCriterionId === "4.6"), pass: avgBand(scored, (i) => i.subCriterionId === "4.6") >= 3 },
-      { id: "Criterion 5", avgBand: avgBand(scored, (i) => i.crit === "5"), pass: avgBand(scored, (i) => i.crit === "5") >= 3 },
-    ],
+    // Reuse the scorecard's own gate computation verbatim — recomputing it
+    // here (with 1-decimal rounding) let the Final Report show gate pass and
+    // fail for the same group on the same page. Round for DISPLAY only.
+    gates: scored.gates.map((g) => ({ id: g.id, avgBand: Math.round(g.avgBand * 10) / 10, pass: g.pass })),
     findingsBySeverity: [
       { label: "Critical", value: sev.Critical || 0 },
       { label: "High", value: sev.High || 0 },
       { label: "Medium", value: sev.Medium || 0 },
       { label: "Low", value: sev.Low || 0 },
     ],
-    findingsOpen: findings.length - findingsClosed,
+    findingsOpen,
     findingsClosed,
     progress: {
       foldersTotal: folders.length,

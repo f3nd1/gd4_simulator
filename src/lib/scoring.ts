@@ -2,6 +2,7 @@ import type { Band, EvidenceLevel, Finding, ItemEvidence } from "../types";
 import { GD4_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { FINDINGS } from "../data/findings";
 import { bandToScore, type ChecklistOverride } from "./checklistBanding";
+import { resolveFindingType } from "./findingClassification";
 
 export type ScoringInput = {
   evidence: Record<string, ItemEvidence>;
@@ -169,6 +170,11 @@ export function buildScored(state: ScoringInput) {
   });
   const gateFail = gateGroups.filter((g) => !g.pass);
   const gatePass = gateFail.length === 0;
+  // Unrounded gate detail for every consumer (Final Report chart, analytics).
+  // Consumers must NOT recompute this: analytics used to re-derive it with
+  // 1-decimal rounding, so an avgBand of 2.96 rounded to 3.0 and displayed
+  // "pass" beside the scorecard's "fail" on the same page.
+  const gates = gateGroups.map((g) => ({ id: g.id, avgBand: g.avgBand, pass: g.pass }));
 
   const T = awardThresholds || { provisional: 500, fourYear: 600, star: 750 };
   let award = total >= T.star ? "EduTrust Star" : total >= T.fourYear ? "EduTrust (4-Year)" : total >= T.provisional ? "EduTrust Provisional (1-Year)" : "Not certified";
@@ -183,9 +189,14 @@ export function buildScored(state: ScoringInput) {
     award = "Not certified — critical gate not met";
   }
 
-  const openAFIs = allFindings.filter((a) => (closures[a.id]?.human || "") !== "Accepted").length;
+  // Open ISSUES only: positive observations (OBS / risk category D — "no
+  // action required") are records of strength, not open items, so counting
+  // them here overstated the open-issue figure everywhere it is shown.
+  const openAFIs = allFindings.filter(
+    (a) => (closures[a.id]?.human || "") !== "Accepted" && resolveFindingType(a) !== "OBS" && a.riskCategory !== "D"
+  ).length;
 
-  return { items, crits, total, gatePass, gateFail, award, openAFIs };
+  return { items, crits, total, gatePass, gateFail, gates, award, openAFIs };
 }
 
 export type Scored = ReturnType<typeof buildScored>;

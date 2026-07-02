@@ -6,6 +6,17 @@ import { useAllFindings } from "../hooks/useAllFindings";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
+import { resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
+
+// The same NC/OFI/OBS + Major/Minor label the register and QA/AFI screens
+// show — exports must never contradict the screen (raw f.type/f.severity
+// predate the classification and can read "Improvement Action / High" for
+// a finding displayed as "NC / Major").
+function findingTypeLabel(f: Parameters<typeof resolveFindingType>[0]): string {
+  const t = resolveFindingType(f);
+  const sev = resolveNcSeverity(f);
+  return sev ? `${t} (${sev})` : t;
+}
 
 export function ExportCentre() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -39,7 +50,7 @@ export function ExportCentre() {
     md +=
       `## Open findings (${scored.openAFIs})\n` +
       findings.filter((a) => (closures[a.id]?.human || "") !== "Accepted")
-        .map((a) => `- ${a.id} (${a.gd4ItemId}) ${a.type}/${a.severity}: ${a.issue}`)
+        .map((a) => `- ${a.id} (${a.gd4ItemId}) ${findingTypeLabel(a)}: ${a.issue}`)
         .join("\n") +
       "\n\n";
     md += `_Internal simulation. Band over 5 times criterion points. Not an official SSG result._\n`;
@@ -70,8 +81,8 @@ export function ExportCentre() {
       f.id,
       f.gd4ItemId,
       f.issue,
-      f.type,
-      f.severity,
+      resolveFindingType(f),
+      resolveNcSeverity(f) ?? "—",
       f.owner,
       f.dueDate,
       (closures[f.id]?.human || "") === "Accepted" ? "Closed" : "Open",

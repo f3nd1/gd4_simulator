@@ -5,7 +5,6 @@ const EXPECTED_ITEM_COUNT = 35;
 const EXPECTED_SUB_CRITERION_COUNT = 24;
 const EXPECTED_CRITERION_COUNT = 7;
 const VALID_SOURCE_TYPES = new Set(["describeShow", "note", "expectedEvidence"]);
-const VALID_APSR = new Set(["Approach", "Processes", "Systems & Outcomes", "Review"]);
 
 describe("GD4 requirement data integrity", () => {
   it("has exactly 7 criteria", () => {
@@ -87,16 +86,6 @@ describe("GD4 requirement data integrity", () => {
     GD4_REQUIREMENTS.forEach((r) => {
       r.flatAuditPoints!.forEach((p) => {
         expect(VALID_SOURCE_TYPES.has(p.sourceType), `${p.ref} has invalid sourceType "${p.sourceType}"`).toBe(true);
-      });
-    });
-  });
-
-  it("flatAuditPoints with apsrHint use only the four valid APSR dimensions", () => {
-    GD4_REQUIREMENTS.forEach((r) => {
-      r.flatAuditPoints!.forEach((p) => {
-        if (p.apsrHint) {
-          expect(VALID_APSR.has(p.apsrHint), `${p.ref} has invalid apsrHint "${p.apsrHint}"`).toBe(true);
-        }
       });
     });
   });

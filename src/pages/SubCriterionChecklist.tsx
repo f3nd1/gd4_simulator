@@ -69,10 +69,6 @@ function statusTone(status: string): "good" | "medium" | "critical" | "neutral" 
   return "neutral";
 }
 
-function sufficiencyTone(s: EvidenceSufficiency): "good" | "medium" | "critical" {
-  return s === "Present" ? "good" : s === "Weak" ? "medium" : "critical";
-}
-
 function quadrantLabel(coveragePct: number, ceiling: number): string {
   const highCoverage = coveragePct >= 50;
   const highMaturity = ceiling >= 3;

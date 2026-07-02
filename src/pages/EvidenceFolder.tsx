@@ -761,7 +761,9 @@ function CompleteDetail({ p, onExportFileLedger, onExportAISummary }: { p: Audit
       ? `#/ppd-review?item=${p.subCriterionId}`
       : `#/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === p.subCriterionId)?.id ?? ""}`;
   const checklistLabel = isOptionA ? "PPD Requirements Review" : "Sub-Criterion Checklist";
-  const findingsHref  = p.subCriterionId ? `#/findings?item=${p.subCriterionId}` : "#/findings";
+  // ?subCrit= (a sub-criterion id like "1.2") — ?item= expects a requirement
+  // id ("1.2.1") and would silently ignore a sub-criterion id.
+  const findingsHref  = p.subCriterionId ? `#/findings?subCrit=${p.subCriterionId}` : "#/findings";
 
   const chipLink: React.CSSProperties = { cursor: "pointer", textDecoration: "none", borderRadius: 6, padding: "5px 11px", fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 };
 
@@ -1306,7 +1308,6 @@ export function EvidenceFolder() {
   const departments    = useWorkspaceStore((s) => s.departments);
   const setFolderField = useWorkspaceStore((s) => s.setFolderField);
   const checkFolderAccess   = useWorkspaceStore((s) => s.checkFolderAccess);
-  const auditFolderContents = useWorkspaceStore((s) => s.auditFolderContents);
   const auditFolderStaged   = useWorkspaceStore((s) => s.auditFolderStaged);
   const cancelBusy          = useWorkspaceStore((s) => s.cancelBusy);
   const clearFileTextCache  = useWorkspaceStore((s) => s.clearFileTextCache);

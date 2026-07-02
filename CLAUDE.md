@@ -53,15 +53,17 @@ Development branch: `claude/prototype-development-y5nqqi`. Commit directly there
    - `supabaseStorage.ts` — debounced write + `beforeunload` flush.
 
 5. **AI layer** (`src/lib/ai/`):
-   - `aiClient.ts` — `fetchWithTimeout()` (90s AbortController), `callAI()`, `summariseText()`.
-   - `agentRuntime.ts` — `runLiveFolderAudit()`, `FOLDER_DOC_CAP = 48000`. Also exports `runStagedPolicyAudit`, `runStagedEvidenceAudit`, `runStagedOutcomeReviewAudit`, `buildStagedApsr` for the three-pass staged audit. `runCitationVerifier()` is the second-pass Strict-mode function. Skills injected via `skills()` (capped to `SKILL_CAP = 3000` chars); `skillsFull()` in `findingWriter.ts` is uncapped (used for `regulatoryReferencesSkill` to preserve full clause tables).
+   - `aiClient.ts` — `fetchWithTimeout()` (90s AbortController), `chatComplete()` (supports `{ temperature?, onUsage?, timeoutMs?, signal? }`), `describeImage()`, `effectiveSettings()`.
+   - `agentRuntime.ts` — `runLiveFolderAudit()`, `FOLDER_DOC_CAP = 60000`. Also exports `runStagedPolicyAudit`, `runStagedEvidenceAudit`, `runStagedOutcomeReviewAudit`, `buildStagedApsr` for the three-pass staged audit, plus `runPPDRequirementsReview` / `runEvidenceAssessment` for the Option A (PPD-first) path. Skills injected via `buildSystemPrompt()` in `skills.ts` (per-skill cap `SKILL_CAP = 7000` chars; `regulatoryReferencesSkill` is uncapped to preserve full clause tables).
    - `simulateAI.ts` — offline fallback keyword-matcher. `FolderAuditLineVerdict` includes an optional `overallReason` field. Also exports `simulateStagedPolicyAudit`, `simulateStagedEvidenceAudit`, `simulateStagedOutcomeReview`.
    - `findingWriter.ts` — `runLiveGroupedFindingWriter()` (AI) and `simulateGroupedFindingWriter()` (offline). The system prompt instructs the AI to quote GD4 requirement text **exactly word-for-word** in the `criteria` field — no paraphrasing. Both inject domain-specialist skill via `domainExpertiseFor()`.
    - `findingGrouper.ts` — groups failing checklist lines by GD4 source ref + APSR dimension into `ChecklistLineGroup[]`.
+   - `src/lib/gd4Refs.ts` — `normalizeAuditRef()` (canonical ref normalizer used at every ref join point) and `findingDedupeKey()` / `findingKeyOf()` (composite finding identity: gd4ItemId + normalized ref + finding type).
 
-6. **Skills** (`src/data/skills/`): injected into audit system prompts:
-   - Generic skills (15): `apsr-rubric.md`, `evidence-standards.md`, `external-auditor.md`, `finding-specificity.md`, `finding-writing.md`, `evidence-ledger.md`, `source-citation-verification.md`, `spreadsheet-evidence.md`, `scanned-document-evidence.md`, `evidence-retrieval.md`, `regulatory-references.md`, `root-cause-methodology.md`, `interview-and-fieldwork.md`, `sample-testing-methodology.md`, `evidence-timeliness.md`, `benchmarking-and-good-practice.md`
-   - Criterion-specific (7): `criterion-{1..7}-*.md` — specialist auditor lenses per criterion (C1 governance/finance, C2 HR/data, C3 agent due-diligence, C4 student-protection, C5 academic QA, C6 QMS, C7 outcomes/data-integrity). Injected as a dedicated block (not capped) via `domainExpertiseFor(subCriterionId)`.
+6. **Skills** (`src/data/skills/`, injection map in `src/lib/ai/skills.ts`):
+   - BASE (every AI call): `external-auditor.md`, `evidence-standards.md`, `apsr-rubric.md`, `sg-pei-context.md` (SSG hard requirements: FPS, contracts, refund table).
+   - Per-module (see `MODULE_SKILLS`): `benchmarking-and-good-practice.md`, `band-calibration.md`, `evidence-retrieval.md`, `source-citation-verification.md`, `evidence-timeliness.md`, `finding-specificity.md`, `finding-writing.md`, `risk-and-remediation.md`, `consultant-insights.md`, `regulatory-references.md` (uncapped), `root-cause-methodology.md`, `evidence-ledger.md`, `interview-and-fieldwork.md`, `sample-testing-methodology.md`; file-type bonus: `scanned-document-evidence.md`, `spreadsheet-evidence.md`.
+   - Criterion-specific (7): `criterion-{1..7}-*.md` — specialist auditor lenses per criterion (C1 governance/finance, C2 corporate admin, C3 recruitment/agents, C4 student-protection, C5 academic, C6 quality assurance, C7 outcomes/data-integrity). Injected as a dedicated block (not capped) via `domainExpertiseFor(subCriterionId)`.
    - `domainExpertise.ts` — `criterionIdOf()`, `domainExpertiseFor()`, `domainExpertiseLabelFor()` (maps any item/sub-criterion/criterion id → skill + display label).
 
 7. **Staged audit** (`auditFolderStaged` in `useWorkspaceStore.ts`): three sequential AI passes — Policy (Approach), Evidence (Processes + Outcomes), Outcome/Review (Review) — then a deterministic `buildStagedApsr()` merger. Progress stages: `listing → reading → policy_audit → evidence_audit → outcome_review → apsr_build → saving → findings_summary → complete`. The `lastAuditSummary` written to the folder includes: specialist lens, band per GD4 item, per-line APSR gap notes, file names read, method description.
@@ -94,7 +96,7 @@ Vitest. Test files must import `classifyPdfTextQuality` and `extractSpreadsheetT
 
 ### Routing
 
-HashRouter — all routes under `#/`. Route list in `src/App.tsx`; nav labels/hints in `src/nav.ts`. Filter pre-selection via `?item=<gd4ItemId>` query param on `/sub-checklist` and `/findings`.
+HashRouter — all routes under `#/`. Route list in `src/App.tsx`; nav labels/hints in `src/nav.ts` (the Help page derives its structure from `NAV`, so nav changes propagate automatically). Filter pre-selection via `?item=<gd4ItemId>` query param on `/sub-checklist` and `/findings`; `/findings` also accepts `?subCrit=<subCriterionId>`.
 
 ### Persistence & security
 
