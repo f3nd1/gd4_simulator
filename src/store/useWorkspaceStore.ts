@@ -56,7 +56,7 @@ import { findingTypeForStatus } from "../lib/findingClassification";
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { buildOptionALineWrites } from "../lib/optionAChecklistWrite";
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
-import { buildFullAuditPlan, type FullAuditProgress } from "../lib/fullAudit";
+import { buildFullAuditPlan, fullAuditLabel, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -1413,9 +1413,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (plan.length === 0) return;
         const linkedCount = plan.filter((p) => p.hasLinks).length;
         const startToken = get().auditRunToken;
-        const log: string[] = [];
+        // One entry per planned sub-criterion, statuses updated live so the
+        // overlay can colour-code waiting/running/done/skipped/error rows.
+        const entries: FullAuditEntry[] = plan.map((p) => ({
+          subCriterionId: p.subCriterionId,
+          label: fullAuditLabel(p.subCriterionId, p.folderName),
+          status: "waiting",
+        }));
         const setFull = (patch: Partial<FullAuditProgress>) =>
-          set((st) => ({ fullAuditProgress: { ...(st.fullAuditProgress ?? { status: "running", current: 0, total: plan.length, currentSubCriterionId: "", currentName: "", log: [] }), ...patch, log: [...log] } }));
+          set((st) => ({ fullAuditProgress: { ...(st.fullAuditProgress ?? { status: "running", current: 0, total: plan.length, currentSubCriterionId: "", currentName: "" }), ...patch, entries: entries.map((e) => ({ ...e })) } as FullAuditProgress }));
         setFull({ status: "running", total: plan.length, current: 0 });
         let cancelled = false;
         for (let i = 0; i < plan.length; i++) {
@@ -1423,13 +1429,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // sweep before starting the next sub-criterion.
           if (get().auditRunToken !== startToken) { cancelled = true; break; }
           const entry = plan[i];
-          setFull({ current: i + 1, currentSubCriterionId: entry.subCriterionId, currentName: entry.folderName });
+          entries[i].status = "running";
+          setFull({ current: i + 1, currentSubCriterionId: entry.subCriterionId, currentName: fullAuditLabel(entry.subCriterionId, entry.folderName) });
           if (!entry.hasLinks) {
             // Never skipped silently: recorded on the folder and in the log.
             set((st) => ({
               folders: st.folders.map((f) => f.id === entry.folderId ? { ...f, lastAuditSummary: "Not assessed / no evidence — no Drive folder links are set for this sub-criterion, so the full audit had nothing to read. Link a Policy & Procedure and/or Actual Evidence folder and re-run." } : f),
             }));
-            log.push(`— ${entry.subCriterionId} ${entry.folderName}: not assessed (no folder links)`);
+            entries[i].status = "skipped";
+            entries[i].note = "no folder links";
             setFull({});
             continue;
           }
@@ -1439,17 +1447,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             } else {
               await get().auditFolderStaged(entry.folderId, "all", undefined, { current: i + 1, total: plan.length });
             }
-            if (get().auditRunToken !== startToken) { cancelled = true; log.push(`✕ ${entry.subCriterionId} ${entry.folderName}: cancelled`); break; }
-            log.push(`✓ ${entry.subCriterionId} ${entry.folderName}: done (Option ${entry.path})`);
+            if (get().auditRunToken !== startToken) { cancelled = true; entries[i].status = "error"; entries[i].note = "cancelled"; break; }
+            entries[i].status = "done";
+            entries[i].note = `Option ${entry.path}`;
           } catch (err) {
-            log.push(`✗ ${entry.subCriterionId} ${entry.folderName}: failed — ${err instanceof Error ? err.message : String(err)}`);
+            entries[i].status = "error";
+            entries[i].note = err instanceof Error ? err.message : String(err);
           }
           setFull({});
         }
-        log.push(cancelled
-          ? `Cancelled — ${log.filter((l) => l.startsWith("✓")).length} of ${linkedCount} linked sub-criteria completed before the stop.`
-          : `Full audit complete — ${log.filter((l) => l.startsWith("✓")).length} of ${linkedCount} linked sub-criteria audited; ${plan.length - linkedCount} had no links.`);
-        setFull({ status: cancelled ? "cancelled" : "complete" });
+        const doneCount = entries.filter((e) => e.status === "done").length;
+        setFull({
+          status: cancelled ? "cancelled" : "complete",
+          summary: cancelled
+            ? `Cancelled — ${doneCount} of ${linkedCount} linked sub-criteria completed before the stop.`
+            : `Full audit complete — ${doneCount} of ${linkedCount} linked sub-criteria audited; ${plan.length - linkedCount} had no links.`,
+        });
       },
 
       resolvePendingItem: (subCriterionId, itemId, decision, overrideStatus) => {

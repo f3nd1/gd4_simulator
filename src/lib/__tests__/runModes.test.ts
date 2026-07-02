@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { partitionWritesByMode, DEFAULT_AUDIT_MODE, auditModeLabel, AUDIT_MODES } from "../runModes";
-import { buildFullAuditPlan } from "../fullAudit";
+import { buildFullAuditPlan, fullAuditLabel } from "../fullAudit";
 import type { ChecklistLineWrite } from "../../types";
 
 function write(over: Partial<ChecklistLineWrite>): ChecklistLineWrite {
@@ -64,5 +64,11 @@ describe("buildFullAuditPlan — the full-auto sweep never skips silently", () =
     const plan = buildFullAuditPlan(folders, { "1.2": "B" }, isLink);
     expect(plan.find((p) => p.subCriterionId === "1.1")!.path).toBe("A");
     expect(plan.find((p) => p.subCriterionId === "1.2")!.path).toBe("B");
+  });
+
+  it("log labels show the sub-criterion number once, not twice", () => {
+    expect(fullAuditLabel("6.2", "6.2 Management Review")).toBe("6.2 Management Review");
+    expect(fullAuditLabel("1.1", "1.1 Leadership & Corporate Governance")).toBe("1.1 Leadership & Corporate Governance");
+    expect(fullAuditLabel("4.2", "Student Contracts")).toBe("4.2 Student Contracts");
   });
 });

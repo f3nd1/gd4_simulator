@@ -29,6 +29,25 @@ export function buildFullAuditPlan(
   }));
 }
 
+// One row of the full-audit live log, colour-coded by status in the overlay:
+// done (green) / skipped, no folder links (amber) / error (red) /
+// waiting (grey) / running (accent, "assessing…").
+export type FullAuditEntryStatus = "waiting" | "running" | "done" | "skipped" | "error";
+export type FullAuditEntry = {
+  subCriterionId: string;
+  label: string;           // display label, number shown ONCE (see fullAuditLabel)
+  status: FullAuditEntryStatus;
+  note?: string;           // e.g. "no folder links", the error message, "Option A"
+};
+
+// Folder names often already start with the sub-criterion number
+// ("6.2 Management Review"); naive `${id} ${name}` doubled it
+// ("6.2 6.2 Management Review"). Prefix the id only when it is missing.
+export function fullAuditLabel(subCriterionId: string, folderName: string): string {
+  const name = folderName.trim();
+  return name.startsWith(subCriterionId) ? name : `${subCriterionId} ${name}`;
+}
+
 // Live progress of the full audit, rendered by the full-screen overlay.
 export type FullAuditProgress = {
   status: "running" | "complete" | "cancelled";
@@ -36,6 +55,8 @@ export type FullAuditProgress = {
   total: number;
   currentSubCriterionId: string;
   currentName: string;
-  // Completion log, newest last: "✓ 1.1 Vision & Mission — done", …
-  log: string[];
+  // One entry per planned sub-criterion, in run order, statuses updated live.
+  entries: FullAuditEntry[];
+  // One-line wrap-up shown when the run ends.
+  summary?: string;
 };

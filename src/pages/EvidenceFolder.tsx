@@ -9,6 +9,8 @@ import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
+import { TONE } from "../lib/theme";
+import type { FullAuditEntry } from "../lib/fullAudit";
 import { NextStepBanner, Walkthrough, WalkthroughLink, useTip } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 
@@ -1324,7 +1326,30 @@ function FullAuditOverlay() {
   const dismiss = useWorkspaceStore((s) => s.dismissFullAuditProgress);
   if (!progress) return null;
   const running = progress.status === "running";
-  const pct = progress.total > 0 ? Math.round(((running ? Math.max(0, progress.current - 1) : progress.total) / progress.total) * 100) : 0;
+  const processed = progress.entries.filter((e) => e.status === "done" || e.status === "skipped" || e.status === "error").length;
+  const doneCount = progress.entries.filter((e) => e.status === "done").length;
+  const skippedCount = progress.entries.filter((e) => e.status === "skipped").length;
+  const errorCount = progress.entries.filter((e) => e.status === "error").length;
+  const pct = progress.total > 0 ? Math.round((processed / progress.total) * 100) : 0;
+
+  // Status → theme tone: done=good, skipped=medium (amber), error=critical,
+  // waiting=neutral, running=progress (accent).
+  const toneOf = (s: FullAuditEntry["status"]) =>
+    s === "done" ? TONE.good : s === "skipped" ? TONE.medium : s === "error" ? TONE.critical : s === "running" ? TONE.progress : TONE.neutral;
+  const statusWord = (e: FullAuditEntry) =>
+    e.status === "running" ? "assessing…" : e.status === "waiting" ? "waiting" : e.status === "done" ? `done${e.note ? ` (${e.note})` : ""}` : e.status === "skipped" ? `skipped${e.note ? ` — ${e.note}` : ""}` : `error${e.note ? ` — ${e.note}` : ""}`;
+
+  // Circular percentage ring.
+  const R = 44;
+  const CIRC = 2 * Math.PI * R;
+  const ringColour = progress.status === "cancelled" ? TONE.medium.fg : TONE.progress.fg;
+
+  const chip = (label: string, count: number, tone: { fg: string; bg: string }) => (
+    <span style={{ fontSize: 11.5, fontWeight: 700, color: tone.fg, background: tone.bg, borderRadius: 999, padding: "3px 11px" }}>
+      {count} {label}
+    </span>
+  );
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 120, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div style={{ background: "#fff", borderRadius: 16, padding: "28px 30px 24px", width: "100%", maxWidth: 680, boxShadow: "0 20px 60px rgba(0,0,0,0.2)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
@@ -1334,19 +1359,53 @@ function FullAuditOverlay() {
             : progress.status === "complete" ? "Full audit complete" : "Full audit cancelled"}
         </div>
         {running && (
-          <div style={{ fontSize: 13, color: "#475569", marginBottom: 10 }}>
-            Now: <b>{progress.currentSubCriterionId} {progress.currentName}</b>
+          <div style={{ fontSize: 13, color: "#475569", marginBottom: 6 }}>
+            Now: <b>{progress.currentName}</b>
           </div>
         )}
-        <div style={{ height: 9, borderRadius: 5, background: "#e2e8f0", overflow: "hidden", marginBottom: 10 }}>
-          <div style={{ width: `${pct}%`, height: "100%", background: progress.status === "cancelled" ? "#f59e0b" : "#7c3aed", borderRadius: 5, transition: "width 0.4s ease" }} />
+        {!running && progress.summary && (
+          <div style={{ fontSize: 12.5, color: "#475569", marginBottom: 6 }}>{progress.summary}</div>
+        )}
+
+        {/* Percentage ring + live stat chips */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, margin: "6px 0 12px" }}>
+          <div style={{ position: "relative", width: 110, height: 110 }}>
+            <svg width={110} height={110}>
+              <circle cx={55} cy={55} r={R} fill="none" stroke={TONE.neutral.bg} strokeWidth={10} />
+              <circle
+                cx={55} cy={55} r={R} fill="none"
+                stroke={ringColour} strokeWidth={10} strokeLinecap="round"
+                strokeDasharray={CIRC} strokeDashoffset={CIRC * (1 - pct / 100)}
+                transform="rotate(-90 55 55)"
+                style={{ transition: "stroke-dashoffset 0.4s ease" }}
+              />
+            </svg>
+            <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+              <span style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", lineHeight: 1 }}>{pct}%</span>
+              <span style={{ fontSize: 10.5, color: "#64748b", marginTop: 3 }}>{processed} of {progress.total}</span>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {chip("done", doneCount, TONE.good)}
+            {chip("skipped", skippedCount, TONE.medium)}
+            {chip("errors", errorCount, TONE.critical)}
+          </div>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", minHeight: 120, maxHeight: 300 }}>
-          {progress.log.length === 0
-            ? <div style={{ fontSize: 12, color: "#94a3b8" }}>Starting…</div>
-            : progress.log.map((l, i) => (
-                <div key={i} style={{ fontSize: 12, color: l.startsWith("✗") ? "#b91c1c" : l.startsWith("✓") ? "#15803d" : "#475569", lineHeight: 1.7 }}>{l}</div>
-              ))}
+
+        {/* Live log: one colour-coded row per sub-criterion */}
+        <div style={{ flex: 1, overflowY: "auto", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", minHeight: 120, maxHeight: 260 }}>
+          {progress.entries.length === 0
+            ? <div style={{ fontSize: 12, color: TONE.neutral.fg }}>Starting…</div>
+            : progress.entries.map((e, i) => {
+                const tone = toneOf(e.status);
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 7, fontSize: 12, lineHeight: 1.8 }}>
+                    <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: tone.fg, flexShrink: 0, alignSelf: "center", opacity: e.status === "waiting" ? 0.45 : 1 }} />
+                    <span style={{ color: tone.fg, fontWeight: e.status === "running" ? 700 : 500, opacity: e.status === "waiting" ? 0.75 : 1 }}>{e.label}</span>
+                    <span style={{ color: tone.fg, opacity: 0.85, fontSize: 11 }}>{statusWord(e)}</span>
+                  </div>
+                );
+              })}
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
           {running ? (
