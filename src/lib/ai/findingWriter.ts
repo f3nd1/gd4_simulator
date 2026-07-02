@@ -183,7 +183,7 @@ export async function runLiveGroupedFindingWriter(
   group: ChecklistLineGroup,
   req: GD4Requirement,
   settings: AISettings,
-  opts?: { onUsage?: (u: AIUsage) => void }
+  opts?: { onUsage?: (u: AIUsage) => void; signal?: AbortSignal }
 ): Promise<GroupedFindingWriterResult> {
   const itemRef = req.itemNumber ?? req.subCriterionId;
   const groupContext = buildGroupContext(group);
@@ -246,6 +246,7 @@ Each apsrBullets array may contain 1–3 bullet strings. Do not add extra keys.
       settings,
       {
         temperature: 0.25,
+        signal: opts?.signal,
         onUsage: (u) => {
           usage = u;
           opts?.onUsage?.(u);
@@ -253,7 +254,10 @@ Each apsrBullets array may contain 1–3 bullet strings. Do not add extra keys.
       }
     );
   } catch (err) {
-    // Fall back to simulation on any AI error so the draft pipeline never stalls.
+    // A cancellation must propagate so the caller stops — do NOT silently
+    // fall back to a simulated draft when the user cancelled.
+    if (opts?.signal?.aborted || (err instanceof Error && /cancel/i.test(err.message))) throw err;
+    // Fall back to simulation on any other AI error so the pipeline never stalls.
     const sim = simulateGroupedFindingWriter(group, req);
     return { ...sim, live: false };
   }

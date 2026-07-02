@@ -291,6 +291,7 @@ export function Findings() {
   const draftStore = useFindingDraftStore();
   const allDraftsBySubCrit = draftStore.draftsBySubCriterion;
   const draftStoreBusy = draftStore.busy;
+  const genProgress = draftStore.generationProgress;
   const [groupGenNote, setGroupGenNote] = useState<string | null>(null);
   const [expandedDraftId, setExpandedDraftId] = useState<string | null>(null);
 
@@ -397,7 +398,42 @@ export function Findings() {
         >
           {draftStoreBusy ? "Generating…" : pendingGroupedDrafts.length > 0 ? "Regenerate drafts" : "Generate grouped findings"}
         </button>
+        {draftStoreBusy && (
+          <button
+            onClick={() => draftStore.cancelGeneration()}
+            title="Stop generating. The in-flight AI call is aborted and no further findings are written."
+            style={{ cursor: "pointer", border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}
+          >
+            Cancel
+          </button>
+        )}
       </div>
+
+      {draftStoreBusy && (
+        <div style={{ marginBottom: 10, padding: "10px 12px", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 8 }}>
+          {(() => {
+            const total = genProgress?.total ?? 0;
+            const done = genProgress?.done ?? 0;
+            const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+            return (
+              <>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 5 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#3730a3" }}>Generating grouped findings</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#3730a3", marginLeft: "auto", fontVariantNumeric: "tabular-nums" }}>
+                    {pct}% · {done}/{total || "…"}
+                  </span>
+                </div>
+                <div style={{ height: 7, borderRadius: 4, background: "#dbeafe", overflow: "hidden" }}>
+                  <div style={{ width: `${total > 0 ? pct : 15}%`, height: "100%", background: "#6366f1", borderRadius: 4, transition: "width 0.3s ease" }} />
+                </div>
+                <div style={{ fontSize: 11.5, color: "#475569", marginTop: 6, lineHeight: 1.4 }}>
+                  {genProgress?.detail ?? "Preparing…"}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
       <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0, marginBottom: groupGenNote ? 6 : 10 }}>
         Consolidates failing checklist lines into grouped finding drafts (same GD4 source-ref parent + same APSR dimension → one finding). Review, edit, then confirm each draft to add it to the register.
       </p>

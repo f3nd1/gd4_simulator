@@ -26,6 +26,13 @@ function newDraftId(): string {
   return `GFD-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+// Run-level abort for the active generation loop. cancelGeneration() aborts
+// it, which propagates through runLiveGroupedFindingWriter into
+// chatComplete → fetch (killing the in-flight request) and stops the loop
+// before the next finding. One run at a time (busy flag), so a single
+// module-level ref is sufficient.
+let _genAbort: AbortController | null = null;
+
 function apsrDimToFindingDim(dim: ChecklistLineGroup["primaryApsrDimension"]): FindingDimension {
   switch (dim) {
     case "Approach":          return "Procedure";
@@ -48,10 +55,20 @@ function isCoveredByExistingFinding(group: ChecklistLineGroup, existingFindings:
   );
 }
 
+// Live progress of a grouped-finding generation run, so the UI can show a
+// bar + percentage + what it is working on right now instead of a static
+// "Generating…". null when no run is active.
+export type GenerationProgress = {
+  done: number;      // findings written so far
+  total: number;     // total findings this run will attempt
+  detail: string;    // human-readable "what it's doing now"
+};
+
 export type FindingDraftState = {
   // drafts keyed by subCriterionId, each value is an ordered array of drafts
   draftsBySubCriterion: Record<string, GroupedFindingDraft[]>;
   busy: boolean;
+  generationProgress: GenerationProgress | null;
 
   // Generate grouped finding drafts for all (or a specific) sub-criterion.
   // Calls AI sequentially per group to avoid rate-limit spikes.
@@ -60,6 +77,11 @@ export type FindingDraftState = {
     auditRunId?: string;
     live?: boolean;
   }) => Promise<{ created: number; skipped: number }>;
+
+  // Cancel an in-progress generation run: aborts the in-flight AI call and
+  // stops the loop before the next finding (the backend really stops — no
+  // further paid calls are made after this returns).
+  cancelGeneration: () => void;
 
   // Confirm a grouped draft — creates a Finding in the workspace register,
   // stamps savedFindingId on every contributing checklist line, and marks
@@ -105,8 +127,13 @@ export const useFindingDraftStore = create<FindingDraftState>()(
     (set, get) => ({
       draftsBySubCriterion: {},
       busy: false,
+      generationProgress: null,
 
       getDrafts: (subCriterionId) => get().draftsBySubCriterion[subCriterionId] ?? [],
+
+      cancelGeneration: () => {
+        _genAbort?.abort();
+      },
 
       generateFindingsFromChecklist: async (opts = {}) => {
         const { subCriterionId, auditRunId, live = false } = opts;
@@ -125,79 +152,112 @@ export const useFindingDraftStore = create<FindingDraftState>()(
 
         if (targetIds.length === 0) return { created: 0, skipped: 0 };
 
-        set({ busy: true });
-        let created = 0;
+        // Build the full work list up front (applying the same skip rules) so
+        // we know the TOTAL and can show an accurate progress bar / percentage.
+        const existingFindings = workspaceState.customFindings;
+        const worklist: Array<{ itemId: string; req: GD4Requirement; subId: string; group: ChecklistLineGroup }> = [];
         let skipped = 0;
-
         for (const itemId of targetIds) {
           const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
           if (!req) continue;
-
           const entry = checklistState.entries[itemId];
           if (!entry) continue;
-
           const groups = groupWeakLines(entry.specific, itemId, req);
           if (groups.length === 0) continue;
-
-          const existingFindings = workspaceState.customFindings;
           const subId = req.subCriterionId;
-
+          const existingDrafts = get().draftsBySubCriterion[subId] ?? [];
           for (const group of groups) {
-            // Skip if already covered by a confirmed finding
-            if (isCoveredByExistingFinding(group, existingFindings)) {
-              skipped++;
-              continue;
-            }
-
-            // Skip if a non-discarded draft already exists for these lines
-            const existingDrafts = get().draftsBySubCriterion[subId] ?? [];
+            if (isCoveredByExistingFinding(group, existingFindings)) { skipped++; continue; }
             const lineIds = new Set(group.lines.map((l) => l.id));
             const alreadyDrafted = existingDrafts.some(
-              (d) =>
-                d.status !== "confirmed" &&
-                d.group.lines.some((l) => lineIds.has(l.id))
+              (d) => d.status !== "confirmed" && d.group.lines.some((l) => lineIds.has(l.id))
             );
-            if (alreadyDrafted) {
-              skipped++;
-              continue;
-            }
+            if (alreadyDrafted) { skipped++; continue; }
+            worklist.push({ itemId, req, subId, group });
+          }
+        }
 
-            const draftId = newDraftId();
-            // Insert a "writing" placeholder immediately so the UI can show progress
-            const placeholder: GroupedFindingDraft = {
-              id: draftId,
-              gd4ItemId: itemId,
-              subCriterionId: subId,
-              auditRunId,
-              group,
-              status: "writing",
-              evidenceStatusSummary: buildEvidenceStatusSummary(group.lines),
-            };
+        if (worklist.length === 0) {
+          return { created: 0, skipped };
+        }
+
+        const abort = new AbortController();
+        _genAbort = abort;
+        const total = worklist.length;
+        set({ busy: true, generationProgress: { done: 0, total, detail: `Preparing ${total} finding${total !== 1 ? "s" : ""}…` } });
+        let created = 0;
+
+        for (let i = 0; i < worklist.length; i++) {
+          if (abort.signal.aborted) break;
+          const { itemId, req, subId, group } = worklist[i];
+          const lineCount = group.lines.length;
+          set({
+            generationProgress: {
+              done: i,
+              total,
+              detail: `Writing finding ${i + 1} of ${total} — GD4 ${itemId} · ${group.gapType} gap (${lineCount} line${lineCount !== 1 ? "s" : ""}${group.sourceRefs[0] ? `, ${group.sourceRefs[0]}` : ""})`,
+            },
+          });
+
+          const draftId = newDraftId();
+          // Insert a "writing" placeholder immediately so the UI can show progress
+          const placeholder: GroupedFindingDraft = {
+            id: draftId,
+            gd4ItemId: itemId,
+            subCriterionId: subId,
+            auditRunId,
+            group,
+            status: "writing",
+            evidenceStatusSummary: buildEvidenceStatusSummary(group.lines),
+          };
+          set((s) => ({
+            draftsBySubCriterion: {
+              ...s.draftsBySubCriterion,
+              [subId]: [...(s.draftsBySubCriterion[subId] ?? []), placeholder],
+            },
+          }));
+
+          const dropPlaceholder = () =>
             set((s) => ({
               draftsBySubCriterion: {
                 ...s.draftsBySubCriterion,
-                [subId]: [...(s.draftsBySubCriterion[subId] ?? []), placeholder],
+                [subId]: (s.draftsBySubCriterion[subId] ?? []).filter((d) => d.id !== draftId),
               },
             }));
 
-            try {
-              let result;
-              const useLive = live && aiSettings.enabled && !!aiSettings.apiKey;
-              if (useLive) {
-                const settings = effectiveSettings(aiSettings, { purpose: "analysis" });
-                result = await runLiveGroupedFindingWriter(group, req, settings);
-              } else {
-                result = simulateGroupedFindingWriter(group, req);
-              }
+          try {
+            let result;
+            const useLive = live && aiSettings.enabled && !!aiSettings.apiKey;
+            if (useLive) {
+              const settings = effectiveSettings(aiSettings, { purpose: "analysis" });
+              result = await runLiveGroupedFindingWriter(group, req, settings, { signal: abort.signal });
+            } else {
+              result = simulateGroupedFindingWriter(group, req);
+            }
 
-              set((s) => ({
-                draftsBySubCriterion: {
-                  ...s.draftsBySubCriterion,
-                  [subId]: (s.draftsBySubCriterion[subId] ?? []).map((d) =>
-                    d.id === draftId
-                      ? {
-                          ...d,
-                          status: "draft" as FindingDraftStatus,
+            // Cancelled while this finding was being written: discard its
+            // half-made placeholder and stop — don't leave a stray draft.
+            if (abort.signal.aborted) { dropPlaceholder(); break; }
+
+            set((s) => ({
+              draftsBySubCriterion: {
+                ...s.draftsBySubCriterion,
+                [subId]: (s.draftsBySubCriterion[subId] ?? []).map((d) =>
+                  d.id === draftId
+                    ? {
+                        ...d,
+                        status: "draft" as FindingDraftStatus,
+                        title: result.title,
+                        observation: result.observation,
+                        criteria: result.criteria,
+                        effect: result.effect,
+                        rootCause: result.rootCause,
+                        corrective: result.corrective,
+                        preventive: result.preventive,
+                        apsrBullets: result.apsrBullets,
+                        evidenceStatusSummary: result.evidenceStatusSummary,
+                        live: result.live,
+                        aiSnapshot: {
                           title: result.title,
                           observation: result.observation,
                           criteria: result.criteria,
@@ -205,39 +265,33 @@ export const useFindingDraftStore = create<FindingDraftState>()(
                           rootCause: result.rootCause,
                           corrective: result.corrective,
                           preventive: result.preventive,
-                          apsrBullets: result.apsrBullets,
-                          evidenceStatusSummary: result.evidenceStatusSummary,
-                          live: result.live,
-                          aiSnapshot: {
-                            title: result.title,
-                            observation: result.observation,
-                            criteria: result.criteria,
-                            effect: result.effect,
-                            rootCause: result.rootCause,
-                            corrective: result.corrective,
-                            preventive: result.preventive,
-                          },
-                        }
-                      : d
-                  ),
-                },
-              }));
-              created++;
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              set((s) => ({
-                draftsBySubCriterion: {
-                  ...s.draftsBySubCriterion,
-                  [subId]: (s.draftsBySubCriterion[subId] ?? []).map((d) =>
-                    d.id === draftId ? { ...d, status: "error" as FindingDraftStatus, errorMessage: msg } : d
-                  ),
-                },
-              }));
-            }
+                        },
+                      }
+                    : d
+                ),
+              },
+            }));
+            created++;
+            set({ generationProgress: { done: i + 1, total, detail: `${i + 1} of ${total} written` } });
+          } catch (err) {
+            // A cancellation aborts cleanly: drop the placeholder and stop the
+            // loop instead of recording an "error" draft.
+            const msg = err instanceof Error ? err.message : String(err);
+            if (abort.signal.aborted || /cancel/i.test(msg)) { dropPlaceholder(); break; }
+            set((s) => ({
+              draftsBySubCriterion: {
+                ...s.draftsBySubCriterion,
+                [subId]: (s.draftsBySubCriterion[subId] ?? []).map((d) =>
+                  d.id === draftId ? { ...d, status: "error" as FindingDraftStatus, errorMessage: msg } : d
+                ),
+              },
+            }));
+            set({ generationProgress: { done: i + 1, total, detail: `${i + 1} of ${total} processed` } });
           }
         }
 
-        set({ busy: false });
+        if (_genAbort === abort) _genAbort = null;
+        set({ busy: false, generationProgress: null });
         return { created, skipped };
       },
 
