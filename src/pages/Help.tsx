@@ -130,6 +130,10 @@ const DETAILS: Record<string, Detail> = {
     what: "Calibration memories — corrections the team has made to past AI outputs, fed back into future assessments.",
     how: "Review, keep or retire memories so the AI keeps learning your standards without accumulating stale ones.",
   },
+  "/ai-calibration": {
+    what: "A measurement harness comparing the app's AI results against UCC's real SSG assessment reports: per real AFI it records caught / partially caught / missed, with an over-rating check and a CSV export.",
+    how: "Paste the real report AFIs into src/data/benchmarkAFIs.ts once, run your PPD/evidence assessments, then 'Run match analysis' — edit any AI judgement by hand; human edits are never overwritten.",
+  },
   "/change-log": {
     what: "History of every app update (git push/pull) the app recorded, with a plain-English summary of what changed.",
     how: "Nothing to fill in — check it to see what changed in the app between sessions.",
