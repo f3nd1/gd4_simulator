@@ -54,6 +54,7 @@ import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImag
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
 import { findingTypeForStatus } from "../lib/findingClassification";
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
+import { buildOptionALineWrites } from "../lib/optionAChecklistWrite";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -1000,6 +1001,28 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             busy: null,
             evidenceAssessmentProgress: null,
           }));
+          // Write the verdicts into the Sub-Criterion Checklist — the same
+          // store Option B's staged audit writes to — so Option A results
+          // persist across reloads/versions and feed buildScored/computeBand
+          // identically. Idempotent: lines are matched by normalized ref and
+          // updated; prior Option A/audit evidence (runId items) is replaced.
+          if (rows) {
+            try {
+              const checklist = useChecklistModuleStore.getState();
+              const linesByItem = Object.fromEntries(
+                Object.entries(checklist.entries).map(([itemId, e]) => [itemId, e.specific.map((l) => ({ id: l.id, sourceRef: l.sourceRef, clause: l.clause }))])
+              );
+              const writes = buildOptionALineWrites(rows, linesByItem, ppd?.rows ?? [], {
+                runId,
+                folderName: folder.folderName,
+                drive: folder.folderLink || folder.policyLink,
+                owner: folder.owner,
+              });
+              checklist.applyOptionAWrites(writes);
+            } catch (err) {
+              console.error("[EvidenceAssessment] checklist write-back failed", err instanceof Error ? err.message : String(err));
+            }
+          }
         };
         const setEvProgress = (detail: string, pct: number) =>
           set({ evidenceAssessmentProgress: { subCriterionId, pct, detail } });

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
@@ -17,23 +17,7 @@ export function CriterionScorecard() {
   const confirmScore = useWorkspaceStore((s) => s.confirmScore);
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
-  const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
-  const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
-
   const [feedbackTarget, setFeedbackTarget] = useState<{ id: string; aiOutput: string } | null>(null);
-
-  // Sub-criteria worked through Option A (PPD Review / Evidence tab) whose
-  // items carry NO checklist band override: scoring only reads checklist
-  // entries, so that Option A work is invisible to the band/award below.
-  // Surfacing this here stops the score silently ignoring assessed work.
-  const optionAUnscored = useMemo(() => {
-    const withResults = new Set<string>();
-    for (const [subId, r] of Object.entries(ppdReviewResults)) if (r.rows.length > 0) withResults.add(subId);
-    for (const [subId, r] of Object.entries(evidenceAssessments)) if (r.rows.length > 0) withResults.add(subId);
-    return [...withResults]
-      .filter((subId) => !scored.items.some((i) => i.subCriterionId === subId && i.checklistOverride))
-      .sort();
-  }, [ppdReviewResults, evidenceAssessments, scored.items]);
 
   return (
     <Card>
@@ -45,14 +29,6 @@ export function CriterionScorecard() {
         Items marked <Pill s="progress">via Checklist</Pill> take their band from the <Link to="/sub-checklist">Sub-Criterion Checklist</Link>,
         which is the source of truth for scoring. For those items the AI/reviewer/confirmed columns are kept for the record but do not change the band.
       </div>
-      {optionAUnscored.length > 0 && (
-        <div style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 11px", marginBottom: 12 }}>
-          ⚠ <b>Option A results are not yet reflected in this score.</b> Sub-criteri{optionAUnscored.length === 1 ? "on" : "a"}{" "}
-          <b>{optionAUnscored.join(", ")}</b> ha{optionAUnscored.length === 1 ? "s" : "ve"} PPD Review / Evidence-tab results but no staged-audit band feeding
-          the scorecard — run the <Link to="/evidence-folder" style={{ color: "#92400e", fontWeight: 700 }}>staged audit</Link> on those folders (or work them
-          through the Sub-Criterion Checklist) for that work to count toward the band and award.
-        </div>
-      )}
       <div style={{ overflowX: "auto" }}>
         <table>
           <thead>

@@ -1303,6 +1303,44 @@ const SCOPE_OPTIONS: { value: AuditScope; label: string; desc: string }[] = [
   { value: "evidence", label: "Evidence only",            desc: "Read only the Actual Evidence folder" },
 ];
 
+// Guidance for the Analysis path column: which of Option A / Option B to
+// choose. One-line summary always visible; detail behind an expander.
+function PathGuidance() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#f8fafc", padding: "8px 12px", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1e293b" }}>
+          Option B for a quick sweep; Option A for the deep, assessor-grade check.
+        </span>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#4a5a8a", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, padding: "3px 9px", marginLeft: "auto" }}
+        >
+          {open ? "Hide" : "Which should I choose?"}
+        </button>
+      </div>
+      {open && (
+        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr", marginTop: 8 }}>
+          <div style={{ background: "#fff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
+            <b style={{ color: "#5b21b6" }}>Option A: PPD + Evidence (recommended for pre-audit).</b>{" "}
+            Two steps: first checks whether your PPD documents each requirement, then checks the evidence against it.
+            Slower and uses more AI, but mirrors how SSG assessors actually work. Most real EduTrust findings are
+            "not documented in PPD" or "not implemented per PPD" gaps, which this path is built to catch. Use it for a
+            thorough, assessor-grade check on the sub-criteria that matter.
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
+            <b style={{ color: "#1e293b" }}>Option B: Evidence Checklist only (fast screening).</b>{" "}
+            A single pass straight to APSR verdicts. Faster and cheaper, and simpler to review. Best for a quick first
+            sweep to see where you stand, or when the PPD is already solid and you only need to check implementation.
+            It blends policy and evidence into one verdict, so it is less likely to isolate a pure policy-documentation gap.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function EvidenceFolder() {
   const folders        = useWorkspaceStore((s) => s.folders);
   const departments    = useWorkspaceStore((s) => s.departments);
@@ -1625,6 +1663,8 @@ export function EvidenceFolder() {
         )}
       </div>
 
+      <PathGuidance />
+
       <table>
         <thead>
           <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>Links</th><th>Analysis path</th><th>Action</th></tr>
@@ -1701,7 +1741,7 @@ export function EvidenceFolder() {
                           <div style={{ display: "flex", gap: 4 }}>
                             <button
                               onClick={() => setAnalysisPath(f.subCriterionId, "A")}
-                              title="PPD Requirements Review: checks the GD4 requirement lines against the PPD only, and compiles findings straight from that page"
+                              title="PPD + Evidence, two steps: checks whether the PPD documents each requirement, then checks the evidence against it. Slower, but mirrors how SSG assessors work. Verdicts feed the Sub-Criterion Checklist and the scorecard."
                               style={{
                                 cursor: "pointer", textAlign: "left", flex: 1, padding: "5px 7px", borderRadius: 6, fontSize: 10.5, lineHeight: 1.3,
                                 border: `1.5px solid ${path === "A" ? "#7c3aed" : "#e2e8f0"}`,
@@ -1710,11 +1750,11 @@ export function EvidenceFolder() {
                               }}
                             >
                               <div style={{ fontWeight: 700 }}>{path === "A" ? "◉" : "○"} Option A · PPD Requirements Review</div>
-                              <div style={{ fontWeight: 400, color: "#94a3b8" }}>Recommended — policy only</div>
+                              <div style={{ fontWeight: 400, color: "#94a3b8" }}>Deep, assessor-grade check</div>
                             </button>
                             <button
                               onClick={() => setAnalysisPath(f.subCriterionId, "B")}
-                              title="Existing Sub-Criterion Checklist flow, unchanged — no PPD layer"
+                              title="Sub-Criterion Checklist flow: a single pass straight to APSR verdicts. Faster and cheaper; best for a quick first sweep or when the PPD is already solid."
                               style={{
                                 cursor: "pointer", textAlign: "left", flex: 1, padding: "5px 7px", borderRadius: 6, fontSize: 10.5, lineHeight: 1.3,
                                 border: `1.5px solid ${path === "B" ? "#7c3aed" : "#e2e8f0"}`,
@@ -1723,7 +1763,7 @@ export function EvidenceFolder() {
                               }}
                             >
                               <div style={{ fontWeight: 700 }}>{path === "B" ? "◉" : "○"} Option B · Checklist only</div>
-                              <div style={{ fontWeight: 400, color: "#94a3b8" }}>Evidence checklist as today</div>
+                              <div style={{ fontWeight: 400, color: "#94a3b8" }}>Fast screening sweep</div>
                             </button>
                           </div>
                           {firstItemId && (

@@ -15,6 +15,7 @@ import type {
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildDraftFinding, lineSufficiency, lineApsr } from "../lib/checklistBanding";
 import { findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
+import type { OptionALineWrite } from "../lib/optionAChecklistWrite";
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill } from "../lib/ai/agentRuntime";
@@ -89,6 +90,13 @@ export type ChecklistModuleState = {
   reuseEvidence: (fromItemId: string, fromLineId: string, evidenceId: string, toItemId: string, toLineId: string) => void;
 
   setSampling: (itemId: string, lineId: string, sampling: SamplingInfo) => void;
+
+  // Writes Option A (PPD + Evidence) verdicts into the checklist — the same
+  // status + audit-evidence fields the staged audit (Option B) writes, so
+  // Option A results persist with the checklist and feed scoring the same
+  // way. Matched lines are UPDATED (idempotent re-runs, prior runId evidence
+  // replaced); unmatched refs create a new line. Returns lines written.
+  applyOptionAWrites: (writes: OptionALineWrite[]) => number;
 
   confirmDraftFinding: (itemId: string, lineId: string, draft: DraftFindingInfo, auditRunId?: string) => void;
   // Scans every checklist line and raises a draft finding for each one that is
@@ -401,6 +409,49 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       },
 
       setSampling: (itemId, lineId, sampling) => set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, sampling })))),
+
+      applyOptionAWrites: (writes) => {
+        let written = 0;
+        set((s) => {
+          const entries = { ...s.entries };
+          for (const w of writes) {
+            const entry = entries[w.gd4ItemId] ?? emptyEntry(w.gd4ItemId);
+            if (w.existingLineId) {
+              const specific = entry.specific.map((l) =>
+                l.id === w.existingLineId
+                  ? {
+                      ...l,
+                      status: w.status,
+                      // Same rule as replaceAuditEvidence: keep manual
+                      // evidence (no runId), replace prior audit items.
+                      evidence: [
+                        ...l.evidence.filter((ev) => !ev.runId),
+                        { ...w.evidence, id: `EV-${Date.now()}-${written}-${l.evidence.filter((ev) => !ev.runId).length}` },
+                      ],
+                    }
+                  : l
+              );
+              entries[w.gd4ItemId] = { ...entry, specific };
+            } else if (w.newLine) {
+              const line: SpecificChecklistLine = {
+                id: newLineId(w.gd4ItemId),
+                text: w.newLine.text,
+                clause: w.newLine.clause,
+                sourceRef: w.newLine.sourceRef,
+                generatedBy: w.newLine.generatedBy,
+                status: w.status,
+                evidence: [{ ...w.evidence, id: `EV-${Date.now()}-${written}-0` }],
+              };
+              entries[w.gd4ItemId] = { ...entry, specific: [...entry.specific, line] };
+            } else {
+              continue;
+            }
+            written++;
+          }
+          return { entries };
+        });
+        return written;
+      },
 
       // The only place a draft finding is ever written to the Findings
       // module — only called from an explicit "Save to findings register"
