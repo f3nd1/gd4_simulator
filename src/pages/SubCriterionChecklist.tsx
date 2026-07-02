@@ -11,6 +11,7 @@ import { apsrAuditNote } from "../lib/ai/simulateAI";
 import { findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
+import { PathStepIndicator } from "../components/ui/PathStepIndicator";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { GOLD, BLUE, INK, TONE, bandTone } from "../lib/theme";
@@ -275,6 +276,25 @@ export function SubCriterionChecklist() {
     return folder?.lastAuditScope && folder.lastAuditScope !== "both" ? folder.lastAuditScope : null;
   }, [folders, req.subCriterionId]);
 
+  // Option A ("PPD + Evidence") vs Option B ("Evidence checklist only",
+  // unchanged) — chosen per sub-criterion on the Evidence Folder page.
+  // Missing key defaults to "A" (recommended). On Option A, this checklist
+  // is Step 2 and is gated behind Step 1 (PPD Review) unless explicitly
+  // skipped; Option B never gates and never shows the step indicator.
+  const analysisPath = useWorkspaceStore((s) => s.analysisPath);
+  const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
+  const ppdStepSkipped = useWorkspaceStore((s) => s.ppdStepSkipped);
+  const setPpdStepSkipped = useWorkspaceStore((s) => s.setPpdStepSkipped);
+  const isOptionA = (analysisPath[req.subCriterionId] ?? "A") === "A";
+  const ppdResult = ppdReviewResults[req.subCriterionId];
+  const ppdDone = !!ppdResult;
+  const ppdSkipped = !!ppdStepSkipped[req.subCriterionId];
+  const gated = isOptionA && !ppdDone && !ppdSkipped;
+  // The PPD baseline for the CURRENT item — PPD Review runs per whole GD4
+  // requirement (e.g. "6.1.1"), not per checklist line, so every line under
+  // this item shares the same baseline extract/verdict.
+  const ppdBaseline = ppdResult?.rows.find((r) => r.gd4ItemId === req.id);
+
   // Dedupe for display: the same GD4 source line can end up in `specific`
   // twice (e.g. an audit auto-generated + verdicted copy alongside a freshly
   // regenerated "Not Started" copy), which surfaces as the same line appearing
@@ -439,6 +459,40 @@ export function SubCriterionChecklist() {
         </Card>
 
         <Card>
+          {isOptionA && (
+            <PathStepIndicator
+              current={gated ? 1 : 2}
+              ppdHref={`/ppd-review?item=${req.subCriterionId}`}
+              evidenceHref={`/sub-checklist?item=${selectedId}`}
+              evidenceEnabled={!gated}
+            />
+          )}
+          {gated ? (
+            <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "16px 18px" }}>
+              <h3 style={{ marginTop: 0, fontSize: 14 }}>Step 1 · PPD Review not done yet</h3>
+              <p style={{ fontSize: 12.5, color: "#78350f", marginBottom: 12 }}>
+                This sub-criterion is on <b>Option A (PPD + Evidence)</b>. Review the Policy & Procedure Document against each
+                GD4 requirement first, then come back here for Step 2 — the evidence checklist will show that PPD baseline
+                alongside each line.
+              </p>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Link
+                  to={`/ppd-review?item=${req.subCriterionId}`}
+                  style={{ fontSize: 12.5, fontWeight: 700, textDecoration: "none", padding: "7px 14px", borderRadius: 8, border: "1px solid #4338ca", background: "#4338ca", color: "#fff" }}
+                >
+                  Go to Step 1 · PPD Review →
+                </Link>
+                <button
+                  onClick={() => setPpdStepSkipped(req.subCriterionId, true)}
+                  title="Continue straight to the evidence checklist, checking against GD4 only — without the PPD layer"
+                  style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 14px", borderRadius: 8, border: "1px solid #b45309", background: "#fff", color: "#b45309" }}
+                >
+                  Skip PPD step → go straight to Evidence
+                </button>
+              </div>
+            </div>
+          ) : (
+          <>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
             {cameFromRubricBanding && (
               <Link
@@ -476,6 +530,30 @@ export function SubCriterionChecklist() {
           {partialAuditScope && (
             <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 11px", marginBottom: 8, fontSize: 12, color: "#9a3412", fontWeight: 600 }}>
               ⚠️ Last audit ran in {partialAuditScope}-only mode — {partialAuditScope === "policy" ? "evidence and outcomes were not assessed" : "policy was not assessed"}. Run a full audit to get complete results.
+            </div>
+          )}
+
+          {isOptionA && !ppdDone && ppdSkipped && (
+            <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 11px", marginBottom: 8, fontSize: 12, color: "#92400e", fontWeight: 600, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>⚠ PPD step skipped — this checklist is being assessed against GD4 only, without the PPD baseline.</span>
+              <Link to={`/ppd-review?item=${req.subCriterionId}`} style={{ fontSize: 11.5, color: "#4338ca", fontWeight: 700, textDecoration: "none" }}>Run Step 1 now →</Link>
+            </div>
+          )}
+
+          {isOptionA && ppdDone && (
+            <div style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "8px 11px", marginBottom: 8, fontSize: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: ppdBaseline ? 4 : 0 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "#5b21b6", textTransform: "uppercase", letterSpacing: 0.3 }}>PPD baseline (Step 1)</span>
+                {ppdBaseline && <Pill s={ppdBaseline.verdict === "Adequate" ? "good" : ppdBaseline.verdict === "Partial" ? "medium" : "critical"}>{ppdBaseline.verdict}</Pill>}
+                <Link to={`/ppd-review?item=${req.subCriterionId}`} style={{ fontSize: 11, color: "#4338ca", fontWeight: 600, textDecoration: "none", marginLeft: "auto" }}>View full PPD review →</Link>
+              </div>
+              {ppdBaseline ? (
+                <div style={{ fontSize: 11.5, color: "#374151", fontStyle: "italic", borderLeft: "3px solid #c4b5fd", paddingLeft: 8 }}>
+                  {ppdBaseline.fullComment || ppdBaseline.shortComment}
+                </div>
+              ) : (
+                <span style={{ fontSize: 11.5, color: "#6b7280" }}>No PPD row for this specific GD4 item in the last review run.</span>
+              )}
             </div>
           )}
 
@@ -691,6 +769,14 @@ export function SubCriterionChecklist() {
                       </span>
                     )}
                     {l.apsrDimension && <Pill s="neutral">{l.apsrDimension}</Pill>}
+                    {isOptionA && ppdBaseline && (
+                      <span
+                        title={`PPD baseline (Step 1): ${ppdBaseline.fullComment || ppdBaseline.shortComment}`}
+                        style={{ cursor: "help" }}
+                      >
+                        <Pill s={ppdBaseline.verdict === "Adequate" ? "good" : ppdBaseline.verdict === "Partial" ? "medium" : "critical"}>PPD: {ppdBaseline.verdict}</Pill>
+                      </span>
+                    )}
                   </div>
                 </div>
                 {/* Row 2 — controls (smaller, stop click propagation) */}
@@ -975,6 +1061,8 @@ export function SubCriterionChecklist() {
           })}
           {sortedSpecific.length === 0 && pending.length === 0 && (
             <p style={{ fontSize: 12, color: "#94a3b8" }}>No specific lines yet — run "AI first pass" or add one manually.</p>
+          )}
+          </>
           )}
         </Card>
 

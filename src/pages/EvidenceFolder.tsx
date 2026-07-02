@@ -6,6 +6,7 @@ import { Pill } from "../components/ui/Pill";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
+import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 
 const SUMMARY_CAP = 320;
 
@@ -1308,6 +1309,10 @@ export function EvidenceFolder() {
   const auditScope         = useWorkspaceStore((s) => s.auditScope);
   const setAuditScope      = useWorkspaceStore((s) => s.setAuditScope);
   const lastAuditRuns      = useWorkspaceStore((s) => s.lastAuditRuns);
+  const analysisPath       = useWorkspaceStore((s) => s.analysisPath);
+  const setAnalysisPath    = useWorkspaceStore((s) => s.setAnalysisPath);
+  const ppdReviewResults   = useWorkspaceStore((s) => s.ppdReviewResults);
+  const ppdStepSkipped     = useWorkspaceStore((s) => s.ppdStepSkipped);
 
   const [checkingAdditional, setCheckingAdditional] = useState(false);
   const [viewingRun, setViewingRun] = useState<AuditRunRecord | null>(null);
@@ -1593,7 +1598,7 @@ export function EvidenceFolder() {
 
       <table>
         <thead>
-          <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>Links</th><th>Action</th></tr>
+          <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>Links</th><th>Analysis path</th><th>Action</th></tr>
         </thead>
         <tbody>
           {visibleFolders.map((f) => {
@@ -1642,6 +1647,54 @@ export function EvidenceFolder() {
                         {f.accessCheckStatus && <Pill s={ACCESS_TONE[f.accessCheckStatus]}>{f.accessCheckStatus}</Pill>}
                       </div>
                     </div>
+                  </td>
+                  <td>
+                    {(() => {
+                      const path = analysisPath[f.subCriterionId] ?? "A";
+                      const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id;
+                      const ppdDone = !!ppdReviewResults[f.subCriterionId];
+                      const ppdSkipped = !!ppdStepSkipped[f.subCriterionId];
+                      const startHref = path === "A" && !ppdDone && !ppdSkipped
+                        ? `/ppd-review?item=${f.subCriterionId}`
+                        : `/sub-checklist?item=${firstItemId ?? ""}`;
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 168 }}>
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button
+                              onClick={() => setAnalysisPath(f.subCriterionId, "A")}
+                              title="2-step analysis: check GD4 requirements against the PPD first, then check evidence"
+                              style={{
+                                cursor: "pointer", textAlign: "left", flex: 1, padding: "5px 7px", borderRadius: 6, fontSize: 10.5, lineHeight: 1.3,
+                                border: `1.5px solid ${path === "A" ? "#7c3aed" : "#e2e8f0"}`,
+                                background: path === "A" ? "#faf5ff" : "#fff",
+                                color: path === "A" ? "#5b21b6" : "#64748b",
+                              }}
+                            >
+                              <div style={{ fontWeight: 700 }}>{path === "A" ? "◉" : "○"} Option A · PPD + Evidence</div>
+                              <div style={{ fontWeight: 400, color: "#94a3b8" }}>Recommended — 2-step</div>
+                            </button>
+                            <button
+                              onClick={() => setAnalysisPath(f.subCriterionId, "B")}
+                              title="Existing Sub-Criterion Checklist flow, unchanged — no PPD layer"
+                              style={{
+                                cursor: "pointer", textAlign: "left", flex: 1, padding: "5px 7px", borderRadius: 6, fontSize: 10.5, lineHeight: 1.3,
+                                border: `1.5px solid ${path === "B" ? "#7c3aed" : "#e2e8f0"}`,
+                                background: path === "B" ? "#faf5ff" : "#fff",
+                                color: path === "B" ? "#5b21b6" : "#64748b",
+                              }}
+                            >
+                              <div style={{ fontWeight: 700 }}>{path === "B" ? "◉" : "○"} Option B · Checklist only</div>
+                              <div style={{ fontWeight: 400, color: "#94a3b8" }}>Evidence checklist as today</div>
+                            </button>
+                          </div>
+                          {firstItemId && (
+                            <Link to={startHref} style={{ fontSize: 11, color: "#4338ca", fontWeight: 600, textDecoration: "none" }}>
+                              {path === "A" && !ppdDone && !ppdSkipped ? "Start · Step 1 PPD Review →" : "Start review →"}
+                            </Link>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td>
                     {isBusy ? (

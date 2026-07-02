@@ -3,7 +3,8 @@ import { useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, filterSelectStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { GD4_CRITERIA, GD4_SUB_CRITERIA } from "../data/gd4Requirements";
+import { PathStepIndicator } from "../components/ui/PathStepIndicator";
+import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import type { PPDVerdict, PPDReviewRow } from "../types";
 
 function verdictTone(v: PPDVerdict): "good" | "medium" | "critical" {
@@ -32,6 +33,9 @@ export function PPDReview() {
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const ppdAcceptedRewrites = useWorkspaceStore((s) => s.ppdAcceptedRewrites);
   const folders = useWorkspaceStore((s) => s.folders);
+  const analysisPath = useWorkspaceStore((s) => s.analysisPath);
+  const isOptionA = (analysisPath[selectedId] ?? "A") === "A";
+  const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === selectedId)?.id ?? "";
 
   const result = ppdReviewResults[selectedId];
   const isRunning = busy === "ppdreview" + selectedId;
@@ -49,6 +53,14 @@ export function PPDReview() {
 
   return (
     <Card>
+      {selectedId && isOptionA && (
+        <PathStepIndicator
+          current={1}
+          ppdHref={`/ppd-review?item=${selectedId}`}
+          evidenceHref={`/sub-checklist?item=${firstItemId}`}
+          evidenceEnabled={!!firstItemId}
+        />
+      )}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>PPD Requirements Review</h3>
         <span style={{ fontSize: 12, color: "#6b7280" }}>

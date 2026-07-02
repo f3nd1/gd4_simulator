@@ -307,6 +307,16 @@ export type WorkspaceState = {
   acceptPPDRewrite: (subCriterionId: string, row: PPDReviewRow) => void;
   setPPDRewriteStatus: (id: string, status: PPDRewriteStatus) => void;
   removePPDRewrite: (id: string) => void;
+  // Which analysis path a sub-criterion uses: "A" (PPD Review, then the
+  // enriched checklist — default/recommended) or "B" (the checklist alone,
+  // unchanged). Missing key means "A" — see ANALYSIS_PATH_DEFAULT.
+  analysisPath: Record<string, "A" | "B">;
+  setAnalysisPath: (subCriterionId: string, path: "A" | "B") => void;
+  // On Option A, Step 2 (the checklist) is gated behind Step 1 (PPD Review)
+  // unless the user explicitly skips it — tracked per sub-criterion so the
+  // skip doesn't leak across items.
+  ppdStepSkipped: Record<string, boolean>;
+  setPpdStepSkipped: (subCriterionId: string, skipped: boolean) => void;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
   // Clears a stranded busy/bulk state so a button stuck on "Auditing…" can be
@@ -616,6 +626,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       evidenceAuditReport: null,
       ppdReviewResults: {},
       ppdAcceptedRewrites: [],
+      analysisPath: {},
+      ppdStepSkipped: {},
       auditJournal: "",
       restoreLog: [],
       activeAuditorId: null,
@@ -789,6 +801,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       removePPDRewrite: (id) =>
         set((s) => ({ ppdAcceptedRewrites: s.ppdAcceptedRewrites.filter((r) => r.id !== id) })),
+
+      setAnalysisPath: (subCriterionId, path) =>
+        set((s) => ({ analysisPath: { ...s.analysisPath, [subCriterionId]: path } })),
+
+      setPpdStepSkipped: (subCriterionId, skipped) =>
+        set((s) => ({ ppdStepSkipped: { ...s.ppdStepSkipped, [subCriterionId]: skipped } })),
 
       // Fills the workspace with realistic sample evidence ratings plus the
       // workflow-progress fields derived from them (reviewer drafts,
@@ -972,6 +990,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           evidenceAuditReport: null,
           ppdReviewResults: {},
           ppdAcceptedRewrites: [],
+          analysisPath: {},
+          ppdStepSkipped: {},
           auditJournal: "",
         }));
       },
