@@ -104,3 +104,29 @@ describe("buildScored — gate failure caps the award", () => {
     expect(s.gateFail.some((g) => g.id === "Criterion 5")).toBe(true);
   });
 });
+
+// Batch 1 scoring-honesty fixes: criterion points come from CAPPED item
+// bands (not raw eff), and a failed gate denies the tier outright.
+describe("buildScored — award computed from capped bands", () => {
+  it("all-good limbs with NO Drive evidence: Band-1 caps flow through to the total and award", () => {
+    const s = buildScored(input(fullEvidence("good", false)));
+    expect(s.items.every((i) => i.band === 1)).toBe(true);
+    // Every criterion at uniform Band 1 = exactly 1/5 of its points → 200/1000.
+    // Previously the UNCAPPED eff average (100) fed the criterion band, so
+    // this same workspace totalled 1000 and was awarded Star.
+    expect(s.total).toBe(200);
+    expect(s.award).toMatch(/Not certified/);
+    expect(s.award).not.toMatch(/Star|4-Year|Provisional/);
+  });
+
+  it("gate failure forces the award to Not certified even at a Star-level total", () => {
+    const evidence = fullEvidence("good", true);
+    for (const r of GD4_REQUIREMENTS) if (r.criterion === "5") evidence[r.id] = mkEv("Missing", false);
+    const s = buildScored(input(evidence));
+    // Criterion 5 drops to Band 1 (−160 points) but the total still clears
+    // the Star threshold — the failed gate must deny the tier anyway.
+    expect(s.total).toBeGreaterThanOrEqual(750);
+    expect(s.gatePass).toBe(false);
+    expect(s.award).toBe("Not certified — critical gate not met");
+  });
+});

@@ -66,19 +66,39 @@ export type BandResult = {
 
 export function computeBand(generic: GenericChecklistLine[], specific: SpecificChecklistLine[], gateSensitive: boolean): BandResult {
   const coveragePct = coveragePercent(specific);
-  const ceiling = maturityCeiling(generic);
   const cap = coverageCap(coveragePct);
   const started = specific.length > 0;
-  let finalBand = Math.min(ceiling, cap) as Band;
 
   const gradedLines = specific.filter((l) => l.status !== "Not Applicable");
   const hasMissingEvidenceLine = gradedLines.some((l) => lineSufficiency(l) === "Missing");
   const hasNoEvidenceAnywhere = gradedLines.length > 0 && gradedLines.every((l) => l.evidence.length === 0);
 
+  // A hand-set G-lens "Met" only counts toward the ceiling when at least one
+  // graded line has evidence attached — self-declared maturity with zero
+  // attached evidence anywhere cannot raise the band on its own. (With lines
+  // present but no evidence, the Band-1 floor below also fires; this rule
+  // additionally covers the all-lines-Not-Applicable case, where the floor's
+  // gradedLines guard would otherwise leave a hand-set ceiling standing.)
+  const evidenceBackedLines = gradedLines.filter((l) => l.evidence.length > 0);
+  const rawCeiling = maturityCeiling(generic);
+  const ceiling = (evidenceBackedLines.length > 0 ? rawCeiling : Math.min(rawCeiling, 1)) as Band;
+
+  let finalBand = Math.min(ceiling, cap) as Band;
+
+  // Mass "Not Applicable" hole: marking most lines NA shrinks the coverage
+  // denominator, letting a single remaining line carry 100% coverage.
+  const naRatio = specific.length > 0 ? (specific.length - gradedLines.length) / specific.length : 0;
+  // All-Weak hole: "Weak" everywhere previously triggered no cap at all —
+  // only "Missing" did.
+  const allEvidenceWeak = gradedLines.length > 0 && gradedLines.every((l) => lineSufficiency(l) === "Weak");
+
   let evidenceCapped = false;
   let evidenceCapWarning: string | undefined;
 
-  if (hasNoEvidenceAnywhere && finalBand > 1) {
+  // No `finalBand > 1` guard here: the evidence-gated ceiling above already
+  // collapses this case to Band 1, but the capped flag + warning must still
+  // fire so the user sees WHY the band is 1.
+  if (hasNoEvidenceAnywhere) {
     finalBand = 1;
     evidenceCapped = true;
     evidenceCapWarning = "No evidence is attached to any checklist line, so a Met/Partial status alone cannot score above Band 1 — attach evidence to substantiate it.";
@@ -88,6 +108,14 @@ export function computeBand(generic: GenericChecklistLine[], specific: SpecificC
     evidenceCapWarning = gateSensitive
       ? "Gate-sensitive item: at least one checklist line has evidence marked Missing, so the band is capped at Band 2 until that evidence is fixed."
       : "At least one checklist line has evidence marked Missing, so the band is capped at Band 2 until that evidence is fixed.";
+  } else if (naRatio > 0.5 && finalBand > 3) {
+    finalBand = 3;
+    evidenceCapped = true;
+    evidenceCapWarning = "More than half the checklist lines are marked Not Applicable, so the band is capped at Band 3 — a single remaining line cannot carry the item to a top band. Re-assess whether those lines truly do not apply.";
+  } else if (allEvidenceWeak && finalBand > 3) {
+    finalBand = 3;
+    evidenceCapped = true;
+    evidenceCapWarning = "Every checklist line's evidence is marked Weak, so the band is capped at Band 3 until stronger evidence is attached.";
   }
 
   return { coveragePct, maturityCeiling: ceiling, coverageCap: cap, finalBand, started, evidenceCapped, evidenceCapWarning };

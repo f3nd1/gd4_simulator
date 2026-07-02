@@ -90,7 +90,9 @@ function tiersFrom(t: { provisional: number; fourYear: number; star: number }) {
 // Derive the achieved tier index from the scoring engine's award string so it
 // can't diverge from the actual score logic.
 export function attainmentFromAward(award: string): { index: number; capped: boolean } {
-  if (award.startsWith("Capped")) return { index: 2, capped: true }; // gate-capped at/above 4-Year band
+  // Gate failure now denies the tier outright (scoring.ts): the award IS
+  // "Not certified", with capped=true so the ladder explains why.
+  if (award.includes("critical gate not met")) return { index: 0, capped: true };
   if (award.includes("Star")) return { index: 3, capped: false };
   if (award.includes("4-Year")) return { index: 2, capped: false };
   if (award.includes("Provisional")) return { index: 1, capped: false };
@@ -107,7 +109,7 @@ export function AttainmentLadder({ total, award, thresholds = DEFAULT_THRESHOLDS
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
         <span style={{ fontSize: 11.5, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4 }}>EduTrust attainment</span>
         <span style={{ fontSize: 18, fontWeight: 800, color: capped ? "#c0392b" : achieved.color }}>
-          {capped ? "Capped — critical gate not met" : achieved.label}
+          {capped ? "Not certified — critical gate not met" : achieved.label}
         </span>
         <span style={{ fontSize: 12, color: "#94a3b8" }}>· {total}/1000</span>
       </div>
@@ -126,7 +128,7 @@ export function AttainmentLadder({ total, award, thresholds = DEFAULT_THRESHOLDS
       </div>
       {capped && (
         <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 6 }}>
-          Score qualifies for a higher tier, but a critical gate (Sub-criterion 4.2 / 4.6 / Criterion 5 at Band 3+) is not met, so the award is capped until that gate is cleared.
+          A critical gate (Sub-criterion 4.2 / 4.6 / Criterion 5 at Band 3+) is not met, so no award tier is granted regardless of the score, until that gate is cleared.
         </div>
       )}
     </div>

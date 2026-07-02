@@ -1315,7 +1315,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // confirmation, so a stale "Confirmed" badge can never sit next to a
       // Reviewer input showing a different number — the reviewer must
       // explicitly re-confirm (and re-justify if still required) the new value.
-      setReviewerScore: (itemId, value) => {
+      setReviewerScore: (itemId, rawValue) => {
+        // Scores are 0–100 by definition; an unclamped value (e.g. a 999
+        // typo) previously flowed straight into eff and inflated the whole
+        // criterion average and the award. Reject non-numeric input outright
+        // and coerce out-of-range values to the nearest bound.
+        if (!Number.isFinite(rawValue)) return;
+        const value = Math.max(0, Math.min(100, rawValue));
         const s = get();
         const aiBand = aiScore(s.evidence[itemId]);
         if (aiBand !== value) {

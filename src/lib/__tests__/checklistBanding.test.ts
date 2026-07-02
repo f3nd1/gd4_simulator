@@ -89,6 +89,30 @@ describe("computeBand evidence weakest-link rules", () => {
   });
 });
 
+// Batch 1: holes that let a self-declared band stand on near-zero evidence.
+describe("computeBand — self-declared band holes", () => {
+  it("mass Not-Applicable: one evidenced Met line among many NA lines caps at Band 3, not Band 5", () => {
+    const lines = [line("Met", [ev("Present")]), line("Not Applicable"), line("Not Applicable"), line("Not Applicable")];
+    const r = computeBand(generic(["G1", "G2", "G3", "G4"]), lines, false);
+    expect(r.finalBand).toBe(3);
+    expect(r.evidenceCapped).toBe(true);
+    expect(r.evidenceCapWarning).toContain("Not Applicable");
+  });
+
+  it("all evidence Weak caps at Band 3 (previously only Missing triggered a cap)", () => {
+    const r = computeBand(generic(["G1", "G2", "G3", "G4"]), [line("Met", [ev("Weak")]), line("Met", [ev("Weak")])], false);
+    expect(r.finalBand).toBe(3);
+    expect(r.evidenceCapped).toBe(true);
+    expect(r.evidenceCapWarning).toContain("Weak");
+  });
+
+  it("hand-set G4 Met with zero attached evidence anywhere (all lines NA) collapses the ceiling to Band 1", () => {
+    const r = computeBand(generic(["G4"]), [line("Not Applicable"), line("Not Applicable")], false);
+    expect(r.finalBand).toBe(1);
+    expect(r.maturityCeiling).toBe(1);
+  });
+});
+
 describe("findingDimension — splits procedure (policy) from evidence (implementation)", () => {
   it("weak/absent Approach → Procedure (the documented policy is the gap)", () => {
     expect(findingDimension(line("Not met", [ev("Missing", apsr({ approach: "Not evident" }))]))).toBe("Procedure");

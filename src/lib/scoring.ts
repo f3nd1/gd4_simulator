@@ -1,7 +1,7 @@
 import type { Band, EvidenceLevel, Finding, ItemEvidence } from "../types";
 import { GD4_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { FINDINGS } from "../data/findings";
-import type { ChecklistOverride } from "./checklistBanding";
+import { bandToScore, type ChecklistOverride } from "./checklistBanding";
 
 export type ScoringInput = {
   evidence: Record<string, ItemEvidence>;
@@ -130,8 +130,19 @@ export function buildScored(state: ScoringInput) {
 
   const crits = GD4_CRITERIA.map((c) => {
     const ci = items.filter((i) => i.crit === c.id);
+    // Raw effective-score average — kept for display (RubricBanding shows it)
+    // and for the "started" signal, but deliberately NOT used for the
+    // criterion band/points any more.
     const avg = ci.reduce((a, i) => a + i.eff, 0) / ci.length;
-    const band = getBand(avg);
+    // Criterion band/points from each item's CAPPED band, not its raw eff.
+    // Previously the average of uncapped eff scores fed the award, so the
+    // per-item evidence caps (no Drive link → Band 1, review/processes
+    // Missing → Band 3/2) were cosmetic: an all-good workspace with zero
+    // linked evidence displayed Band 1 on every item yet still totalled a
+    // Star award. bandToScore round-trips through getBand's thresholds, so a
+    // criterion of uniform Band-N items lands back on Band N.
+    const cappedAvg = ci.reduce((a, i) => a + bandToScore(i.band), 0) / ci.length;
+    const band = getBand(cappedAvg);
     // getBand has no floor below Band 1, so a criterion with literally zero
     // evidence on every item would otherwise still be credited 1/5 of its
     // points (Band 1's share) on a brand-new workspace. Only this exact
@@ -162,13 +173,14 @@ export function buildScored(state: ScoringInput) {
   const T = awardThresholds || { provisional: 500, fourYear: 600, star: 750 };
   let award = total >= T.star ? "EduTrust Star" : total >= T.fourYear ? "EduTrust (4-Year)" : total >= T.provisional ? "EduTrust Provisional (1-Year)" : "Not certified";
   if (!gatePass) {
-    // Gate fail is noted on the award string regardless of tier so it is always
-    // visible — not just when the total would otherwise clear the 4-year bar.
-    if (total >= T.fourYear) {
-      award = "Capped: critical gate not met";
-    } else {
-      award = `${award} — critical gate not met`;
-    }
+    // Official gate rule (GD4 section 20): failing the minimum-Band-3 gate on
+    // 4.2 / 4.6 / Criterion 5 means no certification, full stop — the tier is
+    // denied outright, not merely annotated. Previously this only decorated
+    // the award string, so a gate-failing workspace still exported a named
+    // tier at full points. The numeric total is left as computed (it is the
+    // points achieved), but the awarded tier is "Not certified" everywhere
+    // this string is consumed (Final Report, exports, analytics, charts).
+    award = "Not certified — critical gate not met";
   }
 
   const openAFIs = allFindings.filter((a) => (closures[a.id]?.human || "") !== "Accepted").length;
