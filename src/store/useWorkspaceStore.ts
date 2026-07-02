@@ -66,6 +66,14 @@ import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 // so a single module-level ref is sufficient.
 let _currentFileAbort: (() => void) | null = null;
 
+// Run-level AbortController for the active AI run (staged audit, PPD review,
+// evidence assessment). cancelBusy() aborts it, which propagates through the
+// audit functions into chatComplete → fetch, killing the IN-FLIGHT request
+// immediately instead of letting it run to its 90s timeout (and letting the
+// loop fire further paid calls in the meantime). One run at a time (busy
+// flag), so a single module-level ref is sufficient.
+let _currentRunAbort: AbortController | null = null;
+
 // Best-effort evidence-type classification for audit-attached evidence, from
 // the checklist line being satisfied (the folder audit reads many files into
 // one verdict, so there's no single file type to copy). Keeps the Type column
@@ -691,6 +699,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // the per-file timeout to fire before releasing the busy state.
         _currentFileAbort?.();
         _currentFileAbort = null;
+        // Abort the run-level controller so any IN-FLIGHT AI call dies now —
+        // previously cancel only flipped flags checked between calls, so the
+        // current request (and, in the staged audit, every remaining
+        // window×batch call) kept running and billing after cancel.
+        _currentRunAbort?.abort();
+        _currentRunAbort = null;
         // Also clear the skip-stage flag — otherwise a stale `true` (set right
         // before cancel, with no chance for the in-flight stage's reset to run)
         // would silently cut short the very next audit's first stage.
@@ -729,22 +743,29 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!folder) return;
         set({ busy: "ppdreview" + subCriterionId });
         const runId = `PPD-${subCriterionId}-${Date.now().toString(36).toUpperCase()}`;
+        // Run-level abort — cancelBusy() kills the in-flight AI call.
+        const runAbort = new AbortController();
+        _currentRunAbort = runAbort;
 
-        const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string) => {
+        const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[]) => {
+          if (_currentRunAbort === runAbort) _currentRunAbort = null;
           // Sub-criterion roll-up, derived deterministically from the rows.
+          // "Not assessed" lines (stopped/failed before review) are counted
+          // separately and never counted as gaps.
           const adequate = rows ? rows.filter((r) => r.verdict === "Adequate").length : 0;
           const partial = rows ? rows.filter((r) => r.verdict === "Partial").length : 0;
           const notDocumented = rows ? rows.filter((r) => r.verdict === "Not documented").length : 0;
+          const notAssessed = rows ? rows.filter((r) => r.verdict === "Not assessed").length : 0;
           const overallVerdict: PPDOverallVerdict | undefined = rows
             ? notDocumented > 0 ? "PPD Gaps" : partial > 0 ? "PPD Partial" : "PPD Adequate"
             : undefined;
           const overallSummary = rows
-            ? notDocumented === 0 && partial === 0
+            ? (notDocumented === 0 && partial === 0 && notAssessed === 0
               ? `${adequate} of ${rows.length} requirement line${rows.length === 1 ? "" : "s"} adequately documented`
-              : `${adequate} adequate · ${partial} partial · ${notDocumented} not documented`
+              : `${adequate} adequate · ${partial} partial · ${notDocumented} not documented${notAssessed > 0 ? ` · ${notAssessed} not assessed` : ""}`)
             : undefined;
           const summary = rows
-            ? `PPD requirements review: ${adequate} Adequate, ${partial} Partial, ${notDocumented} Not documented (of ${rows.length}).`
+            ? `PPD requirements review${runWarnings?.length ? " (WITH ERRORS — results may be incomplete)" : ""}: ${adequate} Adequate, ${partial} Partial, ${notDocumented} Not documented${notAssessed > 0 ? `, ${notAssessed} Not assessed` : ""} (of ${rows.length}).`
             : `PPD requirements review failed${liveError ? `: ${liveError}` : "."}`;
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
@@ -769,7 +790,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
           set((st) => ({
             ppdReviewResults: rows
-              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative } }
+              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings } }
               : st.ppdReviewResults,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
@@ -817,7 +838,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             } else {
               try {
                 body = await exportFileText(file, token);
-                set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body?.length ?? 0, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
+                // Only cache successful extractions — caching `text: null`
+                // made a transient read failure stick until the Drive file's
+                // modifiedTime changed, with no way to retry.
+                if (body != null) {
+                  const text = body;
+                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
+                }
               } catch {
                 body = null;
               }
@@ -840,8 +867,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, "AI is disabled or no API key is configured in Settings."); return; }
           const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
 
-          const result = await runPPDRequirementsReview(requirements, policyDocText, analysisSettings, { criterionId: subCriterionId });
-          finish(result.rows, true, undefined, result.promptSent, result.usage, chunkFileNames, result.overallNarrative);
+          const result = await runPPDRequirementsReview(requirements, policyDocText, analysisSettings, {
+            criterionId: subCriterionId,
+            // Cancel support: cancelBusy() clears busy and aborts the signal.
+            shouldStop: () => get().busy !== "ppdreview" + subCriterionId,
+            signal: runAbort.signal,
+          });
+          // Surface window errors / early stop instead of logging a clean
+          // success — a revoked key mid-run used to yield all-"Not documented"
+          // rows recorded as a successful review.
+          const runWarnings: string[] = [
+            ...(result.windowErrors ?? []),
+            ...(result.stoppedEarly ? ["Run stopped before every requirement line was reviewed — unreviewed lines are marked Not assessed."] : []),
+          ];
+          const liveError = result.windowErrors?.length
+            ? `${result.windowErrors.length} AI call(s) failed during the review — results may be incomplete. First error: ${result.windowErrors[0]}`
+            : undefined;
+          finish(result.rows, true, liveError, result.promptSent, result.usage, chunkFileNames, result.overallNarrative, runWarnings.length > 0 ? runWarnings : undefined);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
         }
@@ -935,10 +977,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const ppd = s.ppdReviewResults[subCriterionId];
         set({ busy: "evidenceassess" + subCriterionId });
         const runId = `EV-${subCriterionId}-${Date.now().toString(36).toUpperCase()}`;
+        // Run-level abort — cancelBusy() kills the in-flight AI call.
+        const runAbort = new AbortController();
+        _currentRunAbort = runAbort;
 
         const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>) => {
+          if (_currentRunAbort === runAbort) _currentRunAbort = null;
+          const notAssessedCount = rows ? rows.filter((r) => r.verdict === "Not assessed").length : 0;
           const summary = rows
-            ? `Evidence assessment: ${rows.filter((r) => r.verdict === "Met").length} Met, ${rows.filter((r) => r.verdict === "Partial").length} Partial, ${rows.filter((r) => r.verdict === "Not met").length} Not met (of ${rows.length}).`
+            ? `Evidence assessment${notAssessedCount > 0 ? " (PARTIAL — stopped early)" : ""}: ${rows.filter((r) => r.verdict === "Met").length} Met, ${rows.filter((r) => r.verdict === "Partial").length} Partial, ${rows.filter((r) => r.verdict === "Not met").length} Not met${notAssessedCount > 0 ? `, ${notAssessedCount} Not assessed` : ""} (of ${rows.length}).`
             : `Evidence assessment failed${liveError ? `: ${liveError}` : "."}`;
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
@@ -1003,7 +1050,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             } else {
               try {
                 body = await exportFileText(file, token);
-                set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body?.length ?? 0, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
+                // Only cache successful extractions — see runPPDReview.
+                if (body != null) {
+                  const text = body;
+                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
+                }
               } catch {
                 body = null;
               }
@@ -1037,6 +1088,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             criterionId: subCriterionId,
             onProgress: (detail, pct) => setEvProgress(detail, typeof pct === "number" ? Math.max(3, Math.min(99, pct)) : 50),
             shouldStop: () => get().busy !== "evidenceassess" + subCriterionId,
+            signal: runAbort.signal,
           });
 
           // Merge AI line results with the reused PPD data + resolved file refs.
@@ -2881,6 +2933,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // leak into a fresh run and silently cut its first stage short.
         set({ busy: "folderaudit" + id, auditSkipStageFlag: false });
         const capturedToken = get().auditRunToken;
+        // Run-level abort: cancelBusy() aborts this controller, which kills
+        // the in-flight AI call inside whichever stage is running.
+        const runAbort = new AbortController();
+        _currentRunAbort = runAbort;
         const scope: AuditScope = mode === "policy" ? "policy" : mode === "evidence" ? "evidence" : "both";
 
         const setProgress = (stage: AuditProgressState["stage"], extra?: Partial<AuditProgressState>) => {
@@ -2920,6 +2976,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const auditorLabel = actingAuditor ? `${auditorName} (strictness: ${auditorStrictness})` : auditorName;
 
         const finish = (summary: string, live: boolean, liveError?: string, usage?: AIUsage, auxUsage?: AIUsage, promptSent?: string) => {
+          // The run is over — release the run-level abort controller (only if
+          // it is still ours; a cancel may already have replaced it).
+          if (_currentRunAbort === runAbort) _currentRunAbort = null;
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
             auditCycleId: s.cycle.id,
@@ -3208,6 +3267,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let auditUsage: AIUsage | undefined;
         let stagedPromptSent: string | undefined;
         const truncationNotes: string[] = [];
+        // Stages whose live AI call failed and fell back to offline keyword
+        // simulation — the run must then be labelled OFFLINE FALLBACK, not
+        // "Live AI", wherever the run source is shown.
+        const fallbackStages: string[] = [];
         let totalWindowsProcessed = 0;
         let totalCharsAssessed = 0;
         let totalCharsAvailable = 0;
@@ -3223,7 +3286,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (aiSettings.enabled && aiSettings.apiKey) {
           const stagedCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
           const stagedMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
-          const shouldStopStage = () => get().auditSkipStageFlag;
+          // Stop when the user skips the stage, OR the run has been cancelled.
+          // The token/abort checks matter: cancelBusy() RESETS the skip flag,
+          // so the old flag-only check let a cancelled run's current stage
+          // keep issuing every remaining window×batch AI call.
+          const shouldStopStage = () =>
+            get().auditSkipStageFlag || get().auditRunToken !== capturedToken || runAbort.signal.aborted;
           const resetSkipFlag = () => set({ auditSkipStageFlag: false });
 
           // Stage 2: Policy Adequacy Audit
@@ -3233,6 +3301,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, {
                 criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType, resolveChunkFile,
                 shouldStop: shouldStopStage,
+                signal: runAbort.signal,
                 onProgress: (detail) => {
                   const m = detail.match(/window (\d+)\/(\d+)/);
                   setProgress("policy_audit", { stageDetail: `Policy: ${detail}`, canCancel: true, lastHeartbeatAt: Date.now(), ...(m ? { windowCurrent: +m[1], windowTotal: +m[2] } : {}) });
@@ -3254,6 +3323,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               truncationNotes.push(`[Policy stage failed] ${msg}`);
               console.error("[StagedAudit] Policy stage threw:", msg);
               policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);
+              fallbackStages.push("Policy");
+              truncationNotes.push("[OFFLINE FALLBACK] Policy stage used keyword simulation, not live AI — its verdicts are rough estimates.");
             }
           } else {
             // Mode = "evidence": skip policy stage, default all to "No" (unknown)
@@ -3267,6 +3338,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, {
                 criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType, resolveChunkFile,
                 shouldStop: shouldStopStage,
+                signal: runAbort.signal,
                 onProgress: (detail) => {
                   const m = detail.match(/window (\d+)\/(\d+)/);
                   setProgress("evidence_audit", { stageDetail: `Evidence: ${detail}`, canCancel: true, lastHeartbeatAt: Date.now(), ...(m ? { windowCurrent: +m[1], windowTotal: +m[2] } : {}) });
@@ -3288,6 +3360,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               truncationNotes.push(`[Evidence stage failed] ${msg}`);
               console.error("[StagedAudit] Evidence stage threw:", msg);
               evidenceRows = simulateStagedEvidenceAudit(allAuditPoints, evidenceDocText);
+              fallbackStages.push("Evidence");
+              truncationNotes.push("[OFFLINE FALLBACK] Evidence stage used keyword simulation, not live AI — its verdicts are rough estimates.");
             }
           } else {
             evidenceRows = allAuditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as const, note: "Evidence stage not run in policy-only mode.", chunkIds: [] }));
@@ -3300,6 +3374,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, {
                 criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType, resolveChunkFile,
                 shouldStop: shouldStopStage,
+                signal: runAbort.signal,
                 onProgress: (detail) => {
                   const m = detail.match(/window (\d+)\/(\d+)/);
                   setProgress("outcome_review", { stageDetail: `Outcomes: ${detail}`, canCancel: true, lastHeartbeatAt: Date.now(), ...(m ? { windowCurrent: +m[1], windowTotal: +m[2] } : {}) });
@@ -3321,12 +3396,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               truncationNotes.push(`[Outcome/Review stage failed] ${msg}`);
               console.error("[StagedAudit] Outcome/Review stage threw:", msg);
               outcomeRows = simulateStagedOutcomeReview(allAuditPoints, allDocText);
+              fallbackStages.push("Outcome/Review");
+              truncationNotes.push("[OFFLINE FALLBACK] Outcome/Review stage used keyword simulation, not live AI — its verdicts are rough estimates.");
             }
           } else {
             outcomeRows = allAuditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "Outcome/review stage not run in policy/evidence-only mode.", chunkIds: [] }));
           }
-          // Mark live only if at least one stage produced real AI usage (tokens consumed).
-          live = auditUsage != null;
+          // "Live AI" now means FULLY live: at least one stage consumed real
+          // tokens AND no stage fell back to keyword simulation. A run where
+          // a third of the APSR verdicts are keyword guesses must not present
+          // as a live AI audit — the summary/truncation notes explain which
+          // stage(s) fell back.
+          live = auditUsage != null && fallbackStages.length === 0;
         } else {
           // Offline fallback
           policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);
@@ -3353,22 +3434,39 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const evidenceByRef = new Map(evidenceRows.map((r) => [normalizeAuditRef(r.ref), r]));
         const outcomeByRef = new Map(outcomeRows.map((r) => [normalizeAuditRef(r.ref), r]));
 
-        // Overall coverage for lines without sourceRef
+        // Overall coverage for lines without sourceRef — computed over rows
+        // that were actually assessed; not-assessed placeholders from a
+        // stopped run carry no information and must not skew the fallback.
+        const assessedPolicyRows = policyRows.filter((r) => !r.notAssessed);
+        const assessedEvidenceRows = evidenceRows.filter((r) => !r.notAssessed);
+        const assessedOutcomeRows = outcomeRows.filter((r) => !r.notAssessed);
         const policyOverall: "Yes" | "Partial" | "No" =
-          policyRows.filter((r) => r.covered === "Yes").length >= policyRows.length / 2 ? "Yes" :
-          policyRows.some((r) => r.covered !== "No") ? "Partial" : "No";
+          assessedPolicyRows.length === 0 ? "No" :
+          assessedPolicyRows.filter((r) => r.covered === "Yes").length >= assessedPolicyRows.length / 2 ? "Yes" :
+          assessedPolicyRows.some((r) => r.covered !== "No") ? "Partial" : "No";
         const evidenceOverall: "Yes" | "Partial" | "No" =
-          evidenceRows.filter((r) => r.covered === "Yes").length >= evidenceRows.length / 2 ? "Yes" :
-          evidenceRows.some((r) => r.covered !== "No") ? "Partial" : "No";
-        const outcomeOverall = outcomeRows.some((r) => r.outcomeEvident);
-        const reviewOverall = outcomeRows.some((r) => r.reviewEvident);
+          assessedEvidenceRows.length === 0 ? "No" :
+          assessedEvidenceRows.filter((r) => r.covered === "Yes").length >= assessedEvidenceRows.length / 2 ? "Yes" :
+          assessedEvidenceRows.some((r) => r.covered !== "No") ? "Partial" : "No";
+        const outcomeOverall = assessedOutcomeRows.some((r) => r.outcomeEvident);
+        const reviewOverall = assessedOutcomeRows.some((r) => r.reviewEvident);
 
         type StagedVerdict = { lineId: string; apsr: ApsrBreakdown; status: "Met" | "Partial" | "Not met" };
-        const stagedVerdicts: StagedVerdict[] = lines.map((line) => {
+        // Lines whose backing audit rows were never assessed (run stopped or
+        // stage skipped before reaching them) get NO verdict written at all —
+        // their previous checklist status stays, no finding is raised, and
+        // the count is reported so the partial run cannot pass as complete.
+        let linesNotAssessed = 0;
+        const stagedVerdicts: StagedVerdict[] = lines.flatMap((line) => {
           const normRef = line.sourceRef ? normalizeAuditRef(line.sourceRef) : undefined;
           const pRow = normRef ? policyByRef.get(normRef) : undefined;
           const eRow = normRef ? evidenceByRef.get(normRef) : undefined;
           const oRow = normRef ? outcomeByRef.get(normRef) : undefined;
+
+          if (pRow?.notAssessed || eRow?.notAssessed || oRow?.notAssessed) {
+            linesNotAssessed++;
+            return [];
+          }
 
           // This checklist line has no sourceRef matching a specific flatAuditPoint
           // ref, so there is no window-level note or chunk citation to inherit —
@@ -3384,8 +3482,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // never cites chunks, so applying it there would zero every run.
           const apsr = buildStagedApsr(effectivePRow, effectiveERow, effectiveORow, { requireCitations: live });
           const status = deriveApsrStatus(apsr);
-          return { lineId: line.id, apsr, status };
+          return [{ lineId: line.id, apsr, status }];
         });
+        if (linesNotAssessed > 0) {
+          truncationNotes.push(`[PARTIAL RUN] ${linesNotAssessed} checklist line(s) were NOT assessed (run stopped/skipped before their audit points were reviewed) — their previous status was left unchanged and no findings were raised for them.`);
+        }
 
         // Stage 6: Write to Sub-Criterion Checklist
         setProgress("saving", { stageDetail: `Saving ${stagedVerdicts.length} verdicts…`, linesAssessed: stagedVerdicts.length, findingsDetected: stagedVerdicts.filter((v) => v.status === "Not met").length });
@@ -3479,9 +3580,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const specialistLabel = domainExpertiseLabelFor(folder.subCriterionId);
 
         const lineParts: string[] = [];
+        // Fallback / partial-run banners lead the summary so they cannot be
+        // missed under the detail lines.
+        if (fallbackStages.length > 0) lineParts.push(`⚠ OFFLINE FALLBACK — ${fallbackStages.join(", ")} stage(s) failed live AI and used keyword simulation. This run is NOT a full live AI audit.`);
+        if (linesNotAssessed > 0) lineParts.push(`⚠ PARTIAL RUN — ${linesNotAssessed} line(s) not assessed (run stopped/skipped early); their previous status was left unchanged.`);
         lineParts.push(`Run ${runId} · Staged audit (${mode} mode) · Auditor: ${auditorLabel}.`);
         if (specialistLabel) lineParts.push(`Specialist lens: ${specialistLabel}.`);
-        lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${stagedVerdicts.length} lines).`);
+        lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${stagedVerdicts.length} assessed line${stagedVerdicts.length === 1 ? "" : "s"}${linesNotAssessed > 0 ? `; ${linesNotAssessed} not assessed` : ""}).`);
         if (bandPartsStaged.length) lineParts.push(`Band: ${bandPartsStaged.join(", ")}.`);
         if (autoRaised > 0) lineParts.push(`Raised ${autoRaised} new finding${autoRaised === 1 ? "" : "s"} from the gaps — see the Findings register.`);
         if (gapNotes.length > 0) lineParts.push(`Gap detail:\n${gapNotes.join("\n")}`);
@@ -3586,6 +3691,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
 
         } catch (outerErr) {
+          if (_currentRunAbort === runAbort) _currentRunAbort = null;
+          // A cancelled run's in-flight call throws "AI call cancelled." —
+          // report it AS a cancellation, not as an unexpected failure.
+          if (runAbort.signal.aborted || get().auditRunToken !== capturedToken) {
+            set((st) => ({
+              folders: st.folders.map((f) => f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: "Staged audit cancelled — no results were saved.", lastAuditLive: false } : f),
+              busy: null,
+              auditProgress: st.auditProgress?.folderId === id ? { ...st.auditProgress, stage: "complete", stageDetail: "Cancelled" } : st.auditProgress,
+            }));
+            return;
+          }
           const msg = outerErr instanceof Error ? outerErr.message : String(outerErr);
           set((st) => ({ folders: st.folders.map((f) => f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `Staged audit failed — ${msg}`, lastAuditLive: false, lastAuditError: msg } : f), busy: null }));
         }

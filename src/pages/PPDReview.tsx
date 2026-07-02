@@ -14,12 +14,12 @@ import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict } from "../types";
 // Findings are compiled from the Evidence tab. The single-column Sub-Criterion
 // Checklist (Option B) is untouched.
 
-function ppdVerdictTone(v: PPDVerdict): "good" | "medium" | "critical" {
-  return v === "Adequate" ? "good" : v === "Partial" ? "medium" : "critical";
+function ppdVerdictTone(v: PPDVerdict): "good" | "medium" | "critical" | "neutral" {
+  return v === "Adequate" ? "good" : v === "Partial" ? "medium" : v === "Not assessed" ? "neutral" : "critical";
 }
 
 function ppdVerdictBorderColor(v: PPDVerdict): string {
-  return v === "Adequate" ? "#22c55e" : v === "Partial" ? "#f59e0b" : "#ef4444";
+  return v === "Adequate" ? "#22c55e" : v === "Partial" ? "#f59e0b" : v === "Not assessed" ? "#94a3b8" : "#ef4444";
 }
 
 function evVerdictTone(v: EvidenceVerdict): "good" | "medium" | "critical" | "neutral" {
@@ -158,9 +158,22 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
 
       {liveResult && (
         <>
+          {liveResult.runWarnings && liveResult.runWarnings.length > 0 && (
+            <div style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 11px", marginBottom: 8 }}>
+              <b>⚠ This run had problems — results may be incomplete:</b>
+              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                {liveResult.runWarnings.slice(0, 5).map((w, i) => (
+                  <li key={i} style={{ marginBottom: 1 }}>{w}</li>
+                ))}
+                {liveResult.runWarnings.length > 5 && <li>…and {liveResult.runWarnings.length - 5} more.</li>}
+              </ul>
+            </div>
+          )}
           {liveResult.overallVerdict && (() => {
             const colors = overallPanelColors(liveResult.overallVerdict);
-            const weakRows = liveResult.rows.filter((r) => r.verdict !== "Adequate");
+            // "Not assessed" lines are not gaps — the run simply never
+            // reviewed them; they are excluded from the gap bullets.
+            const weakRows = liveResult.rows.filter((r) => r.verdict === "Partial" || r.verdict === "Not documented");
             return (
               <div style={{ background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 10, padding: "11px 14px", marginBottom: 12 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>

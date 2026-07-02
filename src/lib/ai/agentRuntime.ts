@@ -947,7 +947,7 @@ export async function runStagedPolicyAudit(
   auditPoints: FlatAuditPoint[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
 ): Promise<StagedPolicyAuditResult> {
   if (auditPoints.length === 0 || !policyDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No policy documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
@@ -988,6 +988,11 @@ Respond with JSON only:
   let totalCharsAssessed = 0;
   let windowsCompleted = 0;
   const windowErrors: string[] = [];
+  // Stop = user skip/cancel (shouldStop) or an aborted signal. A stopped run
+  // must report itself as partial and must NOT fabricate verdicts for points
+  // it never put in front of the AI.
+  const stopRequested = () => !!opts.shouldStop?.() || !!opts.signal?.aborted;
+  let stoppedEarly = false;
 
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
@@ -995,12 +1000,12 @@ Respond with JSON only:
   }
 
   for (const win of windows) {
-    if (opts.shouldStop?.()) break;
+    if (stopRequested()) { stoppedEarly = true; break; }
     totalCharsAssessed += win.end - win.start;
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
 
     for (const [bi, batch] of batches.entries()) {
-      if (opts.shouldStop?.()) break;
+      if (stopRequested()) { stoppedEarly = true; break; }
       // Emit progress before EVERY batch, not just once per window. Each window
       // makes `batches.length` sequential AI calls; the store uses this callback
       // to refresh the audit heartbeat, so emitting only once per window let the
@@ -1015,7 +1020,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1037,6 +1042,9 @@ Respond with JSON only:
           }
         }
       } catch (err) {
+        // A cancel/abort surfaces here as a thrown "AI call cancelled." — that
+        // is a stop, not a failure: no error row, no "No" fabrication.
+        if (stopRequested()) { stoppedEarly = true; break; }
         const msg = err instanceof Error ? err.message : String(err);
         const label = windows.length > 1 ? `Policy window ${win.index + 1}/${win.total}` : "Policy AI call";
         const errNote = `${label} failed — ${msg}`;
@@ -1049,13 +1057,22 @@ Respond with JSON only:
         }
       }
     }
+    // A window whose batch sweep was cut short is NOT a completed window —
+    // counting it (as before) made a stopped run report fullCoverage=true.
+    if (stoppedEarly) break;
     windowsCompleted++;
   }
 
-  const fullCoverage = windowsCompleted === windows.length;
+  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length;
 
   const rows: PolicyCoverageRow[] = auditPoints.map((p) => {
     const best = bestByRef.get(p.ref);
+    // A stopped run leaves later batches' points with no verdict at all —
+    // mark them Not assessed instead of fabricating a "No" (a false negative
+    // that would flow into checklist statuses and findings).
+    if (!best && stoppedEarly) {
+      return { ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "Not assessed — the run was stopped before this audit point was reviewed. No verdict was produced.", chunkIds: [], notAssessed: true };
+    }
     const fallback = `No relevant policy evidence found in the ${windowsCompleted} window(s) reviewed.`;
     return {
       ref: p.ref, pointText: p.text,
@@ -1065,8 +1082,9 @@ Respond with JSON only:
     };
   });
 
+  const notAssessedCount = rows.filter((r) => r.notAssessed).length;
   const truncationNote = !fullCoverage
-    ? `Policy content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`
+    ? `Policy content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).${stoppedEarly ? ` Run stopped early — ${notAssessedCount} audit point(s) were not assessed; results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
     : undefined;
 
   return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
@@ -1082,7 +1100,7 @@ export async function runStagedEvidenceAudit(
   evidenceDocText: string,
   policyRows: PolicyCoverageRow[],
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
 ): Promise<StagedEvidenceAuditResult> {
   if (auditPoints.length === 0 || !evidenceDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No evidence documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
@@ -1116,6 +1134,9 @@ Respond with JSON only:
   let totalCharsAssessed = 0;
   let windowsCompleted = 0;
   const windowErrors: string[] = [];
+  // See runStagedPolicyAudit: stopped runs must not fabricate verdicts.
+  const stopRequested = () => !!opts.shouldStop?.() || !!opts.signal?.aborted;
+  let stoppedEarly = false;
 
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
@@ -1123,12 +1144,12 @@ Respond with JSON only:
   }
 
   for (const win of windows) {
-    if (opts.shouldStop?.()) break;
+    if (stopRequested()) { stoppedEarly = true; break; }
     totalCharsAssessed += win.end - win.start;
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
 
     for (const [bi, batch] of batches.entries()) {
-      if (opts.shouldStop?.()) break;
+      if (stopRequested()) { stoppedEarly = true; break; }
       // Per-batch heartbeat — see the note in runStagedPolicyAudit.
       opts.onProgress?.(`Evidence audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
       const pointsBlock = batch.map((p, i) => {
@@ -1143,7 +1164,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1165,6 +1186,8 @@ Respond with JSON only:
           }
         }
       } catch (err) {
+        // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
+        if (stopRequested()) { stoppedEarly = true; break; }
         const msg = err instanceof Error ? err.message : String(err);
         const label = windows.length > 1 ? `Evidence window ${win.index + 1}/${win.total}` : "Evidence AI call";
         const errNote = `${label} failed — ${msg}`;
@@ -1177,13 +1200,17 @@ Respond with JSON only:
         }
       }
     }
+    if (stoppedEarly) break;
     windowsCompleted++;
   }
 
-  const fullCoverage = windowsCompleted === windows.length;
+  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length;
 
   const rows: EvidenceCoverageRow[] = auditPoints.map((p) => {
     const best = bestByRef.get(p.ref);
+    if (!best && stoppedEarly) {
+      return { ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "Not assessed — the run was stopped before this audit point was reviewed. No verdict was produced.", chunkIds: [], notAssessed: true };
+    }
     const fallback = `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`;
     return {
       ref: p.ref, pointText: p.text,
@@ -1193,8 +1220,9 @@ Respond with JSON only:
     };
   });
 
+  const notAssessedCount = rows.filter((r) => r.notAssessed).length;
   const truncationNote = !fullCoverage
-    ? `Evidence content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`
+    ? `Evidence content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).${stoppedEarly ? ` Run stopped early — ${notAssessedCount} audit point(s) were not assessed; results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
     : undefined;
 
   return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
@@ -1209,7 +1237,7 @@ export async function runStagedOutcomeReviewAudit(
   auditPoints: FlatAuditPoint[],
   allDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
 ): Promise<StagedOutcomeReviewAuditResult> {
   if (auditPoints.length === 0 || !allDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "No documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
@@ -1242,6 +1270,9 @@ Respond with JSON only:
   let totalCharsAssessed = 0;
   let windowsCompleted = 0;
   const windowErrors: string[] = [];
+  // See runStagedPolicyAudit: stopped runs must not fabricate verdicts.
+  const stopRequested = () => !!opts.shouldStop?.() || !!opts.signal?.aborted;
+  let stoppedEarly = false;
 
   const batches: FlatAuditPoint[][] = [];
   for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
@@ -1249,12 +1280,12 @@ Respond with JSON only:
   }
 
   for (const win of windows) {
-    if (opts.shouldStop?.()) break;
+    if (stopRequested()) { stoppedEarly = true; break; }
     totalCharsAssessed += win.end - win.start;
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
 
     for (const [bi, batch] of batches.entries()) {
-      if (opts.shouldStop?.()) break;
+      if (stopRequested()) { stoppedEarly = true; break; }
       // Per-batch heartbeat — see the note in runStagedPolicyAudit.
       opts.onProgress?.(`Outcome/review audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
       const pointsBlock = buildStagedPointsBlock(batch);
@@ -1265,7 +1296,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1289,6 +1320,8 @@ Respond with JSON only:
           }
         }
       } catch (err) {
+        // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
+        if (stopRequested()) { stoppedEarly = true; break; }
         const msg = err instanceof Error ? err.message : String(err);
         const label = windows.length > 1 ? `Outcome/review window ${win.index + 1}/${win.total}` : "Outcome/review AI call";
         const errNote = `${label} failed — ${msg}`;
@@ -1301,13 +1334,17 @@ Respond with JSON only:
         }
       }
     }
+    if (stoppedEarly) break;
     windowsCompleted++;
   }
 
-  const fullCoverage = windowsCompleted === windows.length;
+  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length;
 
   const rows: OutcomeReviewRow[] = auditPoints.map((p) => {
     const best = bestByRef.get(p.ref);
+    if (!best && stoppedEarly) {
+      return { ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "Not assessed — the run was stopped before this audit point was reviewed. No verdict was produced.", chunkIds: [], notAssessed: true };
+    }
     const fallback = `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`;
     return {
       ref: p.ref, pointText: p.text,
@@ -1318,8 +1355,9 @@ Respond with JSON only:
     };
   });
 
+  const notAssessedCount = rows.filter((r) => r.notAssessed).length;
   const truncationNote = !fullCoverage
-    ? `Outcome/review content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`
+    ? `Outcome/review content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).${stoppedEarly ? ` Run stopped early — ${notAssessedCount} audit point(s) were not assessed; results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
     : undefined;
 
   return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
@@ -1445,15 +1483,61 @@ export type PPDRequirementsReviewResult = {
   promptSent?: string;
   windowsProcessed?: number;
   fullCoverage?: boolean;
+  // Failed window/batch AI calls — the caller must surface these; a run with
+  // errors must never present as a clean success (a revoked key mid-run used
+  // to yield all-"Not documented" rows logged as successful).
+  windowErrors?: string[];
+  // True when the run was stopped/aborted before every line was reviewed.
+  stoppedEarly?: boolean;
 };
 
-const PPD_VERDICT_ORDER: Record<PPDVerdict, number> = { "Not documented": 0, "Partial": 1, "Adequate": 2 };
+// "Not assessed" ranks below everything: it is a placeholder, never an AI
+// verdict, so any real verdict replaces it in the cross-window merge.
+const PPD_VERDICT_ORDER: Record<PPDVerdict, number> = { "Not assessed": -1, "Not documented": 0, "Partial": 1, "Adequate": 2 };
+
+// Fix for the PPD-quote hallucination channel: the prompt asks for verbatim
+// excerpts in double quotes, but nothing checked they exist in the source.
+// This deterministic verifier extracts every substantial quoted span from a
+// fullComment and substring-checks it against the (whitespace/quote-
+// normalised) source text. Failing quotes are NOT dropped — the comment is
+// annotated so the auditor knows the "quote" is unverified.
+const QUOTE_MIN_CHARS = 20;
+function normaliseForQuoteMatch(s: string): string {
+  return s
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/…/g, "...")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+export function flagUnverifiedQuotes(fullComment: string, sourceText: string): string {
+  if (!fullComment || !sourceText) return fullComment;
+  const sourceNorm = normaliseForQuoteMatch(sourceText);
+  const commentNorm = fullComment.replace(/[“”]/g, '"');
+  const unverified: string[] = [];
+  const quoteRe = /"([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = quoteRe.exec(commentNorm)) !== null) {
+    // Strip the leading/trailing ellipses the prompt's example format uses —
+    // they mark elision, not literal source characters.
+    const inner = m[1].replace(/^(\.{3}|…)\s*/, "").replace(/\s*(\.{3}|…)$/, "").trim();
+    if (inner.length < QUOTE_MIN_CHARS) continue; // skip short incidental quotes ("Adequate", term names)
+    if (!sourceNorm.includes(normaliseForQuoteMatch(inner))) unverified.push(inner);
+  }
+  if (unverified.length === 0) return fullComment;
+  const flags = unverified
+    .slice(0, 3)
+    .map((q) => `⚠ "${q.length > 80 ? `${q.slice(0, 80)}…` : q}" — unverified: not found in source.`)
+    .join("\n");
+  const more = unverified.length > 3 ? `\n⚠ …and ${unverified.length - 3} more unverified quote(s).` : "";
+  return `${fullComment}\n\n${flags}${more}`;
+}
 
 export async function runPPDRequirementsReview(
   requirements: PPDRequirementInput[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string) => void; shouldStop?: () => boolean } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
 ): Promise<PPDRequirementsReviewResult> {
   if (requirements.length === 0 || !policyDocText.trim()) {
     return {
@@ -1500,6 +1584,10 @@ Respond with JSON only:
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
   let windowsCompleted = 0;
+  const windowErrors: string[] = [];
+  // See runStagedPolicyAudit: stopped runs must not fabricate verdicts.
+  const stopRequested = () => !!opts.shouldStop?.() || !!opts.signal?.aborted;
+  let stoppedEarly = false;
 
   const REQ_BATCH_SIZE = 8;
   const batches: PPDRequirementInput[][] = [];
@@ -1508,11 +1596,11 @@ Respond with JSON only:
   }
 
   for (const win of windows) {
-    if (opts.shouldStop?.()) break;
+    if (stopRequested()) { stoppedEarly = true; break; }
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()}]` : "";
 
     for (const [bi, batch] of batches.entries()) {
-      if (opts.shouldStop?.()) break;
+      if (stopRequested()) { stoppedEarly = true; break; }
       opts.onProgress?.(`PPD requirements review — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
       const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText}`).join("\n");
       const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess PPD documentation for each GD4 requirement line:\n${pointsBlock}`;
@@ -1522,7 +1610,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1543,26 +1631,54 @@ Respond with JSON only:
           }
         }
       } catch (err) {
-        console.error("[PPDRequirementsReview]", windows.length > 1 ? `window ${win.index + 1}/${win.total}` : "call failed", err instanceof Error ? err.message : String(err));
+        // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
+        if (stopRequested()) { stoppedEarly = true; break; }
+        const msg = err instanceof Error ? err.message : String(err);
+        const label = windows.length > 1 ? `PPD window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD batch ${bi + 1}/${batches.length}`;
+        windowErrors.push(`${label} failed — ${msg}`);
+        console.error("[PPDRequirementsReview]", label, msg);
       }
     }
+    if (stoppedEarly) break;
     windowsCompleted++;
   }
 
   const rows: PPDReviewRow[] = requirements.map((r) => {
     const best = bestByRef.get(r.ref);
+    // A line never put in front of the AI (run stopped early, or every call
+    // that covered it failed) gets the neutral "Not assessed" — NOT a
+    // fabricated "Not documented" gap.
+    if (!best && (stoppedEarly || windowErrors.length > 0)) {
+      return {
+        ref: r.ref,
+        gd4ItemId: r.gd4ItemId,
+        requirementText: r.requirementText,
+        verdict: "Not assessed" as PPDVerdict,
+        shortComment: stoppedEarly ? "Not assessed — the run was stopped before this line was reviewed." : "Not assessed — the AI call covering this line failed.",
+        fullComment: stoppedEarly
+          ? "Not assessed — the run was stopped before this requirement line was reviewed. Re-run the PPD review to assess it."
+          : "Not assessed — the AI call covering this requirement line failed. Re-run the PPD review to assess it.",
+        chunkIds: [],
+      };
+    }
     // An "Adequate" verdict that cannot point at any supporting PPD chunk is
     // downgraded to "Partial" — same uncited-positive rule as buildStagedApsr.
     const uncitedAdequate = best?.verdict === "Adequate" && (best.chunkIds?.length ?? 0) === 0;
     const verdict: PPDVerdict = uncitedAdequate ? "Partial" : (best?.verdict ?? "Not documented");
     const fullComment = best?.fullComment || "No verdict returned by the AI for this requirement — treat as undocumented until re-run.";
+    // Quote verification: annotate any quoted excerpt that does not exist
+    // verbatim in the source, so hallucinated "quotes" can't pass as real.
+    const verifiedComment = flagUnverifiedQuotes(
+      uncitedAdequate ? `${fullComment}\n\n${UNCITED_DOWNGRADE_NOTE}` : fullComment,
+      policyDocText
+    );
     return {
       ref: r.ref,
       gd4ItemId: r.gd4ItemId,
       requirementText: r.requirementText,
       verdict,
       shortComment: best?.shortComment || "No verdict returned by the AI for this requirement.",
-      fullComment: uncitedAdequate ? `${fullComment}\n\n${UNCITED_DOWNGRADE_NOTE}` : fullComment,
+      fullComment: verifiedComment,
       suggestedRewrite: best?.suggestedRewrite,
       chunkIds: best?.chunkIds ?? [],
     };
@@ -1574,7 +1690,7 @@ Respond with JSON only:
   // and the UI falls back to a deterministic summary. Skipped if the run was
   // stopped mid-way (partial rows would make a misleading synthesis).
   let overallNarrative: string | undefined;
-  if (!opts.shouldStop?.()) {
+  if (!stopRequested() && !stoppedEarly) {
     opts.onProgress?.("PPD requirements review — overall synthesis");
     const lineDigest = rows.map((r) => `[${r.ref}] ${r.verdict}: ${r.requirementText} — ${r.shortComment}`).join("\n");
     const narrativeSystem = `You are writing a short overall roll-up of a PPD (Policy & Procedure Document) requirements review for one GD4 EduTrust sub-criterion. You are given the per-requirement-line verdicts already decided ("Adequate" / "Partial" / "Not documented"). Write a 2-4 sentence synthesis of the sub-criterion AS A WHOLE: whether the PPD documents this sub-criterion's requirements overall, which areas are strongest (documented), and where the gaps are (Partial / Not documented lines). This is a roll-up — do NOT repeat each line's comment verbatim. Keep it factual and neutral: state what is documented and what is missing; do not editorialise with words like "good"/"poor"/"excellent". Respond with JSON only: {"narrative": string}.${buildSystemPrompt("evidenceReview", null, "runPPDRequirementsReview (overall synthesis)", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
@@ -1583,16 +1699,28 @@ Respond with JSON only:
       const content = await chatComplete(
         [{ role: "system", content: narrativeSystem }, { role: "user", content: narrativeUser }],
         settings,
-        { temperature: 0.2, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+        { temperature: 0.2, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
       );
       const parsed = parseJSONObject(content);
       if (typeof parsed.narrative === "string" && parsed.narrative.trim()) overallNarrative = parsed.narrative.trim();
     } catch (err) {
+      if (!stopRequested()) {
+        windowErrors.push(`Overall synthesis call failed — ${err instanceof Error ? err.message : String(err)}`);
+      }
       console.error("[PPDRequirementsReview] overall synthesis failed", err instanceof Error ? err.message : String(err));
     }
   }
 
-  return { rows, overallNarrative, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: windowsCompleted === windows.length };
+  return {
+    rows,
+    overallNarrative,
+    usage,
+    promptSent: firstPromptSent,
+    windowsProcessed: windowsCompleted,
+    fullCoverage: !stoppedEarly && windowsCompleted === windows.length,
+    windowErrors: windowErrors.length > 0 ? windowErrors : undefined,
+    stoppedEarly: stoppedEarly || undefined,
+  };
 }
 
 // ─── Evidence Assessment (Option A, Evidence tab) ───────────────────────────
@@ -1634,7 +1762,7 @@ export async function runEvidenceAssessment(
   inputs: EvidenceAssessmentInput[],
   evidenceDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string, pct?: number) => void; shouldStop?: () => boolean } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string, pct?: number) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
 ): Promise<EvidenceAssessmentRunResult> {
   if (inputs.length === 0) return { rows: [] };
 
@@ -1672,6 +1800,9 @@ Respond with JSON only:
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
   let windowsCompleted = 0;
+  // See runStagedPolicyAudit: stopped runs must not fabricate verdicts.
+  const stopRequested = () => !!opts.shouldStop?.() || !!opts.signal?.aborted;
+  let stoppedEarly = false;
 
   const REQ_BATCH_SIZE = 8;
   const batches: EvidenceAssessmentInput[][] = [];
@@ -1681,10 +1812,10 @@ Respond with JSON only:
   let unitsDone = 0;
 
   for (const win of windows) {
-    if (opts.shouldStop?.()) break;
+    if (stopRequested()) { stoppedEarly = true; break; }
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()}]` : "";
     for (const [bi, batch] of batches.entries()) {
-      if (opts.shouldStop?.()) break;
+      if (stopRequested()) { stoppedEarly = true; break; }
       const firstLine = bi * REQ_BATCH_SIZE + 1;
       const lastLine = Math.min(inputs.length, firstLine + batch.length - 1);
       const lineLabel = inputs.length === 1 ? "line 1 of 1" : `lines ${firstLine}–${lastLine} of ${inputs.length}`;
@@ -1698,7 +1829,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS }
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1719,6 +1850,8 @@ Respond with JSON only:
           failedRefs.delete(inp.ref); // a later window recovered this line
         }
       } catch (err) {
+        // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
+        if (stopRequested()) { stoppedEarly = true; break; }
         // Mark the batch's lines as failed and CONTINUE — one stuck/timed-out
         // call must not abort the rest of the assessment.
         for (const inp of batch) if (!bestByRef.has(inp.ref)) failedRefs.add(inp.ref);
@@ -1726,6 +1859,7 @@ Respond with JSON only:
       }
       unitsDone++;
     }
+    if (stoppedEarly) break;
     windowsCompleted++;
   }
 
@@ -1748,6 +1882,17 @@ Respond with JSON only:
     if (failedRefs.has(inp.ref)) {
       return { ref: inp.ref, evidenceSummary: "Assessment failed — retry.", verdict: "Not met", comment: "The AI call for this line failed or timed out. Re-run the evidence assessment to retry.", chunkIds: [], failed: true };
     }
+    // A line never put in front of the AI because the run stopped early is
+    // "Not assessed" — NOT a fabricated "Not met".
+    if (stoppedEarly) {
+      return {
+        ref: inp.ref,
+        evidenceSummary: "Not assessed — the run was stopped before this line was reviewed.",
+        verdict: "Not assessed",
+        comment: "The run was stopped before this requirement line was reviewed. Re-run the evidence assessment to assess it.",
+        chunkIds: [],
+      };
+    }
     // No evidence documents at all, or the AI returned nothing: fall back to a
     // deterministic verdict driven by the PPD state alone.
     return {
@@ -1761,5 +1906,5 @@ Respond with JSON only:
     };
   });
 
-  return { rows, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: windows.length === 0 || windowsCompleted === windows.length };
+  return { rows, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: !stoppedEarly && (windows.length === 0 || windowsCompleted === windows.length) };
 }

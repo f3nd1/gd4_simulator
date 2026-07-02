@@ -567,6 +567,10 @@ export type PolicyCoverageRow = {
   covered: StagedCoverageStatus;
   note: string;
   chunkIds: string[];
+  // True when the run stopped/was skipped before this point was ever put in
+  // front of the AI. The covered value is then a placeholder, NOT a verdict —
+  // consumers must not write checklist statuses or raise findings from it.
+  notAssessed?: boolean;
 };
 
 export type EvidenceCoverageRow = {
@@ -575,6 +579,8 @@ export type EvidenceCoverageRow = {
   covered: StagedCoverageStatus;
   note: string;
   chunkIds: string[];
+  // See PolicyCoverageRow.notAssessed.
+  notAssessed?: boolean;
 };
 
 export type OutcomeReviewRow = {
@@ -584,6 +590,8 @@ export type OutcomeReviewRow = {
   reviewEvident: boolean;
   note: string;
   chunkIds: string[];
+  // See PolicyCoverageRow.notAssessed.
+  notAssessed?: boolean;
 };
 
 // Live progress state emitted during an Evidence Folder audit. Updated
@@ -673,7 +681,10 @@ export type AuditScope = "both" | "policy" | "evidence";
 // tracker; a Partial/Not documented row can be compiled straight into the
 // Findings register (see useWorkspaceStore.compilePPDFindings).
 
-export type PPDVerdict = "Adequate" | "Partial" | "Not documented";
+// "Not assessed" is never returned by the AI — it marks a requirement line
+// the run stopped/was skipped before reviewing. Neutral: excluded from the
+// overall gap roll-up and shown as a grey chip.
+export type PPDVerdict = "Adequate" | "Partial" | "Not documented" | "Not assessed";
 
 // Sub-criterion-level roll-up of every requirement line's verdict:
 // all Adequate -> "PPD Adequate"; any Partial (none missing) -> "PPD
@@ -713,6 +724,10 @@ export type PPDReviewResult = {
   overallVerdict?: PPDOverallVerdict;
   overallSummary?: string;
   overallNarrative?: string;
+  // Non-fatal problems from the run (failed window/batch AI calls, stopped
+  // early, unverified quotes) — shown as a warning banner so a partially
+  // failed run can never present as a clean success.
+  runWarnings?: string[];
 };
 
 // ─── Evidence Assessment (Option A, Evidence tab) ───────────────────────────
