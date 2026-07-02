@@ -690,6 +690,40 @@ export type PPDVerdict = "Adequate" | "Partial" | "Not documented" | "Not assess
 // Partial"; any Not documented -> "PPD Gaps".
 export type PPDOverallVerdict = "PPD Adequate" | "PPD Partial" | "PPD Gaps";
 
+// One constituent obligation of a GD4 requirement line — the "(a) code of
+// conduct; (b) non-collection of monies" parts a real SSG assessor checks
+// individually. The line verdict is DERIVED from these: all documented →
+// Adequate, some → Partial, none → Not documented.
+export type PPDSubClause = { text: string; verdict: "documented" | "not documented" };
+
+// A specific, verifiable commitment the PPD makes for a requirement line
+// (named mechanism, frequency, scope, role, record). Extracted during the
+// PPD review; verified against Actual Evidence in the evidence assessment
+// ("not implemented in accordance with its documented PPD" findings).
+export type PPDPromise = { promiseText: string; sourceQuote: string; chunkId: string };
+
+// The PPD stating two inconsistent values/timelines/responsibilities for the
+// same thing (e.g. "within 5 working days" vs "within 3 working days").
+// Reported sub-criterion-wide with both quoted passages.
+export type PPDContradiction = {
+  description: string;
+  quoteA: string;
+  chunkA: string;
+  quoteB: string;
+  chunkB: string;
+  // Set once compiled into the Findings register (same back-pointer pattern
+  // as EvidenceAssessmentRow.savedFindingId).
+  savedFindingId?: string;
+};
+
+// Per-promise verification verdict from the evidence assessment pass.
+export type PromiseCheck = {
+  promiseText: string;
+  verdict: "evidenced" | "not evidenced" | "contradicted";
+  evidence: string;
+  chunkIds: string[];
+};
+
 export type PPDReviewRow = {
   // FlatAuditPoint.ref — identifies this specific requirement line (e.g.
   // "1.2.1.DS1"), since a sub-criterion's items each carry several lines.
@@ -702,6 +736,10 @@ export type PPDReviewRow = {
   // Only populated for Partial / Not documented rows.
   suggestedRewrite?: string;
   chunkIds: string[];
+  // Assessor-grade decomposition: per-sub-clause documented/not verdicts.
+  subClauses?: PPDSubClause[];
+  // Specific commitments the PPD makes for this line, verified downstream.
+  promises?: PPDPromise[];
 };
 
 export type PPDReviewResult = {
@@ -723,6 +761,10 @@ export type PPDReviewResult = {
   // early, unverified quotes) — shown as a warning banner so a partially
   // failed run can never present as a clean success.
   runWarnings?: string[];
+  // Internal contradictions found while reading the PPD (two inconsistent
+  // values/timelines/procedures for the same thing) — flagged sub-criterion-
+  // wide and compiled into findings alongside the per-line gaps.
+  contradictions?: PPDContradiction[];
 };
 
 // ─── Evidence Assessment (Option A, Evidence tab) ───────────────────────────
@@ -759,6 +801,9 @@ export type EvidenceAssessmentRow = {
   // "Assessment failed — retry" and is skipped by the findings compile.
   assessmentFailed?: boolean;
   savedFindingId?: string;
+  // Named checks: each PPD promise for this line, verified against the
+  // Actual Evidence (evidenced / not evidenced / contradicted).
+  promiseChecks?: PromiseCheck[];
 };
 
 export type EvidenceAssessmentResult = {

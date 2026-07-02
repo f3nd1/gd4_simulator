@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
 import { chatComplete, AIClientError, addUsage, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
@@ -808,6 +808,10 @@ export type StagedOutcomeReviewAuditResult = {
 
 const STAGED_BATCH_SIZE = 8; // audit points per AI call (each is smaller than a full checklist line)
 
+// Shared assessor-register rule appended to every staged-audit prompt
+// (Techniques 4+5): negatives need a named example and SSG phrasing.
+const SSG_NOTE_REGISTER = ` Every "Partial"/"No"/"Not evident" note MUST include at least one concrete example from the documents — the specific document name, version, date or record entry that demonstrates the gap (or name what was searched and found absent) — and use the SSG assessor register: "It was not evident that the PEI had [documented/implemented/established] …". Where dates or versions can be compared (a record dated after the period it governs; documents that never move past V0), perform the comparison and state it explicitly. A negative note without a concrete example is unsupported and unacceptable. Positive notes stay factual and specific (which record, where) — no praise adjectives.`;
+
 // Sliding window constants. Windows overlap so evidence that straddles a
 // boundary is not missed. Each window is sent as a separate AI call set and
 // the results merged (best verdict wins across windows).
@@ -922,7 +926,7 @@ export async function runStagedPolicyAudit(
 "No" = the policy document does not address this requirement at all.
 
 IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -1072,7 +1076,7 @@ export async function runStagedEvidenceAudit(
 "No" = no implementation evidence in these documents for this requirement.
 
 IMPORTANT: A policy document, SOP, or procedure does NOT count as implementation evidence, even if it is filed in the evidence folder. Only actual records of doing something count.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -1207,7 +1211,7 @@ outcomeEvident: true if there is actual outcome data, KPIs, results, trends, sur
 
 reviewEvident: true if there are records of a formal review of this requirement's effectiveness — meeting minutes with agenda item, management review records, improvement actions triggered by data review, or evaluation reports. A policy that says "we will review annually" is NOT evidence of a review having happened.
 
-Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;
@@ -1428,6 +1432,8 @@ export type PPDRequirementInput = { ref: string; gd4ItemId: string; requirementT
 
 export type PPDRequirementsReviewResult = {
   rows: PPDReviewRow[];
+  // Internal contradictions found by the dedicated per-window hunt pass.
+  contradictions?: PPDContradiction[];
   // A 2-4 sentence AI synthesis of the whole sub-criterion (strongest areas,
   // where the gaps are) — a roll-up, not a repeat of the per-line comments.
   // undefined if the narrative call failed or was skipped.
@@ -1463,6 +1469,16 @@ function normaliseForQuoteMatch(s: string): string {
     .replace(/\s+/g, " ")
     .toLowerCase();
 }
+// Deterministic single-quote check for structured fields (promise
+// sourceQuote, contradiction quoteA/quoteB) — same normalisation rules as
+// flagUnverifiedQuotes. Short quotes pass (term names, "Adequate", etc.).
+export function quoteExistsInSource(quote: string, sourceText: string): boolean {
+  const inner = quote.replace(/^(\.{3}|…)\s*/, "").replace(/\s*(\.{3}|…)$/, "").trim();
+  if (inner.length < QUOTE_MIN_CHARS) return true;
+  return normaliseForQuoteMatch(sourceText).includes(normaliseForQuoteMatch(inner));
+}
+const UNVERIFIED_QUOTE_NOTE = " [⚠ unverified quote — not found in source]";
+
 export function flagUnverifiedQuotes(fullComment: string, sourceText: string): string {
   if (!fullComment || !sourceText) return fullComment;
   const sourceNorm = normaliseForQuoteMatch(sourceText);
@@ -1513,26 +1529,54 @@ export async function runPPDRequirementsReview(
   // comment on the equivalent pattern in runStagedPolicyAudit: buildSystemPrompt()
   // has a dev-only AI Debug Log side effect, and every real chatComplete() call
   // should get its own debug-log entry.
-  const buildSystem = (label: string) => `You are reviewing ONLY the Policy & Procedure Document (PPD) for a GD4 EduTrust sub-criterion, requirement by requirement — not implementation evidence, not outcomes. For EACH GD4 requirement given, decide whether the PPD documents it:
+  const buildSystem = (label: string) => `You are an SSG EduTrust assessor reviewing ONLY the Policy & Procedure Document (PPD) for a GD4 sub-criterion, requirement by requirement — not implementation evidence, not outcomes. Work the way a real assessor works: decompose, check each obligation, and report specific gaps with named examples — never summarise.
 
-"Adequate" = the PPD clearly, specifically and sustainably documents HOW the institution meets this requirement (names who is responsible, what they do, when/how often, and what record is produced).
-"Partial" = the PPD mentions the requirement but is vague, generic, boilerplate, or missing key detail (no named owner, no frequency, not specific to this institution).
-"Not documented" = the PPD does not address this requirement at all.
+STEP 1 — DECOMPOSE. For each GD4 requirement line, first break it into its constituent sub-clauses: the explicit (a)/(b)/(c) parts if present, otherwise each distinct obligation in the sentence (e.g. "documented (a) a code of conduct AND (b) non-collection of monies" = two sub-clauses). Then give a per-sub-clause verdict: "documented" or "not documented" in the PPD.
+
+STEP 2 — DERIVE the line verdict from the sub-clauses:
+"Adequate" = EVERY sub-clause is documented clearly, specifically and sustainably (named responsible role, what they do, when/how often, what record is produced).
+"Partial" = some sub-clauses documented, others missing or vague — the comment MUST name exactly which sub-clauses are missing, e.g. "Sub-clause (b) — non-collection of monies from students — is not addressed in any PPD passage."
+"Not documented" = no sub-clause is addressed at all.
+
+STEP 3 — EXTRACT PROMISES. List every specific, verifiable commitment the PPD makes for this requirement: named mechanisms ("peer reviews"), frequencies ("annually", "within 5 working days"), scopes ("all part-time academic staff"), named roles, named records. Each promise needs its verbatim source quote and chunk ID. These are verified against implementation records in a later pass — extract only what the PPD actually commits to, never invent.
+
+PHRASING REGISTER (mandatory):
+- Negative verdicts use the official SSG register: "It was not evident that the PEI had documented [the specific process/sub-clause(s)] in its PPD…" — name the specific missing obligations, listing sub-clauses where multiple.
+- Every Partial or Not documented verdict MUST cite at least one concrete example from the documents — the specific document name, section, version or passage that demonstrates the gap (or, for a wholly absent topic, name the documents searched). A negative verdict without a concrete example is unsupported and unacceptable.
+- Positive verdicts stay factual and specific (what is documented, in which document/section) — no praise adjectives, no "good"/"structured framework"/"comprehensive".
 
 For each requirement return:
-- verdict: "Adequate" | "Partial" | "Not documented"
-- shortComment: one sentence summarising the verdict
-- fullComment: MUST have two parts. (1) A reasoned justification of the verdict: if Adequate, state specifically WHAT in the PPD makes it adequate (the named owner, frequency, and record it specifies); if Partial or Not documented, state EXACTLY what is missing (which of owner / frequency / record / institution-specific detail is absent). (2) A direct quoted excerpt from the PPD source that supports the verdict — copy the actual line(s) verbatim in double quotes followed by the supporting chunk ID in parentheses, e.g. "...auditors must be independent of the area they audit..." (C001). For "Not documented" there is no supporting excerpt, so state that no PPD passage addresses this requirement instead of inventing a quote. Keep it factual and neutral: state what the policy says and whether it meets the requirement — do not use words like "good"/"poor"/"excellent".
-- suggestedRewrite: for Partial or Not documented ONLY — a concrete, institution-ready PPD paragraph the auditor could paste directly into the policy document to close this gap (name the responsible role, frequency, and the record produced). Omit (empty string) for Adequate.
-- chunkIds: the exact chunk ID(s) (e.g. "C001") from document headers that support the verdict. Leave empty if none directly support it — never invent a chunk ID.
+- subClauses: [{text: string, verdict: "documented"|"not documented"}] — the STEP 1 decomposition. One entry per sub-clause, text quoting/paraphrasing that obligation tightly.
+- verdict: "Adequate" | "Partial" | "Not documented" — derived per STEP 2.
+- shortComment: one sentence; for negatives use the SSG register and name the missing sub-clause(s).
+- fullComment: (1) the justification — for Adequate state specifically WHAT makes it adequate (named owner, frequency, record and where documented); for Partial/Not documented use the SSG register, name each missing sub-clause, and give the concrete example. (2) a verbatim quoted excerpt from the PPD in double quotes followed by its chunk ID, e.g. "...auditors must be independent of the area they audit..." (C001). For "Not documented" state that no PPD passage addresses this requirement instead of inventing a quote. Factual and neutral throughout.
+- promises: [{promiseText: string, sourceQuote: string, chunkId: string}] — the STEP 3 extraction. Empty array if the PPD makes no specific commitment for this line.
+- suggestedRewrite: for Partial or Not documented ONLY — a concrete, institution-ready PPD paragraph closing the gap (responsible role, frequency, record). Empty string for Adequate.
+- chunkIds: exact chunk ID(s) (e.g. "C001") supporting the verdict. Empty if none — never invent a chunk ID.
 
 Respond with JSON only:
-{"results": [{"ref": string, "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "suggestedRewrite": string, "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented"}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}], "suggestedRewrite": string, "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+
+  // Technique 2 — internal contradiction hunt. Run as its OWN pass per
+  // window (not folded into the per-requirement prompt) so the requirement
+  // batches stay within budget and the hunt reads the window whole.
+  const contradictionSystem = (label: string) => `You are an SSG EduTrust assessor reading a PEI's Policy & Procedure Document looking ONLY for INTERNAL CONTRADICTIONS: places where the PPD states two inconsistent values, timelines, percentages, responsibilities, or procedures for the SAME thing (e.g. a refund processed "within 5 working days" in one section and "within 3 working days" in another; two different owners for the same process; two different review frequencies for the same record).
+
+Rules:
+- Only report REAL inconsistencies about the same subject — different processes legitimately having different timelines is NOT a contradiction.
+- Each contradiction must carry BOTH passages quoted verbatim in double quotes with their chunk IDs. Never invent or paraphrase inside the quotes.
+- description: one factual sentence naming the subject and the two conflicting values, in the SSG register (e.g. "The PPD states two different refund timelines for the same process: 'within 5 working days' and 'within 3 working days'.").
+- Report nothing if the window contains no contradiction — an empty array is the correct answer for a consistent PPD.
+
+Respond with JSON only: {"contradictions": [{"description": string, "quoteA": string, "chunkA": string, "quoteB": string, "chunkB": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
 
   const windows = buildDocWindows(policyDocText);
 
-  type BestPPD = { verdict: PPDVerdict; shortComment: string; fullComment: string; suggestedRewrite?: string; chunkIds: string[] };
+  type BestPPD = { verdict: PPDVerdict; shortComment: string; fullComment: string; suggestedRewrite?: string; chunkIds: string[]; subClauses?: PPDSubClause[]; promises?: PPDPromise[] };
   const bestByRef = new Map<string, BestPPD>();
+  // Contradictions merged across windows, deduped on the two quotes.
+  const contradictions: PPDContradiction[] = [];
+  const contradictionKeys = new Set<string>();
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
@@ -1576,11 +1620,42 @@ Respond with JSON only:
           const fullComment = typeof res?.fullComment === "string" ? res.fullComment : "";
           const suggestedRewrite = typeof res?.suggestedRewrite === "string" && res.suggestedRewrite.trim() ? res.suggestedRewrite : undefined;
           const chunkIds = Array.isArray(res?.chunkIds) ? (res!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+          const subClauses: PPDSubClause[] = Array.isArray(res?.subClauses)
+            ? (res!.subClauses as Array<Record<string, unknown>>)
+                .filter((c) => typeof c?.text === "string" && (c?.verdict === "documented" || c?.verdict === "not documented"))
+                .map((c) => ({ text: c.text as string, verdict: c.verdict as PPDSubClause["verdict"] }))
+            : [];
+          // Promises carry verbatim source quotes — verify each against the
+          // window that produced it (same anti-hallucination rule as
+          // fullComment quotes) and annotate failures instead of dropping.
+          const promises: PPDPromise[] = Array.isArray(res?.promises)
+            ? (res!.promises as Array<Record<string, unknown>>)
+                .filter((p) => typeof p?.promiseText === "string" && p.promiseText)
+                .map((p) => {
+                  const sourceQuote = typeof p.sourceQuote === "string" ? p.sourceQuote : "";
+                  return {
+                    promiseText: p.promiseText as string,
+                    sourceQuote: sourceQuote && !quoteExistsInSource(sourceQuote, policyDocText) ? `${sourceQuote}${UNVERIFIED_QUOTE_NOTE}` : sourceQuote,
+                    chunkId: typeof p.chunkId === "string" ? p.chunkId : "",
+                  };
+                })
+            : [];
           const prev = bestByRef.get(r.ref);
           if (!prev || PPD_VERDICT_ORDER[verdict] > PPD_VERDICT_ORDER[prev.verdict]) {
-            bestByRef.set(r.ref, { verdict, shortComment, fullComment, suggestedRewrite, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])] });
+            bestByRef.set(r.ref, {
+              verdict, shortComment, fullComment, suggestedRewrite,
+              chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])],
+              subClauses: subClauses.length > 0 ? subClauses : prev?.subClauses,
+              // Union promises across windows (different windows see
+              // different PPD sections), deduped on promiseText.
+              promises: [...(prev?.promises ?? []), ...promises.filter((p) => !(prev?.promises ?? []).some((q) => q.promiseText === p.promiseText))],
+            });
           } else {
-            bestByRef.set(r.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])] });
+            bestByRef.set(r.ref, {
+              ...prev,
+              chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])],
+              promises: [...(prev.promises ?? []), ...promises.filter((p) => !(prev.promises ?? []).some((q) => q.promiseText === p.promiseText))],
+            });
           }
         }
       } catch (err) {
@@ -1593,6 +1668,43 @@ Respond with JSON only:
       }
     }
     if (stoppedEarly) break;
+
+    // Technique 2 — internal contradiction hunt, one dedicated call per
+    // window. Best-effort: a failed hunt is a warning, never a fake finding.
+    if (!stopRequested()) {
+      opts.onProgress?.(`PPD contradiction hunt — window ${win.index + 1}/${win.total}`);
+      const huntLabel = windows.length > 1 ? `runPPDRequirementsReview (contradiction hunt, window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview (contradiction hunt)";
+      try {
+        const content = await chatComplete(
+          [
+            { role: "system", content: contradictionSystem(huntLabel) },
+            { role: "user", content: `Policy & Procedure documents (chunk IDs in headers)${windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}]` : ""}:\n"""\n${win.text}\n"""\n\nList every internal contradiction, or an empty array if there are none.` },
+          ],
+          settings,
+          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+        );
+        const parsed = parseJSONObject(content);
+        const found = Array.isArray(parsed.contradictions) ? parsed.contradictions as Array<Record<string, unknown>> : [];
+        for (const c of found) {
+          if (typeof c?.description !== "string" || !c.description.trim()) continue;
+          const quoteA = typeof c.quoteA === "string" ? c.quoteA : "";
+          const quoteB = typeof c.quoteB === "string" ? c.quoteB : "";
+          const key = normaliseForQuoteMatch(`${quoteA}::${quoteB}`);
+          if (contradictionKeys.has(key)) continue;
+          contradictionKeys.add(key);
+          contradictions.push({
+            description: c.description.trim(),
+            quoteA: quoteA && !quoteExistsInSource(quoteA, policyDocText) ? `${quoteA}${UNVERIFIED_QUOTE_NOTE}` : quoteA,
+            chunkA: typeof c.chunkA === "string" ? c.chunkA : "",
+            quoteB: quoteB && !quoteExistsInSource(quoteB, policyDocText) ? `${quoteB}${UNVERIFIED_QUOTE_NOTE}` : quoteB,
+            chunkB: typeof c.chunkB === "string" ? c.chunkB : "",
+          });
+        }
+      } catch (err) {
+        if (stopRequested()) { stoppedEarly = true; break; }
+        windowErrors.push(`Contradiction hunt (window ${win.index + 1}/${win.total}) failed — ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     windowsCompleted++;
   }
 
@@ -1634,6 +1746,8 @@ Respond with JSON only:
       fullComment: verifiedComment,
       suggestedRewrite: best?.suggestedRewrite,
       chunkIds: best?.chunkIds ?? [],
+      subClauses: best?.subClauses,
+      promises: best?.promises?.length ? best.promises : undefined,
     };
   });
 
@@ -1666,6 +1780,7 @@ Respond with JSON only:
 
   return {
     rows,
+    contradictions,
     overallNarrative,
     usage,
     promptSent: firstPromptSent,
@@ -1685,7 +1800,7 @@ Respond with JSON only:
 // division of responsibility as every other function here — the store does
 // the folder reading/logging, this makes the AI call(s).
 
-export type EvidenceAssessmentInput = { ref: string; requirementText: string; ppdVerdict: PPDVerdict; ppdExtract: string };
+export type EvidenceAssessmentInput = { ref: string; requirementText: string; ppdVerdict: PPDVerdict; ppdExtract: string; promises?: PPDPromise[] };
 
 export type EvidenceAssessmentLineResult = {
   ref: string;
@@ -1694,6 +1809,9 @@ export type EvidenceAssessmentLineResult = {
   comment: string;
   chunkIds: string[];
   failed?: boolean;
+  // Per-PPD-promise verification (Technique 3 — "not implemented in
+  // accordance with its documented PPD").
+  promiseChecks?: PromiseCheck[];
 };
 
 export type EvidenceAssessmentRunResult = {
@@ -1723,28 +1841,50 @@ export async function runEvidenceAssessment(
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
   const noEvidence = !evidenceDocText.trim();
 
-  const buildSystem = (label: string) => `You are assessing a GD4 EduTrust sub-criterion by combining TWO things for each requirement line: (1) the PPD (Policy & Procedure Document) verdict already decided — whether the requirement is documented — which is GIVEN to you, and (2) the ACTUAL EVIDENCE documents provided below, which show whether the institution actually IMPLEMENTS the requirement in practice.
+  const buildSystem = (label: string) => `You are an SSG EduTrust assessor testing whether a PEI IMPLEMENTS its documented policies. For each requirement line you are given: (1) the PPD verdict already decided (whether the requirement is documented), (2) the specific PROMISES the PPD makes for that line (named mechanisms, frequencies, scopes, roles, records), and (3) the ACTUAL EVIDENCE documents below. Audit like a real assessor: verify each promise against the records, compare dates, and name specifics — never summarise.
 
-For each requirement line return a COMBINED verdict:
-"Met" = the requirement is FULLY documented in the PPD (Adequate PPD verdict) AND there is real implementation evidence in the evidence documents (records, logs, forms, registers, screenshots, actual operational records). A Partial or Not documented PPD verdict can NEVER combine to "Met" — a weak documented approach gates the whole line (APSR Approach hard-gate), no matter how strong the evidence is.
-"Partial" = documented in the PPD but implementation evidence is missing, thin, or only partial; OR strong evidence exists but the PPD documentation was weak/absent (Partial or Not documented PPD verdict).
-"Not met" = neither adequately documented nor evidenced.
+PROMISE VERIFICATION (the core task). Each promise listed under a requirement is a NAMED CHECK. For each one verdict:
+- "evidenced" — a record in the evidence documents shows the promise being carried out; cite the chunk.
+- "not evidenced" — no record shows it. Phrase the finding: "It was not evident that the PEI had [promise], in accordance with its documented PPD."
+- "contradicted" — the records show the OPPOSITE of the promise (e.g. the PPD promises contracts signed before fee collection and a contract is dated after the receipt). Quote the contradicting record.
 
-A policy/SOP/procedure filed in the evidence folder does NOT count as implementation evidence — only actual records of doing something count.
+COMBINED LINE VERDICT:
+"Met" = the requirement is FULLY documented in the PPD (Adequate PPD verdict) AND the promises are evidenced by real implementation records (records, logs, forms, registers, screenshots). A Partial or Not documented PPD verdict can NEVER combine to "Met" — a weak documented approach gates the whole line (APSR Approach hard-gate), no matter how strong the evidence is.
+"Partial" = documented but implementation evidence is missing, thin or partial (including any promise "not evidenced"); OR evidence exists but the PPD documentation was weak/absent.
+"Not met" = neither adequately documented nor evidenced, or promises are contradicted by the records.
+
+EVIDENCE RULES:
+- A policy/SOP/procedure filed in the evidence folder does NOT count as implementation evidence — only actual records of doing something count.
+- NAMED EXAMPLES ARE MANDATORY on every negative: each "Partial"/"Not met" line verdict and each "not evidenced"/"contradicted" promise MUST cite at least one concrete example — the specific document name, version, date or record entry that demonstrates the gap, quoted with its chunk ID; or, where nothing exists, name what was searched and absent. Where dates or versions can be compared (a record dated after the period it governs; documents that never move past V0), PERFORM the comparison and state it explicitly. A negative verdict without a concrete example is unsupported and unacceptable.
+- SSG REGISTER on negatives: "It was not evident that the PEI had [implemented/established]…, in accordance with its documented PPD. Example: …". Positive verdicts stay factual and specific (which record, where) — no praise adjectives.
 
 For each line return:
 - evidenceSummary: 1-2 sentences on what implementation evidence was found (or that none was found), factual and neutral.
 - verdict: "Met" | "Partial" | "Not met"
-- comment: 1-3 sentences justifying the combined verdict, referencing both the PPD documentation state and the evidence found.
-- chunkIds: exact chunk ID(s) (e.g. "C001") from evidence document headers supporting the evidence finding. Empty if none.
+- comment: justification referencing the PPD state, the promise checks and the named example(s), in the register above.
+- promiseChecks: [{promiseText: string, verdict: "evidenced"|"not evidenced"|"contradicted", evidence: string, chunkIds: string[]}] — one entry PER promise given for the line, promiseText copied exactly. evidence = the citation or "No record found in the evidence documents." Empty array only when the line has no promises.
+- chunkIds: exact chunk ID(s) (e.g. "C001") from evidence document headers supporting the line verdict. Empty if none.
 
 Respond with JSON only:
-{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[]}], "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
 
   const windows = noEvidence ? [] : buildDocWindows(evidenceDocText);
 
-  type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[] };
+  type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[] };
   const bestByRef = new Map<string, BestEv>();
+  // Per-promise best verdict across sliding windows: evidence found in ANY
+  // window proves the promise; a contradiction outranks a bare "no record".
+  const PROMISE_VERDICT_ORDER: Record<PromiseCheck["verdict"], number> = { "not evidenced": 0, "contradicted": 1, "evidenced": 2 };
+  const mergePromiseChecks = (prev: PromiseCheck[] | undefined, next: PromiseCheck[]): PromiseCheck[] => {
+    const out = [...(prev ?? [])];
+    for (const n of next) {
+      const i = out.findIndex((p) => p.promiseText === n.promiseText);
+      if (i === -1) out.push(n);
+      else if (PROMISE_VERDICT_ORDER[n.verdict] > PROMISE_VERDICT_ORDER[out[i].verdict]) out[i] = { ...n, chunkIds: [...new Set([...out[i].chunkIds, ...n.chunkIds])] };
+      else out[i] = { ...out[i], chunkIds: [...new Set([...out[i].chunkIds, ...n.chunkIds])] };
+    }
+    return out;
+  };
   // Refs whose AI call failed/timed out at least once and never succeeded —
   // surfaced per line as "Assessment failed — retry" so one stuck call cannot
   // hang the whole tab or silently vanish.
@@ -1774,8 +1914,13 @@ Respond with JSON only:
       const lineLabel = inputs.length === 1 ? "line 1 of 1" : `lines ${firstLine}–${lastLine} of ${inputs.length}`;
       const winLabel = windows.length > 1 ? ` · window ${win.index + 1}/${win.total}` : "";
       opts.onProgress?.(`Assessing ${lineLabel}${winLabel}…`, Math.round((unitsDone / totalUnits) * 100));
-      const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText} [PPD verdict: ${r.ppdVerdict}${r.ppdExtract ? ` — "${r.ppdExtract.slice(0, 100)}"` : ""}]`).join("\n");
-      const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each requirement line for a COMBINED PPD-plus-evidence verdict:\n${pointsBlock}`;
+      const pointsBlock = batch.map((r, i) => {
+        const promisesBlock = (r.promises ?? []).length > 0
+          ? `\n  PPD promises to verify:${(r.promises ?? []).map((p, pi) => `\n    (${pi + 1}) ${p.promiseText}`).join("")}`
+          : "";
+        return `[${r.ref}] (${i + 1}) ${r.requirementText} [PPD verdict: ${r.ppdVerdict}${r.ppdExtract ? ` — "${r.ppdExtract.slice(0, 100)}"` : ""}]${promisesBlock}`;
+      }).join("\n");
+      const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each requirement line: verify each listed PPD promise against the records, then give the COMBINED PPD-plus-evidence verdict:\n${pointsBlock}`;
       const system = buildSystem(windows.length > 1 ? `runEvidenceAssessment (window ${win.index + 1}/${win.total})` : "runEvidenceAssessment");
       if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
       try {
@@ -1794,11 +1939,22 @@ Respond with JSON only:
           const evidenceSummary = typeof res?.evidenceSummary === "string" ? res.evidenceSummary : "";
           const comment = typeof res?.comment === "string" ? res.comment : "";
           const chunkIds = Array.isArray(res?.chunkIds) ? (res!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+          const promiseChecks: PromiseCheck[] = Array.isArray(res?.promiseChecks)
+            ? (res!.promiseChecks as Array<Record<string, unknown>>)
+                .filter((p) => typeof p?.promiseText === "string" && ["evidenced", "not evidenced", "contradicted"].includes(p?.verdict as string))
+                .map((p) => ({
+                  promiseText: p.promiseText as string,
+                  verdict: p.verdict as PromiseCheck["verdict"],
+                  // Quote verification on the cited evidence — same rule as comments.
+                  evidence: typeof p.evidence === "string" ? flagUnverifiedQuotes(p.evidence, win.text) : "",
+                  chunkIds: Array.isArray(p.chunkIds) ? (p.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [],
+                }))
+            : [];
           const prev = bestByRef.get(inp.ref);
           if (!prev || EVIDENCE_VERDICT_ORDER[verdict] > EVIDENCE_VERDICT_ORDER[prev.verdict]) {
-            bestByRef.set(inp.ref, { evidenceSummary, verdict, comment, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])] });
+            bestByRef.set(inp.ref, { evidenceSummary, verdict, comment, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])], promiseChecks: mergePromiseChecks(prev?.promiseChecks, promiseChecks) });
           } else {
-            bestByRef.set(inp.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])] });
+            bestByRef.set(inp.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])], promiseChecks: mergePromiseChecks(prev.promiseChecks, promiseChecks) });
           }
           failedRefs.delete(inp.ref); // a later window recovered this line
         }
@@ -1819,6 +1975,7 @@ Respond with JSON only:
   const rows: EvidenceAssessmentLineResult[] = inputs.map((inp) => {
     const best = bestByRef.get(inp.ref);
     if (best) {
+      const verifiedComment = flagUnverifiedQuotes(best.comment || "", evidenceDocText);
       // Code-level APSR Approach hard-gate: a line whose PPD verdict is not
       // "Adequate" is capped at "Partial" whatever the AI combined — the same
       // facts must not show "Partial" on the PPD tab and "Met" here.
@@ -1827,8 +1984,9 @@ Respond with JSON only:
           ref: inp.ref,
           evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.",
           verdict: "Partial",
-          comment: `${best.comment ? `${best.comment}\n\n` : ""}[Capped at Partial: the PPD verdict for this line is "${inp.ppdVerdict}" — under the APSR Approach hard-gate a line cannot be Met until the documented approach is Adequate, regardless of implementation evidence.]`,
+          comment: `${verifiedComment ? `${verifiedComment}\n\n` : ""}[Capped at Partial: the PPD verdict for this line is "${inp.ppdVerdict}" — under the APSR Approach hard-gate a line cannot be Met until the documented approach is Adequate, regardless of implementation evidence.]`,
           chunkIds: best.chunkIds,
+          promiseChecks: best.promiseChecks,
         };
       }
       // A "Met" verdict that cannot cite any evidence chunk is downgraded to
@@ -1838,11 +1996,26 @@ Respond with JSON only:
           ref: inp.ref,
           evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.",
           verdict: "Partial",
-          comment: `${best.comment ? `${best.comment}\n\n` : ""}${UNCITED_DOWNGRADE_NOTE}`,
+          comment: `${verifiedComment ? `${verifiedComment}\n\n` : ""}${UNCITED_DOWNGRADE_NOTE}`,
           chunkIds: [],
+          promiseChecks: best.promiseChecks,
         };
       }
-      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: best.comment || "", chunkIds: best.chunkIds };
+      // Promise hard-gate: a "Met" line with an unfulfilled or contradicted
+      // PPD promise is capped at "Partial" — "not implemented in accordance
+      // with its documented PPD" is exactly the gap real assessors raise.
+      const unmetPromises = (best.promiseChecks ?? []).filter((p) => p.verdict !== "evidenced");
+      if (best.verdict === "Met" && unmetPromises.length > 0) {
+        return {
+          ref: inp.ref,
+          evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.",
+          verdict: "Partial",
+          comment: `${verifiedComment ? `${verifiedComment}\n\n` : ""}[Capped at Partial: ${unmetPromises.length} PPD promise${unmetPromises.length === 1 ? "" : "s"} not evidenced — ${unmetPromises.map((p) => `"${p.promiseText}"`).join("; ")}. It was not evident that the PEI had implemented ${unmetPromises.length === 1 ? "this commitment" : "these commitments"} in accordance with its documented PPD.]`,
+          chunkIds: best.chunkIds,
+          promiseChecks: best.promiseChecks,
+        };
+      }
+      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks };
     }
     if (failedRefs.has(inp.ref)) {
       return { ref: inp.ref, evidenceSummary: "Assessment failed — retry.", verdict: "Not met", comment: "The AI call for this line failed or timed out. Re-run the evidence assessment to retry.", chunkIds: [], failed: true };

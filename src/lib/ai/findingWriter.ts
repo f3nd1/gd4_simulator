@@ -119,9 +119,16 @@ export function simulateGroupedFindingWriter(
     const firstLine = group.lines[0];
     if (firstLine?.sourceText) observationParts.push(`under ${refs}: "${firstLine.sourceText.slice(0, 200)}"`);
   }
+  // SSG assessor register: negative findings open "It was not evident that
+  // the PEI had…", followed by the specifics and an Example block.
+  const dimVerb =
+    dim === "Approach" ? "documented in its PPD" :
+    dim === "Processes" ? "implemented" :
+    dim === "Systems & Outcomes" ? "established outcome monitoring for" : "established a review of";
+  const exampleLine = group.lines.find((l) => l.sourceText || l.text);
   const observation = observationParts.length > 0
-    ? `Auditor review identified: ${observationParts.join("; ")}.`
-    : `Checklist review identified a ${gapLabel} gap under ${refs}.`;
+    ? `It was not evident that the PEI had ${dimVerb} the requirement(s) under ${refs}. ${observationParts.join("; ")}.${exampleLine ? ` Example: "${(exampleLine.sourceText ?? exampleLine.text ?? "").slice(0, 200)}" — rated ${exampleLine.status}.` : ""}`
+    : `It was not evident that the PEI had ${dimVerb} the requirement(s) under ${refs} (${gapLabel} gap).`;
 
   const criteria = group.sourceTexts.length > 0
     ? `GD4 ${itemRef} requires: "${group.sourceTexts[0].slice(0, 300)}"`
@@ -189,7 +196,7 @@ export async function runLiveGroupedFindingWriter(
   const domainBlock = buildDomainBlock(domainSkill);
 
   const systemPrompt =
-    `You are a GD4 EduTrust internal audit expert. Your task is to write one structured finding draft based on a group of failing checklist lines from an audit. You MUST base everything on the checklist evidence provided — do NOT invent or assume information that is not in the lines. For the root cause: apply 5-Why methodology — reach the systemic Level 3 root cause (a governance, training, data-collection, or review gap), not the symptom. For the criteria section: quote the GD4 requirement text EXACTLY, word-for-word — do not paraphrase or summarise it. Also cite the exact regulatory provision (Act, clause, or SSG instrument) in addition to the GD4 item number. For the effect section: name the specific band ceiling with a concrete Band 4–5 benchmark so the institution knows what "fixed" looks like. Where the checklist lines mention a sample, express the gap as a rate (N of M). Flag any evidence-timeliness issues visible in the line notes (recently created documents, short coverage periods).` +
+    `You are a GD4 EduTrust internal audit expert. Your task is to write one structured finding draft based on a group of failing checklist lines from an audit. You MUST base everything on the checklist evidence provided — do NOT invent or assume information that is not in the lines. For the root cause: apply 5-Why methodology — reach the systemic Level 3 root cause (a governance, training, data-collection, or review gap), not the symptom. For the criteria section: quote the GD4 requirement text EXACTLY, word-for-word — do not paraphrase or summarise it. Also cite the exact regulatory provision (Act, clause, or SSG instrument) in addition to the GD4 item number. For the effect section: name the specific band ceiling with a concrete Band 4–5 benchmark so the institution knows what "fixed" looks like. Where the checklist lines mention a sample, express the gap as a rate (N of M). Flag any evidence-timeliness issues visible in the line notes (recently created documents, short coverage periods). PHRASING REGISTER (mandatory): the observation MUST use the official SSG assessor register — open with "It was not evident that the PEI had [documented in its PPD / implemented / established]…", name the specific process (listing sub-clauses where multiple are missing), and close with an "Example:" block citing the concrete case — the specific document name, version, date or record entry demonstrating the gap. A negative observation without a concrete example is unsupported. No praise adjectives anywhere; positive statements stay factual and specific.` +
     ` Write all finding sections (Observation, Criteria, Effect) in factual, neutral language. State what was found and what the standard requires. Do not characterise evidence as adequate, inadequate, good, or poor — only state what exists or is absent. Avoid phrases like "the policy is adequate" or "well-written" — instead say "a policy document was provided" or "no policy document was found". The reader will judge adequacy — you only state facts.` +
     buildSystemPrompt("findingWriter", null, "runLiveGroupedFindingWriter") +
     domainBlock;
@@ -211,7 +218,7 @@ ${evidenceSummary}
 Return ONLY a JSON object with these exact keys:
 {
   "title": "GD4 [item] — [Gap in plain English]",
-  "observation": "What the auditor found (WHO/WHAT/WHEN/HOW MANY — be specific, cite checklist refs)",
+  "observation": "SSG register: 'It was not evident that the PEI had …' + specifics (WHO/WHAT/WHEN/HOW MANY, checklist refs) + 'Example:' block with the concrete document/date/record demonstrating the gap",
   "criteria": "EXACT word-for-word quote of what GD4 requires — copy the requirement text verbatim from the GD4 item, do NOT paraphrase or summarise. Include the item number and the exact regulatory clause or SSG instrument.",
   "effect": "Why the gap matters (regulatory/band consequence, name the APSR dimension cap)",
   "rootCause": "System root cause — ask why 3 times, write level 3",

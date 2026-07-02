@@ -5,7 +5,7 @@ import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { findingTypeForStatus, findingTypeTone } from "../lib/findingClassification";
-import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict } from "../types";
+import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
 //   • PPD Review — policy only, one row per GD4 requirement line (3 columns).
@@ -202,6 +202,30 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
               </div>
             );
           })()}
+          {liveResult.contradictions && liveResult.contradictions.length > 0 && (
+            <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 10, padding: "11px 14px", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: "#9a3412", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                  ⚠ Internal PPD contradictions ({liveResult.contradictions.length})
+                </span>
+                <span style={{ fontSize: 11.5, color: "#7c2d12" }}>Two inconsistent statements for the same thing — these compile as findings.</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {liveResult.contradictions.map((c, i) => (
+                  <div key={i} style={{ background: "#fff", border: "1px solid #fed7aa", borderLeft: "4px solid #ea580c", borderRadius: 8, padding: "8px 11px" }}>
+                    <div style={{ fontSize: 12.5, color: "#7c2d12", fontWeight: 600, marginBottom: 4 }}>
+                      {c.description}
+                      {c.savedFindingId && <Pill s="medium">Saved {c.savedFindingId}</Pill>}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.45 }}>
+                      <div><b style={{ color: "#9a3412" }}>A:</b> <span style={{ fontStyle: "italic" }}>{c.quoteA}</span>{c.chunkA && <span style={{ fontFamily: "ui-monospace,monospace", color: "#94a3b8" }}> ({c.chunkA})</span>}</div>
+                      <div><b style={{ color: "#9a3412" }}>B:</b> <span style={{ fontStyle: "italic" }}>{c.quoteB}</span>{c.chunkB && <span style={{ fontFamily: "ui-monospace,monospace", color: "#94a3b8" }}> ({c.chunkB})</span>}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
             Last run {new Date(liveResult.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
             {" · "}{liveResult.live ? "Live AI" : "Offline"}
@@ -245,6 +269,33 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
                   </div>
                   {expanded && (
                     <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
+                      {row.subClauses && row.subClauses.length > 0 && (
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>Sub-clause check</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            {row.subClauses.map((c, i) => (
+                              <div key={i} style={{ fontSize: 12, color: c.verdict === "documented" ? "#166534" : "#b91c1c", lineHeight: 1.4 }}>
+                                {c.verdict === "documented" ? "✓" : "✗"} {c.text}
+                                <span style={{ color: "#94a3b8" }}> — {c.verdict}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {row.promises && row.promises.length > 0 && (
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>PPD promises (verified in the Evidence tab)</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                            {row.promises.map((p, i) => (
+                              <div key={i} style={{ fontSize: 12, color: "#374151", lineHeight: 1.4 }}>
+                                • {p.promiseText}
+                                {p.sourceQuote && <span style={{ fontStyle: "italic", color: "#64748b" }}> — "{p.sourceQuote}"</span>}
+                                {p.chunkId && <span style={{ fontFamily: "ui-monospace,monospace", color: "#94a3b8" }}> ({p.chunkId})</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>Full comment</div>
                       <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.45, marginBottom: row.suggestedRewrite ? 10 : 0, whiteSpace: "pre-line" }}>
                         {row.fullComment || row.shortComment}
@@ -327,6 +378,7 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
         ppdExtract: p.fullComment || p.shortComment || "", ppdVerdict: p.verdict,
         evidenceSummary: "", evidenceFiles: [] as { name: string; url: string }[], evidenceChunkIds: [] as string[],
         verdict: undefined as EvidenceVerdict | undefined, comment: "", assessmentFailed: undefined as boolean | undefined, savedFindingId: undefined as string | undefined,
+        promiseChecks: undefined as PromiseCheck[] | undefined,
       }));
 
   return (
@@ -479,10 +531,32 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
                 </div>
               </div>
 
-              {expanded && row.comment && (
+              {expanded && (row.comment || (row.promiseChecks && row.promiseChecks.length > 0)) && (
                 <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>Combined assessment</div>
-                  <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.45, whiteSpace: "pre-line" }}>{row.comment}</div>
+                  {row.promiseChecks && row.promiseChecks.length > 0 && (
+                    <div style={{ marginBottom: row.comment ? 10 : 0 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>PPD promise checks</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {row.promiseChecks.map((p, i) => {
+                          const tone = p.verdict === "evidenced" ? "#166534" : p.verdict === "contradicted" ? "#b91c1c" : "#b45309";
+                          const mark = p.verdict === "evidenced" ? "✓" : p.verdict === "contradicted" ? "✗" : "○";
+                          return (
+                            <div key={i} style={{ fontSize: 12, lineHeight: 1.45 }}>
+                              <span style={{ color: tone, fontWeight: 700 }}>{mark} {p.verdict}</span>
+                              <span style={{ color: "#1e293b" }}> — {p.promiseText}</span>
+                              {p.evidence && <div style={{ color: "#64748b", marginLeft: 16 }}>{p.evidence}{p.chunkIds.length > 0 && <span style={{ fontFamily: "ui-monospace,monospace", color: "#94a3b8" }}> ({p.chunkIds.join(", ")})</span>}</div>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {row.comment && (
+                    <>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>Combined assessment</div>
+                      <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.45, whiteSpace: "pre-line" }}>{row.comment}</div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

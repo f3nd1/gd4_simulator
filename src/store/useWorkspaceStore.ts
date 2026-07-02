@@ -51,7 +51,7 @@ import { useFindingDraftStore } from "./useFindingDraftStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
 import { findingTypeForStatus } from "../lib/findingClassification";
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
@@ -120,6 +120,26 @@ function stripFindingBackPointers<R extends { savedFindingId?: string }, T exten
       return [
         k,
         { ...v, rows: v.rows.map((r) => (r.savedFindingId && shouldClear(r.savedFindingId) ? { ...r, savedFindingId: undefined } : r)) },
+      ];
+    })
+  );
+  return changed ? out : record;
+}
+
+// Same sweep for PPD contradiction back-pointers (they live on the result,
+// not on rows).
+function stripContradictionBackPointers(
+  record: Record<string, PPDReviewResult>,
+  shouldClear: (findingId: string) => boolean
+): Record<string, PPDReviewResult> {
+  let changed = false;
+  const out = Object.fromEntries(
+    Object.entries(record).map(([k, v]) => {
+      if (!v.contradictions?.some((c) => c.savedFindingId && shouldClear(c.savedFindingId))) return [k, v];
+      changed = true;
+      return [
+        k,
+        { ...v, contradictions: v.contradictions.map((c) => (c.savedFindingId && shouldClear(c.savedFindingId) ? { ...c, savedFindingId: undefined } : c)) },
       ];
     })
   );
@@ -711,7 +731,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const runAbort = new AbortController();
         _currentRunAbort = runAbort;
 
-        const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[]) => {
+        const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[], contradictions?: PPDContradiction[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           // Sub-criterion roll-up, derived deterministically from the rows.
           // "Not assessed" lines (stopped/failed before review) are counted
@@ -754,7 +774,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
           set((st) => ({
             ppdReviewResults: rows
-              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings } }
+              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions } }
               : st.ppdReviewResults,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
             busy: null,
@@ -847,7 +867,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const liveError = result.windowErrors?.length
             ? `${result.windowErrors.length} AI call(s) failed during the review — results may be incomplete. First error: ${result.windowErrors[0]}`
             : undefined;
-          finish(result.rows, true, liveError, result.promptSent, result.usage, chunkFileNames, result.overallNarrative, runWarnings.length > 0 ? runWarnings : undefined);
+          finish(result.rows, true, liveError, result.promptSent, result.usage, chunkFileNames, result.overallNarrative, runWarnings.length > 0 ? runWarnings : undefined, result.contradictions);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
         }
@@ -1047,6 +1067,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             requirementText: r.requirementText,
             ppdVerdict: r.verdict,
             ppdExtract: r.fullComment || r.shortComment || "",
+            // Technique 3: the promises the PPD review extracted become named
+            // checks the evidence assessment must verify one by one.
+            promises: r.promises,
           }));
           const result = await runEvidenceAssessment(inputs, evidenceDocText, analysisSettings, {
             criterionId: subCriterionId,
@@ -1079,6 +1102,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               verdict: ev?.verdict ?? "Not met",
               comment: ev?.comment || "",
               assessmentFailed: ev?.failed,
+              promiseChecks: ev?.promiseChecks,
             };
           });
           finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames);
@@ -1209,6 +1233,69 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         });
         if (changed) {
           set((st) => ({ evidenceAssessments: { ...st.evidenceAssessments, [subCriterionId]: { ...result, rows } } }));
+        }
+
+        // Technique 2 compile: each PPD internal contradiction raises its own
+        // finding (OFI, or NC-Minor when it involves a gate-sensitive item's
+        // sub-criterion). Dedupe via the same composite-key mechanism, with a
+        // stable synthetic ref per contradiction.
+        const ppd = get().ppdReviewResults[subCriterionId];
+        if (ppd?.contradictions?.length) {
+          const subItems = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId);
+          const anchorItem = subItems[0];
+          if (anchorItem) {
+            const gateSensitive = subItems.some((r) => r.gateSensitive);
+            let contraChanged = false;
+            const updated = ppd.contradictions.map((c, i) => {
+              if (c.savedFindingId) return c;
+              const ref = `${subCriterionId}.CONTRA${i + 1}`;
+              const key = findingDedupeKey(anchorItem.id, ref, gateSensitive ? "NC" : "OFI");
+              if (key && existingByKey.has(key)) {
+                contraChanged = true;
+                return { ...c, savedFindingId: existingByKey.get(key) };
+              }
+              const finding: Finding = {
+                id: `EV-${Date.now().toString(36).toUpperCase()}-CONTRA${i + 1}`,
+                auditCycleId: s.cycle.id,
+                gd4ItemId: anchorItem.id,
+                issue: `GD4 ${subCriterionId} — internal PPD contradiction: ${c.description.slice(0, 140)}`,
+                type: "AFI",
+                severity: gateSensitive ? "High" : "Medium",
+                owner: "SQ",
+                dueDate: "",
+                repeatFinding: false,
+                overdue: false,
+                managementDecisionNeeded: false,
+                status: "Open",
+                source: "PPD Review",
+                createdAt: new Date().toISOString(),
+                dimension: "Procedure",
+                riskCategory: gateSensitive ? "B" : "C",
+                clause: ref,
+                observation: `${c.description}\n\nPassage A: ${c.quoteA}${c.chunkA ? ` (${c.chunkA})` : ""}\nPassage B: ${c.quoteB}${c.chunkB ? ` (${c.chunkB})` : ""}`,
+                criteria: `The PPD must state one consistent procedure/value for each obligation under GD4 ${subCriterionId}. Two conflicting statements cannot both be followed, so the documented approach is not sustainable.`,
+                effect: "An internally contradictory PPD cannot be consistently implemented or audited — staff cannot know which stated value governs, and an SSG assessor will treat the approach as not sustainably documented.",
+                rootCause: "The PPD sections were drafted or revised independently without a consolidation review, so conflicting values for the same process were never reconciled.",
+                corrective: `Reconcile the two passages: decide the correct value, amend both PPD sections to state it identically, and re-approve the document. ${c.chunkA || c.chunkB ? `Affected passages: ${[c.chunkA, c.chunkB].filter(Boolean).join(", ")}.` : ""}`,
+                preventive: "Add a consistency check to the PPD review checklist (all timelines/values for the same process cross-checked) before each re-approval.",
+                findingType: gateSensitive ? "NC" : "OFI",
+                ncSeverity: gateSensitive ? "Minor" : null,
+                linkedSourceRefs: [ref],
+              };
+              get().addCustomFinding(finding);
+              get().seedClosure(finding.id, { root: finding.rootCause, corr: finding.corrective, prev: finding.preventive });
+              if (key) existingByKey.set(key, finding.id);
+              raised++;
+              contraChanged = true;
+              return { ...c, savedFindingId: finding.id };
+            });
+            if (contraChanged) {
+              set((st) => {
+                const cur = st.ppdReviewResults[subCriterionId];
+                return cur ? { ppdReviewResults: { ...st.ppdReviewResults, [subCriterionId]: { ...cur, contradictions: updated } } } : {};
+              });
+            }
+          }
         }
         return raised;
       },
@@ -3960,6 +4047,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             customFindings: s.customFindings.filter((f) => f.id !== id),
             closures: remainingClosures,
             evidenceAssessments: stripFindingBackPointers(s.evidenceAssessments, (fid) => fid === id),
+            ppdReviewResults: stripContradictionBackPointers(s.ppdReviewResults, (fid) => fid === id),
           };
         });
         useChecklistModuleStore.getState().clearSavedFindingId(id);
@@ -3974,6 +4062,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           seedFindingsLoaded: false,
           // Same back-pointer sweep as removeCustomFinding, for every id.
           evidenceAssessments: stripFindingBackPointers(s.evidenceAssessments, () => true),
+          ppdReviewResults: stripContradictionBackPointers(s.ppdReviewResults, () => true),
         }));
         const cs = useChecklistModuleStore.getState();
         ids.forEach((id) => cs.clearSavedFindingId(id));
