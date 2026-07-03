@@ -18,7 +18,7 @@ Validate GD4 data integrity (35 items, flatAuditPoints consistency): `npm run va
 
 ## Git workflow
 
-Development branch: `claude/prototype-development-y5nqqi`. Commit directly there; the user does `git pull` to pick up changes. Never push to `main` without explicit instruction.
+All work happens directly on `main`: commit there and push with `git push -u origin main`; the user does `git pull` on `main` to pick up changes. The user has given standing permission to push to `main` (2026-07-03) — no per-push confirmation needed. The old dev branch `claude/prototype-development-y5nqqi` is retired; do not commit to it.
 
 ## Architecture
 
