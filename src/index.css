@@ -108,3 +108,27 @@ textarea:focus {
     page-break-inside: avoid;
   }
 }
+
+/* Evidence Folder card: two internal columns (Links+Path | Progress+Action)
+   side by side on desktop, stacking to a single column on narrow widths so
+   nothing is cramped and the card is about half the previous height. */
+.ef-card-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 16px;
+  row-gap: 2px;
+}
+.ef-card-cols > .ef-col-right {
+  border-left: 1px solid #f1f5f9;
+  padding-left: 16px;
+}
+@media (max-width: 720px) {
+  .ef-card-cols { grid-template-columns: 1fr; }
+  .ef-card-cols > .ef-col-right {
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid #f1f5f9;
+    padding-top: 4px;
+    margin-top: 2px;
+  }
+}

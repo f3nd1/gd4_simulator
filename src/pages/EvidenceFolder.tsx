@@ -2119,8 +2119,11 @@ export function EvidenceFolder() {
                 </span>
               </div>
 
+              <div className="ef-card-cols" style={{ padding: "2px 12px 8px 30px" }}>
+              {/* LEFT COLUMN — the setup choices: Links + Path */}
+              <div className="ef-col-left">
               {/* Links: compact chips; inputs appear only while editing */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "0 12px 6px 30px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "3px 0" }}>
                 <span style={rowLabel}>Links</span>
                 {linkChip("policy")}
                 {linkChip("evidence")}
@@ -2128,7 +2131,7 @@ export function EvidenceFolder() {
                 {f.folderLink && <a href={f.folderLink} target="_blank" rel="noreferrer" title="Open the Evidence folder in Drive" style={{ fontSize: 11, color: "#16a34a", textDecoration: "none" }}>Evidence ↗</a>}
               </div>
               {linksEditing && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: "0 12px 8px 30px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: "0 0 6px" }}>
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                     <span style={{ fontSize: 10, fontWeight: 700, color: "#3b82f6", minWidth: 58, textTransform: "uppercase", letterSpacing: 0.3 }}>Policy</span>
                     <input
@@ -2156,7 +2159,7 @@ export function EvidenceFolder() {
               )}
 
               {/* Path: compact A/B chips + Option A sub-steps */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "0 12px 6px 30px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "3px 0" }}>
                 <span style={rowLabel}>Path</span>
                 <button
                   onClick={() => setAnalysisPath(f.subCriterionId, "A")}
@@ -2190,8 +2193,11 @@ export function EvidenceFolder() {
                 )}
               </div>
 
+              </div>
+              {/* RIGHT COLUMN — status + what to do: Progress + Action */}
+              <div className="ef-col-right">
               {/* Progress: completion chips */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "0 12px 6px 30px" }} title={tip("Completion summary for this sub-criterion: PPD review run, evidence assessed, findings raised, checklist band")}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "3px 0" }} title={tip("Completion summary for this sub-criterion: PPD review run, evidence assessed, findings raised, checklist band")}>
                 <span style={rowLabel}>Progress</span>
                 {prog ? (
                   <>
@@ -2206,7 +2212,7 @@ export function EvidenceFolder() {
               </div>
 
               {/* Action: one short primary + Last run + overflow */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "2px 12px 10px 30px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "3px 0" }}>
                 <span style={rowLabel}>Action</span>
                 {isBusy ? (
                   <>
@@ -2295,6 +2301,9 @@ export function EvidenceFolder() {
                   </>
                 )}
               </div>
+
+              </div>{/* /right column */}
+              </div>{/* /ef-card-cols */}
 
               {/* Expandable detail: same-folder warning + access notes + audit result */}
               {rowExpanded && f.policyLink && f.folderLink && f.policyLink === f.folderLink && (
