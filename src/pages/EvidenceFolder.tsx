@@ -2074,7 +2074,7 @@ export function EvidenceFolder() {
             <div
               key={f.id}
               ref={(el) => { rowRefs.current[f.subCriterionId] = el; }}
-              style={{ border: "1px solid #e2e8f0", borderLeft: "4px solid #7c3aed", borderRadius: 10, background: "#fff", maxWidth: "100%", overflow: "hidden" }}
+              style={{ border: "1px solid #e2e8f0", borderLeft: "4px solid #7c3aed", borderRadius: 10, background: "#fff", maxWidth: "100%" }}
             >
               {/* Header: name (click to expand details) + Status/Owner chips */}
               <div
@@ -2082,7 +2082,7 @@ export function EvidenceFolder() {
                 title={rowExpanded ? "Collapse access/audit details" : "Expand access/audit details"}
                 style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "9px 12px 6px", cursor: "pointer" }}
               >
-                <span style={{ color: "#94a3b8", fontSize: 11, flexShrink: 0, transition: "transform 0.15s", transform: rowExpanded ? "rotate(90deg)" : "none" }}>▸</span>
+                <span style={{ color: "#64748b", fontSize: 17, lineHeight: 1, flexShrink: 0, transition: "transform 0.15s", transform: rowExpanded ? "rotate(90deg)" : "none" }}>▸</span>
                 <b style={{ fontSize: 13 }}>{f.folderName}</b>
                 <span style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }} onClick={(e) => e.stopPropagation()}>
                   {editingField?.id === f.id && editingField.field === "status" ? (
