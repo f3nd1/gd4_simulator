@@ -10,6 +10,7 @@ import { Pill } from "../components/ui/Pill";
 import { BLUE, TONE } from "../lib/theme";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { resolveFindingType, findingTypeTone } from "../lib/findingClassification";
+import { PanelReviewSection } from "../components/ui/PanelReviewSection";
 
 export function AFIClosure() {
   const closures = useWorkspaceStore((s) => s.closures);
@@ -146,6 +147,7 @@ export function AFIClosure() {
                     </Link>
                   ) : null}
                 </div>
+                <PanelReviewSection finding={f} />
                 {([
                   ["root", "Root cause (yours)"],
                   ["corr", "Corrective action"],

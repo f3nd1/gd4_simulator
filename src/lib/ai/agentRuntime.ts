@@ -11,6 +11,8 @@ import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, 
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
 import { buildSystemPrompt, buildDomainBlock, type SkillCalibrationExample, type SkillCalibrationMemory } from "./skills";
 import { domainExpertiseFor } from "../../data/skills/domainExpertise";
+import type { AuditorProfile, PanelAuditorReview, PanelReviewResult, PanelSynthesis } from "../../types";
+import { perspectiveOf, perspectiveLabel, perspectiveGuidance } from "../reviewPanel";
 
 export { AIClientError };
 
@@ -393,6 +395,135 @@ const BATCH_DOC_CAP = 60_000;
 // while still being short enough for the 1-retry strategy to recover transient
 // slowdowns within a tolerable wall-clock window.
 const AUDIT_BATCH_TIMEOUT_MS = 90_000;
+
+// ─── Auditor Review Panel ─────────────────────────────────────────────────────
+// A panel of the user's own auditor profiles reviews one finding from their
+// assigned perspectives, then a synthesis call combines them into one balanced
+// conclusion that fills the closure scaffold. Reuses the base auditor skills +
+// criterion skill; each call is logged to the AI Debug Log via buildSystemPrompt.
+
+export type PanelFindingInput = {
+  issue: string;
+  gd4ItemId: string;
+  clause?: string;
+  observation?: string;
+  criteria?: string;
+  evidenceStatusSummary?: string;
+  findingTypeLabel?: string;   // e.g. "NC (Major)"
+  // Raw source text (evidence/PPD) if available, for quote verification.
+  sourceText?: string;
+  // The stable hash the store computed for cache invalidation.
+  findingHash: string;
+};
+
+function strictnessWordFrom(n: number): "lenient" | "standard" | "strict" {
+  return n >= 78 ? "strict" : n <= 45 ? "lenient" : "standard";
+}
+
+export async function runAuditorPanel(
+  finding: PanelFindingInput,
+  panel: AuditorProfile[],
+  settings: AISettings,
+  opts: { onProgress?: (detail: string) => void; signal?: AbortSignal; onUsage?: (u: AIUsage) => void } = {}
+): Promise<PanelReviewResult> {
+  const criterionId = finding.gd4ItemId;
+  const domainSkill = domainExpertiseFor(criterionId);
+  const domainBlock = buildDomainBlock(domainSkill);
+  const findingBlock = [
+    `Finding (GD4 ${finding.gd4ItemId}${finding.clause ? `, clause ${finding.clause}` : ""}): ${finding.issue}`,
+    finding.findingTypeLabel ? `Current classification: ${finding.findingTypeLabel}` : "",
+    finding.observation ? `Observation:\n${finding.observation}` : "",
+    finding.criteria ? `What GD4 requires:\n${finding.criteria}` : "",
+    finding.evidenceStatusSummary ? `Available / missing evidence:\n${finding.evidenceStatusSummary}` : "",
+  ].filter(Boolean).join("\n\n");
+  const verifyAgainst = [finding.sourceText, finding.observation, finding.criteria, finding.evidenceStatusSummary].filter(Boolean).join("\n");
+
+  const warnings: string[] = [];
+  const reviews: PanelAuditorReview[] = [];
+
+  // One review call per panellist. A failed call is noted and skipped — the
+  // synthesis proceeds from whoever succeeded, so one bad call never hangs
+  // or aborts the panel.
+  for (const auditor of panel) {
+    if (opts.signal?.aborted) { warnings.push("Panel review cancelled before all auditors were consulted."); break; }
+    const perspective = perspectiveOf(auditor);
+    const label = perspectiveLabel(perspective);
+    opts.onProgress?.(`${auditor.name} reviewing as ${label}…`);
+    const strictness = strictnessWordFrom(auditor.strictness);
+    const system = `You are ${auditor.name}, ${auditor.role || "an auditor"} on a GD4 EduTrust review panel${auditor.focusArea ? `, specialising in ${auditor.focusArea}` : ""}. You are reviewing ONE audit finding through a specific lens.
+
+REVIEW PERSPECTIVE — ${label}: ${perspectiveGuidance(perspective)}
+
+Apply a ${strictness} standard. Review the finding ONLY through your perspective above — do not try to cover every angle; the panel's other members cover theirs. Base every point on the finding text and the stated evidence; do not invent documents or quote anything not present. Use neutral, factual language (state what exists or is absent; do not use praise words). Keep it to 3-6 sentences.
+
+Respond with JSON only: {"analysis": string}.${buildSystemPrompt("findingWriter", null, `runAuditorPanel · ${auditor.name} (${label})`, criterionId, domainSkill)}${domainBlock}`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: system }, { role: "user", content: findingBlock }],
+        settings,
+        { temperature: 0.35, onUsage: opts.onUsage, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+      );
+      const parsed = parseJSONObject(content);
+      const analysisRaw = typeof parsed.analysis === "string" && parsed.analysis.trim() ? parsed.analysis.trim() : content.trim();
+      const analysis = verifyAgainst ? flagUnverifiedQuotes(analysisRaw, verifyAgainst) : analysisRaw;
+      reviews.push({ auditorId: auditor.id, auditorName: auditor.name, perspective, perspectiveLabel: label, analysis });
+    } catch (err) {
+      if (opts.signal?.aborted) { warnings.push("Panel review cancelled mid-run."); break; }
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`${auditor.name} (${label}) review failed — ${msg}. Synthesised from the remaining panellists.`);
+      reviews.push({ auditorId: auditor.id, auditorName: auditor.name, perspective, perspectiveLabel: label, analysis: "", failed: true, error: msg });
+    }
+  }
+
+  const usable = reviews.filter((r) => !r.failed && r.analysis);
+  const emptySynthesis: PanelSynthesis = {
+    summary: "The panel could not be synthesised — every panellist review failed. Re-run the panel once the AI connection is restored.",
+    riskImpact: "", rootCause: "", immediateCorrection: "", correctiveAction: "", evidenceForClosure: "", finalClassification: "",
+  };
+
+  let synthesis = emptySynthesis;
+  if (usable.length > 0 && !opts.signal?.aborted) {
+    opts.onProgress?.("Synthesising the panel's conclusion…");
+    const panelDigest = usable.map((r) => `[${r.auditorName} — ${r.perspectiveLabel}]\n${r.analysis}`).join("\n\n");
+    const synthSystem = `You are the chair of a GD4 EduTrust audit review panel. You are given several panellists' individual reviews of ONE finding, each from a different perspective (strict auditor, process owner, risk challenger, academic/QA guardian, management reviewer). Combine them into ONE balanced, evidence-based conclusion — reconcile disagreement, do not overstate, and do not simply repeat each panellist.
+
+The ROOT CAUSE must name a SYSTEM or PROCESS cause (a governance, documentation, training, data-collection or review gap) — never "human error", "forgot", "poor communication" or blame of an individual.
+
+Respond with JSON only, all fields plain text:
+{"summary": "Balanced Finding Summary", "riskImpact": "Risk / Impact", "rootCause": "system/process root cause", "immediateCorrection": "Immediate Correction", "correctiveAction": "Corrective Action", "evidenceForClosure": "Evidence Required for Closure", "finalClassification": "one of NC / Observation / OFI / CAR / improvement, with a brief justification and no overstatement"}.${buildSystemPrompt("afiClosure", null, "runAuditorPanel · synthesis", criterionId, domainSkill)}${domainBlock}`;
+    const synthUser = `The finding under review:\n${findingBlock}\n\nPanellists' reviews:\n${panelDigest}\n\nWrite the panel's combined conclusion.`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: synthSystem }, { role: "user", content: synthUser }],
+        settings,
+        { temperature: 0.3, onUsage: opts.onUsage, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+      );
+      const p = parseJSONObject(content);
+      const s = (k: string) => (typeof p[k] === "string" ? (p[k] as string).trim() : "");
+      const vq = (t: string) => (verifyAgainst && t ? flagUnverifiedQuotes(t, verifyAgainst) : t);
+      synthesis = {
+        summary: vq(s("summary")) || emptySynthesis.summary,
+        riskImpact: vq(s("riskImpact")),
+        rootCause: vq(s("rootCause")),
+        immediateCorrection: vq(s("immediateCorrection")),
+        correctiveAction: vq(s("correctiveAction")),
+        evidenceForClosure: vq(s("evidenceForClosure")),
+        finalClassification: s("finalClassification"),
+      };
+    } catch (err) {
+      if (!opts.signal?.aborted) warnings.push(`Synthesis call failed — ${err instanceof Error ? err.message : String(err)}. Showing the individual reviews only.`);
+    }
+  }
+
+  return {
+    reviews,
+    synthesis,
+    runAt: new Date().toISOString(),
+    live: true,
+    runWarnings: warnings.length > 0 ? warnings : undefined,
+    findingHash: finding.findingHash,
+  };
+}
 
 // Retry once on timeout or 5xx before giving up on a batch. A single retry
 // with a short backoff handles transient API slowdowns without hanging the

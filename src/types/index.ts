@@ -40,6 +40,15 @@ export type Department = {
 
 export type AuditorType = "Internal" | "External" | "AI Agent";
 
+// One of five fixed review lenses an auditor profile can carry, injected on
+// top of their strictness + specialist focus when they sit on a review panel.
+export type ReviewPerspective =
+  | "strict-auditor"
+  | "optimistic-process-owner"
+  | "risk-challenger"
+  | "academic-qa-guardian"
+  | "management-reviewer";
+
 export type AuditorProfile = {
   id: string;
   auditCycleId: string;
@@ -50,6 +59,47 @@ export type AuditorProfile = {
   strictness: number;
   focusArea: string;
   checklistTemplateId: string;
+  // The lens this auditor brings to a panel review (default strict-auditor).
+  reviewPerspective?: ReviewPerspective;
+};
+
+// How the review panel is triggered (cycle-level, Settings).
+export type PanelReviewMode = "off" | "on-demand" | "nc-major-auto" | "all";
+
+// One panellist's individual review of a finding.
+export type PanelAuditorReview = {
+  auditorId: string;
+  auditorName: string;
+  perspective: ReviewPerspective;
+  perspectiveLabel: string;
+  analysis: string;
+  failed?: boolean;
+  error?: string;
+};
+
+// The synthesised conclusion combining all panellists, structured to fill the
+// existing Quality Action / AFI closure scaffold.
+export type PanelSynthesis = {
+  summary: string;              // Balanced Finding Summary
+  riskImpact: string;           // Risk / Impact
+  rootCause: string;            // system/process cause (not "human error")
+  immediateCorrection: string;  // Immediate Correction
+  correctiveAction: string;     // Corrective Action
+  evidenceForClosure: string;   // Evidence Required for Closure
+  finalClassification: string;  // NC/Observation/OFI/CAR/improvement + justification
+};
+
+export type PanelReviewResult = {
+  reviews: PanelAuditorReview[];
+  synthesis: PanelSynthesis;
+  runAt: string;
+  live: boolean;
+  // Non-fatal issues (a panellist call failed, quote flags) so a partial
+  // panel never presents as a clean run.
+  runWarnings?: string[];
+  // Stable hash of the finding text this review ran against — lets the UI
+  // offer a re-run when the finding has since changed.
+  findingHash: string;
 };
 
 export type GD4SubCriterion = {
@@ -210,6 +260,10 @@ export type Finding = {
   groupedFindingId?: string;
   createdFromAuditRunId?: string;
   createdAt?: string;
+  // Cached multi-auditor panel review (Part 3) — synthesised conclusion +
+  // each panellist's individual analysis. Re-run only on change or explicit
+  // request (compare panelReview.findingHash).
+  panelReview?: PanelReviewResult;
 };
 
 // Two-layer sub-criterion checklist module: a generic 4-line maturity check
@@ -1090,6 +1144,8 @@ export type WorkspaceSnapshot = {
   evidenceAssessments?: Record<string, EvidenceAssessmentResult>;
   analysisPath?: Record<string, "A" | "B">;
   auditMode?: AuditMode;
+  reviewPanelAuditorIds?: string[];
+  reviewPanelMode?: PanelReviewMode;
   auditRunHistory?: Record<string, AuditRunRecord[]>;
 };
 

@@ -40,7 +40,7 @@ import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import type { EvidenceAuditFlag } from "../lib/evidenceAudit";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit, deriveApsrStatus, type FolderAuditLineVerdict } from "../lib/ai/simulateAI";
-import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP, runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr, simulateStagedPolicyAudit, simulateStagedEvidenceAudit, simulateStagedOutcomeReview, runPPDRequirementsReview, runEvidenceAssessment, type PPDRequirementInput, type EvidenceAssessmentInput } from "../lib/ai/agentRuntime";
+import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP, runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr, simulateStagedPolicyAudit, simulateStagedEvidenceAudit, simulateStagedOutcomeReview, runPPDRequirementsReview, runEvidenceAssessment, runAuditorPanel, type PPDRequirementInput, type EvidenceAssessmentInput } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useAgentMemoryStore } from "./useAgentMemoryStore";
@@ -51,8 +51,30 @@ import { useFindingDraftStore } from "./useFindingDraftStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
-import { findingTypeForStatus } from "../lib/findingClassification";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
+import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
+import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
+
+// Sequential auto-run queue for the review panel (auto modes). Findings are
+// drained one at a time, and only while the store is otherwise idle, so a
+// bulk finding-raise never fires dozens of concurrent AI panels.
+const _panelAutoQueue: string[] = [];
+let _panelAutoDraining = false;
+function enqueuePanelAutoRun(findingId: string, getRunner: () => (id: string, opts?: { force?: boolean }) => Promise<void>, getBusy: () => string | null) {
+  if (!_panelAutoQueue.includes(findingId)) _panelAutoQueue.push(findingId);
+  if (_panelAutoDraining) return;
+  _panelAutoDraining = true;
+  const drain = async () => {
+    while (_panelAutoQueue.length > 0) {
+      // Wait out any in-flight audit/panel so we never contend on busy.
+      if (getBusy()) { await new Promise((r) => setTimeout(r, 400)); continue; }
+      const id = _panelAutoQueue.shift()!;
+      try { await getRunner()(id); } catch { /* runner already logs; keep draining */ }
+    }
+    _panelAutoDraining = false;
+  };
+  void drain();
+}
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { buildOptionALineWrites } from "../lib/optionAChecklistWrite";
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
@@ -412,6 +434,18 @@ export type WorkspaceState = {
   // results commit and whether the human is prompted — see lib/runModes.ts.
   auditMode: AuditMode;
   setAuditMode: (mode: AuditMode) => void;
+
+  // Auditor review panel: which auditor profiles (2-5) sit on the panel, how
+  // it is triggered, and the per-finding run. Panel results cache on the
+  // finding (Finding.panelReview); busy id is `panel:<findingId>`.
+  reviewPanelAuditorIds: string[];
+  setReviewPanelAuditorIds: (ids: string[]) => void;
+  reviewPanelMode: PanelReviewMode;
+  setReviewPanelMode: (mode: PanelReviewMode) => void;
+  // Runs the panel on one finding (per-auditor reviews + synthesis), caches
+  // the result on the finding and seeds the closure scaffold from the
+  // synthesis. force re-runs even if a cached review matches.
+  runFindingPanelReview: (findingId: string, opts?: { force?: boolean }) => Promise<void>;
   // Full-auto sweep: audits every sub-criterion end to end (respecting each
   // row's Option A/B choice); folders with no links are marked "Not assessed
   // / no evidence" rather than silently skipped. Progress drives the
@@ -731,6 +765,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       ppdReviewProgress: null,
       analysisPath: {},
       auditMode: DEFAULT_AUDIT_MODE,
+      reviewPanelAuditorIds: [],
+      reviewPanelMode: "on-demand",
       fullAuditProgress: null,
       pendingCommits: {},
       changeLog: [],
@@ -1425,6 +1461,76 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setAuditMode: (mode) => set({ auditMode: mode }),
 
+      setReviewPanelAuditorIds: (ids) => set({ reviewPanelAuditorIds: ids.slice(0, MAX_PANEL) }),
+      setReviewPanelMode: (mode) => set({ reviewPanelMode: mode }),
+
+      runFindingPanelReview: async (findingId, opts) => {
+        const finding = get().customFindings.find((f) => f.id === findingId);
+        if (!finding) return;
+        if (get().reviewPanelMode === "off") return; // panel disabled
+        const panel = assemblePanel(get().auditors, get().reviewPanelAuditorIds);
+        if (panel.length < MIN_PANEL) return; // need a valid 2-5 panel
+        const hash = findingReviewHash(finding);
+        // Cache: skip if a review already ran against this exact finding text.
+        if (!opts?.force && finding.panelReview && finding.panelReview.findingHash === hash) return;
+
+        const aiSettings = useAISettingsStore.getState();
+        if (!aiSettings.enabled || !aiSettings.apiKey) return;
+        const runAbort = new AbortController();
+        _currentRunAbort = runAbort;
+        set({ busy: "panel:" + findingId });
+        const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
+
+        try {
+          const result = await runAuditorPanel(
+            {
+              issue: finding.issue,
+              gd4ItemId: finding.gd4ItemId,
+              clause: finding.clause,
+              observation: finding.observation,
+              criteria: finding.criteria,
+              evidenceStatusSummary: finding.evidenceStatusSummary,
+              findingTypeLabel: (() => {
+                const t = resolveFindingType(finding);
+                const sev = resolveNcSeverity(finding);
+                return sev ? `${t} (${sev})` : t;
+              })(),
+              findingHash: hash,
+            },
+            panel,
+            analysisSettings,
+            { signal: runAbort.signal },
+          );
+          if (_currentRunAbort === runAbort) _currentRunAbort = null;
+          // Cache on the finding.
+          get().updateCustomFinding(findingId, { panelReview: result });
+          // Feed the synthesis into the existing closure scaffold (only fills
+          // blanks — seedClosure never clobbers the user's own text).
+          const syn = result.synthesis;
+          get().seedClosure(findingId, {
+            root: syn.rootCause || undefined,
+            corr: [syn.immediateCorrection, syn.correctiveAction].filter(Boolean).join("\n\n") || undefined,
+            prev: syn.evidenceForClosure || undefined,
+          });
+          get().pushAIReviewLog({
+            agent: "Auditor Review Panel",
+            reviewType: "Closure",
+            subjectId: finding.gd4ItemId,
+            verdict: syn.finalClassification || "Panel reviewed",
+            confidence: "Medium",
+            keyConcerns: [syn.summary || `Panel of ${panel.length} auditor(s) reviewed this finding.`],
+            recommendedAction: "Review the synthesised conclusion and each panellist's view in the Findings / Quality Action panel.",
+            live: true,
+            generatedContent: `RISK/IMPACT:\n${syn.riskImpact}\n\nROOT CAUSE:\n${syn.rootCause}\n\nCORRECTIVE:\n${syn.correctiveAction}\n\nEVIDENCE FOR CLOSURE:\n${syn.evidenceForClosure}\n\nFINAL CLASSIFICATION:\n${syn.finalClassification}`,
+          });
+        } catch (err) {
+          console.error("[AuditorPanel] failed", err instanceof Error ? err.message : String(err));
+        } finally {
+          if (_currentRunAbort === runAbort) _currentRunAbort = null;
+          if (get().busy === "panel:" + findingId) set({ busy: null });
+        }
+      },
+
       dismissFullAuditProgress: () => set({ fullAuditProgress: null }),
 
       runFullAudit: async () => {
@@ -1657,6 +1763,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             evidenceAssessments: s.evidenceAssessments,
             analysisPath: s.analysisPath,
             auditMode: s.auditMode,
+            reviewPanelAuditorIds: s.reviewPanelAuditorIds,
+            reviewPanelMode: s.reviewPanelMode,
             auditRunHistory: s.auditRunHistory,
           };
           const entry: VersionEntry = {
@@ -1723,6 +1831,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             evidenceAssessments: snap.evidenceAssessments ?? {},
             analysisPath: snap.analysisPath ?? {},
             auditMode: snap.auditMode ?? DEFAULT_AUDIT_MODE,
+            reviewPanelAuditorIds: snap.reviewPanelAuditorIds ?? [],
+            reviewPanelMode: snap.reviewPanelMode ?? "on-demand",
             auditRunHistory: snap.auditRunHistory ?? {},
             // Derived from the restored history: latest run per folder.
             lastAuditRuns: Object.fromEntries(
@@ -1765,6 +1875,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             evidenceAssessments: s.evidenceAssessments,
             analysisPath: s.analysisPath,
             auditMode: s.auditMode,
+            reviewPanelAuditorIds: s.reviewPanelAuditorIds,
+            reviewPanelMode: s.reviewPanelMode,
             auditRunHistory: s.auditRunHistory,
           };
           const entry: VersionEntry = {
@@ -4371,7 +4483,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       addExportLogEntry: (e) => set((s) => ({ exportLog: [e, ...s.exportLog].slice(0, 100) })),
 
-      addCustomFinding: (f) => set((s) => ({ customFindings: [...s.customFindings, f] })),
+      addCustomFinding: (f) => {
+        set((s) => ({ customFindings: [...s.customFindings, f] }));
+        // Auto-run the review panel for eligible findings under the auto
+        // modes. Queued and drained ONE at a time while the store is idle, so
+        // a bulk raise (staged audit) never launches dozens of runs at once.
+        if (shouldAutoRunPanel(get().reviewPanelMode, f) && isValidPanel(get().auditors, get().reviewPanelAuditorIds)) {
+          enqueuePanelAutoRun(f.id, () => get().runFindingPanelReview, () => get().busy);
+        }
+      },
 
       updateCustomFinding: (id, patch) =>
         set((s) => ({ customFindings: s.customFindings.map((f) => (f.id === id ? { ...f, ...patch } : f)) })),

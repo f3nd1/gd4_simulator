@@ -7,6 +7,8 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import { useGuidanceStore } from "../store/useGuidanceStore";
+import { assemblePanel, isValidPanel, panelCostEstimate, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
+import type { PanelReviewMode } from "../types";
 import { getSupabaseClient, getSupabaseConfig } from "../lib/supabaseClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -53,6 +55,55 @@ function GuidanceToggle() {
         When on, the app shows a "what to do now" banner on the main workflow pages, tooltips on key controls, and a
         short first-time walkthrough on Start Audit and Evidence Folder. Turn it off once you know your way around.
       </p>
+    </div>
+  );
+}
+
+// Cycle-level trigger for the auditor review panel + a scaled cost warning.
+const PANEL_MODES: Array<{ value: PanelReviewMode; label: string; desc: string; heavy?: boolean }> = [
+  { value: "off", label: "Off", desc: "No panel. The existing single-pass finding writer is used." },
+  { value: "on-demand", label: "On-demand only", desc: "A 'Panel review' button on each finding runs the panel when you click it." },
+  { value: "nc-major-auto", label: "Auto for NC / Major only", desc: "The panel runs automatically for NC / Major findings; on-demand for the rest.", heavy: true },
+  { value: "all", label: "Auto for all findings", desc: "The panel runs on every finding.", heavy: true },
+];
+
+function PanelModeSettings() {
+  const mode = useWorkspaceStore((s) => s.reviewPanelMode);
+  const setMode = useWorkspaceStore((s) => s.setReviewPanelMode);
+  const panelIds = useWorkspaceStore((s) => s.reviewPanelAuditorIds);
+  const auditors = useWorkspaceStore((s) => s.auditors);
+  const findingCount = useWorkspaceStore((s) => s.customFindings.length);
+  const panelSize = assemblePanel(auditors, panelIds).length;
+  const cost = panelCostEstimate(panelSize || MIN_PANEL, findingCount || 35);
+  const validPanel = isValidPanel(auditors, panelIds);
+
+  return (
+    <div>
+      <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
+        A panel of your auditor profiles reviews each finding from their assigned perspectives, then combines into one
+        balanced, evidence-based conclusion. Choose the panel members on the <a href="#/auditors" style={{ color: "#2563eb" }}>Auditor Creation</a> page.
+      </p>
+      {!validPanel && mode !== "off" && (
+        <div style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 11px", marginBottom: 8 }}>
+          ⚠ No valid panel yet — select {MIN_PANEL} to {MAX_PANEL} auditors on Auditor Creation for panel reviews to run.
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {PANEL_MODES.map((m) => (
+          <label key={m.value} style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer", fontSize: 12.5, padding: "6px 9px", borderRadius: 8, border: `1px solid ${mode === m.value ? "#7c3aed" : "#e2e8f0"}`, background: mode === m.value ? "#faf5ff" : "#fff" }}>
+            <input type="radio" name="panel-mode" checked={mode === m.value} onChange={() => setMode(m.value)} style={{ marginTop: 2 }} />
+            <span>
+              <b>{m.label}</b>{m.value === "on-demand" ? " (default)" : ""}
+              <div style={{ color: "#6b7280", marginTop: 1 }}>{m.desc}</div>
+            </span>
+          </label>
+        ))}
+      </div>
+      {(mode === "nc-major-auto" || mode === "all") && (
+        <div style={{ fontSize: 12, color: "#9a3412", background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 8, padding: "8px 11px", marginTop: 8 }}>
+          {cost.text}
+        </div>
+      )}
     </div>
   );
 }
@@ -145,6 +196,11 @@ export function Settings() {
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Guidance</h3>
         <GuidanceToggle />
+      </Card>
+
+      <Card>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Auditor Review Panel</h3>
+        <PanelModeSettings />
       </Card>
 
       <Card>

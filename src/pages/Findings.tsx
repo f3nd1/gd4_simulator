@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useFindingDraftStore } from "../store/useFindingDraftStore";
+import { PanelReviewSection } from "../components/ui/PanelReviewSection";
 import { NextStepBanner } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
@@ -832,6 +833,7 @@ export function Findings() {
               )}
             </div>
             <FindingDetail finding={detailFinding} />
+            <PanelReviewSection finding={detailFinding} />
             <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
               <Link to="/afi-closure" style={{ fontSize: 12, color: "#15803d", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>
                 Manage closure →
