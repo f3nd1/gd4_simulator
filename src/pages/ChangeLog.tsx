@@ -1,4 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
+import { Navigate } from "react-router-dom";
+import { devToolsRedirect } from "../nav";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -19,6 +21,7 @@ type ActionFilter = "All" | "push" | "pull";
 
 export function ChangeLog() {
   const changeLog = useWorkspaceStore((s) => s.changeLog);
+  const showDeveloperTools = useWorkspaceStore((s) => s.showDeveloperTools);
   const [actionFilter, setActionFilter] = useState<ActionFilter>("All");
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -26,7 +29,7 @@ export function ChangeLog() {
   const toggle = (id: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
 
@@ -41,6 +44,11 @@ export function ChangeLog() {
 
   const pushCount = changeLog.filter((e) => e.action === "push").length;
   const pullCount = changeLog.filter((e) => e.action === "pull").length;
+
+  // Developer tools hidden → this route is inaccessible, not just unlisted.
+  // Placed after every hook so the hook order never varies between renders.
+  const redirect = devToolsRedirect(showDeveloperTools);
+  if (redirect) return <Navigate to={redirect} replace />;
 
   return (
     <Card>

@@ -94,3 +94,26 @@ export const NAV: NavGroup[] = [
     ],
   },
 ];
+
+// ── Developer-tools visibility ───────────────────────────────────────────
+// The commit footer and the Change Log page are developer/diagnostic surfaces:
+// visible by default, hideable for real users via Settings. Pure helpers so
+// the filtering and the route guard are unit-testable.
+
+export const DEFAULT_SHOW_DEVELOPER_TOOLS = true;
+export const DEVELOPER_TOOL_PATHS = ["/change-log"];
+
+// NAV with developer-only entries removed when the toggle is off. Groups that
+// end up empty are dropped entirely (no headerless stubs in the sidebar).
+export function visibleNav(showDeveloperTools: boolean): NavGroup[] {
+  if (showDeveloperTools) return NAV;
+  return NAV
+    .map((g) => ({ ...g, items: g.items.filter((i) => !DEVELOPER_TOOL_PATHS.includes(i.path)) }))
+    .filter((g) => g.items.length > 0);
+}
+
+// Where a hidden developer route should send the user ("/" = dashboard), or
+// null when the page is allowed to render.
+export function devToolsRedirect(showDeveloperTools: boolean): string | null {
+  return showDeveloperTools ? null : "/";
+}

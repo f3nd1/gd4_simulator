@@ -41,6 +41,9 @@ export function Layout() {
         <main className="px-3 sm:px-6" style={{ flex: 1, paddingTop: 18, paddingBottom: 60, maxWidth: 1180, width: "100%", margin: "0 auto" }}>
           <Outlet />
         </main>
+        {/* Recording is ALWAYS mounted — hiding the developer footer must not
+            stop change-log history accumulating in the background. */}
+        <ChangeLogRecorder />
         <GitFooter />
       </div>
     </div>
@@ -68,15 +71,15 @@ function LocalSaveErrorBanner() {
   );
 }
 
-function GitFooter() {
+// Accumulates the git info into the Change Log. Lives OUTSIDE GitFooter so
+// recording continues while the developer footer is hidden — only the UI is
+// toggleable, never the history. Only records a commit that has actually
+// been pushed (ahead === 0), since an unpushed build isn't a "push" event
+// yet; reloading/redeploying a build logs it again, and only an exact
+// double-fire within one page load is suppressed (recordChangeLogEntry).
+function ChangeLogRecorder() {
   const info = __GIT_INFO__;
   const pushed = info.ahead === 0;
-
-  // Accumulate the git info the footer shows into the Change Log. Only record
-  // a commit that has actually been pushed (ahead === 0), since an unpushed
-  // build isn't a "push" event yet. recordChangeLogEntry saves every push it
-  // sees (dev deploy history) — reloading/redeploying a build logs it again;
-  // only an exact double-fire within one page load is suppressed.
   const recordChangeLogEntry = useWorkspaceStore((s) => s.recordChangeLogEntry);
   useEffect(() => {
     if (!pushed || !info.hash || info.hash === "unknown") return;
@@ -88,8 +91,16 @@ function GitFooter() {
       commitMessage: info.message,
     });
   }, [pushed, info.hash, info.isoTime, info.branch, info.message, recordChangeLogEntry]);
+  return null;
+}
 
+function GitFooter() {
+  const showDeveloperTools = useWorkspaceStore((s) => s.showDeveloperTools);
+  const info = __GIT_INFO__;
+  const pushed = info.ahead === 0;
   const time = info.isoTime ? new Date(info.isoTime).toLocaleString("en-SG", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  // Hidden entirely for non-developer users — no empty bar, no border strip.
+  if (!showDeveloperTools) return null;
   return (
     <div style={{ fontSize: 11, color: "#aaa", padding: "4px 16px", borderTop: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 10, background: "#f9fafb" }}>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: pushed ? "#22c55e" : "#f59e0b", flexShrink: 0, display: "inline-block" }} />

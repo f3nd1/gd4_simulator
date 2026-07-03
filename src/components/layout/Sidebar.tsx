@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { NAV } from "../../nav";
+import { visibleNav } from "../../nav";
+import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { GOLD } from "../../lib/theme";
 
 type Props = { open: boolean; onClose: () => void };
 
 export function Sidebar({ open, onClose }: Props) {
   const location = useLocation();
+  const showDeveloperTools = useWorkspaceStore((s) => s.showDeveloperTools);
+  const NAV = visibleNav(showDeveloperTools);
   const activeGroup = NAV.find((g) => g.items.some((i) => i.path === location.pathname))?.group;
   // Only the section containing the current page starts expanded — collapsing
   // the rest is what actually makes a 21-page nav feel navigable instead of

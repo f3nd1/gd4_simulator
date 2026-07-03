@@ -477,6 +477,33 @@ create policy "anon read/write" on public.workspace_state
           Clear all agent memory
         </button>
       </Card>
+
+      <Card>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Developer</h3>
+        <DeveloperToolsSettings />
+      </Card>
     </div>
+  );
+}
+
+// Show/hide the developer diagnostic surfaces (commit footer bar + Change Log
+// page). Synced with the workspace (Supabase) so the choice follows the user
+// across devices; the change-log DATA keeps recording either way — only the
+// UI is hidden.
+function DeveloperToolsSettings() {
+  const show = useWorkspaceStore((s) => s.showDeveloperTools);
+  const setShow = useWorkspaceStore((s) => s.setShowDeveloperTools);
+  return (
+    <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer", fontSize: 12.5 }}>
+      <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} style={{ marginTop: 2 }} />
+      <span>
+        <b>Show developer tools (commit footer and Change Log)</b>
+        <div style={{ color: "#6b7280", marginTop: 2 }}>
+          Shows the git commit footer bar and the Change Log page. Turn off before sharing the app with
+          non-developer users. History keeps recording in the background either way — switching this back on
+          shows the full log, including entries from while it was hidden.
+        </div>
+      </span>
+    </label>
   );
 }

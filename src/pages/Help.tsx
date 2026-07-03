@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom";
 import { Card } from "../components/ui/Card";
 import { INK, GOLD } from "../lib/theme";
-import { NAV } from "../nav";
+import { visibleNav } from "../nav";
+import { useWorkspaceStore } from "../store/useWorkspaceStore";
 
 // The guide's structure (groups, order, labels, which pages exist) comes
 // straight from NAV so this page can never drift from the actual app again.
@@ -145,6 +146,8 @@ const DETAILS: Record<string, Detail> = {
 };
 
 export function Help() {
+  const showDeveloperTools = useWorkspaceStore((s) => s.showDeveloperTools);
+  const NAV = visibleNav(showDeveloperTools);
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
       <Card style={{ background: INK, color: "#fff" }}>

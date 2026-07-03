@@ -55,6 +55,7 @@ import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverage
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
 import { checkAuditorForRun } from "../lib/auditorGuard";
+import { DEFAULT_SHOW_DEVELOPER_TOOLS } from "../nav";
 
 // Sequential auto-run queue for the review panel (auto modes). Findings are
 // drained one at a time, and only while the store is otherwise idle, so a
@@ -475,6 +476,11 @@ export type WorkspaceState = {
   // (dev deploy history — no commit-hash dedupe); the plain-English summary is
   // derived from the commit message when not supplied.
   changeLog: ChangeLogEntry[];
+  // Developer/diagnostic UI visibility (commit footer + Change Log page).
+  // Synced with the workspace (Supabase) so one off switch covers every
+  // device. Hiding the UI never stops change-log entries being recorded.
+  showDeveloperTools: boolean;
+  setShowDeveloperTools: (show: boolean) => void;
   recordChangeLogEntry: (entry: Omit<ChangeLogEntry, "id" | "summary"> & { summary?: string }) => void;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
@@ -777,6 +783,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       fullAuditProgress: null,
       pendingCommits: {},
       changeLog: [],
+      showDeveloperTools: DEFAULT_SHOW_DEVELOPER_TOOLS,
+      setShowDeveloperTools: (show) => set({ showDeveloperTools: show }),
       auditJournal: "",
       restoreLog: [],
       activeAuditorId: null,
