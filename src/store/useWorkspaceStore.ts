@@ -1649,7 +1649,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               }
             : item.write;
           useChecklistModuleStore.getState().applyOptionAWrites([write]);
-          try { useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId); } catch { /* non-fatal */ }
+          try { useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId, { subCriterionId }); } catch { /* non-fatal */ }
           get().logHumanDecision({
             module: "Run mode gate",
             subjectId: item.write.gd4ItemId,
@@ -1688,7 +1688,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const run = get().pendingCommits[subCriterionId];
         if (!run || run.items.length === 0) return;
         useChecklistModuleStore.getState().applyOptionAWrites(run.items.map((i) => i.write));
-        try { useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId); } catch { /* non-fatal */ }
+        try { useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId, { subCriterionId }); } catch { /* non-fatal */ }
         get().logHumanDecision({
           module: "Run mode gate",
           subjectId: subCriterionId,
@@ -3266,7 +3266,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // dimension (procedure vs evidence) and the detailed root-cause report.
         let autoRaised = 0;
         try {
-          autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings(runId);
+          autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings(runId, { subCriterionId: folder.subCriterionId });
         } catch {
           // Non-fatal: a finding-raise failure must not strand the audit.
         }
@@ -4150,7 +4150,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Findings only auto-raise for verdicts that actually committed;
         // queued lines raise theirs when the human accepts them.
         if (automationMode === "full-auto") {
-          try { autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings(runId); } catch { /* non-fatal */ }
+          try { autoRaised = useChecklistModuleStore.getState().raiseAllUnmetFindings(runId, { subCriterionId: folder.subCriterionId }); } catch { /* non-fatal */ }
         }
 
         // Stage 7: Findings Summary
