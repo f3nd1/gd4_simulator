@@ -14,6 +14,7 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 import { listModels } from "../lib/ai/aiClient";
+import { filterModelSuggestions } from "../lib/modelPicker";
 
 // Re-hydrate every store that uses workspaceStorage so that when Supabase
 // credentials are saved mid-session, all previously-saved data (including the
@@ -342,17 +343,6 @@ create policy "anon read/write" on public.workspace_state
           />
         </label>
 
-        {/* Editable model fields (input + datalist) rather than a fixed dropdown:
-            OpenAI ships new model ids faster than this list can be hard-coded, and
-            the id must match exactly or the API rejects the call. "Fetch available
-            models" pulls the real list your key can access so you can pick a valid
-            id and see a ✓/⚠ check on what you typed. */}
-        <datalist id="openai-models">
-          {suggestions.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
-
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
           <button
             type="button"
@@ -372,10 +362,16 @@ create policy "anon read/write" on public.workspace_state
           const setter = kind === "analysis" ? setModel : setUtilityModel;
           const v = modelValidity(value);
           return (
-            <label key={kind} style={{ display: "block", marginBottom: 12 }}>
+            <div key={kind} style={{ marginBottom: 12 }}>
               <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>{kind === "analysis" ? "Analysis model" : "Utility model"}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3 }}>
-                <input list="openai-models" value={value} onChange={(e) => setter(e.target.value)} placeholder={kind === "analysis" ? "gpt-5" : "gpt-5-nano"} style={{ ...inputStyle, flex: 1 }} />
+                <ModelPicker
+                  value={value}
+                  onSelect={setter}
+                  suggestions={suggestions}
+                  placeholder={kind === "analysis" ? "gpt-5" : "gpt-5-nano"}
+                  testId={`model-${kind}`}
+                />
                 {v === "ok" && <span title="This model is available to your key." style={{ color: "#15803d", fontSize: 16, fontWeight: 700 }}>✓</span>}
                 {v === "unknown" && <span title="Not in your key's model list — check the spelling, or your account may not have access." style={{ color: "#b45309", fontSize: 14, fontWeight: 700 }}>⚠</span>}
               </div>
@@ -386,7 +382,7 @@ create policy "anon read/write" on public.workspace_state
                     ? "Audit verdicts, reviews, banding, checklist & finding drafting, closure review, cross-criterion analysis. Use a smarter model (e.g. gpt-5)."
                     : "Reading evidence images and condensing/drafting metadata. A cheaper model is fine (e.g. gpt-5-nano, gpt-4o-mini, or gpt-4o)."}
               </span>
-            </label>
+            </div>
           );
         })}
 
@@ -482,6 +478,76 @@ create policy "anon read/write" on public.workspace_state
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Developer</h3>
         <DeveloperToolsSettings />
       </Card>
+    </div>
+  );
+}
+
+// Editable model field with a DOM dropdown of suggestions. Replaces the
+// native <input list>/<datalist> combo, whose picker rendered but committed
+// nothing on click (native popup selection never reached the controlled
+// React input in some Chromium builds — and it can't be driven by tests
+// either). This popover is ordinary DOM: options select on MOUSEDOWN, which
+// fires before the input's blur, so the "popover closes before the click
+// lands" race cannot happen. Free typing still works for brand-new model ids.
+function ModelPicker({ value, onSelect, suggestions, placeholder, testId }: {
+  value: string;
+  onSelect: (model: string) => void;
+  suggestions: string[];
+  placeholder: string;
+  testId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(-1);
+  const shown = filterModelSuggestions(suggestions, value);
+
+  const pick = (m: string) => {
+    onSelect(m);
+    setOpen(false);
+    setHighlight(-1);
+  };
+
+  return (
+    <div style={{ position: "relative", flex: 1 }}>
+      <input
+        data-testid={testId}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => { onSelect(e.target.value); setOpen(true); setHighlight(-1); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => { setOpen(false); setHighlight(-1); }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHighlight((h) => Math.min(h + 1, shown.length - 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(h - 1, 0)); }
+          else if (e.key === "Enter" && open && highlight >= 0 && shown[highlight]) { e.preventDefault(); pick(shown[highlight]); }
+          else if (e.key === "Escape") { setOpen(false); setHighlight(-1); }
+        }}
+        style={{ ...inputStyle, width: "100%" }}
+        autoComplete="off"
+        role="combobox"
+        aria-expanded={open}
+      />
+      {open && shown.length > 0 && (
+        <div
+          role="listbox"
+          data-testid={`${testId}-list`}
+          style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 40, marginTop: 2, maxHeight: 220, overflowY: "auto", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8, boxShadow: "0 8px 22px rgba(15,23,42,.14)" }}
+        >
+          {shown.map((m, i) => (
+            <div
+              key={m}
+              role="option"
+              aria-selected={m === value}
+              // Mousedown (not click): commits BEFORE the input blurs, and
+              // preventDefault keeps focus in the field.
+              onMouseDown={(e) => { e.preventDefault(); pick(m); }}
+              onMouseEnter={() => setHighlight(i)}
+              style={{ padding: "6px 10px", fontSize: 12.5, cursor: "pointer", fontFamily: "ui-monospace,monospace", background: i === highlight ? "#eef2ff" : m === value ? "#faf5ff" : "#fff", color: "#1e293b" }}
+            >
+              {m}{m === value ? "  ✓" : ""}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
