@@ -99,11 +99,16 @@ export type ChecklistModuleState = {
   applyOptionAWrites: (writes: OptionALineWrite[]) => number;
 
   confirmDraftFinding: (itemId: string, lineId: string, draft: DraftFindingInfo, auditRunId?: string) => void;
-  // Scans every checklist line and raises a draft finding for each one that is
+  // Scans checklist lines and raises a draft finding for each one that is
   // Not met, or marked Met/Partial but with no real evidence attached
   // (the "capped" case). Skips lines that already produced a finding. Returns
   // the number of NEW findings raised so the caller can confirm to the user.
-  raiseAllUnmetFindings: (auditRunId?: string) => number;
+  // `opts.subCriterionId` scopes the sweep to that sub-criterion's item(s) —
+  // a folder audit passes its own sub-criterion so it never raises findings
+  // for OTHER sub-criteria left unmet by an earlier run (which used to make a
+  // 6.3 audit surface findings under 7.1). Omitting it sweeps every item
+  // (the manual "Raise all unmet" button).
+  raiseAllUnmetFindings: (auditRunId?: string, opts?: { subCriterionId?: string }) => number;
   // Called when a finding is deleted — clears the savedFindingId lock on any
   // checklist line that pointed to it, so the line can be re-raised later.
   clearSavedFindingId: (findingId: string) => void;
@@ -514,9 +519,18 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       // marked Met/Partial but no real evidence backs it (sufficiency Missing —
       // the "false pass" the audit caps to Band 1). Reuses confirmDraftFinding
       // so each finding is deduped and traceable exactly like a manual one.
-      raiseAllUnmetFindings: (auditRunId?) => {
+      raiseAllUnmetFindings: (auditRunId?, opts?) => {
         const entries = get().entries;
         let raised = 0;
+        // Scope: when a folder audit passes its sub-criterion, only that
+        // sub-criterion's items are swept — so auditing 6.3 never raises a
+        // leftover-unmet 7.1 line and attributes it to the 6.3 run.
+        const scopeSubId = opts?.subCriterionId;
+        const inScope = (itemId: string) => {
+          if (!scopeSubId) return true;
+          const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
+          return req?.subCriterionId === scopeSubId;
+        };
         // Composite keys (gd4ItemId + normalized ref + finding type) of every
         // finding already in the register — a requirement gap the other
         // pipeline already raised is skipped, not doubled. The old
@@ -529,6 +543,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           existingKeys.add(`${f.gd4ItemId}:${f.issue.slice(0, 60)}`);
         }
         for (const itemId of Object.keys(entries)) {
+          if (!inScope(itemId)) continue;
           const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
           if (!req) continue;
           for (const line of entries[itemId].specific) {

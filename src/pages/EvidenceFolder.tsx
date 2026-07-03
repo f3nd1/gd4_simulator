@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -1685,6 +1685,8 @@ export function EvidenceFolder() {
   const setFolderField = useWorkspaceStore((s) => s.setFolderField);
   const checkFolderAccess   = useWorkspaceStore((s) => s.checkFolderAccess);
   const auditFolderStaged   = useWorkspaceStore((s) => s.auditFolderStaged);
+  const runPPDReview        = useWorkspaceStore((s) => s.runPPDReview);
+  const navigate            = useNavigate();
   const cancelBusy          = useWorkspaceStore((s) => s.cancelBusy);
   const clearFileTextCache  = useWorkspaceStore((s) => s.clearFileTextCache);
   const removeFileTextCacheEntry = useWorkspaceStore((s) => s.removeFileTextCacheEntry);
@@ -2351,13 +2353,19 @@ export function EvidenceFolder() {
                         Open checklist →
                       </Link>
                     ) : path === "A" ? (
-                      <Link
-                        to={`/ppd-review?item=${f.subCriterionId}`}
-                        title={tip("Option A (PPD + Evidence): run the PPD review, then the evidence assessment, then compile findings. You approve each result before it commits (Hybrid mode).")}
-                        style={primaryStyle}
+                      // Option A is multi-step (PPD → evidence → compile) and
+                      // lives on the PPD Review page. Clicking here STARTS the
+                      // first step (PPD review) and opens that page — so an
+                      // Option-A row runs on one click, symmetric with Option
+                      // B's "Run audit →", instead of only navigating.
+                      <button
+                        onClick={() => { runPPDReview(f.subCriterionId); navigate(`/ppd-review?item=${f.subCriterionId}`); }}
+                        disabled={noAuditors}
+                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option A (PPD + Evidence): starts the PPD review now and opens the PPD Review page, where you continue with the evidence assessment and compile findings. You approve each result before it commits (Hybrid mode).")}
+                        style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >
-                        Start review →
-                      </Link>
+                        Run review →
+                      </button>
                     ) : (
                       <button
                         onClick={() => auditFolderStaged(f.id, "all")}
