@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: #eef1f5;
+  color: #1f2733;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4 {
+  letter-spacing: -0.01em;
+}
+
+/* ---- Tables: more breathing room + zebra striping for scannability ---- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th {
+  text-align: left;
+  background: #f4f6f9;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eef1f5;
+  vertical-align: middle;
+  line-height: 1.45;
+}
+/* Zebra striping. Inline row backgrounds (e.g. selected rows) still win,
+   so selection highlights keep working over the stripes. */
+tbody tr:nth-child(even) {
+  background: #fafbfd;
+}
+.rowh {
+  transition: background 0.12s ease;
+}
+.rowh:hover {
+  background: #f1f5fb;
+}
+
+a {
+  color: #3f5286;
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* ---- Sidebar nav link hover (inline styles handle the active state) ---- */
+.navlink:hover {
+  background: #20304a !important;
+  color: #ffffff !important;
+}
+
+/* ---- Inputs: consistent focus ring so fields are easy to locate ---- */
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #ce9e5d !important;
+  box-shadow: 0 0 0 3px rgba(206, 158, 93, 0.18);
+}
+
+/* Slimmer, calmer scrollbars inside scrolling panels */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cdd5e0;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #b3bdcc;
+  background-clip: padding-box;
+}
+
+/* Print: show only the report content, hide app chrome. Used by the
+   "Print / Save as PDF" button on the Final Report. */
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff !important; }
+  main { max-width: none !important; padding: 0 !important; margin: 0 !important; }
+  .gd-card {
+    box-shadow: none !important;
+    border-color: #d6dde6 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+/* Evidence Folder card: two internal columns (Links+Path | Progress+Action)
+   side by side on desktop, stacking to a single column on narrow widths so
+   nothing is cramped and the card is about half the previous height. */
+.ef-card-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 16px;
+  row-gap: 2px;
+}
+.ef-card-cols > .ef-col-right {
+  border-left: 1px solid #f1f5f9;
+  padding-left: 16px;
+}
+@media (max-width: 720px) {
+  .ef-card-cols { grid-template-columns: 1fr; }
+  .ef-card-cols > .ef-col-right {
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid #f1f5f9;
+    padding-top: 4px;
+    margin-top: 2px;
+  }
+}
