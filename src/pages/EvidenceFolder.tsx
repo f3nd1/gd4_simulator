@@ -2015,6 +2015,7 @@ export function EvidenceFolder() {
       <PendingReviewPanel />
       {fullAuditProgress && <FullAuditOverlay />}
 
+      <div style={{ overflowX: "auto" }}>
       <table id="wt-folders-table">
         <thead>
           <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>Links</th><th>Analysis path</th><th>Progress</th><th>Action</th></tr>
@@ -2173,7 +2174,10 @@ export function EvidenceFolder() {
                       (() => {
                         const path = analysisPath[f.subCriterionId] ?? "A";
                         const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id;
-                        const primaryStyle: React.CSSProperties = { cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", whiteSpace: "nowrap", textDecoration: "none", display: "inline-block" };
+                        // Fixed width so every row's primary button aligns and can
+                        // never overflow the Action column; the full description
+                        // lives in the tooltip, not the label.
+                        const primaryStyle: React.CSSProperties = { cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 10px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", textDecoration: "none", display: "inline-block", width: 128, maxWidth: "100%", boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
                         const overflowItem = (label: string, onClick: () => void, opts?: { disabled?: boolean; title?: string; last?: boolean }) => (
                           <button
                             key={label}
@@ -2194,7 +2198,7 @@ export function EvidenceFolder() {
                                 title={tip("Full auto mode: per-row runs are locked. Use the single 'Run full audit' button at the top of this page, or change the mode on Start Audit.")}
                                 style={{ ...primaryStyle, cursor: "not-allowed", background: "#e2e8f0", border: "1px solid #cbd5e1", color: "#94a3b8" }}
                               >
-                                Locked — use "Run full audit"
+                                Locked
                               </button>
                             ) : auditMode === "manual" ? (
                               <Link
@@ -2202,7 +2206,7 @@ export function EvidenceFolder() {
                                 title={tip("Manual mode: the AI decides nothing. Enter each verdict yourself in the Sub-Criterion Checklist; AI suggestions are available per item on request.")}
                                 style={primaryStyle}
                               >
-                                Open checklist (manual entry) →
+                                Open checklist →
                               </Link>
                             ) : path === "A" ? (
                               <Link
@@ -2210,7 +2214,7 @@ export function EvidenceFolder() {
                                 title={tip("Option A (PPD + Evidence): run the PPD review, then the evidence assessment, then compile findings. You approve each result before it commits (Hybrid mode).")}
                                 style={primaryStyle}
                               >
-                                Start PPD + Evidence review →
+                                Start review →
                               </Link>
                             ) : (
                               <button
@@ -2218,7 +2222,7 @@ export function EvidenceFolder() {
                                 title={tip("Option B (Staged audit): policy, evidence, then outcome and review passes produce APSR verdicts, each stopping for your approval before it commits (Hybrid mode).")}
                                 style={primaryStyle}
                               >
-                                Run staged audit (Option B)
+                                Run audit →
                               </button>
                             )}
                             {lastRun && (
@@ -2361,6 +2365,7 @@ export function EvidenceFolder() {
           })}
         </tbody>
       </table>
+      </div>
     </Card>
     </>
   );
