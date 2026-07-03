@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
-import { Card } from "../components/ui/Card";
+import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { NextStepBanner } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 import { findingTypeForStatus, findingTypeTone } from "../lib/findingClassification";
+import { resolvePpdSelection, ppdResultSummary } from "../lib/ppdSelection";
 import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
@@ -46,13 +47,26 @@ const PPD_GRID = "1fr 1fr 1fr";
 const EV_GRID = "1.1fr 1.1fr 1.1fr 0.9fr";
 
 export function PPDReview() {
-  // The sub-criterion is passed in via the ?item= query param — from the
-  // Evidence Folder page's "Start review"/"View Results" links — never picked
-  // manually here.
-  const [searchParams] = useSearchParams();
-  const selectedId = searchParams.get("item") || "";
+  // The sub-criterion comes from ?item= (an Evidence-Folder "Run review" click
+  // or a shared link). When absent — e.g. arriving via the bare sidebar link —
+  // fall back to the last one viewed, then the most recently run, so returning
+  // shows the saved work instead of a blank slate.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
+  const lastPpdSubCriterionId = useWorkspaceStore((s) => s.lastPpdSubCriterionId);
+  const setLastPpdSubCriterion = useWorkspaceStore((s) => s.setLastPpdSubCriterion);
+  const selectedId = resolvePpdSelection(searchParams.get("item"), lastPpdSubCriterionId, ppdReviewResults);
   const sub = GD4_SUB_CRITERIA.find((s) => s.id === selectedId);
   const [tab, setTab] = useState<"ppd" | "evidence">("ppd");
+
+  // Remember the resolved sub-criterion so a later bare-link return restores it.
+  useEffect(() => {
+    if (selectedId && selectedId !== lastPpdSubCriterionId) setLastPpdSubCriterion(selectedId);
+  }, [selectedId, lastPpdSubCriterionId, setLastPpdSubCriterion]);
+
+  const pickSubCriterion = (id: string) => {
+    if (id) setSearchParams({ item: id }); else setSearchParams({});
+  };
 
   const folders = useWorkspaceStore((s) => s.folders);
   const folder = folders.find((f) => f.subCriterionId === selectedId);
@@ -66,21 +80,48 @@ export function PPDReview() {
     [requirementItems]
   );
 
+  const savedResult = ppdReviewResults[selectedId];
+  const savedSummary = ppdResultSummary(savedResult?.rows);
+
   return (
     <Card>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
-        <h3 style={{ margin: 0, fontSize: 14 }}>PPD Requirements Review{sub ? ` — ${sub.id}` : ""}</h3>
-        {!sub && (
-          <span style={{ fontSize: 12, color: "#6b7280" }}>
-            Option A: check the Policy & Procedure Document, then the Actual Evidence, per GD4 requirement line.
-          </span>
-        )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>PPD Requirements Review</h3>
+        {/* Sub-criterion picker — so returning to this page (even via the bare
+            sidebar link) always lets you re-open a saved review, and reviewed
+            sub-criteria are marked. */}
+        <select
+          value={selectedId}
+          onChange={(e) => pickSubCriterion(e.target.value)}
+          style={{ ...inputStyle, width: "auto", minWidth: 260, padding: "5px 8px", fontSize: 12.5 }}
+        >
+          <option value="">Select a sub-criterion…</option>
+          {GD4_SUB_CRITERIA.map((sc) => (
+            <option key={sc.id} value={sc.id}>
+              {ppdReviewResults[sc.id] ? "● " : ""}{sc.id} {sc.title}{ppdReviewResults[sc.id] ? " — reviewed" : ""}
+            </option>
+          ))}
+        </select>
       </div>
+
+      {/* Saved-state banner: proves the results are saved and current, and
+          points at where the same verdicts also live (checklist + scoring). */}
+      {sub && savedResult && (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 11.5, color: "#334155", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "7px 11px", marginBottom: 8 }}>
+          <span><b>Last reviewed {new Date(savedResult.runAt).toLocaleString("en-SG", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</b> · {savedSummary.adequate} adequate / {savedSummary.partial} partial / {savedSummary.gaps} gaps{savedSummary.notAssessed ? ` / ${savedSummary.notAssessed} not assessed` : ""}</span>
+          <span style={{ marginLeft: "auto", color: "#64748b" }}>
+            Also reflected in the{" "}
+            <Link to={`/sub-checklist?item=${requirementItems[0]?.id ?? ""}`} style={{ color: "#4338ca", fontWeight: 600 }}>Sub-Criterion Checklist</Link>{" "}&amp;{" "}
+            <Link to="/scorecard" style={{ color: "#4338ca", fontWeight: 600 }}>Scorecard</Link>.
+          </span>
+        </div>
+      )}
 
       {!sub && (
         <p style={{ fontSize: 12.5, color: "#94a3b8" }}>
-          No sub-criterion selected. Open this page from the <Link to="/evidence-folder" style={{ color: "#4338ca", fontWeight: 600 }}>Evidence Folder</Link> page's
-          "Start review →" or "View Results →" link for the sub-criterion you want to check.
+          Pick a sub-criterion above to review its Policy &amp; Procedure Document, or open this page from the{" "}
+          <Link to="/evidence-folder" style={{ color: "#4338ca", fontWeight: 600 }}>Evidence Folder</Link> page's "Run review →" link.
+          Sub-criteria you have already reviewed are marked ●.
         </p>
       )}
 
