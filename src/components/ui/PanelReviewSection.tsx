@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { Pill } from "./Pill";
+import { PanelChibiDebate } from "./PanelChibiDebate";
 import { assemblePanel, isValidPanel, findingReviewHash, MIN_PANEL } from "../../lib/reviewPanel";
 import type { Finding } from "../../types";
 
@@ -19,6 +20,9 @@ export function PanelReviewSection({ finding }: { finding: Finding }) {
   // Read the live finding so a just-completed review re-renders here.
   const live = useWorkspaceStore((s) => s.customFindings.find((f) => f.id === finding.id)) ?? finding;
   const [showDiscussion, setShowDiscussion] = useState(false);
+  // Presentation-only toggle: "text" is the default and the complete source of
+  // truth; "chibi" animates the same panel data as a staged debate.
+  const [view, setView] = useState<"text" | "chibi">("text");
 
   if (mode === "off") return null;
 
@@ -75,6 +79,26 @@ export function PanelReviewSection({ finding }: { finding: Finding }) {
               {review.runWarnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
             </div>
           )}
+          {/* View toggle — text stays the default/complete view; the chibi
+              debate is a decorative replay of the same data. */}
+          {review.reviews.filter((r) => !r.failed && r.analysis).length >= 2 && (
+            <div style={{ display: "inline-flex", border: "1px solid #ddd6fe", borderRadius: 7, overflow: "hidden", marginBottom: 8 }}>
+              {([["text", "Text view"], ["chibi", "Watch the debate"]] as const).map(([v, lbl]) => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "4px 11px", border: "none", background: view === v ? "#7c3aed" : "#fff", color: view === v ? "#fff" : "#5b21b6" }}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {view === "chibi" ? (
+            <PanelChibiDebate review={review} gd4Ref={live.gd4ItemId} />
+          ) : (
+          <>
           {/* Synthesised conclusion — shown by default */}
           {field("Balanced finding summary", review.synthesis.summary)}
           {field("Risk / impact", review.synthesis.riskImpact)}
@@ -117,6 +141,8 @@ export function PanelReviewSection({ finding }: { finding: Finding }) {
                 </div>
               ))}
             </div>
+          )}
+          </>
           )}
         </>
       )}

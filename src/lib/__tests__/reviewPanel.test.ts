@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   REVIEW_PERSPECTIVES, perspectiveOf, perspectiveLabel, DEFAULT_PERSPECTIVE,
   assemblePanel, isValidPanel, shouldAutoRunPanel, panelCostEstimate, findingReviewHash,
-  detectPanelDisagreement, MIN_PANEL, MAX_PANEL,
+  detectPanelDisagreement, buildDebateScript, debateBubbleLine, chibiColorsFor,
+  MIN_PANEL, MAX_PANEL,
 } from "../reviewPanel";
-import type { PanelAuditorReview } from "../../types";
+import type { PanelAuditorReview, PanelReviewResult } from "../../types";
 import type { AuditorProfile, Finding } from "../../types";
 
 function auditor(id: string, over: Partial<AuditorProfile> = {}): AuditorProfile {
@@ -126,5 +127,63 @@ describe("detectPanelDisagreement", () => {
       rev(undefined, { failed: true, analysis: "" }),
     ]);
     expect(r.disagree).toBe(false);
+  });
+});
+
+describe("chibi debate script (presentation-only)", () => {
+  function pr(id: string, over: Partial<PanelAuditorReview> = {}): PanelAuditorReview {
+    return {
+      auditorId: id, auditorName: id, perspective: "strict-auditor", perspectiveLabel: "Strict Auditor",
+      analysis: "No signed samples are on file. The rest of this review is longer detail.",
+      position: { classification: "NC", severity: "Major", rootCauseDirection: "process" },
+      ...over,
+    };
+  }
+  function result(reviews: PanelAuditorReview[], over: Partial<PanelReviewResult> = {}): PanelReviewResult {
+    return {
+      reviews,
+      synthesis: { summary: "Summary.", riskImpact: "", rootCause: "", immediateCorrection: "", correctiveAction: "", evidenceForClosure: "", finalClassification: "NC (Major) — not demonstrable." },
+      runAt: "2026-07-03T00:00:00Z", live: true, findingHash: "h", ...over,
+    };
+  }
+
+  it("bubble line takes the first sentence and clamps long ones", () => {
+    expect(debateBubbleLine("First point. Second point.")).toBe("First point.");
+    expect(debateBubbleLine("x".repeat(200)).length).toBeLessThanOrEqual(110);
+    expect(debateBubbleLine("")).toBe("");
+  });
+
+  it("agreement: one review step per usable panellist, then synthesis with an 'agreed' caption", () => {
+    const steps = buildDebateScript(result([pr("A"), pr("B"), pr("C")]));
+    expect(steps.map((s) => s.kind)).toEqual(["review", "review", "review", "synthesis"]);
+    expect(steps[0].bubble).toBe("No signed samples are on file.");
+    expect(steps[0].positionPill).toBe("NC · Major");
+    expect(steps[3].caption).toContain("agreed at Round 1");
+    expect(steps[3].bubble).toContain("not demonstrable");
+  });
+
+  it("disagreement: rebuttal steps play after Round 1, and failed panellists are skipped", () => {
+    const steps = buildDebateScript(result(
+      [
+        pr("A", { rebuttal: "I hold the NC. More words." }),
+        pr("B", { rebuttal: "I revise to Minor. More words." }),
+        pr("C", { failed: true, analysis: "" }),
+      ],
+      { discussionTriggered: true }
+    ));
+    expect(steps.map((s) => s.kind)).toEqual(["review", "review", "rebuttal", "rebuttal", "synthesis"]);
+    expect(steps[2].bubble).toBe("I hold the NC.");
+    expect(steps[2].caption).toContain("responds to the others");
+    expect(steps[4].caption).toContain("After the discussion");
+    // Failed panellist C contributes no steps.
+    expect(steps.some((s) => s.caption.includes("C ("))).toBe(false);
+  });
+
+  it("chibi colours are stable per identity and never collide within a panel", () => {
+    const a = chibiColorsFor(["AUD-1", "AUD-2", "AUD-3", "AUD-4", "AUD-5"]);
+    const b = chibiColorsFor(["AUD-1", "AUD-2", "AUD-3", "AUD-4", "AUD-5"]);
+    expect(a).toEqual(b);                       // stable
+    expect(new Set(a).size).toBe(5);            // distinct
+    expect(chibiColorsFor(["AUD-1"])[0]).toBe(a[0]); // identity-derived, not seat-derived
   });
 });
