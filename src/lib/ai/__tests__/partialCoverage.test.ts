@@ -118,6 +118,35 @@ describe("staged policy audit — stopped runs do not fabricate results (Batch 4
   });
 });
 
+describe("staged audit — negative-verdict notes are preserved, not discarded", () => {
+  const SPECIFIC_NEG = 'It was not evident that the PEI had documented the non-collection of monies from students. Example: fee-policy.docx v1 addresses refunds but no clause covers non-collection.';
+
+  it('a "No" policy verdict surfaces the AI\'s specific SSG note, not the generic fallback', async () => {
+    mockChat.mockImplementation(async (messages) => {
+      const user = String(messages[1]?.content ?? "");
+      const refs = [...user.matchAll(/\[(1\.1\.1\.DS\d+)\]/g)].map((m) => m[1]);
+      return JSON.stringify({ results: refs.map((ref) => ({ ref, covered: "No", note: SPECIFIC_NEG, chunkIds: [] })) });
+    });
+    const result = await runStagedPolicyAudit(auditPoints(1), SOURCE_TEXT, SETTINGS, {});
+    expect(result.rows[0].covered).toBe("No");
+    // The retained negative note appears; the old "No relevant policy evidence
+    // found…" fallback does NOT.
+    expect(result.rows[0].note).toContain("non-collection of monies");
+    expect(result.rows[0].note).not.toContain("No relevant policy evidence found");
+  });
+
+  it("the longest (most substantive) negative note wins across windows; empty notes still fall back", async () => {
+    // Single window, empty note → still the generic fallback (nothing to keep).
+    mockChat.mockImplementation(async (messages) => {
+      const user = String(messages[1]?.content ?? "");
+      const refs = [...user.matchAll(/\[(1\.1\.1\.DS\d+)\]/g)].map((m) => m[1]);
+      return JSON.stringify({ results: refs.map((ref) => ({ ref, covered: "No", note: "", chunkIds: [] })) });
+    });
+    const result = await runStagedPolicyAudit(auditPoints(1), SOURCE_TEXT, SETTINGS, {});
+    expect(result.rows[0].note).toContain("No relevant policy evidence found");
+  });
+});
+
 describe("flagUnverifiedQuotes — PPD quote verification (Batch 4)", () => {
   const source = "The institution reviews its policies annually and records minutes of each review. Auditors must be independent of the area they audit.";
 

@@ -310,9 +310,27 @@ export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLi
       ).filter(Boolean)
     : [];
 
-  const observation = apsrNoteLines.length
-    ? `${line.text} — status: ${line.status}. Auditor AI notes: ${apsrNoteLines.join(". ")}.`
-    : `${line.text} — marked ${line.status}${sufficiency === "Missing" ? "; no implementation records were found in the evidence folder" : sufficiency === "Weak" ? "; the records found were incomplete or did not cover the full scope" : ""}.`;
+  // SSG assessor register (Technique 5): open the observation with the official
+  // negative phrasing and name the specific dimension that failed, then carry
+  // the per-dimension AI notes (which hold the named examples, dates and the
+  // specific missing obligation) as an "Example:" block — the same standard as
+  // the Option A finding writer, so auto-raised Option B findings are as
+  // specific as Option A instead of reading "<line> — status: X".
+  const dimVerb =
+    dim === "Procedure" ? "documented in its Policy & Procedure Document" :
+    dim === "Evidence" ? "implemented" :
+    dim === "Outcomes" ? "established outcome monitoring for" :
+    dim === "Review" ? "established a documented review of" :
+    "provided verifiable evidence for";
+  const reqLabel = `the requirement under GD4 ${req.id}${line.clause ? ` (${line.clause})` : ""}: "${line.text?.slice(0, 160) ?? req.requirement}"`;
+  const exampleBlock = apsrNoteLines.length
+    ? ` Example: ${apsrNoteLines.join(". ")}.`
+    : sufficiency === "Missing"
+      ? " Example: no implementation records were found in the evidence folder for this line."
+      : sufficiency === "Weak"
+        ? " Example: the records found were incomplete or did not cover the full audit period."
+        : "";
+  const observation = `It was not evident that the PEI had ${dimVerb} ${reqLabel} (rated ${line.status}).${exampleBlock}`;
 
   const effectByDim: Record<string, string> = {
     Procedure: `Without a documented, institution-specific procedure, this requirement cannot be consistently met. Under the EduTrust APSR rubric, an Approach rated "Beginning" or "Not evident" caps this sub-criterion at Band 2 regardless of any other evidence.`,

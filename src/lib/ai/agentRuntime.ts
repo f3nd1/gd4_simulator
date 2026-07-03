@@ -1003,9 +1003,17 @@ export type StagedOutcomeReviewAuditResult = {
 
 const STAGED_BATCH_SIZE = 8; // audit points per AI call (each is smaller than a full checklist line)
 
-// Shared assessor-register rule appended to every staged-audit prompt
-// (Techniques 4+5): negatives need a named example and SSG phrasing.
-const SSG_NOTE_REGISTER = ` Every "Partial"/"No"/"Not evident" note MUST include at least one concrete example from the documents — the specific document name, version, date or record entry that demonstrates the gap (or name what was searched and found absent) — and use the SSG assessor register: "It was not evident that the PEI had [documented/implemented/established] …". Where dates or versions can be compared (a record dated after the period it governs; documents that never move past V0), perform the comparison and state it explicitly. A negative note without a concrete example is unsupported and unacceptable. Positive notes stay factual and specific (which record, where) — no praise adjectives.`;
+// Shared assessor-register rule appended to every staged-audit prompt. Brings
+// the staged (Option B) notes to the same standard as the Option A prompts —
+// Technique 1 (decompose and name the missing obligation), Technique 4 (named
+// example with dates/versions) and Technique 5 (SSG phrasing register). Write
+// the note as an assessor writes a finding, never as a summary.
+const SSG_NOTE_REGISTER = ` Write the "note" the way an SSG EduTrust assessor writes a finding — specific, decomposed, evidenced — NEVER as a generic summary:
+- DECOMPOSE the requirement into its distinct obligations and name WHICH specific obligation is missing, weak, or met — e.g. "the documents cover the code of conduct but not the non-collection of monies from students", not merely "the requirement is partially met". Where the point has (a)/(b)/(c) parts, say which part fails.
+- Every "Partial"/"No"/"Not evident" note MUST open with the SSG register — "It was not evident that the PEI had [documented / implemented / established] …" — and MUST cite at least one concrete example: the specific document name, section, version, date or record entry that demonstrates the gap; or, where the topic is wholly absent, name what was searched and found absent.
+- Where dates or versions can be compared (a record dated after the period it governs; a document that never moves past V0; evidence created only just before the audit), PERFORM the comparison and state it explicitly in the note.
+- A negative note that does not name the specific missing obligation AND give a concrete example is unsupported and unacceptable — do not write "no relevant evidence found" or "the requirement is not met" on their own.
+- Positive notes stay factual and specific (which record, which section, which date) — no praise adjectives ("good", "robust", "comprehensive", "well-structured").`;
 
 // Sliding window constants. Windows overlap so evidence that straddles a
 // boundary is not missed. Each window is sent as a separate AI call set and
@@ -1050,6 +1058,22 @@ function pushWindowNote(parts: WindowNote[], windowIndex: number, note: string, 
   const trimmed = note.trim();
   if (!trimmed) return parts;
   return [...parts, { window: windowIndex + 1, note: trimmed, chunkIds }];
+}
+
+// For a NEGATIVE (gap) verdict the SSG-register prompt still asks the model to
+// write a specific "It was not evident that the PEI had… Example: …" note. We
+// used to discard those notes (keeping only positive-coverage notes), so every
+// gap — exactly the lines that become findings — fell back to a generic string
+// like "No implementation evidence found…", which is why Option B read generic.
+// Keep the single MOST SUBSTANTIVE negative note (longest wins as a proxy for
+// "carries the named example"); across windows the fullest observation survives
+// rather than a bare "not found in this window".
+function betterNegNote(prev: WindowNote | undefined, windowIndex: number, note: string, chunkIds: string[]): WindowNote | undefined {
+  const trimmed = note.trim();
+  if (!trimmed) return prev;
+  const candidate: WindowNote = { window: windowIndex + 1, note: trimmed, chunkIds };
+  if (!prev || trimmed.length > prev.note.length) return candidate;
+  return prev;
 }
 
 // Renders the accumulated per-window notes for one ref as one numbered,
@@ -1133,7 +1157,7 @@ Respond with JSON only:
   // entry per window that found specific (non-"No") coverage, so the final
   // note can cite every contributing window instead of discarding all but
   // whichever window happened to win the coverage-priority merge.
-  const bestByRef = new Map<string, { covered: StagedCoverageStatus; notes: WindowNote[]; chunkIds: string[] }>();
+  const bestByRef = new Map<string, { covered: StagedCoverageStatus; notes: WindowNote[]; negNote?: WindowNote; chunkIds: string[] }>();
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
@@ -1185,12 +1209,18 @@ Respond with JSON only:
           const note = typeof r?.note === "string" ? r.note : "";
           const prev = bestByRef.get(p.ref);
           if (!prev) {
-            bestByRef.set(p.ref, { covered, notes: covered !== "No" ? pushWindowNote([], win.index, note, chunkIds) : [], chunkIds });
+            bestByRef.set(p.ref, {
+              covered,
+              notes: covered !== "No" ? pushWindowNote([], win.index, note, chunkIds) : [],
+              negNote: covered === "No" ? betterNegNote(undefined, win.index, note, chunkIds) : undefined,
+              chunkIds,
+            });
           } else {
             const merged = mergeCoverage(prev.covered, covered);
             const mergedNotes = covered !== "No" ? pushWindowNote(prev.notes, win.index, note, chunkIds) : prev.notes;
+            const mergedNeg = covered === "No" ? betterNegNote(prev.negNote, win.index, note, chunkIds) : prev.negNote;
             const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
-            bestByRef.set(p.ref, { covered: merged, notes: mergedNotes, chunkIds: mergedChunks });
+            bestByRef.set(p.ref, { covered: merged, notes: mergedNotes, negNote: mergedNeg, chunkIds: mergedChunks });
           }
         }
       } catch (err) {
@@ -1226,10 +1256,13 @@ Respond with JSON only:
       return { ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "Not assessed — the run was stopped before this audit point was reviewed. No verdict was produced.", chunkIds: [], notAssessed: true };
     }
     const fallback = `No relevant policy evidence found in the ${windowsCompleted} window(s) reviewed.`;
+    // Positive-coverage notes win; for a pure gap, surface the retained
+    // negative note (specific SSG observation) instead of the generic fallback.
+    const noteParts = best ? (best.notes.length ? best.notes : best.negNote ? [best.negNote] : []) : [];
     return {
       ref: p.ref, pointText: p.text,
       covered: best?.covered ?? "No",
-      note: best ? renderWindowNotes(best.notes, fallback, opts.resolveChunkFile) : fallback,
+      note: best ? renderWindowNotes(noteParts, fallback, opts.resolveChunkFile) : fallback,
       chunkIds: best?.chunkIds ?? [],
     };
   });
@@ -1279,7 +1312,7 @@ Respond with JSON only:
   const windows = buildDocWindows(evidenceDocText);
   const totalCharsAvailable = evidenceDocText.length;
 
-  const bestByRef = new Map<string, { covered: StagedCoverageStatus; notes: WindowNote[]; chunkIds: string[] }>();
+  const bestByRef = new Map<string, { covered: StagedCoverageStatus; notes: WindowNote[]; negNote?: WindowNote; chunkIds: string[] }>();
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
@@ -1329,12 +1362,18 @@ Respond with JSON only:
           const note = typeof r?.note === "string" ? r.note : "";
           const prev = bestByRef.get(p.ref);
           if (!prev) {
-            bestByRef.set(p.ref, { covered, notes: covered !== "No" ? pushWindowNote([], win.index, note, chunkIds) : [], chunkIds });
+            bestByRef.set(p.ref, {
+              covered,
+              notes: covered !== "No" ? pushWindowNote([], win.index, note, chunkIds) : [],
+              negNote: covered === "No" ? betterNegNote(undefined, win.index, note, chunkIds) : undefined,
+              chunkIds,
+            });
           } else {
             const merged = mergeCoverage(prev.covered, covered);
             const mergedNotes = covered !== "No" ? pushWindowNote(prev.notes, win.index, note, chunkIds) : prev.notes;
+            const mergedNeg = covered === "No" ? betterNegNote(prev.negNote, win.index, note, chunkIds) : prev.negNote;
             const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
-            bestByRef.set(p.ref, { covered: merged, notes: mergedNotes, chunkIds: mergedChunks });
+            bestByRef.set(p.ref, { covered: merged, notes: mergedNotes, negNote: mergedNeg, chunkIds: mergedChunks });
           }
         }
       } catch (err) {
@@ -1364,10 +1403,13 @@ Respond with JSON only:
       return { ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "Not assessed — the run was stopped before this audit point was reviewed. No verdict was produced.", chunkIds: [], notAssessed: true };
     }
     const fallback = `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`;
+    // Positive-coverage notes win; for a pure gap, surface the retained
+    // negative note (specific SSG observation) instead of the generic fallback.
+    const noteParts = best ? (best.notes.length ? best.notes : best.negNote ? [best.negNote] : []) : [];
     return {
       ref: p.ref, pointText: p.text,
       covered: best?.covered ?? "No",
-      note: best ? renderWindowNotes(best.notes, fallback, opts.resolveChunkFile) : fallback,
+      note: best ? renderWindowNotes(noteParts, fallback, opts.resolveChunkFile) : fallback,
       chunkIds: best?.chunkIds ?? [],
     };
   });
@@ -1415,7 +1457,7 @@ Respond with JSON only:
   const totalCharsAvailable = allDocText.length;
 
   // For outcome/review: OR across windows (true if any window finds evidence).
-  const bestByRef = new Map<string, { outcomeEvident: boolean; reviewEvident: boolean; notes: WindowNote[]; chunkIds: string[] }>();
+  const bestByRef = new Map<string, { outcomeEvident: boolean; reviewEvident: boolean; notes: WindowNote[]; negNote?: WindowNote; chunkIds: string[] }>();
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
@@ -1462,13 +1504,19 @@ Respond with JSON only:
           const foundSomething = outcomeEvident || reviewEvident;
           const prev = bestByRef.get(p.ref);
           if (!prev) {
-            bestByRef.set(p.ref, { outcomeEvident, reviewEvident, notes: foundSomething ? pushWindowNote([], win.index, note, chunkIds) : [], chunkIds });
+            bestByRef.set(p.ref, {
+              outcomeEvident, reviewEvident,
+              notes: foundSomething ? pushWindowNote([], win.index, note, chunkIds) : [],
+              negNote: foundSomething ? undefined : betterNegNote(undefined, win.index, note, chunkIds),
+              chunkIds,
+            });
           } else {
             const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
             const newOutcome = prev.outcomeEvident || outcomeEvident;
             const newReview = prev.reviewEvident || reviewEvident;
             const mergedNotes = foundSomething ? pushWindowNote(prev.notes, win.index, note, chunkIds) : prev.notes;
-            bestByRef.set(p.ref, { outcomeEvident: newOutcome, reviewEvident: newReview, notes: mergedNotes, chunkIds: mergedChunks });
+            const mergedNeg = foundSomething ? prev.negNote : betterNegNote(prev.negNote, win.index, note, chunkIds);
+            bestByRef.set(p.ref, { outcomeEvident: newOutcome, reviewEvident: newReview, notes: mergedNotes, negNote: mergedNeg, chunkIds: mergedChunks });
           }
         }
       } catch (err) {
@@ -1498,11 +1546,14 @@ Respond with JSON only:
       return { ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "Not assessed — the run was stopped before this audit point was reviewed. No verdict was produced.", chunkIds: [], notAssessed: true };
     }
     const fallback = `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`;
+    // When neither outcome nor review evidence was found, surface the retained
+    // negative note (specific SSG observation) instead of the generic fallback.
+    const noteParts = best ? (best.notes.length ? best.notes : best.negNote ? [best.negNote] : []) : [];
     return {
       ref: p.ref, pointText: p.text,
       outcomeEvident: best?.outcomeEvident ?? false,
       reviewEvident: best?.reviewEvident ?? false,
-      note: best ? renderWindowNotes(best.notes, fallback, opts.resolveChunkFile) : fallback,
+      note: best ? renderWindowNotes(noteParts, fallback, opts.resolveChunkFile) : fallback,
       chunkIds: best?.chunkIds ?? [],
     };
   });

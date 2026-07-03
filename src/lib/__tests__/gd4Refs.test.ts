@@ -88,4 +88,14 @@ describe("Option A synthetic-line seed parity (buildDraftFinding)", () => {
     expect(draft.corrective).toBeTruthy();
     expect(draft.preventive).toBeTruthy();
   });
+
+  it("the observation uses the SSG assessor register (Technique 5), not the old flat template", () => {
+    const draft = buildDraftFinding(req, syntheticLine("Not met"));
+    // Opens with the official negative register and names the requirement…
+    expect(draft.observation).toMatch(/^It was not evident that the PEI had /);
+    expect(draft.observation).toContain(`GD4 ${req.id}`);
+    // …and does not use the old "<line> — status: X. Auditor AI notes:" shape.
+    expect(draft.observation).not.toContain("Auditor AI notes:");
+    expect(draft.observation).not.toMatch(/— status: /);
+  });
 });
