@@ -1566,6 +1566,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set({ auditBlockedReason: null });
         const plan = buildFullAuditPlan(get().folders, get().analysisPath, (l) => !!parseFolderId(l || ""));
         if (plan.length === 0) return;
+        // Full auto commits every verdict automatically — its own path never
+        // enqueues (partitionWritesByMode returns queue: [] for full-auto). But
+        // a PRIOR Hybrid run may have left "Needs your review" items in
+        // pendingCommits; clear the queue for the sub-criteria this sweep will
+        // (re)assess so the Full auto result isn't mixed with a stale Hybrid
+        // gate. Items for sub-criteria outside this plan are left untouched.
+        {
+          const planSubIds = new Set(plan.map((p) => p.subCriterionId));
+          set((st) => ({ pendingCommits: Object.fromEntries(Object.entries(st.pendingCommits).filter(([subId]) => !planSubIds.has(subId))) }));
+        }
         const linkedCount = plan.filter((p) => p.hasLinks).length;
         const startToken = get().auditRunToken;
         // One entry per planned sub-criterion, statuses updated live so the
