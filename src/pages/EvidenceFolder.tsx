@@ -1651,7 +1651,14 @@ export function EvidenceFolder() {
 
   const [searchParams] = useSearchParams();
   const focusSub = searchParams.get("sub");
-  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // Card chip-to-editor toggles: Owner/Status render as compact chips and
+  // expand to their dropdowns only when clicked; the Drive link inputs show
+  // only while a card's links are being edited.
+  const [editingField, setEditingField] = useState<{ id: string; field: "owner" | "status" } | null>(null);
+  const [editingLinks, setEditingLinks] = useState<Set<string>>(new Set());
+  const toggleEditingLinks = (id: string) =>
+    setEditingLinks((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   // Collapsed by default — the "Access — Policy/Evidence" and "Audit result"
   // detail blocks under each sub-criterion row only show once the row is
   // expanded, keeping the table scannable when many folders are linked.
@@ -2015,356 +2022,357 @@ export function EvidenceFolder() {
       <PendingReviewPanel />
       {fullAuditProgress && <FullAuditOverlay />}
 
-      <div style={{ overflowX: "auto" }}>
-      <table id="wt-folders-table">
-        <thead>
-          <tr><th>Sub-criterion</th><th>Owner</th><th>Status</th><th>Links</th><th>Analysis path</th><th>Progress</th><th>Action</th></tr>
-        </thead>
-        <tbody>
-          {visibleFolders.map((f) => {
-            const isBusy = busy === "folderaudit" + f.id;
-            const auditDismissKey = `${f.id}:${f.lastAuditRunId || f.lastAuditAt || ""}`;
-            const policyDismissKey = `${f.id}:policy:${f.policyAccessAt || ""}`;
-            const evidenceDismissKey = `${f.id}:evidence:${f.accessCheckAt || ""}`;
-            const lastRun = lastAuditRuns[f.id];
-            const rowExpanded = expandedSubCritRows.has(f.id);
+      {/* Card list — one self-contained card per sub-criterion. Everything
+          stacks vertically and wraps; the container never scrolls sideways. */}
+      <div id="wt-folders-table" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {visibleFolders.map((f) => {
+          const isBusy = busy === "folderaudit" + f.id;
+          const auditDismissKey = `${f.id}:${f.lastAuditRunId || f.lastAuditAt || ""}`;
+          const policyDismissKey = `${f.id}:policy:${f.policyAccessAt || ""}`;
+          const evidenceDismissKey = `${f.id}:evidence:${f.accessCheckAt || ""}`;
+          const lastRun = lastAuditRuns[f.id];
+          const rowExpanded = expandedSubCritRows.has(f.id);
+          const path = analysisPath[f.subCriterionId] ?? "A";
+          const prog = subCritProgress[f.subCriterionId];
+          const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id;
+          const linksEditing = editingLinks.has(f.id);
+          const rowLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.4, minWidth: 58, flexShrink: 0 };
+          const chipBtn: React.CSSProperties = { cursor: "pointer", fontSize: 11, fontWeight: 600, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#374151", borderRadius: 999, padding: "3px 10px", whiteSpace: "nowrap" };
+          const linkChip = (kind: "policy" | "evidence") => {
+            const link = kind === "policy" ? f.policyLink : f.folderLink;
+            const status = kind === "policy" ? f.policyAccessStatus : f.accessCheckStatus;
+            const connected = status === "Connected";
+            const label = kind === "policy" ? "Policy" : "Evidence";
             return (
-              <Fragment key={f.id}>
-                <tr
-                  className="rowh"
-                  ref={(el) => { rowRefs.current[f.subCriterionId] = el; }}
-                  onClick={() => toggleSubCritRow(f.id)}
-                  title={rowExpanded ? "Collapse access/audit details" : "Expand access/audit details"}
-                  style={{ cursor: "pointer" }}
-                >
-                  <td>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ color: "#94a3b8", fontSize: 11, flexShrink: 0, transition: "transform 0.15s", transform: rowExpanded ? "rotate(90deg)" : "none" }}>▸</span>
-                      <b>{f.folderName}</b>
-                    </div>
-                  </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <select value={f.owner} onChange={(e) => setFolderField(f.id, "owner", e.target.value)} style={{ ...inputStyle, width: 110, padding: "4px 6px" }}>
+              <button
+                onClick={() => toggleEditingLinks(f.id)}
+                title={tip(`${label} folder: ${link ? (connected ? "connected" : "linked, access not confirmed") : "no Drive link yet"}. Click to ${link ? "edit" : "add"} the link.`)}
+                style={{ ...chipBtn, color: connected ? TONE.good.fg : link ? TONE.medium.fg : TONE.neutral.fg, background: connected ? TONE.good.bg : link ? TONE.medium.bg : TONE.neutral.bg, border: "none" }}
+              >
+                {label}: {connected ? "Connected" : link ? "Linked" : "Not linked"}
+              </button>
+            );
+          };
+          const primaryStyle: React.CSSProperties = { cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 10px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", textDecoration: "none", display: "inline-block", width: 128, maxWidth: "100%", boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+          const overflowItem = (label: string, onClick: () => void, opts?: { disabled?: boolean; title?: string; last?: boolean }) => (
+            <button
+              key={label}
+              disabled={opts?.disabled}
+              title={opts?.title}
+              onClick={() => { onClick(); setOverflowOpen(null); }}
+              style={{ display: "block", width: "100%", textAlign: "left", cursor: opts?.disabled ? "wait" : "pointer", fontSize: 12, padding: "8px 12px", border: "none", background: "transparent", color: "#374151", borderBottom: opts?.last ? "none" : "1px solid #f1f5f9" }}
+            >
+              {label}
+            </button>
+          );
+          const progChip = (label: string, value: string, on: boolean, onColor: string) => (
+            <span key={label} style={{ fontSize: 10.5, fontWeight: on ? 700 : 500, color: on ? onColor : "#94a3b8", background: "#f8fafc", border: "1px solid #eef1f5", borderRadius: 999, padding: "2px 9px", whiteSpace: "nowrap" }}>
+              {label} {value}
+            </span>
+          );
+          return (
+            <div
+              key={f.id}
+              ref={(el) => { rowRefs.current[f.subCriterionId] = el; }}
+              style={{ border: "1px solid #e2e8f0", borderLeft: "4px solid #7c3aed", borderRadius: 10, background: "#fff", maxWidth: "100%", overflow: "hidden" }}
+            >
+              {/* Header: name (click to expand details) + Status/Owner chips */}
+              <div
+                onClick={() => toggleSubCritRow(f.id)}
+                title={rowExpanded ? "Collapse access/audit details" : "Expand access/audit details"}
+                style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "9px 12px 6px", cursor: "pointer" }}
+              >
+                <span style={{ color: "#94a3b8", fontSize: 11, flexShrink: 0, transition: "transform 0.15s", transform: rowExpanded ? "rotate(90deg)" : "none" }}>▸</span>
+                <b style={{ fontSize: 13 }}>{f.folderName}</b>
+                <span style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }} onClick={(e) => e.stopPropagation()}>
+                  {editingField?.id === f.id && editingField.field === "status" ? (
+                    <select
+                      autoFocus
+                      value={f.status}
+                      onBlur={() => setEditingField(null)}
+                      onChange={(e) => { setFolderField(f.id, "status", e.target.value as FolderStatus); setEditingField(null); }}
+                      style={{ ...inputStyle, width: 120, padding: "3px 6px", fontSize: 11 }}
+                    >
+                      {STATUSES.map((st) => <option key={st}>{st}</option>)}
+                    </select>
+                  ) : (
+                    <button onClick={() => setEditingField({ id: f.id, field: "status" })} title={tip("Folder workflow status. Click to change.")} style={chipBtn}>
+                      {f.status}
+                    </button>
+                  )}
+                  {editingField?.id === f.id && editingField.field === "owner" ? (
+                    <select
+                      autoFocus
+                      value={f.owner}
+                      onBlur={() => setEditingField(null)}
+                      onChange={(e) => { setFolderField(f.id, "owner", e.target.value); setEditingField(null); }}
+                      style={{ ...inputStyle, width: 110, padding: "3px 6px", fontSize: 11 }}
+                    >
                       <option value="">(unassigned)</option>
                       {departments.map((d) => <option key={d.id} value={d.acronym}>{d.acronym}</option>)}
                     </select>
-                  </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <select value={f.status} onChange={(e) => setFolderField(f.id, "status", e.target.value as FolderStatus)} style={{ ...inputStyle, width: 110, padding: "4px 6px" }}>
-                      {STATUSES.map((s) => <option key={s}>{s}</option>)}
-                    </select>
-                  </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: "#3b82f6", minWidth: 52, textTransform: "uppercase", letterSpacing: 0.3 }}>Policy</span>
-                        <input
-                          placeholder="Policy folder link…"
-                          value={f.policyLink || ""}
-                          onChange={(e) => setFolderField(f.id, "policyLink", e.target.value)}
-                          style={{ ...inputStyle, width: 140, padding: "3px 5px", fontSize: 11 }}
-                        />
-                        {f.policyLink && <a href={f.policyLink} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#3b82f6" }}>↗</a>}
-                        {f.policyAccessStatus && <Pill s={ACCESS_TONE[f.policyAccessStatus]}>{f.policyAccessStatus}</Pill>}
-                      </div>
-                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", minWidth: 52, textTransform: "uppercase", letterSpacing: 0.3 }}>Evidence</span>
-                        <input
-                          placeholder="Evidence folder link…"
-                          value={f.folderLink || ""}
-                          onChange={(e) => setFolderField(f.id, "folderLink", e.target.value)}
-                          style={{ ...inputStyle, width: 140, padding: "3px 5px", fontSize: 11 }}
-                        />
-                        {f.folderLink && <a href={f.folderLink} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#16a34a" }}>↗</a>}
-                        {f.accessCheckStatus && <Pill s={ACCESS_TONE[f.accessCheckStatus]}>{f.accessCheckStatus}</Pill>}
-                      </div>
-                    </div>
-                  </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    {(() => {
-                      const path = analysisPath[f.subCriterionId] ?? "A";
-                      const prog = subCritProgress[f.subCriterionId];
-                      // Option A's three sub-steps, shown inline so the user
-                      // sees it is a multi-step path BEFORE leaving the row.
-                      const subSteps: Array<{ n: number; label: string; done: boolean }> = [
-                        { n: 1, label: "PPD review", done: !!prog?.ppdDone },
-                        { n: 2, label: "Evidence", done: !!prog?.evidenceDone && !!prog?.ppdDone },
-                        { n: 3, label: "Compile", done: !!prog?.compileDone },
-                      ];
-                      return (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 168 }}>
-                          <div style={{ display: "flex", gap: 4 }}>
-                            <button
-                              onClick={() => setAnalysisPath(f.subCriterionId, "A")}
-                              title={tip("Option A (PPD + Evidence), two steps: checks whether the PPD documents each requirement, then checks the evidence against it. Slower, but mirrors how SSG assessors work.")}
-                              style={{
-                                cursor: "pointer", textAlign: "left", flex: 1, padding: "5px 7px", borderRadius: 6, fontSize: 10.5, lineHeight: 1.3,
-                                border: `1.5px solid ${path === "A" ? "#7c3aed" : "#e2e8f0"}`,
-                                background: path === "A" ? "#faf5ff" : "#fff",
-                                color: path === "A" ? "#5b21b6" : "#64748b",
-                              }}
-                            >
-                              <div style={{ fontWeight: 700 }}>{path === "A" ? "◉" : "○"} Option A · PPD + Evidence</div>
-                              <div style={{ fontWeight: 400, color: "#94a3b8" }}>Deep, assessor-grade check</div>
-                            </button>
-                            <button
-                              onClick={() => setAnalysisPath(f.subCriterionId, "B")}
-                              title={tip("Option B (Staged audit): a single pass straight to APSR verdicts on the Sub-Criterion Checklist. Faster and cheaper; best for a quick first sweep.")}
-                              style={{
-                                cursor: "pointer", textAlign: "left", flex: 1, padding: "5px 7px", borderRadius: 6, fontSize: 10.5, lineHeight: 1.3,
-                                border: `1.5px solid ${path === "B" ? "#7c3aed" : "#e2e8f0"}`,
-                                background: path === "B" ? "#faf5ff" : "#fff",
-                                color: path === "B" ? "#5b21b6" : "#64748b",
-                              }}
-                            >
-                              <div style={{ fontWeight: 700 }}>{path === "B" ? "◉" : "○"} Option B · Staged audit</div>
-                              <div style={{ fontWeight: 400, color: "#94a3b8" }}>Fast screening sweep</div>
-                            </button>
-                          </div>
-                          {path === "A" && (
-                            <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 10.5, whiteSpace: "nowrap" }} title="Option A runs in three steps on the PPD Requirements Review page">
-                              {subSteps.map((s, i) => (
-                                <Fragment key={s.n}>
-                                  {i > 0 && <span style={{ color: "#cbd5e1" }}>·</span>}
-                                  <span style={{ color: s.done ? "#15803d" : "#94a3b8", fontWeight: s.done ? 700 : 400 }}>
-                                    {s.done ? "✓" : s.n} {s.label}
-                                  </span>
-                                </Fragment>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    {(() => {
-                      const prog = subCritProgress[f.subCriterionId];
-                      if (!prog) return <span style={{ fontSize: 11.5, color: "#94a3b8" }}>–</span>;
-                      const cell = (label: string, done: boolean) => (
-                        <span style={{ whiteSpace: "nowrap", color: done ? "#15803d" : "#94a3b8", fontWeight: done ? 700 : 400 }}>
-                          {label} {done ? "✓" : "–"}
+                  ) : (
+                    <button onClick={() => setEditingField({ id: f.id, field: "owner" })} title={tip("Owning department. Click to change.")} style={chipBtn}>
+                      Owner: {f.owner || "—"}
+                    </button>
+                  )}
+                </span>
+              </div>
+
+              {/* Links: compact chips; inputs appear only while editing */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "0 12px 6px 30px" }}>
+                <span style={rowLabel}>Links</span>
+                {linkChip("policy")}
+                {linkChip("evidence")}
+                {f.policyLink && <a href={f.policyLink} target="_blank" rel="noreferrer" title="Open the Policy folder in Drive" style={{ fontSize: 11, color: "#3b82f6", textDecoration: "none" }}>Policy ↗</a>}
+                {f.folderLink && <a href={f.folderLink} target="_blank" rel="noreferrer" title="Open the Evidence folder in Drive" style={{ fontSize: 11, color: "#16a34a", textDecoration: "none" }}>Evidence ↗</a>}
+              </div>
+              {linksEditing && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: "0 12px 8px 30px" }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#3b82f6", minWidth: 58, textTransform: "uppercase", letterSpacing: 0.3 }}>Policy</span>
+                    <input
+                      placeholder="Policy folder link…"
+                      value={f.policyLink || ""}
+                      onChange={(e) => setFolderField(f.id, "policyLink", e.target.value)}
+                      style={{ ...inputStyle, flex: 1, minWidth: 180, padding: "4px 6px", fontSize: 11 }}
+                    />
+                    {f.policyAccessStatus && <Pill s={ACCESS_TONE[f.policyAccessStatus]}>{f.policyAccessStatus}</Pill>}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", minWidth: 58, textTransform: "uppercase", letterSpacing: 0.3 }}>Evidence</span>
+                    <input
+                      placeholder="Evidence folder link…"
+                      value={f.folderLink || ""}
+                      onChange={(e) => setFolderField(f.id, "folderLink", e.target.value)}
+                      style={{ ...inputStyle, flex: 1, minWidth: 180, padding: "4px 6px", fontSize: 11 }}
+                    />
+                    {f.accessCheckStatus && <Pill s={ACCESS_TONE[f.accessCheckStatus]}>{f.accessCheckStatus}</Pill>}
+                  </div>
+                  <button onClick={() => toggleEditingLinks(f.id)} style={{ alignSelf: "flex-start", cursor: "pointer", fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#64748b" }}>
+                    Done
+                  </button>
+                </div>
+              )}
+
+              {/* Path: compact A/B chips + Option A sub-steps */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "0 12px 6px 30px" }}>
+                <span style={rowLabel}>Path</span>
+                <button
+                  onClick={() => setAnalysisPath(f.subCriterionId, "A")}
+                  title={tip("Option A (PPD + Evidence), two steps: checks whether the PPD documents each requirement, then checks the evidence against it. Slower, but mirrors how SSG assessors work.")}
+                  style={{ ...chipBtn, border: `1.5px solid ${path === "A" ? "#7c3aed" : "#e2e8f0"}`, background: path === "A" ? "#faf5ff" : "#fff", color: path === "A" ? "#5b21b6" : "#64748b", fontWeight: 700 }}
+                >
+                  {path === "A" ? "◉" : "○"} A · PPD + Evidence
+                </button>
+                <button
+                  onClick={() => setAnalysisPath(f.subCriterionId, "B")}
+                  title={tip("Option B (Staged audit): a single pass straight to APSR verdicts on the Sub-Criterion Checklist. Faster and cheaper; best for a quick first sweep.")}
+                  style={{ ...chipBtn, border: `1.5px solid ${path === "B" ? "#7c3aed" : "#e2e8f0"}`, background: path === "B" ? "#faf5ff" : "#fff", color: path === "B" ? "#5b21b6" : "#64748b", fontWeight: 700 }}
+                >
+                  {path === "B" ? "◉" : "○"} B · Staged audit
+                </button>
+                {path === "A" && (
+                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 10.5, flexWrap: "wrap" }} title="Option A runs in three steps on the PPD Requirements Review page">
+                    {([
+                      { n: 1, label: "PPD", done: !!prog?.ppdDone },
+                      { n: 2, label: "Evidence", done: !!prog?.evidenceDone && !!prog?.ppdDone },
+                      { n: 3, label: "Compile", done: !!prog?.compileDone },
+                    ]).map((st, i) => (
+                      <Fragment key={st.n}>
+                        {i > 0 && <span style={{ color: "#cbd5e1" }}>·</span>}
+                        <span style={{ color: st.done ? "#15803d" : "#94a3b8", fontWeight: st.done ? 700 : 400, whiteSpace: "nowrap" }}>
+                          {st.done ? "✓" : st.n} {st.label}
                         </span>
-                      );
-                      return (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }} title="Completion summary for this sub-criterion: PPD review run, evidence assessed, findings raised, checklist band">
-                          {cell("PPD", prog.ppdDone)}
-                          {cell("Evidence", prog.evidenceDone)}
-                          <span style={{ whiteSpace: "nowrap", color: prog.findingsCount > 0 ? "#b45309" : "#94a3b8", fontWeight: prog.findingsCount > 0 ? 700 : 400 }}>
-                            Findings {prog.findingsCount}
-                          </span>
-                          <span style={{ whiteSpace: "nowrap", color: prog.bandLabel === "–" ? "#94a3b8" : "#4338ca", fontWeight: prog.bandLabel === "–" ? 400 : 700 }}>
-                            Band {prog.bandLabel}
-                          </span>
-                        </div>
-                      );
-                    })()}
-                  </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    {isBusy ? (
-                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                        <button disabled style={{ cursor: "wait", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #93c5fd", background: "#dbeafe", color: "#1d4ed8", whiteSpace: "nowrap", opacity: 0.8 }}>
-                          Auditing…
-                        </button>
-                        <button onClick={cancelBusy} style={{ cursor: "pointer", fontSize: 11, padding: "6px 9px", borderRadius: 7, border: "1px solid #fca5a5", background: "#fff", color: "#b23121", whiteSpace: "nowrap" }}>
-                          Cancel
-                        </button>
-                      </div>
+                      </Fragment>
+                    ))}
+                  </span>
+                )}
+              </div>
+
+              {/* Progress: completion chips */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "0 12px 6px 30px" }} title={tip("Completion summary for this sub-criterion: PPD review run, evidence assessed, findings raised, checklist band")}>
+                <span style={rowLabel}>Progress</span>
+                {prog ? (
+                  <>
+                    {progChip("PPD", prog.ppdDone ? "✓" : "–", prog.ppdDone, "#15803d")}
+                    {progChip("Evidence", prog.evidenceDone ? "✓" : "–", prog.evidenceDone, "#15803d")}
+                    {progChip("Findings", String(prog.findingsCount), prog.findingsCount > 0, "#b45309")}
+                    {progChip("Band", prog.bandLabel, prog.bandLabel !== "–", "#4338ca")}
+                  </>
+                ) : (
+                  <span style={{ fontSize: 11, color: "#94a3b8" }}>–</span>
+                )}
+              </div>
+
+              {/* Action: one short primary + Last run + overflow */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "2px 12px 10px 30px" }}>
+                <span style={rowLabel}>Action</span>
+                {isBusy ? (
+                  <>
+                    <button disabled style={{ cursor: "wait", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #93c5fd", background: "#dbeafe", color: "#1d4ed8", whiteSpace: "nowrap", opacity: 0.8 }}>
+                      Auditing…
+                    </button>
+                    <button onClick={cancelBusy} style={{ cursor: "pointer", fontSize: 11, padding: "6px 9px", borderRadius: 7, border: "1px solid #fca5a5", background: "#fff", color: "#b23121", whiteSpace: "nowrap" }}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {auditMode === "full-auto" ? (
+                      <button
+                        disabled
+                        title={tip("Full auto mode: per-card runs are locked. Use the single 'Run full audit' button at the top of this page, or change the mode on Start Audit.")}
+                        style={{ ...primaryStyle, cursor: "not-allowed", background: "#e2e8f0", border: "1px solid #cbd5e1", color: "#94a3b8" }}
+                      >
+                        Locked
+                      </button>
+                    ) : auditMode === "manual" ? (
+                      <Link
+                        to={firstItemId ? `/sub-checklist?item=${firstItemId}` : "/sub-checklist"}
+                        title={tip("Manual mode: the AI decides nothing. Enter each verdict yourself in the Sub-Criterion Checklist; AI suggestions are available per item on request.")}
+                        style={primaryStyle}
+                      >
+                        Open checklist →
+                      </Link>
+                    ) : path === "A" ? (
+                      <Link
+                        to={`/ppd-review?item=${f.subCriterionId}`}
+                        title={tip("Option A (PPD + Evidence): run the PPD review, then the evidence assessment, then compile findings. You approve each result before it commits (Hybrid mode).")}
+                        style={primaryStyle}
+                      >
+                        Start review →
+                      </Link>
                     ) : (
-                      (() => {
-                        const path = analysisPath[f.subCriterionId] ?? "A";
-                        const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id;
-                        // Fixed width so every row's primary button aligns and can
-                        // never overflow the Action column; the full description
-                        // lives in the tooltip, not the label.
-                        const primaryStyle: React.CSSProperties = { cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 10px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", textDecoration: "none", display: "inline-block", width: 128, maxWidth: "100%", boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
-                        const overflowItem = (label: string, onClick: () => void, opts?: { disabled?: boolean; title?: string; last?: boolean }) => (
-                          <button
-                            key={label}
-                            disabled={opts?.disabled}
-                            title={opts?.title}
-                            onClick={() => { onClick(); setOverflowOpen(null); }}
-                            style={{ display: "block", width: "100%", textAlign: "left", cursor: opts?.disabled ? "wait" : "pointer", fontSize: 12, padding: "8px 12px", border: "none", background: "transparent", color: "#374151", borderBottom: opts?.last ? "none" : "1px solid #f1f5f9" }}
-                          >
-                            {label}
-                          </button>
-                        );
-                        return (
-                          <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-                            {/* ONE primary action per row, matching the selected path and the cycle mode. */}
-                            {auditMode === "full-auto" ? (
-                              <button
-                                disabled
-                                title={tip("Full auto mode: per-row runs are locked. Use the single 'Run full audit' button at the top of this page, or change the mode on Start Audit.")}
-                                style={{ ...primaryStyle, cursor: "not-allowed", background: "#e2e8f0", border: "1px solid #cbd5e1", color: "#94a3b8" }}
-                              >
-                                Locked
-                              </button>
-                            ) : auditMode === "manual" ? (
-                              <Link
-                                to={firstItemId ? `/sub-checklist?item=${firstItemId}` : "/sub-checklist"}
-                                title={tip("Manual mode: the AI decides nothing. Enter each verdict yourself in the Sub-Criterion Checklist; AI suggestions are available per item on request.")}
-                                style={primaryStyle}
-                              >
-                                Open checklist →
-                              </Link>
-                            ) : path === "A" ? (
-                              <Link
-                                to={`/ppd-review?item=${f.subCriterionId}`}
-                                title={tip("Option A (PPD + Evidence): run the PPD review, then the evidence assessment, then compile findings. You approve each result before it commits (Hybrid mode).")}
-                                style={primaryStyle}
-                              >
-                                Start review →
-                              </Link>
-                            ) : (
-                              <button
-                                onClick={() => auditFolderStaged(f.id, "all")}
-                                title={tip("Option B (Staged audit): policy, evidence, then outcome and review passes produce APSR verdicts, each stopping for your approval before it commits (Hybrid mode).")}
-                                style={primaryStyle}
-                              >
-                                Run audit →
-                              </button>
-                            )}
-                            {lastRun && (
-                              <button
-                                onClick={() => setViewingRun(lastRun)}
-                                title={`View run ${lastRun.runId} — ${new Date(lastRun.startedAt).toLocaleDateString()}`}
-                                style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#374151", whiteSpace: "nowrap" }}
-                              >
-                                Last run ↗
-                              </button>
-                            )}
-                            {/* Secondary actions live here — never competing solid buttons. */}
-                            <div id={`overflow-${f.id}`} style={{ position: "relative" }}>
-                              <button
-                                onClick={() => setOverflowOpen(overflowOpen === f.id ? null : f.id)}
-                                title={tip("More actions: partial Option B runs and Drive access checks")}
-                                style={{ cursor: "pointer", fontSize: 13, padding: "5px 8px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#fff", color: "#64748b", lineHeight: 1 }}
-                              >
-                                ⋯
-                              </button>
-                              {overflowOpen === f.id && (
-                                <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 14px #0002", zIndex: 30, minWidth: 230, overflow: "hidden" }}>
-                                  {auditMode === "hybrid" && path === "A" &&
-                                    overflowItem("Run staged audit (Option B)", () => auditFolderStaged(f.id, "all"), {
-                                      title: "Runs the Option B engine on this folder even though Option A is selected — verdicts land on the Sub-Criterion Checklist",
-                                    })}
-                                  {auditMode === "hybrid" && overflowItem("Policy check only (Option B)", () => auditFolderStaged(f.id, "policy"), {
-                                    title: "Option B partial run: check only Policy & Procedure documents for documented approaches",
-                                  })}
-                                  {auditMode === "hybrid" && overflowItem("Evidence check only (Option B)", () => auditFolderStaged(f.id, "evidence"), {
-                                    title: "Option B partial run: check only Actual Evidence documents for implementation records",
-                                  })}
-                                  {overflowItem(busy === `folderaccess:policy:${f.id}` ? "Checking…" : "Check policy access", () => checkFolderAccess(f.id, "policy"), {
-                                    disabled: busy === `folderaccess:policy:${f.id}`,
-                                  })}
-                                  {overflowItem(busy === `folderaccess:evidence:${f.id}` ? "Checking…" : "Check evidence access", () => checkFolderAccess(f.id, "evidence"), {
-                                    disabled: busy === `folderaccess:evidence:${f.id}`,
-                                    last: true,
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()
+                      <button
+                        onClick={() => auditFolderStaged(f.id, "all")}
+                        title={tip("Option B (Staged audit): policy, evidence, then outcome and review passes produce APSR verdicts, each stopping for your approval before it commits (Hybrid mode).")}
+                        style={primaryStyle}
+                      >
+                        Run audit →
+                      </button>
                     )}
-                  </td>
-                </tr>
-
-                {/* Same-folder warning */}
-                {rowExpanded && f.policyLink && f.folderLink && f.policyLink === f.folderLink && (
-                  <tr>
-                    <td colSpan={7} style={{ padding: "0 10px 8px 28px" }}>
-                      <div style={{ background: "#fff7ed", borderLeft: "3px solid #fb923c", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12, color: "#9a3412" }}>
-                        ⚠ The <b>Policy &amp; Procedure</b> and <b>Actual Evidence</b> links point to the <b>same folder</b>. Link two different folders for a proper audit.
-                      </div>
-                    </td>
-                  </tr>
+                    {lastRun && (
+                      <button
+                        onClick={() => setViewingRun(lastRun)}
+                        title={`View run ${lastRun.runId} — ${new Date(lastRun.startedAt).toLocaleDateString()}`}
+                        style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#374151", whiteSpace: "nowrap" }}
+                      >
+                        Last run ↗
+                      </button>
+                    )}
+                    {/* Secondary actions live here — never competing solid buttons. */}
+                    <div id={`overflow-${f.id}`} style={{ position: "relative" }}>
+                      <button
+                        onClick={() => setOverflowOpen(overflowOpen === f.id ? null : f.id)}
+                        title={tip("More actions: partial Option B runs and Drive access checks")}
+                        style={{ cursor: "pointer", fontSize: 13, padding: "5px 8px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#fff", color: "#64748b", lineHeight: 1 }}
+                      >
+                        ⋯
+                      </button>
+                      {overflowOpen === f.id && (
+                        <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 14px #0002", zIndex: 30, minWidth: 230, overflow: "hidden" }}>
+                          {auditMode === "hybrid" && path === "A" &&
+                            overflowItem("Run staged audit (Option B)", () => auditFolderStaged(f.id, "all"), {
+                              title: "Runs the Option B engine on this folder even though Option A is selected — verdicts land on the Sub-Criterion Checklist",
+                            })}
+                          {auditMode === "hybrid" && overflowItem("Policy check only (Option B)", () => auditFolderStaged(f.id, "policy"), {
+                            title: "Option B partial run: check only Policy & Procedure documents for documented approaches",
+                          })}
+                          {auditMode === "hybrid" && overflowItem("Evidence check only (Option B)", () => auditFolderStaged(f.id, "evidence"), {
+                            title: "Option B partial run: check only Actual Evidence documents for implementation records",
+                          })}
+                          {overflowItem(busy === `folderaccess:policy:${f.id}` ? "Checking…" : "Check policy access", () => checkFolderAccess(f.id, "policy"), {
+                            disabled: busy === `folderaccess:policy:${f.id}`,
+                          })}
+                          {overflowItem(busy === `folderaccess:evidence:${f.id}` ? "Checking…" : "Check evidence access", () => checkFolderAccess(f.id, "evidence"), {
+                            disabled: busy === `folderaccess:evidence:${f.id}`,
+                            last: true,
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
                 )}
+              </div>
 
-                {/* Policy access note */}
-                {rowExpanded && f.policyAccessNote && !dismissedAccessNotes.has(policyDismissKey) && (
-                  <tr>
-                    <td colSpan={7} style={{ padding: "0 10px 6px 28px" }}>
-                      <div style={{ background: "#f8fafc", borderLeft: "3px solid #93c5fd", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#3b82f6", textTransform: "uppercase", letterSpacing: 0.4 }}>Access — policy</span>
-                          <Pill s={ACCESS_TONE[f.policyAccessStatus || "Not Connected"]}>{f.policyAccessStatus || "Not Connected"}</Pill>
-                          {f.policyAccessAt && <span style={{ color: "#94a3b8", fontSize: 11 }}>checked {new Date(f.policyAccessAt).toLocaleString()}</span>}
-                          <button onClick={() => dismissAccessNote(policyDismissKey)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>✕</button>
-                        </div>
-                        <div style={{ color: "#475569", lineHeight: 1.5 }}>{f.policyAccessNote}</div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-
-                {/* Evidence access note */}
-                {rowExpanded && f.accessCheckNote && !dismissedAccessNotes.has(evidenceDismissKey) && (
-                  <tr>
-                    <td colSpan={7} style={{ padding: "0 10px 6px 28px" }}>
-                      <div style={{ background: "#f8fafc", borderLeft: "3px solid #86efac", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", letterSpacing: 0.4 }}>Access — evidence</span>
-                          <Pill s={ACCESS_TONE[f.accessCheckStatus || "Not Connected"]}>{f.accessCheckStatus || "Not Connected"}</Pill>
-                          {f.accessCheckAt && <span style={{ color: "#94a3b8", fontSize: 11 }}>checked {new Date(f.accessCheckAt).toLocaleString()}</span>}
-                          <button onClick={() => dismissAccessNote(evidenceDismissKey)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>✕</button>
-                        </div>
-                        <div style={{ color: "#475569", lineHeight: 1.5 }}>{f.accessCheckNote}</div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-
-                {/* Audit result (dismissible) */}
-                {rowExpanded && f.lastAuditSummary && !dismissedAuditResults.has(auditDismissKey) && (
-                  <tr>
-                    <td colSpan={7} style={{ padding: "0 10px 10px 28px" }}>
-                      <div style={{ background: "#f0fdf4", borderLeft: "3px solid #86c79f", borderRadius: "0 8px 8px 0", padding: "10px 12px", fontSize: 12 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.4 }}>Audit result</span>
-                          <Pill s={f.lastAuditLive ? "progress" : "medium"}>{f.lastAuditLive ? "AI" : "Offline estimate"}</Pill>
-                          <button onClick={() => dismissAuditResult(auditDismissKey)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>✕</button>
-                        </div>
-                        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 7, padding: "5px 8px", background: "#fff", borderRadius: 6, border: "1px solid #dcfce7" }}>
-                          {f.lastAuditRunId && (
-                            <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#374151", background: "#f1f5f9", border: "1px solid #d1d5db", borderRadius: 5, padding: "1px 6px" }}>{f.lastAuditRunId}</span>
-                          )}
-                          {f.lastAuditAuditor && <span style={{ fontSize: 11.5, color: "#374151" }}><span style={{ color: "#6b7280" }}>Auditor:</span> <b>{f.lastAuditAuditor}</b></span>}
-                          {f.lastAuditAt && <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>Audited {new Date(f.lastAuditAt).toLocaleString()}</span>}
-                        </div>
-                        <div style={{ color: "#334155", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
-                          {f.lastAuditSummary.length > SUMMARY_CAP && !expanded[f.id]
-                            ? `${f.lastAuditSummary.slice(0, SUMMARY_CAP)}…`
-                            : f.lastAuditSummary}
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
-                          {f.lastAuditSummary.length > SUMMARY_CAP && (
-                            <button onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))} style={{ cursor: "pointer", border: "none", background: "transparent", color: "#2563eb", fontSize: 11.5, padding: 0, textDecoration: "underline" }}>
-                              {expanded[f.id] ? "Show less" : "Show full result"}
-                            </button>
-                          )}
-                          <Link
-                            to={
-                              (analysisPath[f.subCriterionId] ?? "A") === "A"
-                                ? `/ppd-review?item=${f.subCriterionId}`
-                                : `/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id ?? ""}`
-                            }
-                            style={{ fontSize: 11, color: "#2563eb", textDecoration: "none", whiteSpace: "nowrap" }}
-                          >
-                            View Results →
-                          </Link>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
+              {/* Expandable detail: same-folder warning + access notes + audit result */}
+              {rowExpanded && f.policyLink && f.folderLink && f.policyLink === f.folderLink && (
+                <div style={{ padding: "0 12px 8px 30px" }}>
+                  <div style={{ background: "#fff7ed", borderLeft: "3px solid #fb923c", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12, color: "#9a3412" }}>
+                    ⚠ The <b>Policy &amp; Procedure</b> and <b>Actual Evidence</b> links point to the <b>same folder</b>. Link two different folders for a proper audit.
+                  </div>
+                </div>
+              )}
+              {rowExpanded && f.policyAccessNote && !dismissedAccessNotes.has(policyDismissKey) && (
+                <div style={{ padding: "0 12px 6px 30px" }}>
+                  <div style={{ background: "#f8fafc", borderLeft: "3px solid #93c5fd", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#3b82f6", textTransform: "uppercase", letterSpacing: 0.4 }}>Access — policy</span>
+                      <Pill s={ACCESS_TONE[f.policyAccessStatus || "Not Connected"]}>{f.policyAccessStatus || "Not Connected"}</Pill>
+                      {f.policyAccessAt && <span style={{ color: "#94a3b8", fontSize: 11 }}>checked {new Date(f.policyAccessAt).toLocaleString()}</span>}
+                      <button onClick={() => dismissAccessNote(policyDismissKey)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>✕</button>
+                    </div>
+                    <div style={{ color: "#475569", lineHeight: 1.5 }}>{f.policyAccessNote}</div>
+                  </div>
+                </div>
+              )}
+              {rowExpanded && f.accessCheckNote && !dismissedAccessNotes.has(evidenceDismissKey) && (
+                <div style={{ padding: "0 12px 6px 30px" }}>
+                  <div style={{ background: "#f8fafc", borderLeft: "3px solid #86efac", borderRadius: "0 8px 8px 0", padding: "8px 12px", fontSize: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", letterSpacing: 0.4 }}>Access — evidence</span>
+                      <Pill s={ACCESS_TONE[f.accessCheckStatus || "Not Connected"]}>{f.accessCheckStatus || "Not Connected"}</Pill>
+                      {f.accessCheckAt && <span style={{ color: "#94a3b8", fontSize: 11 }}>checked {new Date(f.accessCheckAt).toLocaleString()}</span>}
+                      <button onClick={() => dismissAccessNote(evidenceDismissKey)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>✕</button>
+                    </div>
+                    <div style={{ color: "#475569", lineHeight: 1.5 }}>{f.accessCheckNote}</div>
+                  </div>
+                </div>
+              )}
+              {rowExpanded && f.lastAuditSummary && !dismissedAuditResults.has(auditDismissKey) && (
+                <div style={{ padding: "0 12px 10px 30px" }}>
+                  <div style={{ background: "#f0fdf4", borderLeft: "3px solid #86c79f", borderRadius: "0 8px 8px 0", padding: "10px 12px", fontSize: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#15803d", textTransform: "uppercase", letterSpacing: 0.4 }}>Audit result</span>
+                      <Pill s={f.lastAuditLive ? "progress" : "medium"}>{f.lastAuditLive ? "AI" : "Offline estimate"}</Pill>
+                      <button onClick={() => dismissAuditResult(auditDismissKey)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, padding: "0 2px", lineHeight: 1 }}>✕</button>
+                    </div>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 7, padding: "5px 8px", background: "#fff", borderRadius: 6, border: "1px solid #dcfce7" }}>
+                      {f.lastAuditRunId && (
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#374151", background: "#f1f5f9", border: "1px solid #d1d5db", borderRadius: 5, padding: "1px 6px" }}>{f.lastAuditRunId}</span>
+                      )}
+                      {f.lastAuditAuditor && <span style={{ fontSize: 11.5, color: "#374151" }}><span style={{ color: "#6b7280" }}>Auditor:</span> <b>{f.lastAuditAuditor}</b></span>}
+                      {f.lastAuditAt && <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>Audited {new Date(f.lastAuditAt).toLocaleString()}</span>}
+                    </div>
+                    <div style={{ color: "#334155", lineHeight: 1.55, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                      {f.lastAuditSummary.length > SUMMARY_CAP && !expanded[f.id]
+                        ? `${f.lastAuditSummary.slice(0, SUMMARY_CAP)}…`
+                        : f.lastAuditSummary}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+                      {f.lastAuditSummary.length > SUMMARY_CAP && (
+                        <button onClick={() => setExpanded((e) => ({ ...e, [f.id]: !e[f.id] }))} style={{ cursor: "pointer", border: "none", background: "transparent", color: "#2563eb", fontSize: 11.5, padding: 0, textDecoration: "underline" }}>
+                          {expanded[f.id] ? "Show less" : "Show full result"}
+                        </button>
+                      )}
+                      <Link
+                        to={
+                          path === "A"
+                            ? `/ppd-review?item=${f.subCriterionId}`
+                            : `/sub-checklist?item=${firstItemId ?? ""}`
+                        }
+                        style={{ fontSize: 11, color: "#2563eb", textDecoration: "none", whiteSpace: "nowrap" }}
+                      >
+                        View Results →
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </Card>
     </>
