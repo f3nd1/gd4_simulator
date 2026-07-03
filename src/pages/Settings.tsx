@@ -326,6 +326,12 @@ create policy "anon read/write" on public.workspace_state
 
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>AI integration (OpenAI)</h3>
+        <div style={{ fontSize: 12, color: "#9a3412", background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 8, padding: "8px 11px", marginBottom: 10 }}>
+          ⚠ Your API key is <b>synced to Supabase</b> so it follows you across devices. Because the workspace table uses
+          an open access policy, anyone with your project's anon key can read it. Use a key scoped/limited to this
+          prototype, and don't connect a shared Supabase project you don't control. Leave Supabase unconfigured to keep
+          the key on this browser only.
+        </div>
         <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 12.5 }}>
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={!apiKey} />
           Enable live AI calls (otherwise AI Agent Review and Closure Review use the offline rule-based simulation)

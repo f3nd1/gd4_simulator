@@ -14,12 +14,13 @@ export type AISettingsState = AISettings & {
   clearApiKey: () => void;
 };
 
-// The OpenAI API key must NEVER reach the remote Supabase blob: the Settings
-// page tells users to create an open `using (true)` RLS policy on that
-// table, so anything persisted through workspaceStorage is readable by
-// anyone holding the public anon key. The key therefore lives in its own
-// plain-localStorage slot (browser-local only) and is partialize'd out of
-// the synced store state below. Model/enabled settings keep syncing.
+// The OpenAI API key SYNCS through Supabase (workspaceStorage) so the same key
+// is available across devices/browsers — restored at the user's request for
+// this internal prototype. SECURITY TRADE-OFF: the Settings page tells users
+// to create an open `using (true)` RLS policy on that table, so the synced key
+// is readable by anyone holding the project's public anon key. Settings shows
+// a visible warning to that effect. A plain-localStorage slot is also kept as
+// an offline fallback so a browser with no Supabase config still has the key.
 const API_KEY_LOCAL_SLOT = "ucc-gd4-ai-api-key";
 
 function loadLocalApiKey(): string {
@@ -63,24 +64,18 @@ export const useAISettingsStore = create<AISettingsState>()(
     {
       name: "ucc-gd4-ai-settings:v1",
       storage: workspaceStorage,
-      // The persisted (and therefore Supabase-synced) copy never contains the
-      // API key — it is blanked here and re-attached from the local slot in
-      // merge() below.
-      partialize: (s) => ({ ...s, apiKey: "" }),
-      // Re-attach the key SYNCHRONOUSLY as the persisted blob merges in.
-      // The previous deferred re-attach (onRehydrateStorage + setTimeout 0)
-      // let the blob's blanked apiKey overwrite the in-memory key for a
-      // window after async (Supabase) rehydration — an audit started in that
-      // window read apiKey === "" and silently fell back to offline keyword
-      // mode. merge() runs inline during rehydrate, so the blank never lands.
+      // The API key IS included in the persisted (Supabase-synced) blob so it
+      // follows the user across devices. (Everything is persisted as-is.)
+      // merge() runs inline during rehydrate so there is no window where a
+      // blank value overwrites the in-memory key.
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<AISettingsState>;
-        // Legacy pre-scrub blobs still carry the key inline: capture it into
-        // the local-only slot once. The next persist write re-serialises
-        // through partialize and scrubs it out of the synced copies.
-        const carried = p.apiKey || "";
-        if (carried && !loadLocalApiKey()) saveLocalApiKey(carried);
-        return { ...current, ...p, apiKey: loadLocalApiKey() || carried || current.apiKey };
+        // Prefer the synced key; fall back to the local slot when the synced
+        // blob has none (e.g. a browser with no Supabase configured). Mirror
+        // whatever we resolve back into the local slot as an offline cache.
+        const key = p.apiKey || loadLocalApiKey() || current.apiKey || "";
+        if (key) saveLocalApiKey(key);
+        return { ...current, ...p, apiKey: key };
       },
       // Bump anyone still carrying the old gpt-4o-mini default onto the new
       // GPT-5 default. Only the old default is migrated — a deliberately
