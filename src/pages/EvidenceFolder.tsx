@@ -56,6 +56,26 @@ function stageToVisualStep(stage: AuditProgressState["stage"]): number {
   }
 }
 
+// Human-readable label for the staged-audit stage — shown in the Full-auto
+// overlay's "current sub-criterion detail" so the user watches the same steps
+// the standalone AuditProgressModal shows, without a second modal.
+function stageLabel(stage: AuditProgressState["stage"]): string {
+  switch (stage) {
+    case "listing": return "Listing Drive folder";
+    case "reading": return "Reading & extracting files";
+    case "condensing": return "Condensing large documents";
+    case "auditing": return "AI assessment";
+    case "policy_audit": return "Policy pass (Approach)";
+    case "evidence_audit": return "Evidence pass (Processes)";
+    case "outcome_review": return "Outcome & review pass";
+    case "apsr_build": return "Building APSR verdicts";
+    case "findings_summary": return "Summarising findings";
+    case "saving": return "Committing verdicts";
+    case "complete": return "Complete";
+    case "error": return "Error";
+  }
+}
+
 function stageProgress(p: AuditProgressState): number {
   switch (p.stage) {
     case "listing": return 4;
@@ -1405,20 +1425,29 @@ function FullAuditOverlay() {
           </div>
         </div>
 
-        {/* Live log: one colour-coded row per sub-criterion */}
-        <div style={{ flex: 1, overflowY: "auto", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", minHeight: 120, maxHeight: 260 }}>
-          {progress.entries.length === 0
-            ? <div style={{ fontSize: 12, color: TONE.neutral.fg }}>Starting…</div>
-            : progress.entries.map((e, i) => {
-                const tone = toneOf(e.status);
-                return (
-                  <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 7, fontSize: 12, lineHeight: 1.8 }}>
-                    <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: tone.fg, flexShrink: 0, alignSelf: "center", opacity: e.status === "waiting" ? 0.45 : 1 }} />
-                    <span style={{ color: tone.fg, fontWeight: e.status === "running" ? 700 : 500, opacity: e.status === "waiting" ? 0.75 : 1 }}>{e.label}</span>
-                    <span style={{ color: tone.fg, opacity: 0.85, fontSize: 11 }}>{statusWord(e)}</span>
-                  </div>
-                );
-              })}
+        {/* Scrollable body: the current sub-criterion's live detail (replacing
+            the separate modal that used to be hidden behind this overlay), then
+            the per-sub-criterion sweep log. Header/ring above and Cancel below
+            stay fixed, so Cancel is always reachable however long the detail. */}
+        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, minHeight: 120 }}>
+          {running && <CurrentSubCriterionDetail />}
+
+          {/* Live log: one colour-coded row per sub-criterion */}
+          <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Sweep progress</div>
+            {progress.entries.length === 0
+              ? <div style={{ fontSize: 12, color: TONE.neutral.fg }}>Starting…</div>
+              : progress.entries.map((e, i) => {
+                  const tone = toneOf(e.status);
+                  return (
+                    <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 7, fontSize: 12, lineHeight: 1.8 }}>
+                      <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: tone.fg, flexShrink: 0, alignSelf: "center", opacity: e.status === "waiting" ? 0.45 : 1 }} />
+                      <span style={{ color: tone.fg, fontWeight: e.status === "running" ? 700 : 500, opacity: e.status === "waiting" ? 0.75 : 1 }}>{e.label}</span>
+                      <span style={{ color: tone.fg, opacity: 0.85, fontSize: 11 }}>{statusWord(e)}</span>
+                    </div>
+                  );
+                })}
+          </div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
           {running ? (
@@ -1444,6 +1473,53 @@ function FullAuditOverlay() {
             </>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// The live, per-sub-criterion detail for the sub-criterion being assessed
+// RIGHT NOW, shown inside the Full-auto overlay. Reads the same auditProgress
+// state the standalone AuditProgressModal uses, so the user watches the
+// current item unfold in the same view instead of behind it. Renders a
+// waiting placeholder between sub-criteria (auditProgress momentarily null).
+function CurrentSubCriterionDetail() {
+  const p = useWorkspaceStore((s) => s.auditProgress);
+  const box: React.CSSProperties = { background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "10px 12px" };
+  const heading = (
+    <div style={{ fontSize: 10, fontWeight: 700, color: "#6d28d9", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 6 }}>Current sub-criterion detail</div>
+  );
+  if (!p) {
+    return <div style={box}>{heading}<div style={{ fontSize: 12, color: "#64748b" }}>Preparing the next sub-criterion…</div></div>;
+  }
+  const stat = (label: string, value: string) => (
+    <span style={{ fontSize: 11.5, color: "#475569" }}><b style={{ color: "#334155" }}>{value}</b> {label}</span>
+  );
+  return (
+    <div style={box}>
+      {heading}
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 2 }}>
+        {p.subCriterionId} {p.folderName && p.folderName !== p.subCriterionId ? `· ${p.folderName}` : ""}
+      </div>
+      <div style={{ fontSize: 12, color: "#6d28d9", fontWeight: 600, marginBottom: 4 }}>
+        {stageLabel(p.stage)}
+        {p.stage === "auditing" && p.batchTotal ? ` — batch ${p.batchCurrent ?? 0}/${p.batchTotal}` : ""}
+      </div>
+      {p.stageDetail && (
+        <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.5, marginBottom: 6, whiteSpace: "pre-line" }}>{p.stageDetail}</div>
+      )}
+      {p.currentFileName && (p.stage === "reading" || p.stage === "condensing") && (
+        <div style={{ fontSize: 11.5, color: "#475569", marginBottom: 6 }}>
+          📄 <b>{p.currentFileName}</b>{p.currentFileBucket ? ` (${p.currentFileBucket})` : ""}{p.currentFileAction ? ` — ${p.currentFileAction}` : ""}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        {(p.filesRead != null || p.filesTotal != null) && stat("files read", `${p.filesRead ?? 0}${p.filesTotal ? `/${p.filesTotal}` : ""}`)}
+        {p.linesAssessed != null && stat("lines assessed", String(p.linesAssessed))}
+        {p.findingsDetected != null && stat("potential issues", String(p.findingsDetected))}
+      </div>
+      <div style={{ fontSize: 11, color: "#7c3aed", marginTop: 6 }}>
+        Full auto — verdicts commit automatically as each sub-criterion finishes; no review gate.
       </div>
     </div>
   );
@@ -1785,7 +1861,10 @@ export function EvidenceFolder() {
 
   return (
     <>
-    {auditProgress && (
+    {/* During Full auto the per-folder detail is shown INSIDE FullAuditOverlay
+        instead — rendering this separate modal too would stack two full-screen
+        dialogs and hide the detail behind the sweep overlay. */}
+    {auditProgress && fullAuditProgress?.status !== "running" && (
       <AuditProgressModal
         progress={auditProgress}
         onClose={clearAuditProgress}
