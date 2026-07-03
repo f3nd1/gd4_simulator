@@ -13,6 +13,7 @@ import { TONE } from "../lib/theme";
 import type { FullAuditEntry } from "../lib/fullAudit";
 import { NextStepBanner, Walkthrough, WalkthroughLink, useTip } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
+import { runAuditorDisplay, panelUnderMinNotice, MSG_NO_AUDITORS_EXIST, AUDITOR_CREATION_PATH } from "../lib/auditorGuard";
 
 const SUMMARY_CAP = 320;
 
@@ -1648,6 +1649,12 @@ export function EvidenceFolder() {
 
   const effectiveAuditor =
     auditors.find((a) => a.id === activeAuditorId) || auditors.find((a) => a.role === "Audit Lead") || auditors[0];
+  const auditBlockedReason = useWorkspaceStore((s) => s.auditBlockedReason);
+  const reviewPanelMode = useWorkspaceStore((s) => s.reviewPanelMode);
+  const reviewPanelAuditorIds = useWorkspaceStore((s) => s.reviewPanelAuditorIds);
+  const auditorDisplay = runAuditorDisplay(auditors, activeAuditorId);
+  const panelNotice = panelUnderMinNotice(reviewPanelMode, auditors, reviewPanelAuditorIds);
+  const noAuditors = auditors.length === 0;
 
   const [searchParams] = useSearchParams();
   const focusSub = searchParams.get("sub");
@@ -1939,6 +1946,19 @@ export function EvidenceFolder() {
         </span>
       </div>
 
+      {/* Blocking guard — a run was refused (or would be) because no auditor
+          can be attributed. Rendered above the run controls so it can't be
+          missed; links straight to the page that fixes it. */}
+      {(auditBlockedReason || auditors.length === 0) && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#fbe7e3", border: "1px solid #f2b8ae", borderRadius: 8, fontSize: 12.5, color: "#b23121", fontWeight: 600 }}>
+          <span aria-hidden>⛔</span>
+          <span style={{ flex: 1, minWidth: 240 }}>{auditBlockedReason || MSG_NO_AUDITORS_EXIST}</span>
+          <Link to={AUDITOR_CREATION_PATH} style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: "#b23121", borderRadius: 6, padding: "5px 12px", textDecoration: "none", whiteSpace: "nowrap" }}>
+            Go to Auditor Creation →
+          </Link>
+        </div>
+      )}
+
       {/* Auditor + scope selectors */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10, padding: "8px 10px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
         <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>Run audit as</span>
@@ -1956,6 +1976,16 @@ export function EvidenceFolder() {
               <option key={a.id} value={a.id}>{a.name} — {a.role} ({a.strictness})</option>
             ))}
           </select>
+        )}
+        {/* Who the run will be attributed to, at a glance (name + perspective).
+            Unassigned renders as a warning, never as neutral text. */}
+        <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, ...(auditorDisplay.unassigned ? { color: "#b23121", background: "#fbe7e3", border: "1px solid #f2b8ae" } : { color: "#1f7a4d", background: "#e3f3ea", border: "1px solid #bfe3cf" }) }}>
+          {auditorDisplay.unassigned ? "⚠ " : ""}{auditorDisplay.text}
+        </span>
+        {panelNotice && (
+          <span style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "3px 9px" }}>
+            ⚠ {panelNotice} <Link to={AUDITOR_CREATION_PATH} style={{ color: "#2563eb" }}>Auditor Creation</Link>
+          </span>
         )}
         <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3, marginLeft: 8 }}>Scope</span>
         <select
@@ -2009,9 +2039,9 @@ export function EvidenceFolder() {
           <button
             id="wt-run-full-audit"
             onClick={() => runFullAudit()}
-            disabled={!!busy || fullAuditProgress?.status === "running"}
-            title={tip("Runs every sub-criterion with folder links end to end, using each row's Option A/B choice. Folders without links are marked 'Not assessed / no evidence'.")}
-            style={{ marginLeft: "auto", cursor: busy ? "not-allowed" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff" }}
+            disabled={!!busy || fullAuditProgress?.status === "running" || noAuditors}
+            title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Runs every sub-criterion with folder links end to end, using each row's Option A/B choice. Folders without links are marked 'Not assessed / no evidence'.")}
+            style={{ marginLeft: "auto", cursor: busy || noAuditors ? "not-allowed" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #7c3aed", background: noAuditors ? "#c4b5fd" : "#7c3aed", color: "#fff" }}
           >
             ⚡ Run full audit
           </button>
@@ -2252,8 +2282,9 @@ export function EvidenceFolder() {
                     ) : (
                       <button
                         onClick={() => auditFolderStaged(f.id, "all")}
-                        title={tip("Option B (Staged audit): policy, evidence, then outcome and review passes produce APSR verdicts, each stopping for your approval before it commits (Hybrid mode).")}
-                        style={primaryStyle}
+                        disabled={noAuditors}
+                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option B (Staged audit): policy, evidence, then outcome and review passes produce APSR verdicts, each stopping for your approval before it commits (Hybrid mode).")}
+                        style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >
                         Run audit →
                       </button>

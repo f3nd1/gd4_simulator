@@ -41,6 +41,17 @@ function supportsTemperature(model: string): boolean {
   return !/^(gpt-5|o1|o3|o4)/.test(model);
 }
 
+// Why a run cannot use live AI, in words the user can act on — or null when
+// live AI is available. Every audit gate that falls back to the offline
+// keyword simulation uses this so the degradation is NEVER silent: the run
+// summary says exactly why AI was not used and where to fix it.
+export function aiOfflineReason(s: Pick<AISettings, "enabled" | "apiKey">): string | null {
+  if (!s.enabled && !s.apiKey) return "AI analysis is switched off and no OpenAI API key is saved on this device — enable it and enter your key in Settings → OpenAI.";
+  if (!s.enabled) return "AI analysis is switched off — enable it in Settings → OpenAI.";
+  if (!s.apiKey) return "No OpenAI API key is saved on this device/browser. For security the key never syncs between devices — re-enter it in Settings → OpenAI on this device.";
+  return null;
+}
+
 // Builds a per-call settings object: picks the analysis vs utility model and
 // merges in the School Context briefing. One helper so every call site routes
 // the model and injects context consistently.

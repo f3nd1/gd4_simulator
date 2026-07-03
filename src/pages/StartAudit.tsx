@@ -10,6 +10,7 @@ import { AUDIT_MODES } from "../lib/runModes";
 import { Card } from "../components/ui/Card";
 import { NextStepBanner, Walkthrough, WalkthroughLink, useTip } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
+import { checkAuditorForRun, runAuditorDisplay, panelUnderMinNotice, AUDITOR_CREATION_PATH } from "../lib/auditorGuard";
 import type { AuditMode } from "../types";
 
 const WALKTHROUGH_STEPS = [
@@ -21,16 +22,45 @@ const WALKTHROUGH_STEPS = [
 export function StartAudit() {
   const auditMode = useWorkspaceStore((s) => s.auditMode);
   const setAuditMode = useWorkspaceStore((s) => s.setAuditMode);
+  const auditors = useWorkspaceStore((s) => s.auditors);
+  const activeAuditorId = useWorkspaceStore((s) => s.activeAuditorId);
+  const reviewPanelMode = useWorkspaceStore((s) => s.reviewPanelMode);
+  const reviewPanelAuditorIds = useWorkspaceStore((s) => s.reviewPanelAuditorIds);
   const tip = useTip();
+
+  const guard = checkAuditorForRun(auditors, activeAuditorId);
+  const auditorDisplay = runAuditorDisplay(auditors, activeAuditorId);
+  const panelNotice = panelUnderMinNotice(reviewPanelMode, auditors, reviewPanelAuditorIds);
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
       <Walkthrough pageId="start-audit" steps={WALKTHROUGH_STEPS} />
       <NextStepBanner text={nextStepText("start-audit", { mode: auditMode })} />
 
+      {/* Blocking guard — Full auto (and every other run) refuses to start
+          without a named auditor; say so here, before the user even leaves
+          this page. */}
+      {!guard.ok && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "9px 12px", background: "#fbe7e3", border: "1px solid #f2b8ae", borderRadius: 10, fontSize: 12.5, color: "#b23121", fontWeight: 600 }}>
+          <span aria-hidden>⛔</span>
+          <span style={{ flex: 1, minWidth: 240 }}>{guard.message}</span>
+          <Link to={AUDITOR_CREATION_PATH} style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: "#b23121", borderRadius: 6, padding: "5px 12px", textDecoration: "none", whiteSpace: "nowrap" }}>
+            Go to Auditor Creation →
+          </Link>
+        </div>
+      )}
+      {panelNotice && (
+        <div style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "8px 12px" }}>
+          ⚠ {panelNotice} <Link to={AUDITOR_CREATION_PATH} style={{ color: "#2563eb" }}>Auditor Creation</Link>
+        </div>
+      )}
+
       <Card>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <h3 style={{ margin: 0, fontSize: 15 }}>Start Audit — choose how much the AI does</h3>
+          <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, ...(auditorDisplay.unassigned ? { color: "#b23121", background: "#fbe7e3", border: "1px solid #f2b8ae" } : { color: "#1f7a4d", background: "#e3f3ea", border: "1px solid #bfe3cf" }) }}>
+            Runs as: {auditorDisplay.unassigned ? "⚠ " : ""}{auditorDisplay.text}
+          </span>
           <span style={{ marginLeft: "auto" }}><WalkthroughLink pageId="start-audit" /></span>
         </div>
         <p style={{ fontSize: 12.5, color: "#6b7280", margin: "6px 0 14px" }}>

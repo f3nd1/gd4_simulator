@@ -54,6 +54,7 @@ import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImag
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
+import { checkAuditorForRun } from "../lib/auditorGuard";
 
 // Sequential auto-run queue for the review panel (auto modes). Findings are
 // drained one at a time, and only while the store is otherwise idle, so a
@@ -79,7 +80,7 @@ import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Ref
 import { buildOptionALineWrites } from "../lib/optionAChecklistWrite";
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
-import { describeImage, effectiveSettings, addUsage, type AIUsage } from "../lib/ai/aiClient";
+import { describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
@@ -636,6 +637,12 @@ export type WorkspaceState = {
   // auditor, then the global AI strictness setting.
   activeAuditorId: string | null;
   setActiveAuditor: (id: string | null) => void;
+
+  // Why the last attempted audit run was refused (no auditor selected / none
+  // exist). Set by the guard at the top of every audit entry action; cleared
+  // when a run starts successfully or the auditor selection changes. Pages
+  // render it as a blocking banner next to their run buttons.
+  auditBlockedReason: string | null;
 };
 
 // ---- Audit Journal helpers -----------------------------------------------
@@ -773,8 +780,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       auditJournal: "",
       restoreLog: [],
       activeAuditorId: null,
+      auditBlockedReason: null,
 
-      setActiveAuditor: (id) => set({ activeAuditorId: id }),
+      // Changing the selection clears any "run blocked" banner — the user has
+      // acted on exactly what the message asked for.
+      setActiveAuditor: (id) => set({ activeAuditorId: id, auditBlockedReason: null }),
       setAuditScope: (scope) => set({ auditScope: scope }),
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
@@ -826,7 +836,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const s = get();
         const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
         if (!folder) return;
-        set({ busy: "ppdreview" + subCriterionId });
+        // Every audit entry point refuses to start without a named auditor —
+        // an "Unassigned" run has no attribution and breaks the review panel.
+        const auditorGate = checkAuditorForRun(s.auditors, s.activeAuditorId);
+        if (!auditorGate.ok) { set({ auditBlockedReason: auditorGate.message }); return; }
+        set({ busy: "ppdreview" + subCriterionId, auditBlockedReason: null });
         const runId = `PPD-${subCriterionId}-${Date.now().toString(36).toUpperCase()}`;
         // Run-level abort — cancelBusy() kills the in-flight AI call.
         const runAbort = new AbortController();
@@ -952,7 +966,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const policyDocText = docParts.join("\n\n=== POLICY & PROCEDURE ===\n\n");
 
           const aiSettings = useAISettingsStore.getState();
-          if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, "AI is disabled or no API key is configured in Settings."); return; }
+          if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, aiOfflineReason(aiSettings) ?? "AI is disabled or no API key is configured in Settings."); return; }
           const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
 
           set({ ppdReviewProgress: { subCriterionId, detail: "Starting PPD requirements review…" } });
@@ -1064,8 +1078,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const s = get();
         const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
         if (!folder) return;
+        // See runPPDReview: no run without a named auditor.
+        const auditorGate = checkAuditorForRun(s.auditors, s.activeAuditorId);
+        if (!auditorGate.ok) { set({ auditBlockedReason: auditorGate.message }); return; }
         const ppd = s.ppdReviewResults[subCriterionId];
-        set({ busy: "evidenceassess" + subCriterionId });
+        set({ busy: "evidenceassess" + subCriterionId, auditBlockedReason: null });
         const runId = `EV-${subCriterionId}-${Date.now().toString(36).toUpperCase()}`;
         // Run-level abort — cancelBusy() kills the in-flight AI call.
         const runAbort = new AbortController();
@@ -1215,7 +1232,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const evidenceDocText = docParts.join("\n\n=== ACTUAL EVIDENCE ===\n\n");
 
           const aiSettings = useAISettingsStore.getState();
-          if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, "AI is disabled or no API key is configured in Settings."); return; }
+          if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, aiOfflineReason(aiSettings) ?? "AI is disabled or no API key is configured in Settings."); return; }
           const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
 
           const inputs: EvidenceAssessmentInput[] = ppd.rows.map((r) => ({
@@ -1535,6 +1552,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       runFullAudit: async () => {
         if (get().fullAuditProgress?.status === "running" || get().busy) return;
+        // See runPPDReview: no run without a named auditor.
+        const auditorGate = checkAuditorForRun(get().auditors, get().activeAuditorId);
+        if (!auditorGate.ok) { set({ auditBlockedReason: auditorGate.message }); return; }
+        set({ auditBlockedReason: null });
         const plan = buildFullAuditPlan(get().folders, get().analysisPath, (l) => !!parseFolderId(l || ""));
         if (plan.length === 0) return;
         const linkedCount = plan.filter((p) => p.hasLinks).length;
@@ -2294,7 +2315,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const s = get();
         const folder = s.folders.find((f) => f.id === id);
         if (!folder) return;
-        set({ busy: "folderaudit" + id });
+        // See runPPDReview: no run without a named auditor.
+        const auditorGate = checkAuditorForRun(s.auditors, s.activeAuditorId);
+        if (!auditorGate.ok) { set({ auditBlockedReason: auditorGate.message }); return; }
+        set({ busy: "folderaudit" + id, auditBlockedReason: null });
         // Capture the cancellation token at start — if cancelBusy() is called
         // while the AI call is in flight, this value will no longer match
         // get().auditRunToken and the results will be discarded without writing.
@@ -3291,8 +3315,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         lineParts.push(
           live
             ? `Method: EduTrust APSR rubric vs the GD4 standard — Approach (documented policy) gates the result, then Processes (implementation), Systems & Outcomes, Review.${windowCount > 1 ? ` ${windowCount} document windows used — all files read in full with no condensing.` : ""}${challenged ? " A strict second-pass challenge was applied." : ""}`
-            : "Method: offline keyword estimate — AI was not used (check AI Settings)."
+            : `Method: offline keyword estimate — AI was not used. ${aiOfflineReason(useAISettingsStore.getState()) ?? "Live AI calls failed mid-run — see the warnings above."}`
         );
+        // Never let an offline run read like an AI audit — lead with WHY.
+        {
+          const offlineWhy = !live ? aiOfflineReason(useAISettingsStore.getState()) : null;
+          if (offlineWhy) lineParts.unshift(`⚠ OFFLINE RUN — ${offlineWhy} Results below are keyword estimates only, not an AI assessment.`);
+        }
         // 4. Warnings, each on its own line so they stand out.
         if (truncationNote) lineParts.push(`⚠ ${truncationNote}`);
         if (parseWarnings.length) lineParts.push(`⚠ ${parseWarnings.length} APSR dimension(s) defaulted to "Not evident" due to unexpected model output — those verdicts may be overly harsh; spot-check them.`);
@@ -3457,6 +3486,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const s = get();
         const folder = s.folders.find((f) => f.id === id);
         if (!folder) return;
+        // See runPPDReview: no run without a named auditor.
+        const auditorGate = checkAuditorForRun(s.auditors, s.activeAuditorId);
+        if (!auditorGate.ok) { set({ auditBlockedReason: auditorGate.message }); return; }
+        set({ auditBlockedReason: null });
         // Automation mode for this sub-criterion (NOT the scope `mode` param):
         // decides whether verdicts commit immediately, queue for review, or
         // whether the run happens at all (manual).
@@ -4210,7 +4243,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             `  Evidence (${evidenceFiles.length}): ${evidenceFiles.length > 0 ? evidenceFiles.map(describeFile).join(", ") : "none"}`
           );
         }
-        lineParts.push(live ? `Method: EduTrust APSR rubric vs GD4 standard — Approach gates the result, then Processes, Systems & Outcomes, Review (3 AI passes).` : "Method: offline keyword estimate — AI was not used (check AI Settings).");
+        lineParts.push(live ? `Method: EduTrust APSR rubric vs GD4 standard — Approach gates the result, then Processes, Systems & Outcomes, Review (3 AI passes).` : `Method: offline keyword estimate — AI was not used. ${aiOfflineReason(useAISettingsStore.getState()) ?? "Live AI calls failed mid-run — see the warnings above."}`);
+        // A silent offline run is the worst failure mode this feature has had:
+        // the user believes they got an AI audit. Lead the summary with WHY.
+        {
+          const offlineWhy = !live ? aiOfflineReason(useAISettingsStore.getState()) : null;
+          if (offlineWhy) lineParts.unshift(`⚠ OFFLINE RUN — ${offlineWhy} Results below are keyword estimates only, not an AI assessment.`);
+        }
         if (detectedFileType) lineParts.push(`File type skill injected: ${detectedFileType} (${detectedFileType === "spreadsheet" ? "spreadsheet-evidence.md" : "scanned-document-evidence.md"}).`);
         if (totalWindowsProcessed > 0 && totalCharsAvailable > 0) {
           const coveragePct = Math.round((totalCharsAssessed / totalCharsAvailable) * 100);
@@ -4295,6 +4334,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // bulkAuditStatus. The component navigates to the Scorecard when it
       // resolves. Reuses auditFolderContents verbatim so behaviour can't drift.
       auditAllFolders: async () => {
+        // See runPPDReview: no run without a named auditor.
+        const auditorGate = checkAuditorForRun(get().auditors, get().activeAuditorId);
+        if (!auditorGate.ok) { set({ auditBlockedReason: auditorGate.message, bulkAuditStatus: null }); return; }
+        set({ auditBlockedReason: null });
         const folders = get().folders.filter((f) => parseFolderId(f.folderLink) || parseFolderId(f.policyLink));
         if (folders.length === 0) {
           set({ bulkAuditStatus: null });

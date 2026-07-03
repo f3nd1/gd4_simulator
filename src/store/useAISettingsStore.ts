@@ -64,20 +64,23 @@ export const useAISettingsStore = create<AISettingsState>()(
       name: "ucc-gd4-ai-settings:v1",
       storage: workspaceStorage,
       // The persisted (and therefore Supabase-synced) copy never contains the
-      // API key — it is blanked here and re-attached from the local slot on
-      // rehydrate (see onRehydrateStorage).
+      // API key — it is blanked here and re-attached from the local slot in
+      // merge() below.
       partialize: (s) => ({ ...s, apiKey: "" }),
-      onRehydrateStorage: () => (state) => {
-        // Pre-v2 blobs (localStorage AND the remote Supabase copy) still
-        // carry the key inline. Capture it into the local-only slot once,
-        // then overwrite the in-memory value from the slot — the deferred
-        // setState also triggers a persist write, which re-serialises the
-        // store through partialize and scrubs the key out of both persisted
-        // copies.
-        const carried = state?.apiKey || "";
+      // Re-attach the key SYNCHRONOUSLY as the persisted blob merges in.
+      // The previous deferred re-attach (onRehydrateStorage + setTimeout 0)
+      // let the blob's blanked apiKey overwrite the in-memory key for a
+      // window after async (Supabase) rehydration — an audit started in that
+      // window read apiKey === "" and silently fell back to offline keyword
+      // mode. merge() runs inline during rehydrate, so the blank never lands.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<AISettingsState>;
+        // Legacy pre-scrub blobs still carry the key inline: capture it into
+        // the local-only slot once. The next persist write re-serialises
+        // through partialize and scrubs it out of the synced copies.
+        const carried = p.apiKey || "";
         if (carried && !loadLocalApiKey()) saveLocalApiKey(carried);
-        const key = carried || loadLocalApiKey();
-        setTimeout(() => useAISettingsStore.setState({ apiKey: key }), 0);
+        return { ...current, ...p, apiKey: loadLocalApiKey() || carried || current.apiKey };
       },
       // Bump anyone still carrying the old gpt-4o-mini default onto the new
       // GPT-5 default. Only the old default is migrated — a deliberately
