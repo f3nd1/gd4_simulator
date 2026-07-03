@@ -407,6 +407,12 @@ export type WorkspaceState = {
   // combined assessment (below) without re-reading the policy.
   ppdReviewResults: Record<string, PPDReviewResult>;
   runPPDReview: (subCriterionId: string) => Promise<void>;
+  // Last sub-criterion viewed on the PPD Requirements Review page, persisted so
+  // returning to that page via the bare sidebar link (no ?item= param) shows
+  // the last work instead of a blank slate. The results themselves always
+  // lived in ppdReviewResults (persisted); this just restores the selection.
+  lastPpdSubCriterionId: string | null;
+  setLastPpdSubCriterion: (subCriterionId: string) => void;
   // Evidence Assessment (Option A, "Evidence" tab) — per requirement line,
   // reuses the PPD verdict and reads the Actual Evidence folder fresh for a
   // combined Met/Partial/Not met verdict. compileEvidenceFindings raises a
@@ -773,6 +779,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       schoolContext: { text: "", link: "" },
       evidenceAuditReport: null,
       ppdReviewResults: {},
+      lastPpdSubCriterionId: null,
+      setLastPpdSubCriterion: (subCriterionId) => set({ lastPpdSubCriterionId: subCriterionId }),
       evidenceAssessments: {},
       evidenceAssessmentProgress: null,
       ppdReviewProgress: null,
