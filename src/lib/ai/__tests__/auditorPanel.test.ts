@@ -82,4 +82,50 @@ describe("runAuditorPanel", () => {
     expect(result.reviews.every((r) => r.failed)).toBe(true);
     expect(result.synthesis.summary).toContain("could not be synthesised");
   });
+
+  it("when Round-1 positions disagree, a rebuttal round runs before synthesis", async () => {
+    const panel = [
+      auditor("Ana", { reviewPerspective: "strict-auditor" }),
+      auditor("Ben", { reviewPerspective: "optimistic-process-owner" }),
+    ];
+    // Ana says NC/Major, Ben says No issue → classification split → Round 2.
+    mockChat.mockImplementation(async (messages) => {
+      const sys = String(messages[0]?.content ?? "");
+      if (sys.includes("chair of a GD4 EduTrust audit review panel")) {
+        expect(sys).toContain("rebuttal round"); // chair told discussion happened
+        return JSON.stringify({ summary: "Reconciled.", rootCause: "process gap", correctiveAction: "fix", evidenceForClosure: "records", finalClassification: "NC" });
+      }
+      if (sys.includes("you are now in a discussion round")) {
+        return JSON.stringify({ rebuttal: `Rebuttal from ${sys.includes("You are Ana") ? "Ana" : "Ben"}` });
+      }
+      // Round 1: give opposing positions
+      if (sys.includes("You are Ana")) return JSON.stringify({ analysis: "Ana view", classification: "NC", severity: "Major", rootCauseDirection: "process" });
+      return JSON.stringify({ analysis: "Ben view", classification: "No issue", severity: "None", rootCauseDirection: "none" });
+    });
+
+    const result = await runAuditorPanel(FINDING, panel, SETTINGS);
+    // 2 round-1 + 2 rebuttal + 1 synthesis
+    expect(mockChat).toHaveBeenCalledTimes(5);
+    expect(result.discussionTriggered).toBe(true);
+    expect(result.reviews.every((r) => r.rebuttal)).toBe(true);
+    // Each keeps its own perspective through the rebuttal.
+    expect(result.reviews.map((r) => r.perspectiveLabel)).toEqual(["Strict Auditor", "Optimistic Process Owner"]);
+    expect(result.runWarnings?.some((w) => /disagreed/i.test(w))).toBe(true);
+  });
+
+  it("when Round-1 positions agree, no rebuttal round runs", async () => {
+    const panel = [auditor("Ana"), auditor("Ben")];
+    mockChat.mockImplementation(async (messages) => {
+      const sys = String(messages[0]?.content ?? "");
+      if (sys.includes("chair of a GD4 EduTrust audit review panel")) {
+        return JSON.stringify({ summary: "Agreed.", rootCause: "process gap", correctiveAction: "fix", evidenceForClosure: "records", finalClassification: "NC" });
+      }
+      return JSON.stringify({ analysis: "aligned", classification: "NC", severity: "Major", rootCauseDirection: "process" });
+    });
+
+    const result = await runAuditorPanel(FINDING, panel, SETTINGS);
+    expect(mockChat).toHaveBeenCalledTimes(3); // 2 round-1 + synthesis, no rebuttal
+    expect(result.discussionTriggered).toBeFalsy();
+    expect(result.reviews.every((r) => !r.rebuttal)).toBe(true);
+  });
 });

@@ -11,8 +11,8 @@ import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, 
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
 import { buildSystemPrompt, buildDomainBlock, type SkillCalibrationExample, type SkillCalibrationMemory } from "./skills";
 import { domainExpertiseFor } from "../../data/skills/domainExpertise";
-import type { AuditorProfile, PanelAuditorReview, PanelReviewResult, PanelSynthesis } from "../../types";
-import { perspectiveOf, perspectiveLabel, perspectiveGuidance } from "../reviewPanel";
+import type { AuditorProfile, PanelAuditorReview, PanelReviewPosition, PanelReviewResult, PanelSynthesis } from "../../types";
+import { perspectiveOf, perspectiveLabel, perspectiveGuidance, detectPanelDisagreement } from "../reviewPanel";
 
 export { AIClientError };
 
@@ -454,9 +454,14 @@ export async function runAuditorPanel(
 
 REVIEW PERSPECTIVE — ${label}: ${perspectiveGuidance(perspective)}
 
-Apply a ${strictness} standard. Review the finding ONLY through your perspective above — do not try to cover every angle; the panel's other members cover theirs. Base every point on the finding text and the stated evidence; do not invent documents or quote anything not present. Use neutral, factual language (state what exists or is absent; do not use praise words). Keep it to 3-6 sentences.
+Apply a ${strictness} standard. Review the finding ONLY through your perspective above — do not try to cover every angle; the panel's other members cover theirs. Base every point on the finding text and the stated evidence; do not invent documents or quote anything not present. Use neutral, factual language (state what exists or is absent; do not use praise words). Keep the analysis to 3-6 sentences.
 
-Respond with JSON only: {"analysis": string}.${buildSystemPrompt("findingWriter", null, `runAuditorPanel · ${auditor.name} (${label})`, criterionId, domainSkill)}${domainBlock}`;
+Also state your STRUCTURED POSITION so the panel can detect disagreement:
+- classification: the type you would assign — one of "NC", "OFI", "Observation" or "No issue".
+- severity: "Major", "Minor" or "None".
+- rootCauseDirection: one short phrase naming the direction — one of documentation, process, training, data, review, or none.
+
+Respond with JSON only: {"analysis": string, "classification": string, "severity": string, "rootCauseDirection": string}.${buildSystemPrompt("findingWriter", null, `runAuditorPanel · ${auditor.name} (${label})`, criterionId, domainSkill)}${domainBlock}`;
     try {
       const content = await chatComplete(
         [{ role: "system", content: system }, { role: "user", content: findingBlock }],
@@ -466,12 +471,67 @@ Respond with JSON only: {"analysis": string}.${buildSystemPrompt("findingWriter"
       const parsed = parseJSONObject(content);
       const analysisRaw = typeof parsed.analysis === "string" && parsed.analysis.trim() ? parsed.analysis.trim() : content.trim();
       const analysis = verifyAgainst ? flagUnverifiedQuotes(analysisRaw, verifyAgainst) : analysisRaw;
-      reviews.push({ auditorId: auditor.id, auditorName: auditor.name, perspective, perspectiveLabel: label, analysis });
+      const ps = (k: string) => (typeof parsed[k] === "string" ? (parsed[k] as string).trim() : "");
+      const position: PanelReviewPosition = {
+        classification: ps("classification"),
+        severity: ps("severity"),
+        rootCauseDirection: ps("rootCauseDirection"),
+      };
+      reviews.push({ auditorId: auditor.id, auditorName: auditor.name, perspective, perspectiveLabel: label, analysis, position });
     } catch (err) {
       if (opts.signal?.aborted) { warnings.push("Panel review cancelled mid-run."); break; }
       const msg = err instanceof Error ? err.message : String(err);
       warnings.push(`${auditor.name} (${label}) review failed — ${msg}. Synthesised from the remaining panellists.`);
       reviews.push({ auditorId: auditor.id, auditorName: auditor.name, perspective, perspectiveLabel: label, analysis: "", failed: true, error: msg });
+    }
+  }
+
+  // ── Round 2 — rebuttal (only when the Round-1 positions materially disagree).
+  // Each surviving panellist is shown the OTHERS' Round-1 views and asked to
+  // respond from their own lens: agree, challenge, or revise — and flag where
+  // and why they disagree. Their perspective/strictness is unchanged.
+  let discussionTriggered = false;
+  const round1Usable = reviews.filter((r) => !r.failed && r.analysis);
+  const disagreement = detectPanelDisagreement(reviews);
+  if (disagreement.disagree && round1Usable.length >= 2 && !opts.signal?.aborted) {
+    discussionTriggered = true;
+    warnings.push(`Panellists disagreed, so a rebuttal round was held. ${disagreement.reasons.join(" ")}`);
+    for (const auditor of panel) {
+      if (opts.signal?.aborted) { warnings.push("Rebuttal round cancelled before all auditors responded."); break; }
+      const review = reviews.find((r) => r.auditorId === auditor.id);
+      if (!review || review.failed || !review.analysis) continue; // skip failed Round-1 panellists
+      const others = round1Usable.filter((r) => r.auditorId !== auditor.id);
+      if (others.length === 0) continue;
+      const perspective = review.perspective;
+      const label = review.perspectiveLabel;
+      opts.onProgress?.(`${auditor.name} responding to the panel as ${label}…`);
+      const strictness = strictnessWordFrom(auditor.strictness);
+      const othersDigest = others.map((r) => {
+        const pos = r.position ? ` (position: ${r.position.classification || "—"} / ${r.position.severity || "—"} / ${r.position.rootCauseDirection || "—"})` : "";
+        return `[${r.auditorName} — ${r.perspectiveLabel}]${pos}\n${r.analysis}`;
+      }).join("\n\n");
+      const rebSystem = `You are ${auditor.name}, ${auditor.role || "an auditor"} on a GD4 EduTrust review panel${auditor.focusArea ? `, specialising in ${auditor.focusArea}` : ""}. You already gave your independent view of ONE finding. The panel disagreed, so you are now in a discussion round.
+
+REVIEW PERSPECTIVE — ${label}: ${perspectiveGuidance(perspective)}
+
+Apply a ${strictness} standard and KEEP your perspective. Read the other panellists' views below and respond from your own lens: state clearly where you AGREE, where you CHALLENGE them (and why), and whether you REVISE any part of your own position. Explicitly name the points of disagreement. Do not simply repeat your first review and do not adopt another lens. Base every point on the finding text and stated evidence; do not invent documents. Keep it to 3-6 sentences.
+
+Respond with JSON only: {"rebuttal": string}.${buildSystemPrompt("findingWriter", null, `runAuditorPanel · rebuttal · ${auditor.name} (${label})`, criterionId, domainSkill)}${domainBlock}`;
+      const rebUser = `The finding under review:\n${findingBlock}\n\nYour Round-1 view:\n${review.analysis}\n\nThe other panellists' Round-1 views:\n${othersDigest}\n\nRespond to the panel.`;
+      try {
+        const content = await chatComplete(
+          [{ role: "system", content: rebSystem }, { role: "user", content: rebUser }],
+          settings,
+          { temperature: 0.35, onUsage: opts.onUsage, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+        );
+        const parsed = parseJSONObject(content);
+        const rebRaw = typeof parsed.rebuttal === "string" && parsed.rebuttal.trim() ? parsed.rebuttal.trim() : content.trim();
+        review.rebuttal = verifyAgainst ? flagUnverifiedQuotes(rebRaw, verifyAgainst) : rebRaw;
+      } catch (err) {
+        if (opts.signal?.aborted) { warnings.push("Rebuttal round cancelled mid-run."); break; }
+        const msg = err instanceof Error ? err.message : String(err);
+        warnings.push(`${auditor.name} (${label}) rebuttal failed — ${msg}. Synthesised from their Round-1 view.`);
+      }
     }
   }
 
@@ -484,8 +544,11 @@ Respond with JSON only: {"analysis": string}.${buildSystemPrompt("findingWriter"
   let synthesis = emptySynthesis;
   if (usable.length > 0 && !opts.signal?.aborted) {
     opts.onProgress?.("Synthesising the panel's conclusion…");
-    const panelDigest = usable.map((r) => `[${r.auditorName} — ${r.perspectiveLabel}]\n${r.analysis}`).join("\n\n");
-    const synthSystem = `You are the chair of a GD4 EduTrust audit review panel. You are given several panellists' individual reviews of ONE finding, each from a different perspective (strict auditor, process owner, risk challenger, academic/QA guardian, management reviewer). Combine them into ONE balanced, evidence-based conclusion — reconcile disagreement, do not overstate, and do not simply repeat each panellist.
+    const panelDigest = usable.map((r) => {
+      const base = `[${r.auditorName} — ${r.perspectiveLabel}]\n${r.analysis}`;
+      return r.rebuttal ? `${base}\nAfter discussion: ${r.rebuttal}` : base;
+    }).join("\n\n");
+    const synthSystem = `You are the chair of a GD4 EduTrust audit review panel. You are given several panellists' reviews of ONE finding, each from a different perspective (strict auditor, process owner, risk challenger, academic/QA guardian, management reviewer)${discussionTriggered ? ", along with their post-discussion responses after a rebuttal round in which they disagreed" : ""}. Combine them into ONE balanced, evidence-based conclusion — reconcile the disagreement, weigh the post-discussion views, do not overstate, and do not simply repeat each panellist.
 
 The ROOT CAUSE must name a SYSTEM or PROCESS cause (a governance, documentation, training, data-collection or review gap) — never "human error", "forgot", "poor communication" or blame of an individual.
 
@@ -522,6 +585,7 @@ Respond with JSON only, all fields plain text:
     live: true,
     runWarnings: warnings.length > 0 ? warnings : undefined,
     findingHash: finding.findingHash,
+    discussionTriggered,
   };
 }
 

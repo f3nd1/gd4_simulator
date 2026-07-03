@@ -2,8 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   REVIEW_PERSPECTIVES, perspectiveOf, perspectiveLabel, DEFAULT_PERSPECTIVE,
   assemblePanel, isValidPanel, shouldAutoRunPanel, panelCostEstimate, findingReviewHash,
-  MIN_PANEL, MAX_PANEL,
+  detectPanelDisagreement, MIN_PANEL, MAX_PANEL,
 } from "../reviewPanel";
+import type { PanelAuditorReview } from "../../types";
 import type { AuditorProfile, Finding } from "../../types";
 
 function auditor(id: string, over: Partial<AuditorProfile> = {}): AuditorProfile {
@@ -64,12 +65,14 @@ describe("mode gating (shouldAutoRunPanel)", () => {
 });
 
 describe("cost estimate + finding hash", () => {
-  it("scales one call per auditor plus one synthesis", () => {
+  it("scales one call per auditor plus one synthesis, with a disagreement worst case", () => {
     const c = panelCostEstimate(5, 35);
-    expect(c.perFinding).toBe(6);
+    expect(c.perFinding).toBe(6);       // 5 panellists + synthesis
+    expect(c.perFindingMax).toBe(11);   // + 5 rebuttals on disagreement
     expect(c.total).toBe(210);
+    expect(c.totalMax).toBe(385);
     expect(c.text).toContain("6 calls per finding");
-    expect(c.text).toContain("210 calls");
+    expect(c.text).toContain("210–385 calls");
   });
   it("finding hash changes when the finding text changes, stable otherwise", () => {
     const a = finding({ observation: "x" });
@@ -77,5 +80,51 @@ describe("cost estimate + finding hash", () => {
     const c = finding({ observation: "y" });
     expect(findingReviewHash(a)).toBe(findingReviewHash(b));
     expect(findingReviewHash(a)).not.toBe(findingReviewHash(c));
+  });
+});
+
+describe("detectPanelDisagreement", () => {
+  function rev(position: PanelAuditorReview["position"], over: Partial<PanelAuditorReview> = {}): PanelAuditorReview {
+    return { auditorId: "a", auditorName: "A", perspective: "strict-auditor", perspectiveLabel: "Strict Auditor", analysis: "x", position, ...over };
+  }
+  it("agrees when classification/severity/root-cause align (synonyms collapse)", () => {
+    const r = detectPanelDisagreement([
+      rev({ classification: "NC", severity: "Major", rootCauseDirection: "process" }),
+      rev({ classification: "Non-conformity", severity: "High", rootCauseDirection: "control workflow" }),
+    ]);
+    expect(r.disagree).toBe(false);
+    expect(r.reasons).toHaveLength(0);
+  });
+  it("flags a classification split (finding vs no issue)", () => {
+    const r = detectPanelDisagreement([
+      rev({ classification: "NC", severity: "Major", rootCauseDirection: "process" }),
+      rev({ classification: "No issue", severity: "None", rootCauseDirection: "none" }),
+    ]);
+    expect(r.disagree).toBe(true);
+    expect(r.reasons.some((x) => /classification/i.test(x))).toBe(true);
+  });
+  it("flags a severity split (major vs minor) with same classification", () => {
+    const r = detectPanelDisagreement([
+      rev({ classification: "NC", severity: "Major", rootCauseDirection: "process" }),
+      rev({ classification: "NC", severity: "Minor", rootCauseDirection: "process" }),
+    ]);
+    expect(r.disagree).toBe(true);
+    expect(r.reasons.some((x) => /severity/i.test(x))).toBe(true);
+  });
+  it("flags contradictory root-cause directions", () => {
+    const r = detectPanelDisagreement([
+      rev({ classification: "NC", severity: "Major", rootCauseDirection: "documentation gap" }),
+      rev({ classification: "NC", severity: "Major", rootCauseDirection: "staff training" }),
+    ]);
+    expect(r.disagree).toBe(true);
+    expect(r.reasons.some((x) => /root-cause/i.test(x))).toBe(true);
+  });
+  it("ignores failed / position-less panellists and needs 2+ positions", () => {
+    expect(detectPanelDisagreement([rev({ classification: "NC", severity: "Major", rootCauseDirection: "process" })]).disagree).toBe(false);
+    const r = detectPanelDisagreement([
+      rev({ classification: "NC", severity: "Major", rootCauseDirection: "process" }),
+      rev(undefined, { failed: true, analysis: "" }),
+    ]);
+    expect(r.disagree).toBe(false);
   });
 });

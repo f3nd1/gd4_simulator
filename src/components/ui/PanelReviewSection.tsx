@@ -42,6 +42,7 @@ export function PanelReviewSection({ finding }: { finding: Finding }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
         <span style={label}>Auditor review panel</span>
         {review && !stale && <Pill s="good">Reviewed by {review.reviews.length}</Pill>}
+        {review?.discussionTriggered && <Pill s="medium">Discussion held</Pill>}
         {stale && <Pill s="medium">Finding changed since review</Pill>}
         <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
           {(!review || stale || review) && (
@@ -91,16 +92,28 @@ export function PanelReviewSection({ finding }: { finding: Finding }) {
           </button>
           {showDiscussion && (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+              {review.discussionTriggered && (
+                <div style={{ fontSize: 11.5, color: "#5b21b6", fontStyle: "italic" }}>
+                  The panellists disagreed after their independent reviews, so a rebuttal round was held. Each auditor's response to the panel is shown below their first view.
+                </div>
+              )}
               {review.reviews.map((r, i) => (
                 <div key={i} style={{ background: "#fff", border: "1px solid #e9e5f8", borderRadius: 8, padding: "8px 11px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{r.auditorName}</span>
                     <Pill s="neutral">{r.perspectiveLabel}</Pill>
+                    {r.position?.classification && <Pill s="neutral">{r.position.classification}{r.position.severity && r.position.severity.toLowerCase() !== "none" ? ` · ${r.position.severity}` : ""}</Pill>}
                     {r.failed && <Pill s="critical">call failed</Pill>}
                   </div>
                   <div style={{ fontSize: 12.5, color: r.failed ? "#b91c1c" : "#374151", lineHeight: 1.5, whiteSpace: "pre-line" }}>
                     {r.failed ? `Review unavailable — ${r.error}` : r.analysis}
                   </div>
+                  {r.rebuttal && (
+                    <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #e9e5f8" }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 2 }}>After discussion</div>
+                      <div style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5, whiteSpace: "pre-line" }}>{r.rebuttal}</div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

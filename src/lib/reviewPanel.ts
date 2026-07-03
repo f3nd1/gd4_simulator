@@ -2,7 +2,7 @@
 // gating, cost estimate and finding hash are unit-testable. The AI calls
 // themselves live in agentRuntime.runAuditorPanel.
 
-import type { AuditorProfile, Finding, PanelReviewMode, ReviewPerspective } from "../types";
+import type { AuditorProfile, Finding, PanelAuditorReview, PanelReviewMode, ReviewPerspective } from "../types";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
 
 export const REVIEW_PERSPECTIVES: Array<{ value: ReviewPerspective; label: string; guidance: string }> = [
@@ -75,16 +75,86 @@ export function shouldAutoRunPanel(mode: PanelReviewMode, finding: Finding): boo
   return false; // off, on-demand
 }
 
-// Cost estimate scaled to panel size and finding count: one call per
-// panellist plus one synthesis per finding.
-export function panelCostEstimate(panelSize: number, findingCount: number): { perFinding: number; total: number; text: string } {
+// Cost estimate scaled to panel size and finding count. Best case (panellists
+// agree) is one call per panellist plus one synthesis. Worst case (they
+// disagree) adds a Round-2 rebuttal call per panellist, so ≈ 2×panel + 1.
+export function panelCostEstimate(panelSize: number, findingCount: number): { perFinding: number; perFindingMax: number; total: number; totalMax: number; text: string } {
   const perFinding = panelSize + 1;
+  const perFindingMax = panelSize * 2 + 1;
   const total = perFinding * findingCount;
+  const totalMax = perFindingMax * findingCount;
   return {
     perFinding,
+    perFindingMax,
     total,
-    text: `⚠ Each panel review runs one AI call per panel auditor plus one synthesis. A ${panelSize}-auditor panel is ${perFinding} calls per finding; ${findingCount} finding${findingCount === 1 ? "" : "s"} ≈ ${total} calls. Use for final pre-audit passes.`,
+    totalMax,
+    text: `⚠ Each panel review runs one AI call per panel auditor plus one synthesis. If the panellists disagree, a rebuttal round adds one more call each. A ${panelSize}-auditor panel is ${perFinding} calls per finding (up to ${perFindingMax} when they disagree); ${findingCount} finding${findingCount === 1 ? "" : "s"} ≈ ${total}–${totalMax} calls. Use for final pre-audit passes.`,
   };
+}
+
+// Normalise a free-text position field to a comparable token. Maps common
+// synonyms so "No issue" / "none" / "not a finding" collapse together and
+// "Non-conformity" / "NC" collapse together.
+function normClassification(s: string): string {
+  const t = (s || "").toLowerCase().trim();
+  if (!t) return "";
+  // Check non-conformity BEFORE the "compliant/conform" none-pattern, since
+  // "non-conformity" contains "conform".
+  if (/(non-?conformity|non-?conformance|non-?compliance)/.test(t)) return "nc";
+  if (/(no issue|no finding|not a finding|not an issue|none|compliant|conform|satisfactor|met\b)/.test(t)) return "none";
+  if (/\bnc\b/.test(t)) return "nc";
+  if (/\bcar\b/.test(t)) return "nc"; // corrective action request ≈ NC severity
+  if (/ofi|opportunity/.test(t)) return "ofi";
+  if (/obs|observation/.test(t)) return "observation";
+  if (/improve/.test(t)) return "ofi";
+  return t;
+}
+function normSeverity(s: string): string {
+  const t = (s || "").toLowerCase().trim();
+  if (!t) return "";
+  if (/(major|high|critical|serious)/.test(t)) return "major";
+  if (/(minor|low|slight)/.test(t)) return "minor";
+  if (/(medium|moderate)/.test(t)) return "medium";
+  if (/(none|nil|n\/a|not applicable)/.test(t)) return "none";
+  return t;
+}
+function normRootDir(s: string): string {
+  const t = (s || "").toLowerCase().trim();
+  if (!t) return "";
+  if (/(document|record|policy|procedure|written)/.test(t)) return "documentation";
+  if (/(train|competen|awareness|skill)/.test(t)) return "training";
+  if (/(data|record-keeping|collection|tracking)/.test(t)) return "data";
+  if (/(review|monitor|oversight|audit|governance)/.test(t)) return "review";
+  if (/(process|control|workflow|step|system)/.test(t)) return "process";
+  if (/(none|no root|not applicable|n\/a)/.test(t)) return "none";
+  return t;
+}
+
+// Do the panellists' Round-1 positions MATERIALLY disagree? True when they
+// split on classification (some see a finding, others none, or NC vs OFI vs
+// observation), on severity (major vs minor), or on root-cause direction
+// (two clearly different named directions). Blank/failed positions are ignored.
+// A disagreement means Round 2 (rebuttal) runs before synthesis.
+export function detectPanelDisagreement(reviews: Pick<PanelAuditorReview, "position" | "failed">[]): {
+  disagree: boolean;
+  reasons: string[];
+} {
+  const positions = reviews.filter((r) => !r.failed && r.position).map((r) => r.position!);
+  if (positions.length < 2) return { disagree: false, reasons: [] };
+  const reasons: string[] = [];
+
+  const classes = new Set(positions.map((p) => normClassification(p.classification)).filter(Boolean));
+  if (classes.size > 1) reasons.push(`Classification split: ${[...classes].join(" vs ")}.`);
+
+  const sevs = new Set(positions.map((p) => normSeverity(p.severity)).filter((s) => s && s !== "none"));
+  if (sevs.has("major") && (sevs.has("minor") || sevs.has("medium"))) {
+    reasons.push(`Severity split: ${[...sevs].join(" vs ")}.`);
+  }
+
+  const dirs = new Set(positions.map((p) => normRootDir(p.rootCauseDirection)).filter((d) => d && d !== "none"));
+  if (dirs.size > 1) reasons.push(`Root-cause direction split: ${[...dirs].join(" vs ")}.`);
+
+  return { disagree: reasons.length > 0, reasons };
 }
 
 // Stable, cheap hash of the finding text a review ran against, so the cache

@@ -66,13 +66,28 @@ export type AuditorProfile = {
 // How the review panel is triggered (cycle-level, Settings).
 export type PanelReviewMode = "off" | "on-demand" | "nc-major-auto" | "all";
 
+// A panellist's structured Round-1 position, used to detect material
+// disagreement (which triggers the Round-2 rebuttal round).
+export type PanelReviewPosition = {
+  // Short classification the panellist would assign, e.g. "NC" | "OFI" |
+  // "Observation" | "No issue". Free text but compared case-insensitively.
+  classification: string;
+  // Severity direction, e.g. "Major" | "Minor" | "None".
+  severity: string;
+  // One short phrase naming the root-cause direction (process / documentation /
+  // training / data / review / none), so contradictory directions are visible.
+  rootCauseDirection: string;
+};
+
 // One panellist's individual review of a finding.
 export type PanelAuditorReview = {
   auditorId: string;
   auditorName: string;
   perspective: ReviewPerspective;
   perspectiveLabel: string;
-  analysis: string;
+  analysis: string;              // Round-1 independent analysis
+  position?: PanelReviewPosition; // Round-1 structured stance (for disagreement check)
+  rebuttal?: string;             // Round-2 response to the other panellists (only when discussion ran)
   failed?: boolean;
   error?: string;
 };
@@ -100,6 +115,9 @@ export type PanelReviewResult = {
   // Stable hash of the finding text this review ran against — lets the UI
   // offer a re-run when the finding has since changed.
   findingHash: string;
+  // True when Round-1 positions materially disagreed and a Round-2 rebuttal
+  // round was run before synthesis.
+  discussionTriggered?: boolean;
 };
 
 export type GD4SubCriterion = {
