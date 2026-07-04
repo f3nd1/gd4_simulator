@@ -17,6 +17,7 @@ export function PanelReviewSection({ finding }: { finding: Finding }) {
   const panelIds = useWorkspaceStore((s) => s.reviewPanelAuditorIds);
   const busy = useWorkspaceStore((s) => s.busy);
   const runFindingPanelReview = useWorkspaceStore((s) => s.runFindingPanelReview);
+  const applyPanelConclusion = useWorkspaceStore((s) => s.applyPanelConclusion);
   // Read the live finding so a just-completed review re-renders here.
   const live = useWorkspaceStore((s) => s.customFindings.find((f) => f.id === finding.id)) ?? finding;
   const [showDiscussion, setShowDiscussion] = useState(false);
@@ -71,6 +72,20 @@ export function PanelReviewSection({ finding }: { finding: Finding }) {
       {running && !review && (
         <div style={{ fontSize: 12, color: "#6d28d9" }}>The panel is reviewing this finding — one call per auditor, then a synthesis…</div>
       )}
+
+      {review && live.panelConflict?.fields?.length ? (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8, padding: "7px 10px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 7 }}>
+          <span style={{ fontSize: 11.5, color: "#92400e", flex: 1, minWidth: 200 }}>
+            Panel concluded differently from your edits ({live.panelConflict.fields.join(", ")}) — review before applying.
+          </span>
+          <button
+            onClick={() => applyPanelConclusion(live.id, { force: true })}
+            style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "5px 11px", borderRadius: 6, border: "1px solid #d97706", background: "#f59e0b", color: "#fff", whiteSpace: "nowrap" }}
+          >
+            Apply panel conclusion
+          </button>
+        </div>
+      ) : null}
 
       {review && (
         <>

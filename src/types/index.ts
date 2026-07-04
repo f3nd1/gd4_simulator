@@ -300,6 +300,14 @@ export type Finding = {
   // each panellist's individual analysis. Re-run only on change or explicit
   // request (compare panelReview.findingHash).
   panelReview?: PanelReviewResult;
+  // True once the header classification (findingType/ncSeverity) has been set
+  // by a human, so a later panel run defers to it instead of overwriting.
+  classificationManual?: boolean;
+  // Set when the latest panel run reached a different conclusion than fields
+  // the user had manually edited — the finding shows a "review / apply panel
+  // conclusion" notice instead of silently overwriting. Cleared once applied
+  // or once a panel run reconciles cleanly.
+  panelConflict?: { fields: string[] };
 };
 
 // Two-layer sub-criterion checklist module: a generic 4-line maturity check
@@ -1074,6 +1082,7 @@ export type HumanDecisionModule =
   | "Cross-Criterion Analysis"
   | "Final Report"
   | "AI Review Log Feedback"
+  | "Panel Conclusion"
   | "Run mode gate";
 
 export type HumanDecisionType = "Accepted" | "Edited" | "Overridden" | "Dismissed";

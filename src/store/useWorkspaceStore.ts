@@ -54,6 +54,7 @@ import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImag
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
+import { computePanelConclusion } from "../lib/panelConclusion";
 import { checkAuditorForRun } from "../lib/auditorGuard";
 import { checkDriveForRun, type DriveRunBlock } from "../lib/driveGuard";
 import { DEFAULT_SHOW_DEVELOPER_TOOLS } from "../nav";
@@ -271,6 +272,11 @@ export type ClosureState = {
   aiReason?: string;
   aiNeed?: string;
   live?: boolean;
+  // Per-field provenance: true once the user has hand-edited that closure
+  // field, so a later panel run defers to it (Fix 3) instead of overwriting.
+  // Auto content (finding-writer draft, "Suggest actions" AI, a prior panel
+  // run) leaves these false and IS overwritten by the latest panel synthesis.
+  manual?: { root?: boolean; corr?: boolean; prev?: boolean; evid?: boolean };
 };
 
 export type ItemAIVerdict = {
@@ -459,6 +465,11 @@ export type WorkspaceState = {
   // the result on the finding and seeds the closure scaffold from the
   // synthesis. force re-runs even if a cached review matches.
   runFindingPanelReview: (findingId: string, opts?: { force?: boolean }) => Promise<void>;
+  // Writes the finding's cached panel synthesis into its closure fields +
+  // header classification. Overwrites auto-generated content; defers to
+  // manually-edited fields (flagging a conflict) unless force is set — the
+  // "Apply panel conclusion" button passes force to override manual edits.
+  applyPanelConclusion: (findingId: string, opts?: { force?: boolean }) => void;
   // Full-auto sweep: audits every sub-criterion end to end (respecting each
   // row's Option A/B choice); folders with no links are marked "Not assessed
   // / no evidence" rather than silently skipped. Progress drives the
@@ -1563,14 +1574,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           // Cache on the finding.
           get().updateCustomFinding(findingId, { panelReview: result });
-          // Feed the synthesis into the existing closure scaffold (only fills
-          // blanks — seedClosure never clobbers the user's own text).
+          // The panel's synthesis is now the source of truth: write it into the
+          // closure fields + header classification, overwriting auto-generated
+          // content and deferring to any manual edits (Fix 1/2/3/4).
           const syn = result.synthesis;
-          get().seedClosure(findingId, {
-            root: syn.rootCause || undefined,
-            corr: [syn.immediateCorrection, syn.correctiveAction].filter(Boolean).join("\n\n") || undefined,
-            prev: syn.evidenceForClosure || undefined,
-          });
+          get().applyPanelConclusion(findingId, { force: false });
           // Log EVERY AI sub-call the panel made — each auditor's Round-1
           // review, any rebuttals, and the chair synthesis — as its own AI
           // Review Log entry with its REAL input prompt (promptSent) and output
@@ -2181,6 +2189,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       },
 
       setClosureField: (afiId, field, value) => {
+        const isTextField = field === "root" || field === "corr" || field === "prev" || field === "evid";
         if (field === "root" || field === "corr" || field === "prev") {
           const c = get().closures[afiId] || {};
           const prev = (c[field] as string | undefined) ?? "";
@@ -2198,7 +2207,56 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             });
           }
         }
-        set((s) => ({ closures: { ...s.closures, [afiId]: { ...(s.closures[afiId] || {}), [field]: value } } }));
+        set((s) => {
+          const cur = s.closures[afiId] || {};
+          // A user edit marks the field manual, so a later panel run defers to
+          // it (Fix 3). Non-text fields (human accept, AI verdict) don't affect
+          // provenance.
+          const manual = isTextField ? { ...(cur.manual || {}), [field]: true } : cur.manual;
+          return { closures: { ...s.closures, [afiId]: { ...cur, [field]: value, manual } } };
+        });
+      },
+
+      applyPanelConclusion: (findingId, opts) => {
+        const finding = get().customFindings.find((f) => f.id === findingId);
+        const syn = finding?.panelReview?.synthesis;
+        if (!finding || !syn) return;
+
+        const c = get().closures[findingId] || {};
+        const curType = resolveFindingType(finding);
+        const curSev = resolveNcSeverity(finding);
+        const plan = computePanelConclusion(
+          { closure: c, findingType: curType, ncSeverity: curSev, classificationManual: finding.classificationManual, synthesis: syn },
+          { force: !!opts?.force }
+        );
+
+        // Commit the closure overwrites and reset those fields' manual flags —
+        // they're panel-sourced (auto) again, so a future re-run refreshes them.
+        set((s) => {
+          const prev = s.closures[findingId] || {};
+          const manual = { ...(prev.manual || {}) };
+          for (const k of plan.clearedManual) manual[k] = false;
+          return { closures: { ...s.closures, [findingId]: { ...prev, ...plan.closure, manual } } };
+        });
+
+        const findingPatch: Partial<Finding> = { panelConflict: plan.conflicts.length ? { fields: plan.conflicts } : undefined };
+        if (plan.classification) {
+          findingPatch.findingType = plan.classification.findingType;
+          findingPatch.ncSeverity = plan.classification.ncSeverity;
+          findingPatch.classificationManual = false;
+          const fmt = (t: string, sv: string | null) => `${t}${sv ? ` (${sv})` : ""}`;
+          get().logHumanDecision({
+            module: "Panel Conclusion",
+            subjectId: findingId,
+            aiOutput: fmt(plan.classification.findingType, plan.classification.ncSeverity),
+            humanDecision: `${fmt(curType, curSev)} → ${fmt(plan.classification.findingType, plan.classification.ncSeverity)}`,
+            changed: true,
+            decisionType: "Overridden",
+            reason: "Auditor Review Panel final classification applied.",
+            field: "classification",
+          });
+        }
+        get().updateCustomFinding(findingId, findingPatch);
       },
 
       seedClosure: (afiId, seed) =>
