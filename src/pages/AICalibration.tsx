@@ -13,6 +13,7 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { ConsistencyTab, AvsBTab, RecommendationsPanel } from "./CalibrationLab";
 import { recommendFromBenchmark } from "../lib/tuningAdvisor";
+import { BenchmarkBreakdownChart, ImprovementChart } from "../components/ui/calibrationCharts";
 import type { Finding } from "../types";
 
 const PATTERNS: BenchmarkFindingPattern[] = [
@@ -327,6 +328,14 @@ Give a one-line justification naming what matched or what was missed. Respond wi
             </div>
           </div>
         )}
+      </Card>
+
+      {/* Charts — visual summaries of the scoreboard + improvement trend. */}
+      <Card>
+        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))" }}>
+          <BenchmarkBreakdownChart byYear={scoreboard.byYear} byPattern={scoreboard.byPattern} />
+          <ImprovementChart history={runHistory} />
+        </div>
       </Card>
 
       {/* Tuning Advisor — auto-generated from the missed/partial findings. */}

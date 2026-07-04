@@ -26,6 +26,7 @@ import {
   type ConsistencyLine, type ConsistencyTestResult, type ABTestResult, type ABPathOutcome,
 } from "../lib/calibrationTesting";
 import { OVERFITTING_CAUTION, recommendFromConsistency, recommendFromAB, type Recommendation } from "../lib/tuningAdvisor";
+import { ConsistencyHeatChart, ABHeadToHeadChart, ABWinPatternChart } from "../components/ui/calibrationCharts";
 
 const STATUS_COLOR: Record<string, string> = { Met: "#15803d", Partial: "#b45309", "Not met": "#b91c1c" };
 
@@ -342,6 +343,7 @@ export function ConsistencyTab() {
       </Card>
 
       {saved && <ConsistencyResult result={saved} onDelete={() => { deleteConsistencyTest(saved.subCriterionId); setSelectedId(""); }} />}
+      {saved && <Card><ConsistencyHeatChart result={saved} /></Card>}
       {saved && <RecommendationsPanel source="consistency" recommendations={recommendFromConsistency(saved)} />}
 
       {/* Past tests on other sub-criteria stay reviewable + individually re-runnable + deletable. */}
@@ -560,6 +562,8 @@ export function AvsBTab() {
       </Card>
 
       {saved && <ABResult result={saved} onDelete={() => { deleteAbTest(saved.subCriterionId); setSelectedId(""); }} />}
+      {saved && <Card><ABHeadToHeadChart result={saved} /></Card>}
+      {Object.values(tests).some((t) => t.winner === "A" || t.winner === "B") && <Card><ABWinPatternChart tests={Object.values(tests)} /></Card>}
       {Object.keys(tests).length > 0 && <RecommendationsPanel source="a-vs-b" recommendations={recommendFromAB(Object.values(tests))} />}
 
       {Object.values(tests).filter((t) => t.subCriterionId !== selectedId).map((t) => (
