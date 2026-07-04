@@ -1182,7 +1182,7 @@ export async function runStagedPolicyAudit(
   auditPoints: FlatAuditPoint[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
 ): Promise<StagedPolicyAuditResult> {
   if (auditPoints.length === 0 || !policyDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No policy documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
@@ -1206,7 +1206,7 @@ Decide deterministically by counting which of the four specifics are documented 
 BOUNDARY RULE (Yes vs Partial): if you can name even one missing specific (owner / action / timing / record), it is "Partial", not "Yes". When unsure between "Yes" and "Partial", choose "Partial" (resolve down).
 
 IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -1350,7 +1350,7 @@ export async function runStagedEvidenceAudit(
   evidenceDocText: string,
   policyRows: PolicyCoverageRow[],
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
 ): Promise<StagedEvidenceAuditResult> {
   if (auditPoints.length === 0 || !evidenceDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No evidence documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
@@ -1371,7 +1371,7 @@ Decide "covered" deterministically — the same evidence must always yield the s
 BOUNDARY RULE (Yes vs Partial): award "Yes" only when the evidence covers the requirement in FULL; if any nameable part is uncovered, it is "Partial", not "Yes". If you cannot name what is missing, it is "Yes"; if you can, it is "Partial". When genuinely unsure between "Yes" and "Partial", choose "Partial" (resolve down).
 
 IMPORTANT: A policy document, SOP, or procedure does NOT count as implementation evidence, even if it is filed in the evidence folder. Only actual records of doing something count.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
@@ -1498,7 +1498,7 @@ export async function runStagedOutcomeReviewAudit(
   auditPoints: FlatAuditPoint[],
   allDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
 ): Promise<StagedOutcomeReviewAuditResult> {
   if (auditPoints.length === 0 || !allDocText.trim()) {
     return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "No documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
@@ -1515,7 +1515,7 @@ outcomeEvident: true if there is actual outcome data, KPIs, results, trends, sur
 
 reviewEvident: true if there are records of a formal review of this requirement's effectiveness — meeting minutes with agenda item, management review records, improvement actions triggered by data review, or evaluation reports. A policy that says "we will review annually" is NOT evidence of a review having happened.
 
-Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
+Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chunk directly supports a true verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
 
 Respond with JSON only:
 {"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;
@@ -1819,7 +1819,7 @@ export async function runPPDRequirementsReview(
   requirements: PPDRequirementInput[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
 ): Promise<PPDRequirementsReviewResult> {
   if (requirements.length === 0 || !policyDocText.trim()) {
     return {
@@ -1868,7 +1868,7 @@ For each requirement return:
 - chunkIds: exact chunk ID(s) (e.g. "C001") supporting the verdict. Empty if none — never invent a chunk ID.
 
 Respond with JSON only:
-{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented"}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}], "suggestedRewrite": string, "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented"}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}], "suggestedRewrite": string, "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   // Technique 2 — internal contradiction hunt. Run as its OWN pass per
   // window (not folded into the per-requirement prompt) so the requirement
@@ -1881,7 +1881,7 @@ Rules:
 - description: one factual sentence naming the subject and the two conflicting values, in the SSG register (e.g. "The PPD states two different refund timelines for the same process: 'within 5 working days' and 'within 3 working days'.").
 - Report nothing if the window contains no contradiction — an empty array is the correct answer for a consistent PPD.
 
-Respond with JSON only: {"contradictions": [{"description": string, "quoteA": string, "chunkA": string, "quoteB": string, "chunkB": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+Respond with JSON only: {"contradictions": [{"description": string, "quoteA": string, "chunkA": string, "quoteB": string, "chunkB": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   const windows = buildDocWindows(policyDocText);
 
@@ -2073,7 +2073,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
   if (!stopRequested() && !stoppedEarly) {
     opts.onProgress?.("PPD requirements review — overall synthesis");
     const lineDigest = rows.map((r) => `[${r.ref}] ${r.verdict}: ${r.requirementText} — ${r.shortComment}`).join("\n");
-    const narrativeSystem = `You are writing a short overall roll-up of a PPD (Policy & Procedure Document) requirements review for one GD4 EduTrust sub-criterion. You are given the per-requirement-line verdicts already decided ("Adequate" / "Partial" / "Not documented"). Write a 2-4 sentence synthesis of the sub-criterion AS A WHOLE: whether the PPD documents this sub-criterion's requirements overall, which areas are strongest (documented), and where the gaps are (Partial / Not documented lines). This is a roll-up — do NOT repeat each line's comment verbatim. Keep it factual and neutral: state what is documented and what is missing; do not editorialise with words like "good"/"poor"/"excellent". Respond with JSON only: {"narrative": string}.${buildSystemPrompt("evidenceReview", null, "runPPDRequirementsReview (overall synthesis)", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+    const narrativeSystem = `You are writing a short overall roll-up of a PPD (Policy & Procedure Document) requirements review for one GD4 EduTrust sub-criterion. You are given the per-requirement-line verdicts already decided ("Adequate" / "Partial" / "Not documented"). Write a 2-4 sentence synthesis of the sub-criterion AS A WHOLE: whether the PPD documents this sub-criterion's requirements overall, which areas are strongest (documented), and where the gaps are (Partial / Not documented lines). This is a roll-up — do NOT repeat each line's comment verbatim. Keep it factual and neutral: state what is documented and what is missing; do not editorialise with words like "good"/"poor"/"excellent". Respond with JSON only: {"narrative": string}.${buildSystemPrompt("evidenceReview", null, "runPPDRequirementsReview (overall synthesis)", opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
     const narrativeUser = `Per-requirement-line verdicts for this sub-criterion:\n${lineDigest}\n\nWrite the overall roll-up narrative.`;
     try {
       // Generative (fixed): a 2-4 sentence roll-up NARRATIVE synthesising the
@@ -2158,7 +2158,7 @@ export async function runEvidenceAssessment(
   inputs: EvidenceAssessmentInput[],
   evidenceDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string, pct?: number) => void; onEvent?: (ev: EvidenceRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string, pct?: number) => void; onEvent?: (ev: EvidenceRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
 ): Promise<EvidenceAssessmentRunResult> {
   if (inputs.length === 0) return { rows: [] };
 
@@ -2195,7 +2195,7 @@ For each line return:
 - chunkIds: exact chunk ID(s) (e.g. "C001") from evidence document headers supporting the line verdict. Empty if none.
 
 Respond with JSON only:
-{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[]}], "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
+{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[]}], "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   const windows = noEvidence ? [] : buildDocWindows(evidenceDocText);
 

@@ -14,6 +14,7 @@ import { Pill } from "../components/ui/Pill";
 import { ConsistencyTab, AvsBTab, RecommendationsPanel } from "./CalibrationLab";
 import { recommendFromBenchmark } from "../lib/tuningAdvisor";
 import { BenchmarkBreakdownChart, ImprovementChart } from "../components/ui/calibrationCharts";
+import { RuleTuningTab } from "./RuleTuningTab";
 import type { Finding } from "../types";
 
 const PATTERNS: BenchmarkFindingPattern[] = [
@@ -90,12 +91,12 @@ function fmtDate(iso: string): string {
 // Tab shell: Benchmark (the original calibration content, unchanged) plus
 // the two measurement tabs (Consistency, A vs B) from CalibrationLab.tsx.
 export function AICalibration() {
-  const [tab, setTab] = useState<"benchmark" | "consistency" | "ab">("benchmark");
+  const [tab, setTab] = useState<"benchmark" | "consistency" | "ab" | "rules">("benchmark");
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
       <Card style={{ paddingBottom: 0 }}>
         <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e2e8f0" }}>
-          {([["benchmark", "Benchmark"], ["consistency", "Consistency"], ["ab", "A vs B"]] as const).map(([id, label]) => (
+          {([["benchmark", "Benchmark"], ["consistency", "Consistency"], ["ab", "A vs B"], ["rules", "Rule Tuning"]] as const).map(([id, label]) => (
             <button
               key={id}
               onClick={() => setTab(id)}
@@ -113,6 +114,7 @@ export function AICalibration() {
       {tab === "benchmark" && <BenchmarkTab />}
       {tab === "consistency" && <ConsistencyTab />}
       {tab === "ab" && <AvsBTab />}
+      {tab === "rules" && <RuleTuningTab />}
     </div>
   );
 }

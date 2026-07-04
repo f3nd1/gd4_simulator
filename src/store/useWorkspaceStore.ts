@@ -57,6 +57,7 @@ import { computePanelConclusion } from "../lib/panelConclusion";
 import { checkAuditorForRun, independenceNotice } from "../lib/auditorGuard";
 import { checkDriveForRun, DRIVE_EXPIRED_MID_RUN, type DriveRunBlock } from "../lib/driveGuard";
 import { applyCarryover, type PriorCycleArchive } from "../lib/cycleCarryover";
+import { useRuleTuningStore } from "./useRuleTuningStore";
 import { FINDINGS } from "../data/findings";
 import { DEFAULT_SHOW_DEVELOPER_TOOLS } from "../nav";
 
@@ -1049,6 +1050,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set({ ppdReviewProgress: { subCriterionId, detail: "Starting PPD requirements review…" } });
           const result = await runPPDRequirementsReview(requirements, policyDocText, analysisSettings, {
             criterionId: subCriterionId,
+            ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
             onProgress: (detail) => set({ ppdReviewProgress: { subCriterionId, detail } }),
             // Cancel support: cancelBusy() clears busy and aborts the signal.
             shouldStop: () => get().busy !== "ppdreview" + subCriterionId,
@@ -1369,6 +1371,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }));
           const result = await runEvidenceAssessment(inputs, evidenceDocText, analysisSettings, {
             criterionId: subCriterionId,
+            ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
             onProgress: (detail, pct) => setEvProgress(detail, typeof pct === "number" ? Math.max(25, Math.min(98, pct)) : 50),
             onEvent: (ev) => {
               if (ev.type === "window-start") {
@@ -4319,7 +4322,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             setProgress("policy_audit", { stageDetail: `Checking policy coverage for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
               const result = await runStagedPolicyAudit(allAuditPoints, policyDocText, analysisSettings, {
-                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType, resolveChunkFile,
+                criterionId, calibration: stagedCalibration, memories: stagedMemories, ruleInjection: useRuleTuningStore.getState().championInjection(criterionId), fileType: detectedFileType, resolveChunkFile,
                 shouldStop: shouldStopStage,
                 signal: runAbort.signal,
                 onProgress: (detail) => {
@@ -4356,7 +4359,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             setProgress("evidence_audit", { stageDetail: `Checking implementation evidence for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
               const result = await runStagedEvidenceAudit(allAuditPoints, evidenceDocText, policyRows, analysisSettings, {
-                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType, resolveChunkFile,
+                criterionId, calibration: stagedCalibration, memories: stagedMemories, ruleInjection: useRuleTuningStore.getState().championInjection(criterionId), fileType: detectedFileType, resolveChunkFile,
                 shouldStop: shouldStopStage,
                 signal: runAbort.signal,
                 onProgress: (detail) => {
@@ -4392,7 +4395,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             setProgress("outcome_review", { stageDetail: `Checking outcome data and review records for ${allAuditPoints.length} audit points…`, canCancel: true });
             try {
               const result = await runStagedOutcomeReviewAudit(allAuditPoints, allDocText, analysisSettings, {
-                criterionId, calibration: stagedCalibration, memories: stagedMemories, fileType: detectedFileType, resolveChunkFile,
+                criterionId, calibration: stagedCalibration, memories: stagedMemories, ruleInjection: useRuleTuningStore.getState().championInjection(criterionId), fileType: detectedFileType, resolveChunkFile,
                 shouldStop: shouldStopStage,
                 signal: runAbort.signal,
                 onProgress: (detail) => {

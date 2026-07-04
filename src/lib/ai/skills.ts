@@ -224,7 +224,7 @@ function labelSkill(raw: string, content: string): string {
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("findingWriter");
  *   const sys = `You are a GD4 auditor.` + buildSystemPrompt("evidenceReview", "spreadsheet");
  */
-export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string, criterionId?: string, criterionSkillContent?: string, calibrationExamples?: SkillCalibrationExample[], memories?: SkillCalibrationMemory[]): string {
+export function buildSystemPrompt(module: SkillModule, fileType?: FileType | null, fnName?: string, criterionId?: string, criterionSkillContent?: string, calibrationExamples?: SkillCalibrationExample[], memories?: SkillCalibrationMemory[], ruleInjection?: string): string {
   const moduleSkills = MODULE_SKILLS[module];
 
   // Capped skills: BASE + module capped skills, each truncated to SKILL_CAP chars.
@@ -238,8 +238,9 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType | nul
   // Uncapped skills appended after (regulatory references must not be truncated).
   const uncappedDocs = moduleSkills.uncapped.map((d) => labelSkill(d, d.trim()));
 
+  const rulesBlock = ruleInjection?.trim() ? ruleInjection : "";
   const allDocs = [...cappedDocs, ...uncappedDocs].filter(Boolean);
-  if (allDocs.length === 0 && (!calibrationExamples || calibrationExamples.length === 0) && (!memories || memories.length === 0)) return "";
+  if (allDocs.length === 0 && (!calibrationExamples || calibrationExamples.length === 0) && (!memories || memories.length === 0) && !rulesBlock) return rulesBlock;
 
   const skillsBlock = allDocs.length > 0
     ? `\n\n## Auditor knowledge base (apply this expertise to your assessment)\n\n${allDocs.join(SEP)}`
@@ -264,7 +265,9 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType | nul
     memoriesBlock = `\n\n=== LEARNED CORRECTIONS — apply these to your assessment ===\n${lines}\n===`;
   }
 
-  const result = skillsBlock + calibrationBlock + memoriesBlock;
+  // Tunable rules appended LAST so they sit closest to the task, but they are
+  // explicitly subordinate to the core rules (see buildRuleInjection).
+  const result = skillsBlock + calibrationBlock + memoriesBlock + rulesBlock;
 
   // Log each buildSystemPrompt() call to the AI Debug Log page (all builds —
   // the team uses it for development even on deployed builds; the log is

@@ -141,7 +141,7 @@ function buildDigest(lines: ScratchRunOutput["lines"]): string {
 // Runs Option A (PPD review, then the evidence assessment when an evidence
 // folder is linked) as a scratch run. Line status: the evidence verdict when
 // the evidence stage ran, else the mapped PPD verdict.
-export async function runScratchA(subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress): Promise<ScratchRunOutput> {
+export async function runScratchA(subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress, ruleInjection?: string): Promise<ScratchRunOutput> {
   const fail = (error: string): ScratchRunOutput => ({ ok: false, error, lines: [], gapCount: 0, byType: { NC: 0, OFI: 0, OBS: 0 }, bandEstimate: null, digest: "" });
   try {
     const folder = folderOf(subCriterionId);
@@ -158,7 +158,7 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
     const settings = analysisSettings();
     onProgress("Option A — PPD requirements review…");
     const ppd = await runPPDRequirementsReview(requirements, policy.text, settings, {
-      criterionId: subCriterionId, signal, onProgress: (d) => onProgress(`Option A — PPD review: ${d}`),
+      criterionId: subCriterionId, ruleInjection, signal, onProgress: (d) => onProgress(`Option A — PPD review: ${d}`),
     });
     logRun("Calibration · Option A (PPD)", subCriterionId, `${ppd.rows.length} lines reviewed`, ppd.usage);
 
@@ -170,7 +170,7 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
       onProgress("Option A — evidence assessment…");
       const inputs: EvidenceAssessmentInput[] = ppd.rows.map((r) => ({ ref: r.ref, requirementText: r.requirementText, ppdVerdict: r.verdict, ppdExtract: r.fullComment || r.shortComment, promises: r.promises }));
       const ev = await runEvidenceAssessment(inputs, evidence.text, settings, {
-        criterionId: subCriterionId, signal, onProgress: (d) => onProgress(`Option A — evidence: ${d}`),
+        criterionId: subCriterionId, ruleInjection, signal, onProgress: (d) => onProgress(`Option A — evidence: ${d}`),
       });
       logRun("Calibration · Option A (Evidence)", subCriterionId, `${ev.rows.length} lines assessed`, ev.usage);
       const evByRef = new Map(ev.rows.map((r) => [r.ref, r]));
@@ -194,7 +194,7 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
 // Runs Option B (the three staged passes + deterministic APSR merge) as a
 // scratch run. Line status: deriveApsrStatus over buildStagedApsr — the same
 // derivation the real staged audit commits.
-export async function runScratchB(subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress): Promise<ScratchRunOutput> {
+export async function runScratchB(subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress, ruleInjection?: string): Promise<ScratchRunOutput> {
   const fail = (error: string): ScratchRunOutput => ({ ok: false, error, lines: [], gapCount: 0, byType: { NC: 0, OFI: 0, OBS: 0 }, bandEstimate: null, digest: "" });
   try {
     const folder = folderOf(subCriterionId);
@@ -210,11 +210,11 @@ export async function runScratchB(subCriterionId: string, signal: AbortSignal, o
     const settings = analysisSettings();
 
     onProgress("Option B — policy pass…");
-    const pol = await runStagedPolicyAudit(points, policy.text || evidence.text, settings, { criterionId: subCriterionId, signal, onProgress: (d) => onProgress(`Option B — policy: ${d}`) });
+    const pol = await runStagedPolicyAudit(points, policy.text || evidence.text, settings, { criterionId: subCriterionId, ruleInjection, signal, onProgress: (d) => onProgress(`Option B — policy: ${d}`) });
     onProgress("Option B — evidence pass…");
-    const ev = await runStagedEvidenceAudit(points, evidence.text || policy.text, pol.rows, settings, { criterionId: subCriterionId, signal, onProgress: (d) => onProgress(`Option B — evidence: ${d}`) });
+    const ev = await runStagedEvidenceAudit(points, evidence.text || policy.text, pol.rows, settings, { criterionId: subCriterionId, ruleInjection, signal, onProgress: (d) => onProgress(`Option B — evidence: ${d}`) });
     onProgress("Option B — outcome & review pass…");
-    const out = await runStagedOutcomeReviewAudit(points, [policy.text, evidence.text].filter(Boolean).join("\n\n"), settings, { criterionId: subCriterionId, signal, onProgress: (d) => onProgress(`Option B — outcomes: ${d}`) });
+    const out = await runStagedOutcomeReviewAudit(points, [policy.text, evidence.text].filter(Boolean).join("\n\n"), settings, { criterionId: subCriterionId, ruleInjection, signal, onProgress: (d) => onProgress(`Option B — outcomes: ${d}`) });
     logRun("Calibration · Option B (staged)", subCriterionId, `${points.length} audit points, 3 passes`);
 
     const polByRef = new Map(pol.rows.map((r) => [r.ref, r]));
@@ -235,8 +235,8 @@ export async function runScratchB(subCriterionId: string, signal: AbortSignal, o
   }
 }
 
-export async function runScratch(path: "A" | "B", subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress): Promise<ScratchRunOutput> {
-  return path === "A" ? runScratchA(subCriterionId, signal, onProgress) : runScratchB(subCriterionId, signal, onProgress);
+export async function runScratch(path: "A" | "B", subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress, ruleInjection?: string): Promise<ScratchRunOutput> {
+  return path === "A" ? runScratchA(subCriterionId, signal, onProgress, ruleInjection) : runScratchB(subCriterionId, signal, onProgress, ruleInjection);
 }
 
 // Judges one scratch run's output against the sub-criterion's benchmark

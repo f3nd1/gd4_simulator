@@ -27,3 +27,22 @@ describe("skill injection", () => {
     expect(buildSystemPrompt("bandRecommend")).toContain("=== SKILL: consultant-insights.md ===");
   });
 });
+
+describe("tunable rule injection reaches the assessment prompt", () => {
+  it("appends the ruleInjection block verbatim to the built prompt", () => {
+    const injection = "\n\n=== TUNABLE ASSESSMENT RULES (added to the assessment prompt for Criterion 6) ===\nMet needs every promise evidenced.\n=== END TUNABLE RULES ===";
+    const prompt = buildSystemPrompt("evidenceReview", null, undefined, "6.3", undefined, undefined, undefined, injection);
+    expect(prompt).toContain("TUNABLE ASSESSMENT RULES");
+    expect(prompt).toContain("Met needs every promise evidenced.");
+  });
+  it("returns just the injection when there are no skills for the module (still delivered)", () => {
+    const injection = "\n\n=== TUNABLE ASSESSMENT RULES ===\nrule text\n=== END TUNABLE RULES ===";
+    // A module with no skills would otherwise return "" — the rule must survive.
+    const prompt = buildSystemPrompt("evidenceReview", null, undefined, undefined, undefined, undefined, undefined, injection);
+    expect(prompt).toContain("rule text");
+  });
+  it("no injection → unchanged behaviour (baseline no-op)", () => {
+    const without = buildSystemPrompt("evidenceReview", null, undefined, "6.3");
+    expect(without).not.toContain("TUNABLE ASSESSMENT RULES");
+  });
+});
