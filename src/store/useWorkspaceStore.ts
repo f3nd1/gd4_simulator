@@ -31,7 +31,6 @@ import type {
   AuditAISummaryLine,
   ChangeLogEntry,
 } from "../types";
-import { summariseCommitMessage } from "../lib/changeLogSummary";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders } from "../data/folders";
 import { AGENTS } from "../data/agents";
@@ -103,6 +102,14 @@ let _currentFileAbort: (() => void) | null = null;
 // loop fire further paid calls in the meantime). One run at a time (busy
 // flag), so a single module-level ref is sufficient.
 let _currentRunAbort: AbortController | null = null;
+
+// Persisted-prompt cap (see partialize): what is WRITTEN to storage is
+// truncated; in-memory state keeps full text for the current session.
+const PROMPT_PERSIST_CAP = 4_000;
+function capPersistedText(t: string | undefined): string | undefined {
+  if (!t || t.length <= PROMPT_PERSIST_CAP) return t;
+  return `${t.slice(0, PROMPT_PERSIST_CAP)}\n…[truncated for storage — full text was available in the session that produced it]`;
+}
 
 // Combines a run-level abort signal with a hard timeout, without relying on
 // AbortSignal.any (not available in all targets). Used to bound every Drive
@@ -493,17 +500,16 @@ export type WorkspaceState = {
   // findings, end to end with no stops (each step is the existing engine).
   runOptionAFullAuto: (subCriterionId: string) => Promise<void>;
 
-  // Running history of the git push/pull info the footer surfaces (from the
-  // build-time __GIT_INFO__ constant). recordChangeLogEntry saves EVERY push
-  // (dev deploy history — no commit-hash dedupe); the plain-English summary is
-  // derived from the commit message when not supplied.
+  // LEGACY change-log copy: kept in state only so the one-time migration into
+  // the dedicated append-only useChangeLogStore can read previously-persisted
+  // entries. No longer written to (recordChangeLogEntry removed) and excluded
+  // from partialize.
   changeLog: ChangeLogEntry[];
   // Developer/diagnostic UI visibility (commit footer + Change Log page).
   // Synced with the workspace (Supabase) so one off switch covers every
   // device. Hiding the UI never stops change-log entries being recorded.
   showDeveloperTools: boolean;
   setShowDeveloperTools: (show: boolean) => void;
-  recordChangeLogEntry: (entry: Omit<ChangeLogEntry, "id" | "summary"> & { summary?: string }) => void;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
   // Clears a stranded busy/bulk state so a button stuck on "Auditing…" can be
@@ -759,15 +765,6 @@ function patternNote(journal: string): string {
 // ---- End audit journal helpers --------------------------------------------
 
 let logCounter = 0;
-
-// Change log is a DEV deploy history: it records every push the app sees and
-// never dedupes them away, so `id` needs a unique suffix per entry (the old
-// commit-hash id collided once per commit). `lastRecordedChangeKey` is an
-// in-memory (per page-load) guard that swallows only React's double-invoked
-// mount effect — it resets on reload, so genuinely reloading/redeploying the
-// same build is logged again rather than suppressed.
-let changeLogCounter = 0;
-let lastRecordedChangeKey = "";
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
@@ -1908,28 +1905,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         get().compileEvidenceFindings(subCriterionId);
       },
 
-      // Appends one git push/pull entry to the change log, deduped by
-      // commitHash so re-visits / re-renders of the same build don't log the
-      // same commit twice. Derives the plain-English summary from the commit
-      // message when the caller doesn't supply one.
-      recordChangeLogEntry: (entry) =>
-        set((s) => {
-          if (!entry.commitHash || entry.commitHash === "unknown") return {};
-          // Save EVERY push (dev deploy history) — no commit-hash dedupe, so
-          // re-deploying/reloading the same build is still recorded. The only
-          // thing suppressed is an exact re-fire within the SAME page load
-          // (React's double-invoked mount effect); this guard resets on reload.
-          const key = `${entry.action}:${entry.commitHash}:${entry.timestamp}`;
-          if (key === lastRecordedChangeKey) return {};
-          lastRecordedChangeKey = key;
-          const full: ChangeLogEntry = {
-            ...entry,
-            id: `CL-${entry.commitHash}-${entry.action}-${Date.now().toString(36)}-${++changeLogCounter}`,
-            summary: entry.summary?.trim() || summariseCommitMessage(entry.commitMessage),
-          };
-          return { changeLog: [full, ...s.changeLog].slice(0, 500) };
-        }),
-
       // Fills the workspace with realistic sample evidence ratings plus the
       // workflow-progress fields derived from them (reviewer drafts,
       // sign-offs, closures, samples, interview prep, management review
@@ -1989,7 +1964,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             customFindings: s.customFindings,
             seedFindingsLoaded: s.seedFindingsLoaded,
             itemReviews: s.itemReviews,
-            aiReviewLog: s.aiReviewLog,
+            // aiReviewLog is deliberately NOT snapshotted any more: each entry
+            // can carry a full prompt, and 50 versions × 200 entries was the
+            // main localStorage-quota driver. Restore keeps the current log.
+            auditors: s.auditors,
+            departments: s.departments,
             schoolContext: s.schoolContext,
             additionalInfo: s.additionalInfo,
             agentMemory: useAgentMemoryStore.getState().memory,
@@ -2035,6 +2014,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // case the current checklist is left untouched.
           if (snap.checklistEntries) useChecklistModuleStore.getState().replaceAllEntries(snap.checklistEntries);
           if (snap.agentMemory) useAgentMemoryStore.getState().replaceAllMemory(snap.agentMemory);
+          // Grouped drafts point at findings/lines that are about to roll back —
+          // reset them (same as createNewCycle) so no draft dangles.
+          useFindingDraftStore.getState().resetAllDrafts();
           const logEntry = {
             restoredAt: new Date().toLocaleString(),
             fromVersion: entry.version,
@@ -2057,6 +2039,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // lost; fall back to current state for pre-existing snapshots.
             itemReviews: (snap.itemReviews as WorkspaceState["itemReviews"]) ?? s.itemReviews,
             aiReviewLog: snap.aiReviewLog ?? s.aiReviewLog,
+            // Roster travels with the snapshot so the restored panel ids
+            // (reviewPanelAuditorIds below) can't dangle against a different
+            // current roster. Older snapshots keep the current roster.
+            auditors: snap.auditors ?? s.auditors,
+            departments: snap.departments ?? s.departments,
             schoolContext: snap.schoolContext ?? s.schoolContext,
             additionalInfo: snap.additionalInfo ?? s.additionalInfo,
             auditJournal: (snap as WorkspaceSnapshot & { auditJournal?: string }).auditJournal ?? s.auditJournal,
@@ -2079,6 +2066,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 .filter(([, runs]) => runs.length > 0)
                 .map(([folderId, runs]) => [folderId, runs[0]])
             ),
+            // Queued pending writes and the evidence recheck report belong to
+            // the pre-restore state — keeping them would reference findings /
+            // lines that were just rolled back.
+            pendingCommits: {},
+            evidenceAuditReport: null,
             // Append to the immutable restore audit trail
             restoreLog: [...s.restoreLog, logEntry],
           };
@@ -2101,7 +2093,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             customFindings: s.customFindings,
             seedFindingsLoaded: s.seedFindingsLoaded,
             itemReviews: s.itemReviews,
-            aiReviewLog: s.aiReviewLog,
+            // aiReviewLog is deliberately NOT snapshotted any more: each entry
+            // can carry a full prompt, and 50 versions × 200 entries was the
+            // main localStorage-quota driver. Restore keeps the current log.
+            auditors: s.auditors,
+            departments: s.departments,
             schoolContext: s.schoolContext,
             additionalInfo: s.additionalInfo,
             agentMemory: useAgentMemoryStore.getState().memory,
@@ -5021,22 +5017,51 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     // evidence baseline (previously seeded with sample ratings) instead of
     // silently keeping the old pre-filled state cached under v1.
     //
-    // partialize — one exclusion, quota-driven:
+    // partialize — quota-driven exclusions/caps (Batch 3):
     //  • fileTextCache: full extracted text of every Drive file ever read —
     //    persisting it can blow the localStorage quota and take ALL
     //    persistence down with it. Performance cache, in-memory only.
-    // promptSent is deliberately persisted IN FULL (AI Review Log, PPD
-    // review results, evidence assessments, version snapshots): the team
-    // needs the complete prompts for development. Trade-off accepted at the
-    // user's request: full prompts embed school-document text and are large,
-    // so they land in Supabase/localStorage.
+    //  • changeLog: history now lives in the dedicated append-only
+    //    useChangeLogStore; the legacy copy here is kept in memory only for
+    //    the one-time migration and no longer persisted.
+    //  • promptSent/generatedContent: CAPPED in the persisted view. Full
+    //    prompts (which embed school-document text, 40k+ chars each) across
+    //    200 log entries, 24 Option A results and 50 version snapshots were a
+    //    guaranteed localStorage-quota blowout that killed the offline safety
+    //    net — the exact failure mode that wiped the Change Log. The
+    //    IN-MEMORY state keeps full prompts, so the AI Review Log shows them
+    //    uncut for the session that produced them (and the AI Debug Log keeps
+    //    per-call prompts); only what is WRITTEN to storage is truncated.
     {
       name: "ucc-gd4-workspace:v3",
       storage: workspaceStorage,
-      partialize: (s) => ({
-        ...s,
-        fileTextCache: {},
-      }),
+      partialize: (s) => {
+        const capLog = (entries: AIReviewLogEntry[]) =>
+          entries.map((e) => ({ ...e, promptSent: capPersistedText(e.promptSent), generatedContent: capPersistedText(e.generatedContent) }));
+        const capPpd = (r: Record<string, PPDReviewResult>) =>
+          Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v.promptSent) }]));
+        const capEv = (r: Record<string, EvidenceAssessmentResult>) =>
+          Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v.promptSent) }]));
+        return {
+          ...s,
+          fileTextCache: {},
+          changeLog: [],
+          aiReviewLog: capLog(s.aiReviewLog),
+          ppdReviewResults: capPpd(s.ppdReviewResults),
+          evidenceAssessments: capEv(s.evidenceAssessments),
+          // Historical snapshots: strip the embedded log (new snapshots no
+          // longer capture it) and cap embedded Option A prompts.
+          versions: s.versions.map((v) => ({
+            ...v,
+            snapshot: {
+              ...v.snapshot,
+              aiReviewLog: undefined,
+              ppdReviewResults: v.snapshot.ppdReviewResults ? capPpd(v.snapshot.ppdReviewResults) : undefined,
+              evidenceAssessments: v.snapshot.evidenceAssessments ? capEv(v.snapshot.evidenceAssessments) : undefined,
+            },
+          })),
+        };
+      },
     }
   )
 );

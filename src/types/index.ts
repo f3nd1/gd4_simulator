@@ -1213,6 +1213,12 @@ export type WorkspaceSnapshot = {
   reviewPanelAuditorIds?: string[];
   reviewPanelMode?: PanelReviewMode;
   auditRunHistory?: Record<string, AuditRunRecord[]>;
+  // Roster + departments: captured so restoring a version can't leave the
+  // review panel (reviewPanelAuditorIds, restored above) pointing at auditor
+  // IDs that don't exist in the current roster. Optional for older snapshots,
+  // which keep the current roster on restore.
+  auditors?: AuditorProfile[];
+  departments?: Department[];
 };
 
 export type VersionEntry = {

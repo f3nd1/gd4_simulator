@@ -4,6 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
+import { collectBackup, backupFilename } from "../lib/workspaceBackup";
 
 export function DraftWorkspace() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -23,6 +24,21 @@ export function DraftWorkspace() {
     saveAsNewVersion(name, note);
     setName("");
     setNote("");
+  }
+
+  // Audit-day safety net: one click bundles every persisted app key
+  // (workspace, checklist, drafts, profile, settings) into a JSON file the
+  // user can keep outside the browser.
+  function downloadBackup() {
+    const now = new Date();
+    const backup = collectBackup(window.localStorage, now);
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = backupFilename(now);
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function createNew() {
@@ -72,6 +88,13 @@ export function DraftWorkspace() {
           </button>
           <button onClick={duplicateCycle} style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>
             Duplicate cycle
+          </button>
+          <button
+            onClick={downloadBackup}
+            title="Downloads every locally-persisted workspace key (workspace, checklist, drafts, PEI profile, settings — including your saved API keys) as one JSON file. Keep it somewhere safe before audit day."
+            style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8" }}
+          >
+            Download backup (JSON)
           </button>
           <button onClick={createNew} style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: "#b23121" }}>
             Create new (blank) cycle

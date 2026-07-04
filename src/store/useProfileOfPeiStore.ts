@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { workspaceStorage } from "./supabaseStorage";
 import type {
   ProfileOfPeiState,
   PeiStatusRow,
@@ -232,6 +233,13 @@ export const useProfileOfPeiStore = create<ProfileOfPeiState & ProfileOfPeiActio
       setStudentProfileMarkdown: (text) => set({ studentProfileMarkdown: text }),
       setStaffProfileMarkdown: (text) => set({ staffProfileMarkdown: text }),
     }),
-    { name: "profile-of-pei-v2" }
+    {
+      name: "profile-of-pei-v2",
+      // Audit content, not device preference: the profile feeds every AI
+      // assessment (school context), so it must sync cross-device like the
+      // rest of the workspace. Was localStorage-only, which silently showed a
+      // blank/stale profile on any second device.
+      storage: workspaceStorage,
+    }
   )
 );
