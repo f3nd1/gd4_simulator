@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CloseoutStepper } from "../components/ui/CloseoutStepper";
 import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
@@ -33,6 +34,8 @@ export function CriterionScorecard() {
   const [feedbackTarget, setFeedbackTarget] = useState<{ id: string; aiOutput: string } | null>(null);
 
   return (
+    <>
+    <CloseoutStepper />
     <Card>
       <h3 style={{ marginTop: 0, fontSize: 14 }}>Criterion scorecard — three score types</h3>
       <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
@@ -145,5 +148,6 @@ export function CriterionScorecard() {
         }}
       />
     </Card>
+    </>
   );
 }

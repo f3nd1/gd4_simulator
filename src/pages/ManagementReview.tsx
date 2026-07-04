@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CloseoutStepper } from "../components/ui/CloseoutStepper";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
@@ -33,6 +34,7 @@ export function ManagementReview() {
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div style={{ gridColumn: "1 / -1" }}><CloseoutStepper /></div>
       <Card style={{ gridColumn: "1 / -1" }}>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Management review pack</h3>
         <p style={{ fontSize: 13 }}>

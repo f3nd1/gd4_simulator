@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
+import { CloseoutStepper } from "../components/ui/CloseoutStepper";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
@@ -111,6 +112,7 @@ export function FinalReport() {
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
+      <CloseoutStepper />
       <Card style={{ background: INK, color: "#fff" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
           <div>

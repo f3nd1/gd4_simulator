@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { CloseoutStepper } from "../components/ui/CloseoutStepper";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
@@ -50,6 +51,7 @@ export function Finalisation() {
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
+      <CloseoutStepper />
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Finalisation checklist</h3>
         <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>

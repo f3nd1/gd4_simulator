@@ -60,10 +60,11 @@ describe("buildFullAuditPlan — the full-auto sweep never skips silently", () =
     expect(plan.find((p) => p.subCriterionId === "2.1")!.hasLinks).toBe(false);
   });
 
-  it("respects each row's Option A/B choice and defaults to A when unset", () => {
-    const plan = buildFullAuditPlan(folders, { "1.2": "B" }, isLink);
-    expect(plan.find((p) => p.subCriterionId === "1.1")!.path).toBe("A");
-    expect(plan.find((p) => p.subCriterionId === "1.2")!.path).toBe("B");
+  it("respects each row's Option A/B choice and defaults to the staged path (B) when unset", () => {
+    const plan = buildFullAuditPlan(folders, { "1.2": "A" }, isLink);
+    // One-pipeline default (Batch 7): unset → B; Option A is the explicit opt-in.
+    expect(plan.find((p) => p.subCriterionId === "1.1")!.path).toBe("B");
+    expect(plan.find((p) => p.subCriterionId === "1.2")!.path).toBe("A");
   });
 
   it("log labels show the sub-criterion number once, not twice", () => {

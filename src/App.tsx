@@ -1,5 +1,6 @@
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Layout } from "./components/layout/Layout";
+import { DevToolsRoute } from "./components/layout/DevToolsRoute";
 import { Dashboard } from "./pages/Dashboard";
 import { DraftWorkspace } from "./pages/DraftWorkspace";
 import { AuditCycle } from "./pages/AuditCycle";
@@ -51,7 +52,6 @@ export default function App() {
           <Route path="/evidence-folder" element={<EvidenceFolder />} />
           <Route path="/gd4-scoring-setup" element={<GD4ScoringSetup />} />
           <Route path="/gd4-library" element={<GD4Library />} />
-          <Route path="/evidence-matrix" element={<EvidenceMatrix />} />
           <Route path="/evidence-intelligence" element={<EvidenceIntelligence />} />
           <Route path="/scorecard" element={<CriterionScorecard />} />
           <Route path="/rubric-banding" element={<RubricBanding />} />
@@ -61,11 +61,17 @@ export default function App() {
           <Route path="/findings" element={<Findings />} />
           <Route path="/afi-closure" element={<AFIClosure />} />
           <Route path="/ppd-review" element={<PPDReview />} />
-          <Route path="/ai-review" element={<AIReview />} />
-          <Route path="/human-decision-log" element={<HumanDecisionLog />} />
-          <Route path="/ai-debug" element={<AIDebugLog />} />
-          <Route path="/human-review" element={<HumanReview />} />
           <Route path="/re-audit" element={<ReAudit />} />
+          {/* Diagnostic / superseded surfaces — inaccessible when developer
+              tools are hidden in Settings (see DEVELOPER_TOOL_PATHS). The
+              ChangeLog page keeps its own in-page guard for back-compat. */}
+          <Route element={<DevToolsRoute />}>
+            <Route path="/ai-review" element={<AIReview />} />
+            <Route path="/human-decision-log" element={<HumanDecisionLog />} />
+            <Route path="/ai-debug" element={<AIDebugLog />} />
+            <Route path="/human-review" element={<HumanReview />} />
+            <Route path="/evidence-matrix" element={<EvidenceMatrix />} />
+          </Route>
           {/* Version History merged into Draft Workspace; keep the old path working. */}
           <Route path="/version-history" element={<Navigate to="/draft-workspace" replace />} />
           <Route path="/final-report" element={<FinalReport />} />

@@ -17,6 +17,8 @@ import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { NAV } from "../nav";
 import { runLiveCrossCriterionAnalysis, AIClientError } from "../lib/ai/agentRuntime";
 import { effectiveSettings } from "../lib/ai/aiClient";
+import { buildResumeItems } from "../lib/resumePanel";
+import { useFindingDraftStore } from "../store/useFindingDraftStore";
 
 export function Dashboard() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -39,6 +41,18 @@ export function Dashboard() {
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
   const folders = useWorkspaceStore((s) => s.folders);
   const reportRef = useRef<HTMLDivElement | null>(null);
+  const lastAuditRuns = useWorkspaceStore((s) => s.lastAuditRuns);
+  const pendingCommits = useWorkspaceStore((s) => s.pendingCommits);
+  const closures = useWorkspaceStore((s) => s.closures);
+  const draftsBySubCriterion = useFindingDraftStore((s) => s.draftsBySubCriterion);
+  // (closures is also used further down for the open-critical count.)
+  const resumeItems = useMemo(() => buildResumeItems({
+    lastAuditRuns,
+    pendingCommitCount: Object.keys(pendingCommits).length,
+    pendingDraftCount: Object.values(draftsBySubCriterion).flat().filter((d) => d.status === "draft").length,
+    findings,
+    closures,
+  }), [lastAuditRuns, pendingCommits, draftsBySubCriterion, findings, closures]);
   const aiSettings = useAISettingsStore();
   const aiEnabled = aiSettings.enabled && !!aiSettings.apiKey;
 
@@ -123,7 +137,6 @@ export function Dashboard() {
   }, [evidenceAuditReport]);
 
   const belowBand3 = scored.items.filter((i) => i.band < 3).length;
-  const closures = useWorkspaceStore((s) => s.closures);
   const openCritical = findings.filter((a) => a.severity === "Critical" && (closures[a.id]?.human || "") !== "Accepted").length;
   const finalisationReady = scored.gatePass && scored.openAFIs === 0;
 
@@ -149,7 +162,7 @@ export function Dashboard() {
     [checklistEntries, cycle.periodStart, cycle.periodEnd]
   );
 
-  // Mirrors the 6 numbered groups in nav.ts so the Dashboard guide and the
+  // Mirrors the 5 numbered groups in nav.ts so the Dashboard guide and the
   // sidebar always describe the same workflow stages — one source of truth.
   const totalItems = scored.items.length;
   const evidenceAttached = scored.items.filter((i) => i.ev.drive || i.checklistOverride).length;
@@ -161,23 +174,23 @@ export function Dashboard() {
     ? `${scored.gateFail.length === 0 ? "3/3" : `${3 - scored.gateFail.length}/3`} gate groups at Band 3+`
     : `${3 - scored.gateFail.length}/3 gate groups at Band 3+ — failing: ${scored.gateFail.map((g) => g.id).join(", ")}`;
 
+  // 5-step workflow (Batch 7 IA): 1 Setup · 2 Audit & Evidence · 3 Fieldwork ·
+  // 4 Findings & Review · 5 Close out (scoring now lives inside Close out).
   function stepProgress(step: number): { label: string; pct: number | null } {
     switch (step) {
       case 1:
         return { label: auditorsCount > 0 ? `${auditorsCount} auditor(s) added` : "No auditors added yet", pct: auditorsCount > 0 ? 100 : 0 };
       case 2:
-        return { label: `${evidenceAttached}/${totalItems} items have evidence attached`, pct: totalItems ? Math.round((evidenceAttached / totalItems) * 100) : 0 };
-      case 3:
         return {
-          label: `${itemsScored}/${totalItems} items scored · Gate: ${gateGroupsSummary}`,
-          pct: totalItems ? Math.round((itemsScored / totalItems) * 100) : 0,
+          label: `${evidenceAttached}/${totalItems} items have evidence · ${itemsScored}/${totalItems} scored`,
+          pct: totalItems ? Math.round(((evidenceAttached + itemsScored) / (totalItems * 2)) * 100) : 0,
         };
-      case 4:
+      case 3:
         return { label: samplesRecorded > 0 ? `${samplesRecorded} sample(s) recorded` : "Not started yet", pct: samplesRecorded > 0 ? 100 : 0 };
-      case 5:
+      case 4:
         return { label: findings.length ? `${findingsClosed}/${findings.length} findings closed` : "No findings raised yet", pct: findings.length ? Math.round((findingsClosed / findings.length) * 100) : null };
-      case 6:
-        return { label: finalisationReady ? "Ready to finalise" : "Blocked on gate / open AFIs", pct: finalisationReady ? 100 : 0 };
+      case 5:
+        return { label: finalisationReady ? `Gate: ${gateGroupsSummary} · Ready to finalise` : `Gate: ${gateGroupsSummary} · Blocked on gate / open AFIs`, pct: finalisationReady ? 100 : 0 };
       default:
         return { label: "", pct: null };
     }
@@ -265,6 +278,23 @@ export function Dashboard() {
         {bulkAuditStatus && <div style={{ fontSize: 11.5, color: "#aeb8c7", marginTop: 8 }}>{bulkAuditStatus}</div>}
         {analysisError && <div style={{ fontSize: 11.5, color: "#f4b3aa", marginTop: 8 }}>Strategic analysis failed: {analysisError}</div>}
       </Card>
+
+      {/* Resume panel — "since you were last here": in-flight work with deep links. */}
+      {resumeItems.length > 0 && (
+        <Card style={{ gridColumn: "1 / -1" }}>
+          <h3 style={{ margin: "0 0 8px", fontSize: 14 }}>Pick up where you left off</h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {resumeItems.map((it) => (
+              <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+                <span style={{ flex: 1, fontSize: 12.5, color: "#374151" }}>{it.label}</span>
+                <Link to={it.to} style={{ fontSize: 12, fontWeight: 700, color: "#4f46e5", textDecoration: "none", whiteSpace: "nowrap", padding: "4px 10px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
+                  {it.action} →
+                </Link>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {analysisResult && (
         <Card style={{ gridColumn: "1 / -1" }}>

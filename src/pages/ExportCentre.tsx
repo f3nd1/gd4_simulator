@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { CloseoutStepper } from "../components/ui/CloseoutStepper";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
@@ -129,6 +130,7 @@ export function ExportCentre() {
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div style={{ gridColumn: "1 / -1" }}><CloseoutStepper /></div>
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Export centre</h3>
         <p style={{ fontSize: 13 }}>

@@ -11,6 +11,7 @@ import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
 import { TONE } from "../lib/theme";
 import type { FullAuditEntry } from "../lib/fullAudit";
+import { resolveAnalysisPath } from "../lib/fullAudit";
 import { NextStepBanner, Walkthrough, WalkthroughLink, useTip } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 import { runAuditorDisplay, panelUnderMinNotice, MSG_NO_AUDITORS_EXIST, AUDITOR_CREATION_PATH } from "../lib/auditorGuard";
@@ -783,7 +784,7 @@ function CompleteDetail({ p, onExportFileLedger, onExportAISummary }: { p: Audit
   // Same Option A/B routing as the main "View results" button — Option A
   // sends the auditor to PPD Review first, Option B straight to the checklist.
   const analysisPath = useWorkspaceStore((s) => s.analysisPath);
-  const isOptionA = (analysisPath[p.subCriterionId ?? ""] ?? "A") === "A";
+  const isOptionA = resolveAnalysisPath(analysisPath, p.subCriterionId ?? "") === "A";
   const checklistHref = !p.subCriterionId
     ? "#/sub-checklist"
     : isOptionA
@@ -1022,7 +1023,7 @@ function AuditProgressModal({
   const analysisPath = useWorkspaceStore((s) => s.analysisPath);
   const subCriterionId = progress.subCriterionId ?? "";
   const viewResultsHref =
-    (analysisPath[subCriterionId] ?? "A") === "A"
+    resolveAnalysisPath(analysisPath, subCriterionId) === "A"
       ? `/ppd-review?item=${subCriterionId}`
       : `/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === subCriterionId)?.id ?? ""}`;
 
@@ -1695,7 +1696,7 @@ function PathGuidance() {
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#f8fafc", padding: "8px 12px", marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1e293b" }}>
-          Option B for a quick sweep; Option A for the deep, assessor-grade check.
+          Option B (default) runs in place and batches; Option A is the advanced, assessor-grade PPD-first check.
         </span>
         <button
           onClick={() => { setOpen((v) => !v); setModesOpen(false); }}
@@ -1728,14 +1729,14 @@ function PathGuidance() {
       {open && (
         <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr", marginTop: 8 }}>
           <div style={{ background: "#fff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
-            <b style={{ color: "#5b21b6" }}>Option A: PPD + Evidence (recommended for pre-audit).</b>{" "}
+            <b style={{ color: "#5b21b6" }}>Option A: PPD + Evidence (advanced, deepest check).</b>{" "}
             Two steps: first checks whether your PPD documents each requirement, then checks the evidence against it.
             Slower and uses more AI, but mirrors how SSG assessors actually work. Most real EduTrust findings are
             "not documented in PPD" or "not implemented per PPD" gaps, which this path is built to catch. Use it for a
             thorough, assessor-grade check on the sub-criteria that matter.
           </div>
           <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
-            <b style={{ color: "#1e293b" }}>Option B: Staged audit (fast screening).</b>{" "}
+            <b style={{ color: "#1e293b" }}>Option B: Staged audit (the default).</b>{" "}
             A single pass straight to APSR verdicts on the Sub-Criterion Checklist. Faster and cheaper, and simpler to review. Best for a quick first
             sweep to see where you stand, or when the PPD is already solid and you only need to check implementation.
             It blends policy and evidence into one verdict, so it is less likely to isolate a pure policy-documentation gap.
@@ -2268,7 +2269,7 @@ export function EvidenceFolder() {
           const evidenceDismissKey = `${f.id}:evidence:${f.accessCheckAt || ""}`;
           const lastRun = lastAuditRuns[f.id];
           const rowExpanded = expandedSubCritRows.has(f.id);
-          const path = analysisPath[f.subCriterionId] ?? "A";
+          const path = resolveAnalysisPath(analysisPath, f.subCriterionId);
           const prog = subCritProgress[f.subCriterionId];
           const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id;
           const linksEditing = editingLinks.has(f.id);
