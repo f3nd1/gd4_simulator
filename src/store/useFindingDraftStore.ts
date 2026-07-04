@@ -14,8 +14,9 @@ import type {
   FindingDimension,
   ApsrBreakdown,
 } from "../types";
+import { findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { groupWeakLines, buildEvidenceStatusSummary, synthesiseApsrFromGroup } from "../lib/findingGrouper";
+import { groupWeakLines, buildEvidenceStatusSummary, synthesiseApsrFromGroup, isCoveredByExistingFinding, classifyGroup } from "../lib/findingGrouper";
 import { simulateGroupedFindingWriter, runLiveGroupedFindingWriter } from "../lib/ai/findingWriter";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useWorkspaceStore } from "./useWorkspaceStore";
@@ -40,19 +41,6 @@ function apsrDimToFindingDim(dim: ChecklistLineGroup["primaryApsrDimension"]): F
     case "Systems & Outcomes":return "Outcomes";
     case "Review":            return "Review";
   }
-}
-
-// Whether a candidate group is already covered by an existing confirmed finding.
-// A group is considered covered when an existing finding shares the same gd4ItemId
-// AND has at least 1 overlapping linkedChecklistLineId.
-function isCoveredByExistingFinding(group: ChecklistLineGroup, existingFindings: Finding[]): boolean {
-  const lineIds = new Set(group.lines.map((l) => l.id));
-  return existingFindings.some(
-    (f) =>
-      f.gd4ItemId === group.gd4ItemId &&
-      Array.isArray(f.linkedChecklistLineIds) &&
-      f.linkedChecklistLineIds.some((id) => lineIds.has(id))
-  );
 }
 
 // Live progress of a grouped-finding generation run, so the UI can show a
@@ -305,6 +293,40 @@ export const useFindingDraftStore = create<FindingDraftState>()(
         const sourceTexts = draft.group.sourceTexts;
         const evidenceStatusSummary = draft.evidenceStatusSummary ?? buildEvidenceStatusSummary(draft.group.lines);
         const apsr: ApsrBreakdown | undefined = synthesiseApsrFromGroup(draft.group, draft.apsrBullets);
+        const { findingType, ncSeverity } = classifyGroup(draft.group, apsr);
+
+        // Confirm-time dedupe: the same gap may ALREADY be in the register —
+        // raiseAllUnmetFindings can fire (auto-raise, or the Findings page
+        // "raise from gaps") between this draft's generation and its confirm.
+        // Creating anyway would put two findings on the same gap. Instead,
+        // RELINK the draft to the existing finding and stop.
+        {
+          const existingFindings = useWorkspaceStore.getState().customFindings;
+          const draftKey = findingDedupeKey(draft.gd4ItemId, sourceRefs[0], findingType);
+          // (a) a register finding with the same composite identity, or
+          // (b) a CURRENT checklist line in this group already stamped with a
+          //     savedFindingId (the group's line copies are generation-time
+          //     snapshots, so read the live checklist), or
+          // (c) line-id / source-ref overlap via isCoveredByExistingFinding.
+          const entry = useChecklistModuleStore.getState().entries[draft.gd4ItemId];
+          const lineIdSet = new Set(lineIds);
+          const stampedId = entry?.specific.find((l) => lineIdSet.has(l.id) && l.draftFinding?.savedFindingId)?.draftFinding?.savedFindingId;
+          const existing =
+            existingFindings.find((f) => stampedId && f.id === stampedId) ??
+            existingFindings.find((f) => draftKey != null && findingKeyOf(f) === draftKey) ??
+            existingFindings.find((f) => isCoveredByExistingFinding(draft.group, [f]));
+          if (existing) {
+            set((s) => ({
+              draftsBySubCriterion: {
+                ...s.draftsBySubCriterion,
+                [subCriterionId]: (s.draftsBySubCriterion[subCriterionId] ?? []).map((d) =>
+                  d.id === draftId ? { ...d, status: "confirmed" as FindingDraftStatus, savedFindingId: existing.id } : d
+                ),
+              },
+            }));
+            return;
+          }
+        }
 
         const finding: Finding = {
           id: `GF-${Date.now()}`,
@@ -324,6 +346,11 @@ export const useFindingDraftStore = create<FindingDraftState>()(
           effect: draft.effect ?? "",
           riskCategory: draft.group.riskCategory,
           dimension: apsrDimToFindingDim(draft.group.primaryApsrDimension),
+          // Header classification — without this, grouped findings keyed as
+          // `item::ref::` (empty type) and could never dedupe against
+          // auto-raised findings keyed `item::ref::NC`.
+          findingType,
+          ncSeverity,
           source: draft.auditRunId ? "ai_audit" : "Checklist",
           rootCause: draft.rootCause,
           corrective: draft.corrective,

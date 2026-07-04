@@ -390,3 +390,64 @@ describe("synthesiseApsrFromGroup", () => {
     expect(result?.review.status).toBe("Not evident");
   });
 });
+
+// ── Batch 2: cross-pipeline dedupe + grouped-finding classification ──────────
+
+import { isCoveredByExistingFinding, classifyGroup } from "../findingGrouper";
+import type { Finding } from "../../types";
+
+function makeFinding(over: Partial<Finding> = {}): Finding {
+  return {
+    id: "F-1", auditCycleId: "cycle-1", gd4ItemId: "4.5.1", issue: "gap",
+    type: "AFI", severity: "Medium", owner: "", dueDate: "", repeatFinding: false,
+    overdue: false, managementDecisionNeeded: false, status: "Open", ...over,
+  };
+}
+
+describe("isCoveredByExistingFinding — sees auto-raised findings too", () => {
+  const group: ChecklistLineGroup = {
+    gd4ItemId: "4.5.1", subCriterionId: "4.5", gapType: "Implementation/Process",
+    primaryApsrDimension: "Processes",
+    lines: [makeLine({ id: "L9", status: "Not met", sourceRef: "4.5.1.DS1.a" })],
+    sourceRefs: ["4.5.1.DS1.a"], sourceTexts: ["…"], severity: "Medium", riskCategory: "C",
+  };
+
+  it("matches on overlapping linkedChecklistLineIds (existing behaviour)", () => {
+    const f = makeFinding({ linkedChecklistLineIds: ["L9"] });
+    expect(isCoveredByExistingFinding(group, [f])).toBe(true);
+  });
+
+  it("matches an auto-raised finding via linkedSourceRefs even with NO line ids", () => {
+    // raiseAllUnmetFindings stamps linkedSourceRefs but not linkedChecklistLineIds —
+    // this used to be invisible to the grouped pipeline and produced duplicates.
+    const f = makeFinding({ linkedSourceRefs: ["DS: 4.5.1.ds1.a"] }); // drifted form still matches
+    expect(isCoveredByExistingFinding(group, [f])).toBe(true);
+  });
+
+  it("does not match a different item or a different ref", () => {
+    expect(isCoveredByExistingFinding(group, [makeFinding({ gd4ItemId: "4.6.1", linkedSourceRefs: ["4.5.1.DS1.a"] })])).toBe(false);
+    expect(isCoveredByExistingFinding(group, [makeFinding({ linkedSourceRefs: ["4.5.1.DS2"] })])).toBe(false);
+  });
+});
+
+describe("classifyGroup — grouped findings carry a real findingType", () => {
+  const groupOf = (lines: SpecificChecklistLine[]): ChecklistLineGroup => ({
+    gd4ItemId: "4.5.1", subCriterionId: "4.5", gapType: "Implementation/Process",
+    primaryApsrDimension: "Processes", lines, sourceRefs: [], sourceTexts: [],
+    severity: "Medium", riskCategory: "C",
+  });
+
+  it("any Not-met line → NC; all-Partial → OFI (matching findingTypeForStatus)", () => {
+    expect(classifyGroup(groupOf([makeLine({ status: "Not met" }), makeLine({ id: "L2", status: "Partial" })]), undefined).findingType).toBe("NC");
+    expect(classifyGroup(groupOf([makeLine({ status: "Partial" })]), undefined).findingType).toBe("OFI");
+  });
+
+  it("OFI carries no NC severity; NC with a weak Approach is Major", () => {
+    expect(classifyGroup(groupOf([makeLine({ status: "Partial" })]), undefined).ncSeverity).toBeNull();
+    const apsr: ApsrBreakdown = {
+      approach: { status: "Not evident", note: "" }, processes: { status: "Not evident", note: "" },
+      systemsOutcomes: { status: "Not evident", note: "" }, review: { status: "Not evident", note: "" },
+    };
+    expect(classifyGroup(groupOf([makeLine({ status: "Not met" })]), apsr).ncSeverity).toBe("Major");
+  });
+});

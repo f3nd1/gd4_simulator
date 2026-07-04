@@ -1090,15 +1090,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let matched = 0;
         const rows: EvidenceAssessmentRow[] = ppd.rows.map((p) => {
           const hit = lineByRef.get(normalizeAuditRef(p.ref));
-          const verdict = hit ? statusToVerdict(hit.status) : null;
-          if (hit && verdict) {
+          const rawVerdict = hit ? statusToVerdict(hit.status) : null;
+          if (hit && rawVerdict) {
             matched++;
             const apsr = hit.apsr;
             const chunkIds = apsr
               ? [...new Set([...(apsr.approach.sourceChunkIds ?? []), ...(apsr.processes.sourceChunkIds ?? []), ...(apsr.systemsOutcomes.sourceChunkIds ?? []), ...(apsr.review.sourceChunkIds ?? [])])]
               : [];
-            const comment = apsr ? apsrAuditNote(apsr) : (hit.note || "");
+            let comment = apsr ? apsrAuditNote(apsr) : (hit.note || "");
             const evidenceSummary = apsr ? (apsr.processes.note || apsr.systemsOutcomes.note || "Assessed by the Evidence Folder staged audit.") : (hit.note || "Assessed by the Evidence Folder staged audit.");
+            // PPD hard-gate — same rule as the fresh AI path (runEvidenceAssessment
+            // caps at agentRuntime's APSR Approach gate): a line whose PPD verdict
+            // is not "Adequate" can never show "Met" here, or the Evidence tab
+            // would contradict the PPD tab for the same ref.
+            let verdict = rawVerdict;
+            if (verdict === "Met" && p.verdict !== "Adequate") {
+              verdict = "Partial";
+              comment = `${comment ? `${comment}\n\n` : ""}[Capped at Partial: the PPD verdict for this line is "${p.verdict}" — under the APSR Approach hard-gate a line cannot be Met until the documented approach is Adequate, regardless of implementation evidence.]`;
+            }
             return {
               gdRef: p.ref, gd4ItemId: p.gd4ItemId, requirementText: p.requirementText,
               ppdExtract: p.fullComment || p.shortComment || "", ppdVerdict: p.verdict,
@@ -1455,7 +1464,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (line.draftFinding?.savedFindingId) {
               findingId = line.draftFinding.savedFindingId;
             } else {
-              const draft = buildDraftFinding(req, line);
+              // Type the draft off the ROW's verdict, not the checklist line's
+              // possibly-stale status — when Compile runs before the checklist
+              // write-back (manual/hybrid), line.status can still hold the old
+              // value, which typed the finding differently from the dedupe key
+              // built at the top of this loop and produced duplicates later.
+              const draft = buildDraftFinding(req, { ...line, status: rowStatus });
               const before = get().customFindings.length;
               checklist.confirmDraftFinding(row.gd4ItemId, line.id, draft);
               findingId = useChecklistModuleStore
@@ -1801,7 +1815,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               }
             : item.write;
           useChecklistModuleStore.getState().applyOptionAWrites([write]);
-          try { useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId, { subCriterionId }); } catch { /* non-fatal */ }
+          try {
+            useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId, { subCriterionId });
+            // Option A parity with full-auto: raiseAllUnmetFindings only covers
+            // Not-met/missing-evidence lines — compile also raises the OFIs for
+            // Partial verdicts and the Technique-2 PPD-contradiction findings
+            // (both deduped), so hybrid approval yields the same register as a
+            // full-auto run of the same assessment.
+            if (run.path === "A") get().compileEvidenceFindings(subCriterionId);
+          } catch (err) {
+            console.error("[resolvePendingItem] finding raise failed", err instanceof Error ? err.message : String(err));
+          }
           get().logHumanDecision({
             module: "Run mode gate",
             subjectId: item.write.gd4ItemId,
@@ -1840,7 +1864,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const run = get().pendingCommits[subCriterionId];
         if (!run || run.items.length === 0) return;
         useChecklistModuleStore.getState().applyOptionAWrites(run.items.map((i) => i.write));
-        try { useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId, { subCriterionId }); } catch { /* non-fatal */ }
+        try {
+          useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId, { subCriterionId });
+          // See resolvePendingItem: Option A parity with full-auto (Partial→OFI
+          // + PPD-contradiction findings, deduped).
+          if (run.path === "A") get().compileEvidenceFindings(subCriterionId);
+        } catch (err) {
+          console.error("[acceptAllPending] finding raise failed", err instanceof Error ? err.message : String(err));
+        }
         get().logHumanDecision({
           module: "Run mode gate",
           subjectId: subCriterionId,
@@ -1917,9 +1948,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             reviewPanelAuditorIds: DEFAULT_AUDITORS.map((a) => a.id).slice(0, MAX_PANEL),
             seedFindingsLoaded: true,
             cycle: { ...s.cycle, ...DEMO_CYCLE_FIELDS },
+            // Clear prior REAL audit state so demo data never mixes with it:
+            // leftover custom findings, queued pending commits, AI verdicts and
+            // Option A results would otherwise sit alongside the demo findings
+            // (referencing lines/refs the demo did not create) and corrupt every
+            // count on the Dashboard/Findings/Scorecard.
+            customFindings: [],
+            pendingCommits: {},
+            itemReviews: {},
+            ppdReviewResults: {},
+            evidenceAssessments: {},
+            auditRunHistory: {},
+            lastAuditRuns: {},
             ...buildDemoDataset(evidence),
           };
         });
+        // Grouped drafts reference findings/lines the demo wipe just replaced.
+        useFindingDraftStore.getState().resetAllDrafts();
       },
 
       // Snapshot+restore versioning: every save captures a full copy of the

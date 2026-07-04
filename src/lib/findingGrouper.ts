@@ -9,8 +9,14 @@ import type {
   Severity,
   ApsrBreakdown,
   FindingDimension,
+  Finding,
+  FindingTypeCode,
+  NcSeverity,
 } from "../types";
 import { lineSufficiency, findingDimension, computeRiskCategory, lineApsr } from "./checklistBanding";
+import { findingTypeForStatus, ncSeverityFor } from "./findingClassification";
+import { normalizeAuditRef } from "./gd4Refs";
+import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 
 // Strip a terminal single-letter sub-item suffix from a sourceRef so that
 // sibling points (.a, .b, .c …) from the same parent bullet are grouped.
@@ -182,4 +188,32 @@ export function groupWeakLines(
   }
 
   return groups;
+}
+
+// Whether a candidate group is already covered by an existing confirmed finding.
+// A group is considered covered when an existing finding shares the same gd4ItemId
+// AND (a) has at least 1 overlapping linkedChecklistLineId, OR (b) points at the
+// same GD4 source ref. (b) matters because auto-raised findings
+// (raiseAllUnmetFindings) stamp linkedSourceRefs but NOT linkedChecklistLineIds,
+// so a line-id-only join could not see them and the same gap got two findings.
+export function isCoveredByExistingFinding(group: ChecklistLineGroup, existingFindings: Finding[]): boolean {
+  const lineIds = new Set(group.lines.map((l) => l.id));
+  const groupRefs = new Set(group.sourceRefs.map((r) => normalizeAuditRef(r)).filter(Boolean));
+  return existingFindings.some(
+    (f) =>
+      f.gd4ItemId === group.gd4ItemId &&
+      ((Array.isArray(f.linkedChecklistLineIds) && f.linkedChecklistLineIds.some((id) => lineIds.has(id))) ||
+        (Array.isArray(f.linkedSourceRefs) && f.linkedSourceRefs.some((r) => groupRefs.has(normalizeAuditRef(r)))))
+  );
+}
+
+// The header classification a grouped finding should carry, derived from its
+// contributing lines' statuses exactly like the single-line raise path
+// (findingTypeForStatus): any "Not met" line → NC, otherwise OFI. NC severity
+// follows the same gate/approach rule as checklist-raised findings.
+export function classifyGroup(group: ChecklistLineGroup, apsr: ApsrBreakdown | undefined): { findingType: FindingTypeCode; ncSeverity: NcSeverity | null } {
+  const worst: "Not met" | "Partial" = group.lines.some((l) => l.status === "Not met") ? "Not met" : "Partial";
+  const findingType = findingTypeForStatus(worst);
+  const gateSensitive = GD4_REQUIREMENTS.some((r) => r.id === group.gd4ItemId && r.gateSensitive);
+  return { findingType, ncSeverity: ncSeverityFor(findingType, { gateSensitive, approachStatus: apsr?.approach.status }) };
 }

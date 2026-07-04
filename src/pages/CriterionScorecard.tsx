@@ -117,7 +117,7 @@ export function CriterionScorecard() {
         onSubmit={(fb) => {
           if (!feedbackTarget) return;
           const memId = !fb.correct ? addCalibrationMemory({ module: "Item Scoring", subjectId: feedbackTarget.id, context: feedbackTarget.aiOutput, aiOutput: feedbackTarget.aiOutput, staffCorrection: fb.correction, keyLearning: fb.reason, status: "active", tokenCount: 0 }) : undefined;
-          logHumanDecision({ module: "Item Scoring", subjectId: feedbackTarget.id, aiOutput: feedbackTarget.aiOutput, humanDecision: fb.correction || "Rejected", changed: true, decisionType: "Rejected" in fb ? "Overridden" : "Accepted", reason: fb.reason, memoryId: memId ?? undefined });
+          logHumanDecision({ module: "Item Scoring", subjectId: feedbackTarget.id, aiOutput: feedbackTarget.aiOutput, humanDecision: fb.correct ? "Accepted" : (fb.correction || "Rejected"), changed: !fb.correct, decisionType: fb.correct ? "Accepted" : "Overridden", reason: fb.reason, memoryId: memId ?? undefined });
           setFeedbackTarget(null);
         }}
       />

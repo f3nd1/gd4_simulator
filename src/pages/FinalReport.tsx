@@ -16,7 +16,7 @@ import { Gauge, HBars, VBars, BAND_COLOR, AttainmentLadder } from "../components
 import { GOLD, INK, bandTone } from "../lib/theme";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 
-const SEV_TONE: Record<string, string> = { Critical: "critical", High: "critical", Medium: "medium", Low: "progress" };
+const SEV_TONE: Record<string, string> = { Critical: "critical", High: "critical", Medium: "medium", Low: "progress", Major: "critical", Minor: "medium" };
 
 export function FinalReport() {
   const scored = useScored();

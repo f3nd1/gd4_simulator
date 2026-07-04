@@ -600,7 +600,7 @@ Respond with JSON only: {"rebuttal": string}.${buildSystemPrompt("findingWriter"
 The ROOT CAUSE must name a SYSTEM or PROCESS cause (a governance, documentation, training, data-collection or review gap) — never "human error", "forgot", "poor communication" or blame of an individual.
 
 Respond with JSON only, all fields plain text:
-{"summary": "Balanced Finding Summary", "riskImpact": "Risk / Impact", "rootCause": "system/process root cause", "immediateCorrection": "Immediate Correction", "correctiveAction": "Corrective Action", "evidenceForClosure": "Evidence Required for Closure", "finalClassification": "one of NC / Observation / OFI / CAR / improvement, with a brief justification and no overstatement"}.${buildSystemPrompt("afiClosure", null, "runAuditorPanel · synthesis", criterionId, domainSkill)}${domainBlock}`;
+{"summary": "Balanced Finding Summary", "riskImpact": "Risk / Impact", "rootCause": "system/process root cause", "immediateCorrection": "Immediate Correction", "correctiveAction": "Corrective Action", "evidenceForClosure": "Evidence Required for Closure", "finalClassification": "MUST start with exactly one of: NC (Major), NC (Minor), OFI, OBS — followed by an em-dash and a brief justification, no overstatement. Use no other classification word (no CAR, no improvement)."}.${buildSystemPrompt("afiClosure", null, "runAuditorPanel · synthesis", criterionId, domainSkill)}${domainBlock}`;
     const synthUser = `The finding under review:\n${findingBlock}\n\nPanellists' reviews:\n${panelDigest}\n\nWrite the panel's combined conclusion.`;
     try {
       let callUsage: AIUsage | undefined;

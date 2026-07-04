@@ -5,6 +5,7 @@
 import type { Scored } from "./scoring";
 import type { SubCriterionChecklistEntry, Finding, GenericChecklistLine, SpecificChecklistLine } from "../types";
 import { computeBand, lineSufficiency } from "./checklistBanding";
+import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
 import { GD4_REQUIREMENTS } from "./../data/gd4Requirements";
 
 export type ClosureLite = { root?: string; corr?: string; prev?: string; evid?: string; human?: "" | "Accepted"; aiNeed?: string };
@@ -135,8 +136,11 @@ export function buildFinalReport(
       id: f.id,
       itemId: f.gd4ItemId + (reqTitle ? ` ${reqTitle}` : ""),
       issue: f.issue,
-      severity: f.severity,
-      type: f.type,
+      // Resolved NC/OFI/OBS classification (which applyPanelConclusion updates),
+      // not the raw legacy fields — the report must agree with the Findings
+      // register and Export Centre, both of which already resolve.
+      severity: resolveNcSeverity(f) ?? f.severity,
+      type: resolveFindingType(f),
       status: f.status,
       closed: (c.human || "") === "Accepted",
       rootCause: c.root,
