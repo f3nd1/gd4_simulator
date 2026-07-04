@@ -5134,6 +5134,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       incrementMemoryUsage: (id) =>
         set((s) => ({ calibrationMemories: s.calibrationMemories.map((m) => m.id === id ? { ...m, usageCount: m.usageCount + 1 } : m) })),
 
+      // Currently uncalled: awaits a per-memory feedback signal (none exists —
+      // system-level effectiveness is measured by the AI Calibration benchmark).
       updateMemoryEffectiveness: (id, score) =>
         set((s) => ({ calibrationMemories: s.calibrationMemories.map((m) => m.id === id ? { ...m, effectivenessScore: score } : m) })),
     }),
