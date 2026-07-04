@@ -892,9 +892,6 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
     if (!driveClientId) { navigate(DRIVE_CONNECT_PATH); return; }
     useGoogleDriveStore.getState().connect().catch(() => {/* lastError shown in Settings */});
   };
-  const openFolderSettings = () => {
-    navigate(p.subCriterionId ? `/evidence-folder?sub=${p.subCriterionId}` : "/evidence-folder");
-  };
 
   const btn = (label: string, onClick: () => void, primary: boolean): React.ReactNode => (
     <button
@@ -944,7 +941,6 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
               connectDrive,
               true,
             )}
-            {btn("Open folder settings", openFolderSettings, false)}
           </div>
           {/* The specific checks + the folder link so the user can verify it. */}
           <div style={{ fontSize: 11, color: "#64748b", background: "#f8fafc", border: "1px solid #eef1f5", borderRadius: 7, padding: "7px 10px" }}>

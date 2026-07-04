@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
+import { DRIVE_CONNECT_PATH } from "../lib/driveGuard";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
@@ -185,6 +187,25 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
   const result = ppdReviewResults[selectedId];
   const isRunning = busy === "ppdreview" + selectedId;
   const liveProgress = useWorkspaceStore((s) => s.ppdReviewProgress);
+
+  // Drive-connection block for THIS sub-criterion — runPPDReview sets this when
+  // the folder can't be reached, so the button appears to "do nothing".
+  // Surface it here with a Connect action (Option A parity with Evidence Folder).
+  const driveBlockedReason = useWorkspaceStore((s) => s.driveBlockedReason);
+  const setDriveBlockedReason = useWorkspaceStore((s) => s.setDriveBlockedReason);
+  const driveToken = useGoogleDriveStore((s) => s.accessToken);
+  const driveConnecting = useGoogleDriveStore((s) => s.connecting);
+  const driveClientId = useGoogleDriveStore((s) => s.clientId);
+  const navigate = useNavigate();
+  const driveBlock = driveBlockedReason && driveBlockedReason.subCriterionId === selectedId ? driveBlockedReason : null;
+  const connectDrive = () => {
+    if (!driveClientId) { navigate(DRIVE_CONNECT_PATH); return; }
+    useGoogleDriveStore.getState().connect().catch(() => {/* lastError shown in Settings */});
+  };
+  // Clear the block once a token arrives so the banner disappears without reload.
+  useEffect(() => {
+    if (driveToken && driveBlock?.reason === "not-connected") setDriveBlockedReason(null);
+  }, [driveToken, driveBlock, setDriveBlockedReason]);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const toggleExpanded = (ref: string) =>
     setExpandedRows((prev) => {
@@ -207,6 +228,25 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
       >
         {isRunning ? "Reviewing…" : result ? "Re-run PPD review" : "Run PPD review"}
       </button>
+
+      {/* Show a Connect affordance whenever Drive isn't connected (so the
+          button is always reachable), or when a run was explicitly blocked. */}
+      {(driveBlock || !driveToken) && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12, padding: "9px 12px", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 8, fontSize: 12.5, color: "#92600a", fontWeight: 600 }}>
+          <span aria-hidden>🔌</span>
+          <span style={{ flex: 1, minWidth: 220 }}>
+            {driveBlock ? driveBlock.message : "Not connected to Google Drive — connect to read this sub-criterion's Policy folder and run the review."}
+          </span>
+          <button
+            type="button"
+            onClick={connectDrive}
+            disabled={driveConnecting}
+            style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: driveConnecting ? "#94a3b8" : "#2563eb", border: "none", borderRadius: 6, padding: "5px 12px", cursor: driveConnecting ? "default" : "pointer", whiteSpace: "nowrap" }}
+          >
+            {driveConnecting ? "Connecting…" : "Connect to Google Drive"}
+          </button>
+        </div>
+      )}
       {isRunning && (
         <div style={{ marginBottom: 12, padding: "8px 12px", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
