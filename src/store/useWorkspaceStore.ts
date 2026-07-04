@@ -2394,7 +2394,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const memory = useAgentMemoryStore.getState().memory["closure-reviewer"] || [];
             const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
             const closureCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "AFI Closure").slice(0, 3);
-            verdict = await runLiveClosureReview(c, settings, memory, closureCalibration);
+            const closureItemId = get().customFindings.find((f) => f.id === afiId)?.gd4ItemId;
+            verdict = await runLiveClosureReview(c, settings, memory, closureCalibration, closureItemId);
             useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "user", content: `Reviewed closure for ${afiId}.`, createdAt: new Date().toISOString() });
             useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "assistant", content: verdict.reason, createdAt: new Date().toISOString() });
           } catch (err) {

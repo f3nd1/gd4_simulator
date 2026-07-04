@@ -1995,6 +1995,18 @@ export function EvidenceFolder() {
             Use the scope selector to audit only Policy or only Evidence files. Files are cached — unchanged Drive files are reused on repeat audits.
             "View last run" reopens the read-only audit record with full file ledger and AI summary CSVs.
           </p>
+          {/* Folder-prep conventions the audit's file classifier depends on —
+              previously only implied, so misnamed subfolders silently
+              misclassified files and the operator only found out post-run. */}
+          <div style={{ fontSize: 12, color: "#374151", background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 8, padding: "9px 12px", marginBottom: 8 }}>
+            <b style={{ color: "#0369a1" }}>How to prepare each Drive folder (the audit depends on these exact names):</b>
+            <ul style={{ margin: "5px 0 0 18px", padding: 0, lineHeight: 1.6 }}>
+              <li>When one shared folder is linked for both tabs, name its two subfolders exactly <b>“1. Policy &amp; Procedure”</b> and <b>“2. Actual Evidence”</b> — files are classified by this path prefix, and a misnamed subfolder silently puts files in the wrong bucket.</li>
+              <li><b>Policy &amp; Procedure</b> = the documented approach: the PPD, SOPs, frameworks. <b>Actual Evidence</b> = records of DOING it: filled forms, registers, logs, minutes, screenshots. A policy filed under Evidence earns no implementation credit.</li>
+              <li>Evidence the AI can credit is <b>dated, named and in-period</b>: records covering the review period, with owners/signatures and dates visible. Undated or cut-off-breaching documents are graded down.</li>
+              <li>Scanned/image-only PDFs extract little text — prefer digital originals or spreadsheets where they exist.</li>
+            </ul>
+          </div>
           {fileTextCacheSize > 0 && (
             <div style={{ marginBottom: 8, background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 7, overflow: "hidden" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px" }}>

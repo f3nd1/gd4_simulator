@@ -80,6 +80,7 @@ import spreadsheetEvidenceSkill    from "../../data/skills/spreadsheet-evidence.
 import sgPeiContextSkill           from "../../data/skills/sg-pei-context.md?raw";
 import consultantInsightsSkill     from "../../data/skills/consultant-insights.md?raw";
 import riskRemediationSkill        from "../../data/skills/risk-and-remediation.md?raw";
+import commonFindingPatternsSkill  from "../../data/skills/common-ssg-finding-patterns.md?raw";
 
 // ─── Named exports (use these when you need an individual skill) ─────────────
 
@@ -104,6 +105,7 @@ export {
   sgPeiContextSkill,
   consultantInsightsSkill,
   riskRemediationSkill,
+  commonFindingPatternsSkill,
 };
 
 // ─── Module map ─────────────────────────────────────────────────────────────
@@ -127,11 +129,17 @@ const MODULE_SKILLS: Record<SkillModule, { capped: string[]; uncapped: string[] 
     uncapped: [],
   },
   evidenceReview: {
-    capped:   [evidenceRetrievalSkill, sourceCitationSkill, evidenceTimelinessSkill],
-    uncapped: [],
+    // regulatory-references was previously injected only for finding-writing
+    // and band-recommendation — the evidence passes that actually DECIDE
+    // Met/Not met never saw the clause tables (PDPA timelines, cooling-off,
+    // ICA thresholds). Uncapped for the same mid-table-truncation reason.
+    // common-ssg-finding-patterns primes the verdict passes with the gap
+    // patterns real assessors raised at this PEI.
+    capped:   [evidenceRetrievalSkill, sourceCitationSkill, evidenceTimelinessSkill, commonFindingPatternsSkill],
+    uncapped: [regulatoryReferencesSkill],
   },
   findingWriter: {
-    capped:   [findingSpecificitySkill, findingWritingSkill, riskRemediationSkill],
+    capped:   [findingSpecificitySkill, findingWritingSkill, riskRemediationSkill, commonFindingPatternsSkill],
     uncapped: [regulatoryReferencesSkill],
   },
   afiClosure: {
@@ -192,6 +200,7 @@ const SKILL_NAMES = new Map<string, string>([
   [sgPeiContextSkill,           "sg-pei-context.md"],
   [consultantInsightsSkill,     "consultant-insights.md"],
   [riskRemediationSkill,        "risk-and-remediation.md"],
+  [commonFindingPatternsSkill,  "common-ssg-finding-patterns.md"],
 ]);
 
 function labelSkill(raw: string, content: string): string {

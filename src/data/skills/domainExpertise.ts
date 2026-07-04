@@ -18,6 +18,9 @@ import criterion4 from "./criterion-4-student-protection.md?raw";
 import criterion5 from "./criterion-5-academic.md?raw";
 import criterion6 from "./criterion-6-quality-assurance.md?raw";
 import criterion7 from "./criterion-7-outcomes.md?raw";
+import ssgRefundRules from "./ssg-refund-and-withdrawal-rules.md?raw";
+import standardStudentContract from "./standard-student-contract.md?raw";
+import fpsRules from "./fps-rules.md?raw";
 
 // Short human-readable label of the specialist persona per criterion, used in
 // the UI so the auditor can see which expertise the audit applied.
@@ -31,11 +34,19 @@ export const DOMAIN_EXPERTISE_LABELS: Record<string, string> = {
   "7": "Performance-measurement & data-integrity specialist",
 };
 
+// Criterion 4 (student protection) carries three regulatory supplements —
+// refund/cooling-off rules, the Standard Student Contract checks, and FPS
+// mechanics. These are the zero-tolerance areas where the AI previously had
+// to "verify a table it had never seen"; appending them here reaches every
+// C4 call (evidence passes, finding writer, panel) at zero cost to the other
+// criteria.
+const criterion4Full = [criterion4, ssgRefundRules, standardStudentContract, fpsRules].join("\n\n---\n\n");
+
 const DOMAIN_EXPERTISE_SKILLS: Record<string, string> = {
   "1": criterion1,
   "2": criterion2,
   "3": criterion3,
-  "4": criterion4,
+  "4": criterion4Full,
   "5": criterion5,
   "6": criterion6,
   "7": criterion7,

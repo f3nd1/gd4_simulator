@@ -250,9 +250,15 @@ export async function runLiveClosureReview(
   closure: { root?: string; corr?: string; prev?: string; evid?: string },
   settings: AISettings,
   memory: AgentMemoryEntry[],
-  calibration?: SkillCalibrationExample[]
+  calibration?: SkillCalibrationExample[],
+  criterionId?: string
 ): Promise<Omit<SimulatedClosureVerdict, "live"> & { live: true; usage?: AIUsage }> {
-  const system = `You are the Closure Reviewer Agent for an EduTrust GD4 internal audit. Assess whether a corrective/preventive action closure is Acceptable, Partial, should Maintain Finding, or should Escalate, using only the narrative given — never assume evidence that wasn't described, and never let well-written narrative substitute for missing evidence. If no closure evidence link is provided, you must return "Maintain Finding" regardless of how complete or convincing the narrative sounds. Respond with JSON only: {"verdict": "Acceptable" | "Partial" | "Maintain Finding" | "Escalate", "reason": string, "evidenceNeeded": string}.${buildSystemPrompt("afiClosure", null, "runLiveClosureReview", undefined, undefined, calibration)}`;
+  // Closure review previously got NO criterion specialist knowledge — the one
+  // reviewer deciding whether a fix is adequate judged it generically. Inject
+  // the same domain block every other per-item call gets.
+  const domainSkill = domainExpertiseFor(criterionId);
+  const domainBlock = buildDomainBlock(domainSkill);
+  const system = `You are the Closure Reviewer Agent for an EduTrust GD4 internal audit. Assess whether a corrective/preventive action closure is Acceptable, Partial, should Maintain Finding, or should Escalate, using only the narrative given — never assume evidence that wasn't described, and never let well-written narrative substitute for missing evidence. If no closure evidence link is provided, you must return "Maintain Finding" regardless of how complete or convincing the narrative sounds. Respond with JSON only: {"verdict": "Acceptable" | "Partial" | "Maintain Finding" | "Escalate", "reason": string, "evidenceNeeded": string}.${buildSystemPrompt("afiClosure", null, "runLiveClosureReview", criterionId, domainSkill, calibration)}${domainBlock}`;
   const user = `Root cause: ${closure.root || "(none provided)"}\nCorrective action: ${closure.corr || "(none provided)"}\nPreventive action: ${closure.prev || "(none provided)"}\nClosure evidence link: ${closure.evid || "(none provided — no evidence is linked)"}`;
 
   let usage: AIUsage | undefined;

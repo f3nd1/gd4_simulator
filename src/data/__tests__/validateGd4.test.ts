@@ -181,3 +181,39 @@ describe("GD4 requirement data integrity", () => {
     });
   });
 });
+
+// ── Skill-file size guard (Batch 5) ─────────────────────────────────────────
+// Every CAPPED skill must fit inside SKILL_CAP or it silently truncates
+// mid-sentence in every prompt that injects it. The uncapped set
+// (regulatory-references + the criterion/domain supplements) is exempt.
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+describe("skill files fit the injection cap", () => {
+  const SKILL_CAP = 7000; // keep in sync with src/lib/ai/skills.ts
+  const UNCAPPED = new Set([
+    "regulatory-references.md",
+    // Criterion/domain files are injected via buildDomainBlock (never capped).
+    "criterion-1-leadership-finance.md",
+    "criterion-2-corporate-admin.md",
+    "criterion-3-recruitment-agents.md",
+    "criterion-4-student-protection.md",
+    "criterion-5-academic.md",
+    "criterion-6-quality-assurance.md",
+    "criterion-7-outcomes.md",
+    "ssg-refund-and-withdrawal-rules.md",
+    "standard-student-contract.md",
+    "fps-rules.md",
+  ]);
+  const dir = join(__dirname, "..", "skills");
+
+  it("every capped skill file is ≤ SKILL_CAP chars (no silent mid-file truncation)", () => {
+    const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+    expect(files.length).toBeGreaterThan(20); // sanity: the skills are where we think
+    for (const f of files) {
+      if (UNCAPPED.has(f)) continue;
+      const size = statSync(join(dir, f)).size;
+      expect(size, `${f} is ${size} bytes — over the ${SKILL_CAP}-char injection cap; it would truncate mid-content in every prompt`).toBeLessThanOrEqual(SKILL_CAP);
+    }
+  });
+});
