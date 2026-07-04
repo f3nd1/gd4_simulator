@@ -2428,6 +2428,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const memory = useAgentMemoryStore.getState().memory["closure-reviewer"] || [];
             const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
             const closureCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "AFI Closure").slice(0, 3);
+            if (closureCalibration.length) get().markCalibrationUsed(closureCalibration.map((e) => e.id));
             const closureItemId = get().customFindings.find((f) => f.id === afiId)?.gd4ItemId;
             verdict = await runLiveClosureReview(c, settings, memory, closureCalibration, closureItemId);
             useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "user", content: `Reviewed closure for ${afiId}.`, createdAt: new Date().toISOString() });
@@ -2485,6 +2486,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const auditedLine = entry?.specific.find((l) => l.draftFinding?.savedFindingId === afiId);
           const apsr = auditedLine ? lineApsr(auditedLine) : undefined;
           const closureDraftCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Closure Drafting").slice(0, 3);
+          if (closureDraftCalibration.length) get().markCalibrationUsed(closureDraftCalibration.map((e) => e.id));
           const draft = await runLiveClosureDraft({ issue, gd4ItemId }, settings, { standard, apsr: apsr ? apsrReason(apsr) : undefined, calibration: closureDraftCalibration });
           // Record this AI run so every AI use shows in the AI Review Log.
           get().pushAIReviewLog({
@@ -2677,14 +2679,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }));
       },
 
-      // "Run audit" action on the Evidence Folder page. Reads every
-      // supported document in the folder via the real Drive API, judges the
-      // checklist lines belonging to this sub-criterion against that real
-      // text (live OpenAI call when configured, offline keyword heuristic
-      // otherwise), and — per the user's explicit choice for this one
-      // feature — writes the verdicts straight into the Sub-Criterion
-      // Checklist rather than just advising. This is the only AI feature in
-      // the app permitted to do that.
+      // Classic single-pass folder audit. Reads every supported document in
+      // the folder via the real Drive API, judges the checklist lines for this
+      // sub-criterion against that real text (live OpenAI when configured,
+      // offline keyword heuristic otherwise), and writes the verdicts straight
+      // into the Sub-Criterion Checklist.
+      //
+      // REDUNDANCY FLAG (dead-code audit, kept because it is still REACHABLE):
+      // this single-pass engine (via runLiveFolderAudit) duplicates the newer
+      // canonical staged engine (auditFolderStaged / runOptionAFullAuto — three
+      // sequential APSR passes + mode-awareness). The per-folder "Run audit"
+      // button on the Evidence Folder page now uses auditFolderStaged; this
+      // classic path survives ONLY as the Dashboard bulk sweeps
+      // (auditAllFolders / auditChangedFolders → "Audit all folders" /
+      // "Re-audit changed only"). It is therefore a consolidation candidate:
+      // if those Dashboard sweeps are re-pointed at the staged engine, this
+      // action and runLiveFolderAudit can be retired. Left in place for now so
+      // no reachable feature is removed.
       auditFolderContents: async (id, extraContext, overallProgress) => {
         const s = get();
         const folder = s.folders.find((f) => f.id === id);
@@ -3362,6 +3373,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             let globalBatchDone = 0;
             const auditCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
             const auditMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
+            // Record that these examples/memories fed a live audit run so the AI
+            // Memories page shows real usage counts (see incrementMemoryUsage /
+            // markCalibrationUsed). Once per run, before the per-window loop.
+            if (auditCalibration.length) get().markCalibrationUsed(auditCalibration.map((e) => e.id));
+            auditMemories.forEach((m) => get().incrementMemoryUsage(m.id));
             const windowResults = await Promise.all(
               docWindows.map((docWindow, wi) =>
                 runLiveFolderAudit(lines, docWindow, analysisSettings, {
@@ -4287,6 +4303,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (aiSettings.enabled && aiSettings.apiKey) {
           const stagedCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
           const stagedMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
+          // Same usage tracking as the classic path — once per staged run.
+          if (stagedCalibration.length) get().markCalibrationUsed(stagedCalibration.map((e) => e.id));
+          stagedMemories.forEach((m) => get().incrementMemoryUsage(m.id));
           // Stop when the user skips the stage, OR the run has been cancelled.
           // The token/abort checks matter: cancelBusy() RESETS the skip flag,
           // so the old flag-only check let a cancelled run's current stage
