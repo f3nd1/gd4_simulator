@@ -2523,7 +2523,7 @@ export function EvidenceFolder() {
                 )}
               </div>
 
-              {/* Action: one short primary + Last run + overflow */}
+              {/* Action: one short primary + View results + overflow */}
               <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "3px 0" }}>
                 <span style={rowLabel}>Action</span>
                 {isBusy ? (
@@ -2578,28 +2578,29 @@ export function EvidenceFolder() {
                         Run audit →
                       </button>
                     )}
-                    {/* Option A re-open: mirrors Option B's "Last run ↗" — opens
-                        the saved review instantly in the modal, no AI call. Shown
-                        whenever a saved Option A result exists, regardless of the
-                        currently selected path or mode. */}
-                    {(ppdReviewResults[f.subCriterionId] || evidenceAssessments[f.subCriterionId]) && (
-                      <button
-                        onClick={() => setOptionAModal(f.subCriterionId)}
-                        title={ppdReviewResults[f.subCriterionId] ? `View the saved PPD + Evidence review (last run ${new Date(ppdReviewResults[f.subCriterionId].runAt).toLocaleDateString()}) — instant, no AI call` : "View the saved evidence assessment — instant, no AI call"}
-                        style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #ddd6fe", background: "#faf5ff", color: "#5b21b6", whiteSpace: "nowrap", fontWeight: 600 }}
-                      >
-                        View results
-                      </button>
-                    )}
-                    {lastRun && (
-                      <button
-                        onClick={() => setViewingRun(lastRun)}
-                        title={`View run ${lastRun.runId} — ${new Date(lastRun.startedAt).toLocaleDateString()}`}
-                        style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#374151", whiteSpace: "nowrap" }}
-                      >
-                        Last run ↗
-                      </button>
-                    )}
+                    {/* ONE "View results" re-open per row — identical label,
+                        style and position for both paths. Re-opens the last
+                        SAVED result with no AI call: the Option A review modal,
+                        or Option B's audit-run record — chosen by the row's
+                        current path, falling back to whichever result exists.
+                        When BOTH exist, the other result stays reachable via
+                        the ⋯ overflow menu. */}
+                    {(() => {
+                      const hasA = !!(ppdReviewResults[f.subCriterionId] || evidenceAssessments[f.subCriterionId]);
+                      if (!hasA && !lastRun) return null;
+                      const openA = hasA && (path === "A" || !lastRun);
+                      return (
+                        <button
+                          onClick={() => (openA ? setOptionAModal(f.subCriterionId) : setViewingRun(lastRun!))}
+                          title={openA
+                            ? (ppdReviewResults[f.subCriterionId] ? `View the saved PPD + Evidence review (last run ${new Date(ppdReviewResults[f.subCriterionId].runAt).toLocaleDateString()}) — instant, no AI call` : "View the saved evidence assessment — instant, no AI call")
+                            : `View run ${lastRun!.runId} — ${new Date(lastRun!.startedAt).toLocaleDateString()} — instant, no AI call`}
+                          style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #ddd6fe", background: "#faf5ff", color: "#5b21b6", whiteSpace: "nowrap", fontWeight: 600 }}
+                        >
+                          View results
+                        </button>
+                      );
+                    })()}
                     {/* Secondary actions live here — never competing solid buttons. */}
                     <div id={`overflow-${f.id}`} style={{ position: "relative" }}>
                       <button
@@ -2611,6 +2612,18 @@ export function EvidenceFolder() {
                       </button>
                       {overflowOpen === f.id && (
                         <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 14px #0002", zIndex: 30, minWidth: 230, overflow: "hidden" }}>
+                          {/* When BOTH paths have saved results, the row's
+                              "View results" opens the path-matching one; the
+                              other stays reachable here. */}
+                          {(ppdReviewResults[f.subCriterionId] || evidenceAssessments[f.subCriterionId]) && lastRun && (
+                            path === "A"
+                              ? overflowItem("View results (Option B run record)", () => setViewingRun(lastRun), {
+                                  title: `View run ${lastRun.runId} — ${new Date(lastRun.startedAt).toLocaleDateString()} — instant, no AI call`,
+                                })
+                              : overflowItem("View results (PPD + Evidence review)", () => setOptionAModal(f.subCriterionId), {
+                                  title: "View the saved PPD + Evidence review — instant, no AI call",
+                                })
+                          )}
                           {auditMode === "hybrid" && path === "A" &&
                             overflowItem("Run staged audit (Option B)", () => auditFolderStaged(f.id, "all"), {
                               title: "Runs the Option B engine on this folder even though Option A is selected — verdicts land on the Sub-Criterion Checklist",
@@ -2712,7 +2725,7 @@ export function EvidenceFolder() {
                         }
                         style={{ fontSize: 11, color: "#2563eb", textDecoration: "none", whiteSpace: "nowrap" }}
                       >
-                        View Results →
+                        View results →
                       </Link>
                     </div>
                   </div>
