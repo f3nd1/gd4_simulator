@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  checkAuditorForRun, resolveRunAuditor, panelUnderMinNotice, runAuditorDisplay,
+  checkAuditorForRun, resolveRunAuditor, panelUnderMinNotice, runAuditorDisplay, independenceNotice,
   MSG_NO_AUDITORS_EXIST, MSG_NO_AUDITOR_SELECTED, MSG_PANEL_UNDER_MIN, AUDITOR_CREATION_PATH,
 } from "../auditorGuard";
 import { aiOfflineReason } from "../ai/aiClient";
@@ -35,6 +35,20 @@ describe("checkAuditorForRun — the run gate", () => {
     const fallbackLead = checkAuditorForRun(auds, null);
     expect(fallbackLead.ok && fallbackLead.auditor.id).toBe("a2");
     expect(resolveRunAuditor([auditor("only")], "stale-id")?.id).toBe("only");
+  });
+});
+
+describe("independenceNotice — ISO 19011 self-audit warning", () => {
+  it("warns (case-insensitively) when the auditor's department owns the audited folder", () => {
+    const msg = independenceNotice(auditor("a1", { name: "Tan", departmentId: "ACAD" }), "acad");
+    expect(msg).toContain("Independence risk");
+    expect(msg).toContain("Tan");
+  });
+  it("stays silent for a different department or when either side is unset", () => {
+    expect(independenceNotice(auditor("a1", { departmentId: "ACAD" }), "REG")).toBeUndefined();
+    expect(independenceNotice(auditor("a1"), "REG")).toBeUndefined();
+    expect(independenceNotice(auditor("a1", { departmentId: "ACAD" }), "")).toBeUndefined();
+    expect(independenceNotice(undefined, "REG")).toBeUndefined();
   });
 });
 

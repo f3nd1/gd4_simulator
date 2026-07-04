@@ -54,8 +54,10 @@ import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverage
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
 import { computePanelConclusion } from "../lib/panelConclusion";
-import { checkAuditorForRun } from "../lib/auditorGuard";
+import { checkAuditorForRun, independenceNotice } from "../lib/auditorGuard";
 import { checkDriveForRun, DRIVE_EXPIRED_MID_RUN, type DriveRunBlock } from "../lib/driveGuard";
+import { applyCarryover, type PriorCycleArchive } from "../lib/cycleCarryover";
+import { FINDINGS } from "../data/findings";
 import { DEFAULT_SHOW_DEVELOPER_TOOLS } from "../nav";
 
 // Sequential auto-run queue for the review panel (auto modes). Findings are
@@ -271,6 +273,9 @@ function strictnessFromScore(n: number): "Lenient" | "Standard" | "Strict" {
 
 export type ClosureState = {
   root?: string;
+  // Immediate correction / containment — ISO 9001 10.2 distinguishes stopping
+  // the immediate problem from the corrective action that removes its cause.
+  containment?: string;
   corr?: string;
   prev?: string;
   evid?: string;
@@ -279,11 +284,20 @@ export type ClosureState = {
   aiReason?: string;
   aiNeed?: string;
   live?: boolean;
+  // Closure verification record: WHO accepted it and WHEN — a closure without
+  // an identifiable verifier is not an auditable record.
+  closedBy?: string;
+  closedAt?: string; // ISO
+  // Post-closure effectiveness review (ISO 9001 10.2.1(d)): set to +30 days on
+  // acceptance; confirmed later with a note once the action is shown to work.
+  effectivenessDue?: string;         // ISO date
+  effectivenessConfirmedAt?: string; // ISO datetime
+  effectivenessNote?: string;
   // Per-field provenance: true once the user has hand-edited that closure
   // field, so a later panel run defers to it (Fix 3) instead of overwriting.
   // Auto content (finding-writer draft, "Suggest actions" AI, a prior panel
   // run) leaves these false and IS overwritten by the latest panel synthesis.
-  manual?: { root?: boolean; corr?: boolean; prev?: boolean; evid?: boolean };
+  manual?: { root?: boolean; corr?: boolean; prev?: boolean; evid?: boolean; containment?: boolean };
 };
 
 export type ItemAIVerdict = {
@@ -391,6 +405,12 @@ export type WorkspaceState = {
   // brand-new workspace's Findings/AFI Closure modules start truly empty —
   // those 22 sample findings only appear once "Use demo data" is clicked.
   seedFindingsLoaded: boolean;
+  // PDCA memory: the previous cycle's full findings register, archived by
+  // createNewCycle. New findings raised in the current cycle are matched
+  // against it (item + normalized source ref) to derive repeatFinding and
+  // escalate a repeat Minor NC to Major — without this, "did last year's
+  // AFIs recur?" was unanswerable because the old cycle was simply wiped.
+  priorCycleFindings: PriorCycleArchive | null;
   busy: string | null;
   // Monotonically-increasing counter used as a run-cancellation guard: each
   // audit captures it at start; cancelBusy() increments it; before writing
@@ -555,6 +575,7 @@ export type WorkspaceState = {
   runClosureAI: (afiId: string) => Promise<void>;
   draftClosureActions: (afiId: string, issue: string, gd4ItemId: string) => Promise<void>;
   setClosureHuman: (afiId: string, value: "" | "Accepted", reason?: string) => void;
+  confirmClosureEffectiveness: (afiId: string, note: string) => void;
 
   addAuditor: (a: AuditorProfile) => void;
   updateAuditor: (id: string, patch: Partial<AuditorProfile>) => void;
@@ -791,6 +812,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       exportLog: [],
       customFindings: [],
       seedFindingsLoaded: false,
+      priorCycleFindings: null,
       busy: null,
       auditRunToken: 0,
       auditSkipStageFlag: false,
@@ -934,7 +956,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ppdReviewResults: rows
               ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions } }
               : st.ppdReviewResults,
-            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
+            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
             // Guarded: a timed-out run's late finish must not clear the NEXT
             // run's busy flag (the full-audit sweep may already have moved on).
             busy: st.busy === "ppdreview" + subCriterionId ? null : st.busy,
@@ -1186,7 +1208,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             evidenceAssessments: rows
               ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, derivedFromAudit: false } }
               : st.evidenceAssessments,
-            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
+            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
             // Guarded — see runPPDReview's finish.
             busy: st.busy === "evidenceassess" + subCriterionId ? null : st.busy,
             evidenceAssessmentProgress: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? null : st.evidenceAssessmentProgress,
@@ -2150,13 +2172,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // savedFindingIds point at findings wiped below).
         useAgentMemoryStore.getState().clearMemory();
         useFindingDraftStore.getState().resetAllDrafts();
+        // PDCA carryover (ISO 9011/9001): archive the outgoing cycle's full
+        // register so new-cycle findings can be matched against it
+        // (repeatFinding + Minor→Major escalation), and carry every OPEN
+        // finding (closure not human-Accepted) into the new cycle with its
+        // closure state — an unclosed nonconformity does not vanish just
+        // because the audit year rolled over.
+        const prev = get();
+        const allPrev: Finding[] = [...(prev.seedFindingsLoaded ? FINDINGS : []), ...prev.customFindings];
+        const archive: PriorCycleArchive | null = allPrev.length
+          ? { cycleId: prev.cycle.id, cycleName: prev.cycle.name, archivedAt: new Date().toISOString(), findings: allPrev }
+          : prev.priorCycleFindings; // an empty cycle keeps the older archive
+        const openFindings = allPrev.filter((f) => prev.closures[f.id]?.human !== "Accepted");
+        const carriedClosures = Object.fromEntries(openFindings.filter((f) => prev.closures[f.id]).map((f) => [f.id, prev.closures[f.id]]));
         set(() => ({
           cycle: { ...DEFAULT_CYCLE, id: `cycle-${Date.now()}`, name: "New Audit Cycle", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
           evidence: blankEvidence(),
           reviewer: {},
           confirmed: {},
           justify: {},
-          closures: {},
+          closures: carriedClosures,
           auditors: [],
           departments: DEFAULT_DEPARTMENTS,
           folders: seedFolders(),
@@ -2169,8 +2204,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           interviewQuestions: [],
           managementReviewItems: [],
           exportLog: [],
-          customFindings: [],
+          customFindings: openFindings,
           seedFindingsLoaded: false,
+          priorCycleFindings: archive,
           evidenceAuditReport: null,
           ppdReviewResults: {},
           evidenceAssessments: {},
@@ -2295,12 +2331,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           completionTokens: (verdict as { usage?: AIUsage }).usage?.completionTokens,
           totalTokens: (verdict as { usage?: AIUsage }).usage?.totalTokens,
         };
-        set({ itemReviews: { ...s.itemReviews, [itemId]: verdict }, aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200), busy: null });
+        set({ itemReviews: { ...s.itemReviews, [itemId]: verdict }, aiReviewLog: [log, ...s.aiReviewLog].slice(0, 500), busy: null });
       },
 
       setClosureField: (afiId, field, value) => {
-        const isTextField = field === "root" || field === "corr" || field === "prev" || field === "evid";
-        if (field === "root" || field === "corr" || field === "prev") {
+        const isTextField = field === "root" || field === "corr" || field === "prev" || field === "evid" || field === "containment";
+        if (field === "root" || field === "corr" || field === "prev" || field === "containment") {
           const c = get().closures[afiId] || {};
           const prev = (c[field] as string | undefined) ?? "";
           // Only log when there was prior AI-drafted content being changed
@@ -2428,7 +2464,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         };
         set({
           closures: { ...s.closures, [afiId]: { ...c, ai: verdict.verdict, aiReason: verdict.reason, aiNeed: verdict.evidenceNeeded, live: verdict.live } },
-          aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200),
+          aiReviewLog: [log, ...s.aiReviewLog].slice(0, 500),
           busy: null,
         });
       },
@@ -2491,6 +2527,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const s = get();
         const c = s.closures[afiId] || {};
         const aiVerdict = c.ai ?? "";
+        // ISO 9001 10.2 closure gating — acceptance is only a record when the
+        // CAP substance exists. The UI disables the button too; this guard
+        // makes the rule hold for every caller.
+        if (value === "Accepted") {
+          if (!c.root?.trim() || !c.corr?.trim() || !c.evid?.trim()) {
+            console.warn("[setClosureHuman] rejected: root cause, corrective action and closure evidence are required before acceptance.");
+            return;
+          }
+          // The override-reason field was rendered but never enforced: a human
+          // acceptance that contradicts a negative AI verdict without a stated
+          // reason is not an auditable override.
+          const contradictsAi = aiVerdict === "Maintain Finding" || aiVerdict === "Escalate";
+          if (contradictsAi && !reason.trim()) {
+            console.warn("[setClosureHuman] rejected: overriding the AI reviewer verdict requires a reason.");
+            return;
+          }
+        }
         const changed = value !== aiVerdict;
         get().logHumanDecision({
           module: "AFI Closure",
@@ -2502,7 +2555,47 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           reason,
           field: "human",
         });
-        set((s) => ({ closures: { ...s.closures, [afiId]: { ...(s.closures[afiId] || {}), human: value } } }));
+        set((st) => {
+          const prev = st.closures[afiId] || {};
+          const accepted = value === "Accepted";
+          return {
+            closures: {
+              ...st.closures,
+              [afiId]: {
+                ...prev,
+                human: value,
+                // Verification record + effectiveness schedule on acceptance;
+                // reopening clears them so a re-closure re-records.
+                closedBy: accepted ? (st.auditors.find((a) => a.id === st.activeAuditorId)?.name || st.cycle.owner || "Unattributed") : undefined,
+                closedAt: accepted ? new Date().toISOString() : undefined,
+                effectivenessDue: accepted ? new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().slice(0, 10) : undefined,
+                effectivenessConfirmedAt: accepted ? prev.effectivenessConfirmedAt : undefined,
+                effectivenessNote: accepted ? prev.effectivenessNote : undefined,
+              },
+            },
+          };
+        });
+      },
+
+      // Post-closure effectiveness confirmation (ISO 9001 10.2.1(d)): records
+      // that the corrective action was later checked and shown to work. A
+      // closure without this remains "Closed — pending effectiveness".
+      confirmClosureEffectiveness: (afiId, note) => {
+        const c = get().closures[afiId];
+        if (!c || c.human !== "Accepted" || !note.trim()) return;
+        get().logHumanDecision({
+          module: "AFI Closure",
+          subjectId: afiId,
+          aiOutput: "Effectiveness review due " + (c.effectivenessDue ?? "(unscheduled)"),
+          humanDecision: `Effective — ${note.trim().slice(0, 200)}`,
+          changed: false,
+          decisionType: "Accepted",
+          reason: note.trim(),
+          field: "effectiveness",
+        });
+        set((st) => ({
+          closures: { ...st.closures, [afiId]: { ...(st.closures[afiId] || {}), effectivenessConfirmedAt: new Date().toISOString(), effectivenessNote: note.trim() } },
+        }));
       },
 
       addAuditor: (a) => set((s) => ({ auditors: [...s.auditors, a] })),
@@ -2703,7 +2796,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const terminalStage = (auditHadError || liveError) ? "error" : "complete";
           set((st) => ({
             folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: summary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel, lastAuditScope: scope } : f)),
-            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
+            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
             busy: null,
             auditProgress: st.auditProgress?.folderId === id
               ? { ...st.auditProgress, stage: terminalStage, stageDetail: undefined, errorMessage: liveError }
@@ -2775,6 +2868,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Setup warnings surfaced in the result summary (configuration problems
         // detected before the AI even runs, e.g. the same folder linked twice).
         const setupWarnings: string[] = [];
+        // Non-blocking ISO 19011 independence check: auditor auditing their
+        // own department's folder is flagged in the run summary, never blocked.
+        const independenceWarn = independenceNotice(auditorGate.auditor, folder.owner);
+        if (independenceWarn) setupWarnings.push(independenceWarn);
         const gather = async (fid: string | null, bucket: TaggedFile["bucket"], label: string) => {
           if (!fid) return;
           try {
@@ -3893,7 +3990,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const terminalStage = (auditHadError || liveError) ? "error" : "complete";
           set((st) => ({
             folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `[Staged] ${summary}`, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel, lastAuditScope: scope } : f)),
-            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 200),
+            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
             busy: null,
             auditProgress: st.auditProgress?.folderId === id
               ? { ...st.auditProgress, stage: terminalStage, stageDetail: undefined, errorMessage: liveError }
@@ -4525,6 +4622,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // missed under the detail lines.
         if (fallbackStages.length > 0) lineParts.push(`⚠ OFFLINE FALLBACK — ${fallbackStages.join(", ")} stage(s) failed live AI and used keyword simulation. This run is NOT a full live AI audit.`);
         if (linesNotAssessed > 0) lineParts.push(`⚠ PARTIAL RUN — ${linesNotAssessed} line(s) not assessed (run stopped/skipped early, or their AI calls failed); their previous status was left unchanged.`);
+        {
+          // Non-blocking ISO 19011 independence check (same as the classic run).
+          const independenceWarn = independenceNotice(auditorGate.auditor, folder.owner);
+          if (independenceWarn) lineParts.push(`⚠ ${independenceWarn}`);
+        }
         lineParts.push(`Run ${runId} · Staged audit (${mode} mode) · Mode: ${auditModeLabel(automationMode)} · Auditor: ${auditorLabel}.`);
         if (queuedForReview > 0) lineParts.push(`⏸ ${queuedForReview} verdict${queuedForReview === 1 ? "" : "s"} NOT committed — waiting for your review on the Evidence Folder page ("Needs your review"). Findings for those lines are raised only when you accept them.`);
         if (specialistLabel) lineParts.push(`Specialist lens: ${specialistLabel}.`);
@@ -4857,9 +4959,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           managementReviewItems: s.managementReviewItems.map((m) => (m.id === id ? { ...m, decision, decidedBy, decidedAt: new Date().toLocaleString() } : m)),
         })),
 
-      addExportLogEntry: (e) => set((s) => ({ exportLog: [e, ...s.exportLog].slice(0, 100) })),
+      addExportLogEntry: (e) => set((s) => ({ exportLog: [e, ...s.exportLog].slice(0, 300) })),
 
-      addCustomFinding: (f) => {
+      addCustomFinding: (raw) => {
+        // Cross-cycle repeat check: mark repeatFinding / escalate a repeat
+        // Minor NC to Major when the same item+ref gap exists in the archived
+        // prior cycle. Findings carried over by createNewCycle bypass this
+        // (they are written directly, not via addCustomFinding), so a carried
+        // finding never flags itself as its own repeat.
+        const f = applyCarryover(raw, get().priorCycleFindings);
         set((s) => ({ customFindings: [...s.customFindings, f] }));
         // Auto-run the review panel for eligible findings under the auto
         // modes. Queued and drained ONE at a time while the store is idle, so
@@ -4945,7 +5053,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             completionTokens: entry.usage?.completionTokens,
             totalTokens: entry.usage?.totalTokens,
           };
-          return { aiReviewLog: [log, ...s.aiReviewLog].slice(0, 200) };
+          return { aiReviewLog: [log, ...s.aiReviewLog].slice(0, 500) };
         }),
 
       logHumanDecision: (entry) =>
@@ -4953,7 +5061,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const id = `HDL-${Date.now()}-${++logCounter}`;
           const ts = new Date().toISOString();
           const log: HumanDecisionEntry = { id, timestamp: ts, ...entry };
-          const next: ReturnType<typeof Object.assign> = { humanDecisionLog: [log, ...s.humanDecisionLog].slice(0, 500) };
+          const next: ReturnType<typeof Object.assign> = { humanDecisionLog: [log, ...s.humanDecisionLog].slice(0, 2000) };
           // Auto-promote to calibration library when there is a reason and a change
           if (entry.changed && entry.reason.trim()) {
             const cal: CalibrationExample = {

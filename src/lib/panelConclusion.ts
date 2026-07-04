@@ -7,17 +7,22 @@ import type { FindingTypeCode, NcSeverity, PanelSynthesis } from "../types";
 // The closure fields the panel synthesis populates. Note the deliberate
 // mapping fixes:
 //   - evidenceForClosure → evid (the CLOSURE EVIDENCE field), NOT prev.
-//   - immediateCorrection + correctiveAction → corr.
+//   - immediateCorrection → containment (ISO 9001 10.2 distinguishes the
+//     immediate correction that stops the bleeding from the corrective action
+//     that removes the cause — the panel produces both, so they must not be
+//     concatenated into one field).
+//   - correctiveAction → corr.
 //   - rootCause → root.
 // The preventive field has no counterpart in the synthesis, so it is left
 // untouched (never overwritten with evidenceForClosure).
-export type PanelClosureTargets = { root: string; corr: string; evid: string };
+export type PanelClosureTargets = { root: string; corr: string; containment: string; evid: string };
 
 export function panelClosureTargets(syn: PanelSynthesis): PanelClosureTargets {
   const t = (v: string | undefined) => (v || "").trim();
   return {
     root: t(syn.rootCause),
-    corr: [t(syn.immediateCorrection), t(syn.correctiveAction)].filter(Boolean).join("\n\n"),
+    containment: t(syn.immediateCorrection),
+    corr: t(syn.correctiveAction),
     evid: t(syn.evidenceForClosure),
   };
 }
@@ -46,16 +51,16 @@ export function parsePanelClassification(text: string): { findingType: FindingTy
 }
 
 // Per-field manual-edit provenance for the closure text fields.
-export type ClosureManual = { root?: boolean; corr?: boolean; prev?: boolean; evid?: boolean };
+export type ClosureManual = { root?: boolean; corr?: boolean; prev?: boolean; evid?: boolean; containment?: boolean };
 
 // The decision the store applies when a panel run finishes (or the user clicks
 // "Apply panel conclusion", force=true). Pure so the overwrite / manual-edit
 // protection / classification rules are testable without the store.
 export type PanelConclusionPlan = {
   // Closure fields to write (only those the panel speaks to and doesn't defer).
-  closure: { root?: string; corr?: string; evid?: string };
+  closure: { root?: string; corr?: string; containment?: string; evid?: string };
   // Closure fields whose manual flag should reset to false (now panel-sourced).
-  clearedManual: Array<"root" | "corr" | "evid">;
+  clearedManual: Array<"root" | "corr" | "containment" | "evid">;
   // Non-null when the header classification should change.
   classification: { findingType: FindingTypeCode; ncSeverity: NcSeverity | null } | null;
   // Human-readable field labels that were NOT overwritten because they hold a
@@ -65,7 +70,7 @@ export type PanelConclusionPlan = {
 
 export function computePanelConclusion(
   input: {
-    closure: { root?: string; corr?: string; evid?: string; manual?: ClosureManual };
+    closure: { root?: string; corr?: string; containment?: string; evid?: string; manual?: ClosureManual };
     findingType: FindingTypeCode; // resolved current type
     ncSeverity: NcSeverity | null; // resolved current severity
     classificationManual?: boolean;
@@ -80,7 +85,7 @@ export function computePanelConclusion(
   const clearedManual: PanelConclusionPlan["clearedManual"] = [];
   const conflicts: string[] = [];
 
-  const applyField = (key: "root" | "corr" | "evid", label: string, target: string) => {
+  const applyField = (key: "root" | "corr" | "containment" | "evid", label: string, target: string) => {
     if (!target) return; // never clobber with empty text
     const cur = ((input.closure[key] as string | undefined) ?? "").trim();
     // Defer to a differing manual edit (unless forced) — flag it instead.
@@ -89,6 +94,7 @@ export function computePanelConclusion(
     clearedManual.push(key);
   };
   applyField("root", "root cause", targets.root);
+  applyField("containment", "immediate correction", targets.containment);
   applyField("corr", "corrective", targets.corr);
   applyField("evid", "closure evidence", targets.evid);
 

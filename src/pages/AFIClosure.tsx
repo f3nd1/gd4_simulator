@@ -9,7 +9,7 @@ import { Card, inputStyle, filterSelectStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { BLUE, TONE } from "../lib/theme";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { resolveFindingType, findingTypeTone } from "../lib/findingClassification";
+import { resolveFindingType, resolveNcSeverity, findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
 import { PanelReviewSection } from "../components/ui/PanelReviewSection";
 
 export function AFIClosure() {
@@ -34,6 +34,8 @@ export function AFIClosure() {
   const [draftErrors, setDraftErrors] = useState<Record<string, string>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [closureReasons, setClosureReasons] = useState<Record<string, string>>({});
+  const [effectivenessNotes, setEffectivenessNotes] = useState<Record<string, string>>({});
+  const confirmClosureEffectiveness = useWorkspaceStore((s) => s.confirmClosureEffectiveness);
   const [closureFeedback, setClosureFeedback] = useState<{ id: string; aiOutput: string } | null>(null);
 
   const subCritOptions = useMemo(
@@ -128,7 +130,13 @@ export function AFIClosure() {
               <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#6b7280", minWidth: 38 }}>{f.gd4ItemId}</span>
               <span style={{ flex: 1, fontSize: 12.5 }}>{f.issue}</span>
               {f.createdAt && <span style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>{new Date(f.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>}
-              <Pill s={f.severity === "Critical" || f.severity === "High" ? "critical" : f.severity === "Medium" ? "medium" : "neutral"}>{f.severity}</Pill>
+              {(() => {
+                // Unified taxonomy: NC severity (Major/Minor), not the legacy
+                // Critical/High/Medium severity scale — the type pill already
+                // shows NC/OFI/OBS, so this pill only qualifies an NC.
+                const sev = resolveFindingType(f) === "NC" ? resolveNcSeverity(f) : null;
+                return sev ? <Pill s={ncSeverityTone(sev)}>{sev}</Pill> : null;
+              })()}
               {c.human === "Accepted" ? (
                 <Pill s="good">closed</Pill>
               ) : (
@@ -150,7 +158,8 @@ export function AFIClosure() {
                 <PanelReviewSection finding={f} />
                 {([
                   ["root", "Root cause (yours)"],
-                  ["corr", "Corrective action"],
+                  ["containment", "Immediate correction (containment — what stopped the problem now)"],
+                  ["corr", "Corrective action (what removes the cause)"],
                   ["prev", "Preventive action"],
                   ["evid", "Closure evidence (Drive link / record)"],
                 ] as const).map(([field, label]) => (
@@ -203,31 +212,47 @@ export function AFIClosure() {
                       style={{ ...inputStyle, width: 260, padding: "5px 8px", fontSize: 11.5 }}
                     />
                   )}
-                  <button
-                    onClick={() => {
-                      const reason = closureReasons[f.id] ?? "";
-                      setClosureHuman(f.id, c.human === "Accepted" ? "" : "Accepted", reason);
-                      if (c.human !== "Accepted") setClosureReasons((r) => ({ ...r, [f.id]: "" }));
-                    }}
-                    disabled={c.human !== "Accepted" && !c.evid?.trim()}
-                    title={c.human !== "Accepted" && !c.evid?.trim() ? "Add a closure evidence link before accepting" : undefined}
-                    style={{
-                      cursor: c.human !== "Accepted" && !c.evid?.trim() ? "not-allowed" : "pointer",
-                      fontSize: 12,
-                      fontWeight: 700,
-                      padding: "7px 12px",
-                      borderRadius: 8,
-                      border: `1px solid ${TONE.good.fg}55`,
-                      background: c.human === "Accepted" ? TONE.good.bg : "#fff",
-                      color: c.human !== "Accepted" && !c.evid?.trim() ? "#94a3b8" : TONE.good.fg,
-                      opacity: c.human !== "Accepted" && !c.evid?.trim() ? 0.6 : 1,
-                    }}
-                  >
-                    {c.human === "Accepted" ? "Closed ✓" : "Accept closure"}
-                  </button>
-                  {c.human !== "Accepted" && !c.evid?.trim() && (
-                    <span style={{ fontSize: 11, color: "#94a3b8", alignSelf: "center" }}>Evidence link required to close</span>
-                  )}
+                  {(() => {
+                    // ISO 9001 10.2 closure gate: root cause + corrective action +
+                    // evidence, AND a stated reason when overriding a negative AI
+                    // verdict. Mirrors the store guard in setClosureHuman.
+                    const missing: string[] = [];
+                    if (!c.root?.trim()) missing.push("root cause");
+                    if (!c.corr?.trim()) missing.push("corrective action");
+                    if (!c.evid?.trim()) missing.push("evidence link");
+                    const contradictsAi = c.ai === "Maintain Finding" || c.ai === "Escalate";
+                    if (contradictsAi && !(closureReasons[f.id] ?? "").trim()) missing.push(`override reason (AI said "${c.ai}")`);
+                    const blocked = c.human !== "Accepted" && missing.length > 0;
+                    return (
+                      <>
+                        <button
+                          onClick={() => {
+                            const reason = closureReasons[f.id] ?? "";
+                            setClosureHuman(f.id, c.human === "Accepted" ? "" : "Accepted", reason);
+                            if (c.human !== "Accepted") setClosureReasons((r) => ({ ...r, [f.id]: "" }));
+                          }}
+                          disabled={blocked}
+                          title={blocked ? `Required before closing: ${missing.join(", ")}` : undefined}
+                          style={{
+                            cursor: blocked ? "not-allowed" : "pointer",
+                            fontSize: 12,
+                            fontWeight: 700,
+                            padding: "7px 12px",
+                            borderRadius: 8,
+                            border: `1px solid ${TONE.good.fg}55`,
+                            background: c.human === "Accepted" ? TONE.good.bg : "#fff",
+                            color: blocked ? "#94a3b8" : TONE.good.fg,
+                            opacity: blocked ? 0.6 : 1,
+                          }}
+                        >
+                          {c.human === "Accepted" ? "Closed ✓" : "Accept closure"}
+                        </button>
+                        {blocked && (
+                          <span style={{ fontSize: 11, color: "#b45309", alignSelf: "center" }}>Required: {missing.join(", ")}</span>
+                        )}
+                      </>
+                    );
+                  })()}
                   <span style={{ flex: 1 }} />
                   {confirmDeleteId === f.id ? (
                     <>
@@ -238,6 +263,40 @@ export function AFIClosure() {
                     <button onClick={() => setConfirmDeleteId(f.id)} style={{ fontSize: 11, color: "#94a3b8", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}>Remove finding</button>
                   )}
                 </div>
+                {/* Closure verification record + post-closure effectiveness
+                    review (ISO 9001 10.2.1(d)): a closure stays "pending
+                    effectiveness" until someone confirms the action worked. */}
+                {c.human === "Accepted" && (
+                  <div style={{ marginTop: 8, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>
+                    <div style={{ color: "#475569" }}>
+                      Closed by <b>{c.closedBy || "—"}</b>{c.closedAt ? ` on ${new Date(c.closedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}` : ""}.
+                    </div>
+                    {c.effectivenessConfirmedAt ? (
+                      <div style={{ color: TONE.good.fg, marginTop: 4 }}>
+                        ✓ <b>Effectiveness confirmed</b> {new Date(c.effectivenessConfirmedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}{c.effectivenessNote ? ` — ${c.effectivenessNote}` : ""}
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 5 }}>
+                        <span style={{ color: "#b45309", fontWeight: 600 }}>
+                          Pending effectiveness review{c.effectivenessDue ? ` — due ${new Date(c.effectivenessDue).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}` : ""}
+                        </span>
+                        <input
+                          placeholder="How was the action verified to work? (e.g. re-checked records for the next intake)"
+                          value={effectivenessNotes[f.id] || ""}
+                          onChange={(e) => setEffectivenessNotes((n) => ({ ...n, [f.id]: e.target.value }))}
+                          style={{ ...inputStyle, flex: 1, minWidth: 220, padding: "5px 8px", fontSize: 11.5 }}
+                        />
+                        <button
+                          disabled={!(effectivenessNotes[f.id] || "").trim()}
+                          onClick={() => { confirmClosureEffectiveness(f.id, effectivenessNotes[f.id] || ""); setEffectivenessNotes((n) => ({ ...n, [f.id]: "" })); }}
+                          style={{ cursor: (effectivenessNotes[f.id] || "").trim() ? "pointer" : "not-allowed", fontSize: 11.5, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: `1px solid ${TONE.good.fg}55`, background: "#fff", color: (effectivenessNotes[f.id] || "").trim() ? TONE.good.fg : "#94a3b8" }}
+                        >
+                          Confirm effective
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {c.ai && (
                   <div
                     style={{

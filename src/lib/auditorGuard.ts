@@ -41,6 +41,18 @@ export function panelUnderMinNotice(mode: PanelReviewMode, auditors: AuditorProf
   return assemblePanel(auditors, panelIds).length < MIN_PANEL ? MSG_PANEL_UNDER_MIN : undefined;
 }
 
+// ISO 19011 §5.4.2 objectivity — a non-blocking independence notice raised
+// when the auditor running a folder audit belongs to the department that OWNS
+// the audited folder (auditing one's own work). Both sides are department
+// acronyms ("EXCO", "ACAD", …); comparison is case-insensitive and the notice
+// is undefined when either side is unset (nothing to compare).
+export function independenceNotice(auditor: Pick<AuditorProfile, "name" | "departmentId"> | undefined, folderOwner: string | undefined): string | undefined {
+  const dept = (auditor?.departmentId || "").trim().toLowerCase();
+  const owner = (folderOwner || "").trim().toLowerCase();
+  if (!dept || !owner || dept !== owner) return undefined;
+  return `Independence risk: this audit was run by ${auditor!.name} of ${folderOwner}, the department that owns this evidence — the auditor is assessing their own department's work. ISO 19011 expects auditors independent of the area audited; have a different department's auditor re-run or review this result.`;
+}
+
 // Part 4 — "who will this run as" display: name + perspective, or an
 // explicit unassigned marker the pages style as a warning.
 export function runAuditorDisplay(auditors: AuditorProfile[], activeAuditorId: string | null): { text: string; unassigned: boolean } {

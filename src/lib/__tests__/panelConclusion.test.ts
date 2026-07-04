@@ -19,9 +19,10 @@ describe("panelClosureTargets — the field mapping", () => {
   it("maps evidenceForClosure to the CLOSURE-EVIDENCE field, not preventive", () => {
     const t = panelClosureTargets(syn());
     expect(t.evid).toBe("Fee register cross-checked to signed contracts for the period.");
-    // corr = immediateCorrection + correctiveAction joined; root = rootCause.
-    expect(t.corr).toContain("Halt collection");
-    expect(t.corr).toContain("signed-contract gate");
+    // ISO 9001 10.2 split: immediateCorrection → containment, correctiveAction → corr.
+    expect(t.containment).toBe("Halt collection until contracts are signed.");
+    expect(t.corr).toBe("Add a signed-contract gate to the finance workflow.");
+    expect(t.corr).not.toContain("Halt collection");
     expect(t.root).toContain("no control links fee collection");
     // There is deliberately no preventive target — evidence must never land there.
     expect(t as Record<string, unknown>).not.toHaveProperty("prev");
@@ -52,9 +53,10 @@ describe("computePanelConclusion", () => {
       {}
     );
     expect(plan.closure.root).toContain("no control links fee collection");
-    expect(plan.closure.corr).toContain("signed-contract gate");
+    expect(plan.closure.corr).toBe("Add a signed-contract gate to the finance workflow.");
+    expect(plan.closure.containment).toBe("Halt collection until contracts are signed.");
     expect(plan.conflicts).toEqual([]);
-    expect(plan.clearedManual).toEqual(expect.arrayContaining(["root", "corr", "evid"]));
+    expect(plan.clearedManual).toEqual(expect.arrayContaining(["root", "containment", "corr", "evid"]));
   });
 
   // (b) evidenceForClosure reaches evid, and nothing is written to preventive

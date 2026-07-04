@@ -27,10 +27,6 @@ const RAISABLE_TYPES: FindingType[] = ["AFI", "Improvement Action", "Observation
 const DIMENSIONS: (FindingDimension | "All")[] = ["All", "Procedure", "Evidence", "Outcomes", "Review", "Unverified"];
 const RISK_CATS: ("A" | "B" | "C" | "D" | "All")[] = ["All", "A", "B", "C", "D"];
 
-function severityTone(sev: Severity) {
-  return sev === "Critical" || sev === "High" ? "critical" : sev === "Medium" ? "medium" : "neutral";
-}
-
 // Procedure (documented policy) vs Evidence (implementation) are the two the
 // user most cares about, so they get the two strongest, most distinct colours.
 function dimensionTone(d: FindingDimension): "good" | "medium" | "critical" | "neutral" | "high" | "progress" {
@@ -263,8 +259,6 @@ export function Findings() {
     });
     return filtered;
   }, [allFindings, typeFilter, sevFilter, dimFilter, riskCatFilter, dateFilter, critFilter, subCritFilter, sortCol, sortDir]);
-
-  const SEV_ORDER: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 };
 
   const groupedRows = useMemo(() => {
     const map = new Map<string, { subCritId: string; findings: Finding[] }>();
@@ -722,9 +716,8 @@ export function Findings() {
             const isOpen = expandedSubCrits.has(subCritId);
             const closedCount = grpFindings.filter((f) => (closures[f.id]?.human || "") === "Accepted").length;
             const openCount = grpFindings.length - closedCount;
-            const highestSev = grpFindings.reduce((best, f) => (SEV_ORDER[f.severity] ?? 0) > (SEV_ORDER[best] ?? 0) ? f.severity : best, "Low" as Severity);
-            // NC/OFI/OBS classification is separate from the legacy severity
-            // above — surface the highest NC severity present in the group
+            // Unified NC/OFI/OBS taxonomy (the legacy Critical/High/Medium
+            // pill is gone) — surface the highest NC severity in the group
             // ("Major NC" if any line is a Major NC, else "Minor NC" if the
             // group has NC findings but none are Major, else nothing).
             const ncSeverities = grpFindings.filter((f) => resolveFindingType(f) === "NC").map((f) => resolveNcSeverity(f));
@@ -749,7 +742,6 @@ export function Findings() {
                   <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 12, fontWeight: 700, color: "#4338ca", minWidth: 36 }}>{subCritId}</span>
                   {sc && <span style={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sc.title}</span>}
                   <span style={{ fontSize: 11.5, color: "#6b7280", whiteSpace: "nowrap" }}>{grpFindings.length} gap{grpFindings.length !== 1 ? "s" : ""}</span>
-                  <Pill s={severityTone(highestSev)}>{highestSev}</Pill>
                   {highestNc && <Pill s={ncSeverityTone(highestNc)}>{highestNc} NC</Pill>}
                   <span style={{ fontSize: 11.5, fontWeight: 600, color: statusColor, whiteSpace: "nowrap" }}>{statusLabel}</span>
                   {earliestStr && <span style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap" }}>from {earliestStr}</span>}
@@ -774,7 +766,6 @@ export function Findings() {
                           {f.dimension && <Pill s={dimensionTone(f.dimension)}>{f.dimension}</Pill>}
                           <Pill s={findingTypeTone(resolveFindingType(f))}>{resolveFindingType(f)}</Pill>
                           {resolveNcSeverity(f) && <Pill s={ncSeverityTone(resolveNcSeverity(f)!)}>{resolveNcSeverity(f)}</Pill>}
-                          <Pill s={severityTone(f.severity)}>{f.severity}</Pill>
                           <Pill s={closed ? "good" : "critical"}>{closed ? "Closed" : "Open"}</Pill>
                           <span style={{ whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                             {confirmDeleteId === f.id ? (
@@ -816,7 +807,8 @@ export function Findings() {
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
               <b style={{ color: "#ce9e5d", fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{detailFinding.id}</b>
-              <Pill s={severityTone(detailFinding.severity)}>{detailFinding.severity}</Pill>
+              <Pill s={findingTypeTone(resolveFindingType(detailFinding))}>{resolveFindingType(detailFinding)}</Pill>
+              {resolveNcSeverity(detailFinding) && <Pill s={ncSeverityTone(resolveNcSeverity(detailFinding)!)}>{resolveNcSeverity(detailFinding)}</Pill>}
               {detailFinding.dimension && <Pill s={dimensionTone(detailFinding.dimension)}>{detailFinding.dimension}</Pill>}
               <Pill s={(closures[detailFinding.id]?.human || "") === "Accepted" ? "good" : "critical"}>{(closures[detailFinding.id]?.human || "") === "Accepted" ? "Closed" : "Open"}</Pill>
               <button onClick={() => setDetailFinding(null)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#94a3b8", lineHeight: 1, padding: "2px 4px" }} title="Close">✕</button>
