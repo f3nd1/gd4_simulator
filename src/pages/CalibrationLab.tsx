@@ -15,6 +15,8 @@ import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { BENCHMARK_AFIS } from "../data/benchmarkAFIs";
 import { useCalibrationStore } from "../store/useCalibrationStore";
+import { useAISettingsStore } from "../store/useAISettingsStore";
+import { verdictTemp } from "../lib/ai/aiClient";
 import { toCsv, downloadCsv } from "../lib/auditCsvExport";
 import { foldersConnected, aiReady, runScratch, judgeVsBenchmark, type ScratchRunOutput } from "../lib/calibrationRunner";
 import {
@@ -116,6 +118,7 @@ export function ConsistencyTab() {
   const setConsistencyTest = useCalibrationStore((s) => s.setConsistencyTest);
   const deleteConsistencyTest = useCalibrationStore((s) => s.deleteConsistencyTest);
   const clearConsistencyTests = useCalibrationStore((s) => s.clearConsistencyTests);
+  const verdictTemperature = useAISettingsStore((s) => verdictTemp(s));
   const infos = useSubCritInfo(tests);
   const [selectedId, setSelectedId] = useState("");
   const [path, setPath] = useState<"A" | "B">("B");
@@ -165,6 +168,7 @@ export function ConsistencyTab() {
       const { agreementPct } = consistencyAgreement(lines);
       const result: ConsistencyTestResult = {
         subCriterionId, path: testPath, runs: outputs.length, runAt: new Date().toISOString(),
+        temperature: verdictTemp(useAISettingsStore.getState()),
         lines, bands, gapCounts, failedRuns, agreementPct,
         summary: consistencySummary(agreementPct, bands, gapCounts, failedRuns, outputs.length),
       };
@@ -182,7 +186,7 @@ export function ConsistencyTab() {
     const maxRuns = Math.max(1, ...all.map((t) => t.runs));
     const rows = all.flatMap((t) =>
       t.lines.map((l) => [
-        t.subCriterionId, t.path, t.runAt, formatRunOn(t.runAt), t.runs, t.agreementPct ?? "",
+        t.subCriterionId, t.path, t.runAt, formatRunOn(t.runAt), t.temperature ?? "", t.runs, t.agreementPct ?? "",
         t.bands.map((b) => b ?? "failed").join(" | "), t.gapCounts.map((c) => c ?? "failed").join(" | "),
         l.ref, l.text,
         ...l.verdicts.map((v) => v ?? "run failed"),
@@ -192,7 +196,7 @@ export function ConsistencyTab() {
     );
     downloadCsv(
       toCsv([
-        "Sub-criterion", "Path", "Run on (ISO)", "Run on", "Runs", "Agreement %", "Band estimates", "Gap counts", "Line ref", "Requirement",
+        "Sub-criterion", "Path", "Run on (ISO)", "Run on", "Temperature", "Runs", "Agreement %", "Band estimates", "Gap counts", "Line ref", "Requirement",
         ...Array.from({ length: maxRuns }, (_, i) => `Run ${i + 1} verdict`),
         ...Array.from({ length: maxRuns }, (_, i) => `Run ${i + 1} reasoning`),
       ], rows),
@@ -209,6 +213,9 @@ export function ConsistencyTab() {
           your real audit results are not touched. Any connected sub-criterion works (repeatability needs no benchmark truth).
         </p>
         <CoverageLine label="consistency-tested" infos={infos} testedMap={tests} />
+        <div style={{ fontSize: 11.5, color: "#3730a3", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", marginBottom: 8 }}>
+          Verdict temperature now in effect: <b>{verdictTemperature.toFixed(2)}</b>. Inconsistent results? <Link to="/settings" style={{ color: "#4338ca", fontWeight: 600 }}>Lower the temperature in Settings</Link>, then re-run this test.
+        </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
           <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)} style={{ ...inputStyle, width: "auto", minWidth: 340, padding: "5px 8px", fontSize: 12.5 }}>
             <option value="">Select a sub-criterion… (★ = recommended)</option>
@@ -257,6 +264,7 @@ export function ConsistencyTab() {
             <b style={{ fontSize: 12.5 }}>{t.subCriterionId}</b>
             <Pill s="neutral">Option {t.path} × {t.runs}</Pill>
             <span style={{ fontSize: 12, color: "#475569", flex: 1 }}>{t.summary}</span>
+            {t.temperature != null && <span style={{ fontSize: 11, color: "#4338ca", whiteSpace: "nowrap" }}>temp {t.temperature.toFixed(2)}</span>}
             <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>Run on {formatRunOn(t.runAt)}</span>
             <button onClick={() => setSelectedId(t.subCriterionId)} style={{ cursor: "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}>View</button>
             <button disabled={!!running} onClick={() => { setSelectedId(t.subCriterionId); setPath(t.path); runTest(t.subCriterionId, t.path, t.runs); }} style={{ cursor: running ? "not-allowed" : "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #c7d2fe", background: "#eef2ff", color: "#4338ca", fontWeight: 600 }}>Re-run</button>
@@ -277,7 +285,8 @@ function ConsistencyResult({ result, onDelete }: { result: ConsistencyTestResult
     <Card>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Consistency — {result.subCriterionId} · Option {result.path} × {result.runs}</h3>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#334155", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 6, padding: "2px 9px" }}>Run on {formatRunOn(result.runAt)}</span>
+        {result.temperature != null && <span style={{ fontSize: 12, fontWeight: 600, color: "#3730a3", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 6, padding: "2px 9px" }}>temperature {result.temperature.toFixed(2)}</span>}
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#334155", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 6, padding: "2px 9px" }}>Run on {formatRunOn(result.runAt)}</span>
         <button onClick={onDelete} title="Delete this test record (scratch only — audit results untouched)" style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11.5, padding: "3px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 600 }}>Delete</button>
       </div>
       <div style={{ fontSize: 12.5, fontWeight: 600, color: result.agreementPct != null && result.agreementPct < 75 ? "#b45309" : "#15803d", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", marginBottom: 10 }}>
@@ -391,7 +400,7 @@ export function AvsBTab() {
       const benchmarkCount = BENCHMARK_AFIS.filter((x) => x.subCriterion === subCriterionId && x.kind === "AFI").length;
       const patterns = [...new Set(BENCHMARK_AFIS.filter((x) => x.subCriterion === subCriterionId && x.kind === "AFI").map((x) => x.findingPattern))];
       const result: ABTestResult = {
-        subCriterionId, runAt: new Date().toISOString(), benchmarkCount, patterns, a, b,
+        subCriterionId, runAt: new Date().toISOString(), temperature: verdictTemp(useAISettingsStore.getState()), benchmarkCount, patterns, a, b,
         winner: abWinner(a, b, benchmarkCount),
         verdictLine: abVerdictLine(subCriterionId, a, b, benchmarkCount),
       };
@@ -406,13 +415,13 @@ export function AvsBTab() {
 
   function exportCsv() {
     const rows = Object.values(tests).map((t) => [
-      t.subCriterionId, t.runAt, formatRunOn(t.runAt), t.benchmarkCount, t.patterns.join(" | "),
+      t.subCriterionId, t.runAt, formatRunOn(t.runAt), t.temperature ?? "", t.benchmarkCount, t.patterns.join(" | "),
       t.a.caught, t.a.partial, t.a.missed, t.a.findingsTotal, t.a.byType.NC, t.a.byType.OFI, t.a.bandEstimate ?? "",
       t.b.caught, t.b.partial, t.b.missed, t.b.findingsTotal, t.b.byType.NC, t.b.byType.OFI, t.b.bandEstimate ?? "",
       t.winner, t.verdictLine,
     ]);
     downloadCsv(
-      toCsv(["Sub-criterion", "Run on (ISO)", "Run on", "Benchmark AFIs", "Patterns", "A caught", "A partial", "A missed", "A findings", "A NC", "A OFI", "A band est.", "B caught", "B partial", "B missed", "B findings", "B NC", "B OFI", "B band est.", "Winner", "Verdict"], rows),
+      toCsv(["Sub-criterion", "Run on (ISO)", "Run on", "Temperature", "Benchmark AFIs", "Patterns", "A caught", "A partial", "A missed", "A findings", "A NC", "A OFI", "A band est.", "B caught", "B partial", "B missed", "B findings", "B NC", "B OFI", "B band est.", "Winner", "Verdict"], rows),
       `gd4-a-vs-b-tests-${new Date().toISOString().slice(0, 10)}.csv`);
   }
 
@@ -514,7 +523,8 @@ function ABResult({ result, onDelete }: { result: ABTestResult; onDelete: () => 
     <Card>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>A vs B — {result.subCriterionId}</h3>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#334155", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 6, padding: "2px 9px" }}>Run on {formatRunOn(result.runAt)}</span>
+        {result.temperature != null && <span style={{ fontSize: 12, fontWeight: 600, color: "#3730a3", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 6, padding: "2px 9px" }}>temperature {result.temperature.toFixed(2)}</span>}
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#334155", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 6, padding: "2px 9px" }}>Run on {formatRunOn(result.runAt)}</span>
         <button onClick={onDelete} title="Delete this test record (scratch only — audit results untouched)" style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11.5, padding: "3px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 600 }}>Delete</button>
       </div>
       <div style={{ fontSize: 12.5, fontWeight: 600, color: "#1e293b", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", marginBottom: 10, lineHeight: 1.5 }}>

@@ -6,7 +6,7 @@
 // official GD4 scoring engine never depends on a live AI call.
 
 import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
-import { chatComplete, AIClientError, addUsage, type AIUsage } from "./aiClient";
+import { chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
 import { buildSystemPrompt, buildDomainBlock, type SkillCalibrationExample, type SkillCalibrationMemory } from "./skills";
@@ -191,6 +191,10 @@ Intent: ${req.intent}
 Official source points (each line = one auditable requirement; ref = official GD4 reference):
 ${sourceBlock}${req.gateSensitive ? "\n\nNote: This item is gate-sensitive — a minimum Band 3 average applies to this sub-criterion under the official GD4 standard. Lines must be especially precise and unambiguous." : ""}`;
 
+  // Generative (fixed, ignores verdictTemperature): this GENERATES checklist
+  // lines from requirement text — a bit of variation helps phrase distinct
+  // testable lines. Not a Met/Partial verdict, and not exercised by the
+  // consistency test (scratch runs assess flatAuditPoints directly).
   const content = await chatComplete(
     [{ role: "system", content: system }, { role: "user", content: user }],
     settings,
@@ -486,7 +490,7 @@ Respond with JSON only: {"analysis": string, "classification": string, "severity
       const content = await chatComplete(
         [{ role: "system", content: system }, { role: "user", content: findingBlock }],
         settings,
-        { temperature: 0.35, onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+        { temperature: verdictTemp(settings), onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
       );
       const parsed = parseJSONObject(content);
       const analysisRaw = typeof parsed.analysis === "string" && parsed.analysis.trim() ? parsed.analysis.trim() : content.trim();
@@ -559,7 +563,7 @@ Respond with JSON only: {"rebuttal": string}.${buildSystemPrompt("findingWriter"
         const content = await chatComplete(
           [{ role: "system", content: rebSystem }, { role: "user", content: rebUser }],
           settings,
-          { temperature: 0.35, onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { temperature: verdictTemp(settings), onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const rebRaw = typeof parsed.rebuttal === "string" && parsed.rebuttal.trim() ? parsed.rebuttal.trim() : content.trim();
@@ -613,7 +617,7 @@ Respond with JSON only, all fields plain text:
       const content = await chatComplete(
         [{ role: "system", content: synthSystem }, { role: "user", content: synthUser }],
         settings,
-        { temperature: 0.3, onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+        { temperature: verdictTemp(settings), onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
       );
       const p = parseJSONObject(content);
       const s = (k: string) => (typeof p[k] === "string" ? (p[k] as string).trim() : "");
@@ -742,7 +746,7 @@ For EVERY non-empty positive claim (i.e. status is not "Not evident"), cite the 
   const content = await chatComplete(
     [{ role: "system", content: system }, { role: "user", content: user }],
     settings,
-    { onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS },
+    { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS },
   );
   const arr = parseJSONArray(content);
   // Extract optional folderWarnings from the same response object (backward
@@ -998,6 +1002,8 @@ APSR assessment: ${apsrSummary}
 Dimension (APSR leg that fell short): ${dimension}`;
 
   let usage: AIUsage | undefined;
+  // Generative (fixed): writes the finding OBSERVATION prose (WHO/WHAT/WHEN
+  // narrative), not a verdict — natural varied wording is desirable here.
   const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.5, onUsage: (u) => { usage = u; } });
   const parsed = parseJSONObject(content, ["observation", "criteria", "effect"]);
   return {
@@ -1193,9 +1199,11 @@ export async function runStagedPolicyAudit(
   // AI is unchanged from before.
   const buildSystem = (label: string) => `You are auditing ONLY the POLICY & PROCEDURE documents for a GD4 EduTrust sub-criterion. Your task for each audit point: does this institution's policy documentation DOCUMENT an approach that addresses this requirement? You are assessing APPROACH only — not whether it is implemented, not whether outcomes are achieved.
 
-"Yes" = the policy clearly, specifically, and sustainably documents HOW the institution meets this requirement (names who, what, when, frequency, ownership).
-"Partial" = the policy mentions the requirement but is vague, generic, or incomplete — missing who owns it, missing timing, or using boilerplate language not specific to this institution.
-"No" = the policy document does not address this requirement at all.
+Decide deterministically by counting which of the four specifics are documented — WHO owns it, WHAT they do, WHEN/how often, and WHAT record results — the same policy text must always yield the same verdict:
+"Yes" = all four specifics are documented (named owner, the action, timing/frequency, and the resulting record). Full, specific, sustainable.
+"Partial" = the requirement is addressed but ONE OR MORE of the four specifics is missing or is boilerplate not specific to this institution. Name which specific is missing.
+"No" = the policy does not address this requirement at all.
+BOUNDARY RULE (Yes vs Partial): if you can name even one missing specific (owner / action / timing / record), it is "Partial", not "Yes". When unsure between "Yes" and "Partial", choose "Partial" (resolve down).
 
 IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
 Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
@@ -1249,7 +1257,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1356,9 +1364,11 @@ export async function runStagedEvidenceAudit(
   // chatComplete() call instead of a single entry for the whole stage.
   const buildSystem = (label: string) => `You are auditing ONLY the ACTUAL EVIDENCE documents for a GD4 EduTrust sub-criterion. Your task: does the evidence show that the institution actually IMPLEMENTS each requirement in practice? You are assessing PROCESSES only — not the documented policy (assessed separately), not outcomes.
 
-"Yes" = there are real implementation records, logs, forms, screenshots, registers, or actual operational records showing this was done consistently.
-"Partial" = some implementation evidence exists but it is incomplete, covers only part of the review period, or the sample is too small to be representative.
-"No" = no implementation evidence in these documents for this requirement.
+Decide "covered" deterministically — the same evidence must always yield the same verdict; count records, do not judge "feel":
+"Yes" = at least one real implementation record (log, form, screenshot, register, operational record) directly demonstrates this requirement being carried out, AND nothing indicates it was done only once/partially. Cite the record.
+"Partial" = implementation records exist but are INCOMPLETE by a concrete, stateable measure — covers only part of the review period, a single instance where the requirement implies a recurring process, or only some of the requirement's sub-parts. You MUST name which part is missing.
+"No" = no implementation record in these documents demonstrates this requirement at all.
+BOUNDARY RULE (Yes vs Partial): award "Yes" only when the evidence covers the requirement in FULL; if any nameable part is uncovered, it is "Partial", not "Yes". If you cannot name what is missing, it is "Yes"; if you can, it is "Partial". When genuinely unsure between "Yes" and "Partial", choose "Partial" (resolve down).
 
 IMPORTANT: A policy document, SOP, or procedure does NOT count as implementation evidence, even if it is filed in the evidence folder. Only actual records of doing something count.
 Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}
@@ -1406,7 +1416,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1547,7 +1557,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1910,7 +1920,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1984,7 +1994,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
             { role: "user", content: `Policy & Procedure documents (chunk IDs in headers)${windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}]` : ""}:\n"""\n${win.text}\n"""\n\nList every internal contradiction, or an empty array if there are none.` },
           ],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const found = Array.isArray(parsed.contradictions) ? parsed.contradictions as Array<Record<string, unknown>> : [];
@@ -2066,6 +2076,10 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     const narrativeSystem = `You are writing a short overall roll-up of a PPD (Policy & Procedure Document) requirements review for one GD4 EduTrust sub-criterion. You are given the per-requirement-line verdicts already decided ("Adequate" / "Partial" / "Not documented"). Write a 2-4 sentence synthesis of the sub-criterion AS A WHOLE: whether the PPD documents this sub-criterion's requirements overall, which areas are strongest (documented), and where the gaps are (Partial / Not documented lines). This is a roll-up — do NOT repeat each line's comment verbatim. Keep it factual and neutral: state what is documented and what is missing; do not editorialise with words like "good"/"poor"/"excellent". Respond with JSON only: {"narrative": string}.${buildSystemPrompt("evidenceReview", null, "runPPDRequirementsReview (overall synthesis)", opts.criterionId, domainSkill, opts.calibration, opts.memories)}${domainBlock}`;
     const narrativeUser = `Per-requirement-line verdicts for this sub-criterion:\n${lineDigest}\n\nWrite the overall roll-up narrative.`;
     try {
+      // Generative (fixed): a 2-4 sentence roll-up NARRATIVE synthesising the
+      // already-decided line verdicts — prose, not itself a verdict. The
+      // per-line verdicts above (which the consistency test measures) use the
+      // tunable verdictTemperature; this summary does not affect them.
       const content = await chatComplete(
         [{ role: "system", content: narrativeSystem }, { role: "user", content: narrativeUser }],
         settings,
@@ -2159,10 +2173,14 @@ PROMISE VERIFICATION (the core task). Each promise listed under a requirement is
 - "not evidenced" — no record shows it. Phrase the finding: "It was not evident that the PEI had [promise], in accordance with its documented PPD."
 - "contradicted" — the records show the OPPOSITE of the promise (e.g. the PPD promises contracts signed before fee collection and a contract is dated after the receipt). Quote the contradicting record.
 
-COMBINED LINE VERDICT:
-"Met" = the requirement is FULLY documented in the PPD (Adequate PPD verdict) AND the promises are evidenced by real implementation records (records, logs, forms, registers, screenshots). A Partial or Not documented PPD verdict can NEVER combine to "Met" — a weak documented approach gates the whole line (APSR Approach hard-gate), no matter how strong the evidence is.
-"Partial" = documented but implementation evidence is missing, thin or partial (including any promise "not evidenced"); OR evidence exists but the PPD documentation was weak/absent.
-"Not met" = neither adequately documented nor evidenced, or promises are contradicted by the records.
+COMBINED LINE VERDICT — apply this decision procedure IN ORDER and stop at the first rule that matches. This is deterministic: the same PPD verdict and the same promise-check counts must ALWAYS yield the same line verdict (do not use "feels thin/strong" judgement — count the promise checks).
+1. If ANY promise is "contradicted" by the records → "Not met". (A contradiction is a hard fail regardless of everything else.)
+2. Else if the PPD verdict is "Not documented" → "Not met". (No documented approach; the APSR Approach hard-gate floors the line.)
+3. Else if the PPD verdict is "Partial" → "Partial". (A weak documented approach caps the whole line at Partial, no matter how complete the evidence — never "Met".)
+4. Else (PPD verdict is "Adequate"), decide by the promise checks:
+   a. If there were extractable promises: let E = number "evidenced", T = total promises. Then "Met" if E === T (every promise evidenced); "Partial" if 0 < E < T (some but not all); "Not met" if E === 0 (none evidenced).
+   b. If there were NO extractable promises for this line: "Met" if at least one actual implementation record supports the requirement; "Partial" if the approach is documented but no implementation record is present.
+Ties/borderline cases resolve DOWN, never up: if you are unsure between two adjacent verdicts, choose the lower one. "Met" requires every applicable promise evidenced with a cited record — it is never awarded on partial or ambiguous evidence.
 
 EVIDENCE RULES:
 - A policy/SOP/procedure filed in the evidence folder does NOT count as implementation evidence — only actual records of doing something count.
@@ -2243,7 +2261,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: 0.15, onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];

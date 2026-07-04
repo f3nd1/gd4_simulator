@@ -11,8 +11,15 @@ export type AISettingsState = AISettings & {
   setModel: (model: string) => void;
   setUtilityModel: (model: string) => void;
   setEnabled: (enabled: boolean) => void;
+  setVerdictTemperature: (t: number) => void;
   clearApiKey: () => void;
 };
+
+// Verdict calls are assessment calls — default to a low temperature so the
+// same evidence yields the same verdict across repeated runs. Exported so the
+// Settings control, the calibration test, and the fallback in agentRuntime all
+// agree on the default.
+export const DEFAULT_VERDICT_TEMPERATURE = 0.1;
 
 // The OpenAI API key SYNCS through Supabase (workspaceStorage) so the same key
 // is available across devices/browsers — restored at the user's request for
@@ -48,6 +55,7 @@ export const useAISettingsStore = create<AISettingsState>()(
       model: "gpt-5-mini",
       utilityModel: "gpt-5-nano",
       enabled: false,
+      verdictTemperature: DEFAULT_VERDICT_TEMPERATURE,
 
       setApiKey: (apiKey) => {
         saveLocalApiKey(apiKey);
@@ -56,6 +64,7 @@ export const useAISettingsStore = create<AISettingsState>()(
       setModel: (model) => set({ model }),
       setUtilityModel: (utilityModel) => set({ utilityModel }),
       setEnabled: (enabled) => set({ enabled }),
+      setVerdictTemperature: (t) => set({ verdictTemperature: Math.max(0, Math.min(1, t)) }),
       clearApiKey: () => {
         saveLocalApiKey("");
         set({ apiKey: "", enabled: false });

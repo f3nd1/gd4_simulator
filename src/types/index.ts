@@ -1230,6 +1230,13 @@ export type AISettings = {
   // don't need the analysis model's reasoning.
   utilityModel: string;
   enabled: boolean;
+  // Temperature for VERDICT-DECIDING calls (staged audit passes, PPD review,
+  // evidence assessment, auditor-panel classification). Lower = the same input
+  // yields the same verdicts (reproducibility); default 0.1. Generative calls
+  // (closure/finding prose, roll-up narrative) keep their own fixed higher
+  // temperature and ignore this. Optional so pre-existing persisted settings
+  // fall back to the default.
+  verdictTemperature?: number;
   // Transient, merged in per call (never persisted in the settings store):
   // the School Context briefing injected as background into every AI call.
   context?: string;

@@ -76,6 +76,9 @@ export type ConsistencyTestResult = {
   path: "A" | "B";
   runs: number;
   runAt: string; // ISO
+  // Verdict temperature in effect for this test, so a past result is
+  // interpretable ("3 runs at 0.7 — 40%" vs "3 runs at 0.1 — 90%").
+  temperature?: number;
   lines: ConsistencyLine[];
   bands: (number | null)[]; // band estimate per run (null = run failed)
   gapCounts: (number | null)[]; // findings(gaps) count per run
@@ -150,6 +153,7 @@ export type ABPathOutcome = {
 export type ABTestResult = {
   subCriterionId: string;
   runAt: string;
+  temperature?: number; // verdict temperature in effect for this comparison
   benchmarkCount: number; // real AFIs available as truth (0 = raw counts only)
   patterns: string[]; // the benchmark AFIs' finding patterns for this sub-criterion
   a: ABPathOutcome;

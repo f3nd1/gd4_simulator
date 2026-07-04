@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useAgentMemoryStore } from "../store/useAgentMemoryStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
@@ -13,7 +14,7 @@ import { getSupabaseClient, getSupabaseConfig } from "../lib/supabaseClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
-import { listModels } from "../lib/ai/aiClient";
+import { listModels, verdictTemp } from "../lib/ai/aiClient";
 import { filterModelSuggestions } from "../lib/modelPicker";
 
 // Re-hydrate every store that uses workspaceStorage so that when Supabase
@@ -110,7 +111,8 @@ function PanelModeSettings() {
 }
 
 export function Settings() {
-  const { apiKey, model, utilityModel, enabled, setApiKey, setModel, setUtilityModel, setEnabled, clearApiKey } = useAISettingsStore();
+  const { apiKey, model, utilityModel, enabled, setApiKey, setModel, setUtilityModel, setEnabled, clearApiKey, setVerdictTemperature } = useAISettingsStore();
+  const verdictTemperature = useAISettingsStore((s) => verdictTemp(s));
   const memory = useAgentMemoryStore((s) => s.memory);
   const clearMemory = useAgentMemoryStore((s) => s.clearMemory);
   const [draftKey, setDraftKey] = useState(apiKey);
@@ -391,6 +393,35 @@ create policy "anon read/write" on public.workspace_state
             </div>
           );
         })}
+
+        {/* Verdict consistency (temperature) — governs reproducibility of all
+            assessment/verdict AI calls. */}
+        <div style={{ marginBottom: 12 }}>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Verdict consistency (temperature)</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+            <input
+              type="range" min={0} max={1} step={0.05}
+              value={verdictTemperature}
+              onChange={(e) => setVerdictTemperature(Number(e.target.value))}
+              data-testid="verdict-temperature"
+              style={{ flex: 1, maxWidth: 320, accentColor: "#4338ca" }}
+            />
+            <input
+              type="number" min={0} max={1} step={0.05}
+              value={verdictTemperature}
+              onChange={(e) => setVerdictTemperature(Number(e.target.value))}
+              style={{ width: 66, padding: "4px 6px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12.5 }}
+            />
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: verdictTemperature <= 0.2 ? "#15803d" : verdictTemperature <= 0.5 ? "#b45309" : "#b23121" }}>
+              {verdictTemperature <= 0.2 ? "Highly consistent" : verdictTemperature <= 0.5 ? "Somewhat varied" : "Highly varied"}
+            </span>
+          </div>
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>
+            Lower = the same input gives the same verdicts (recommended for audits — default 0.10). Higher = more varied wording but less repeatable results.
+            Applies to all assessment calls: staged audit passes, PPD review, evidence assessment, and auditor-panel classification. Generative prose (finding/closure drafting, roll-up narratives) keeps its own fixed setting.
+            {" "}Verify the effect with the <Link to="/ai-calibration" style={{ color: "#4338ca", fontWeight: 600 }}>AI Calibration → Consistency</Link> test.
+          </span>
+        </div>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button

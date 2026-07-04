@@ -33,6 +33,16 @@ export class AIClientError extends Error {}
 
 const DEFAULT_MODEL = "gpt-5-mini";
 
+// Fallback used by verdict-deciding calls when a settings object predates the
+// verdictTemperature field (kept in sync with DEFAULT_VERDICT_TEMPERATURE in
+// the settings store). Resolves the user-tuned verdict temperature for any
+// assessment call: staged audit passes, PPD review, evidence assessment,
+// auditor-panel classification.
+export function verdictTemp(settings: Pick<AISettings, "verdictTemperature">): number {
+  const t = settings.verdictTemperature;
+  return typeof t === "number" && t >= 0 && t <= 1 ? t : 0.1;
+}
+
 // GPT-5 and the o-series are reasoning models: Chat Completions rejects any
 // `temperature` other than the default (1) for them with a 400, which would
 // otherwise silently drop every call back to the offline simulation. Only
