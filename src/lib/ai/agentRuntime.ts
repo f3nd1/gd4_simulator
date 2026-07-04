@@ -2131,11 +2131,19 @@ export type EvidenceAssessmentRunResult = {
 // any real verdict would replace it if it ever entered a merge.
 const EVIDENCE_VERDICT_ORDER: Record<EvidenceVerdict, number> = { "Not assessed": -1, "Not met": 0, "Partial": 1, "Met": 2 };
 
+// Purely-observational live events emitted as the assessment proceeds, so the
+// UI can show a detailed activity view. Emitting them changes no assessment
+// behaviour — they mirror the window/batch loop the run already performs.
+export type EvidenceRunEvent =
+  | { type: "window-start"; window: { current: number; total: number }; refs: string[]; firstLine: number; lastLine: number }
+  | { type: "batch-done"; verdicts: { ref: string; verdict: EvidenceVerdict }[]; usage?: AIUsage }
+  | { type: "batch-failed"; refs: string[] };
+
 export async function runEvidenceAssessment(
   inputs: EvidenceAssessmentInput[],
   evidenceDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string, pct?: number) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; onProgress?: (detail: string, pct?: number) => void; onEvent?: (ev: EvidenceRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
 ): Promise<EvidenceAssessmentRunResult> {
   if (inputs.length === 0) return { rows: [] };
 
@@ -2216,6 +2224,7 @@ Respond with JSON only:
       const lineLabel = inputs.length === 1 ? "line 1 of 1" : `lines ${firstLine}–${lastLine} of ${inputs.length}`;
       const winLabel = windows.length > 1 ? ` · window ${win.index + 1}/${win.total}` : "";
       opts.onProgress?.(`Assessing ${lineLabel}${winLabel}…`, Math.round((unitsDone / totalUnits) * 100));
+      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((b) => b.ref), firstLine, lastLine });
       const pointsBlock = batch.map((r, i) => {
         const promisesBlock = (r.promises ?? []).length > 0
           ? `\n  PPD promises to verify:${(r.promises ?? []).map((p, pi) => `\n    (${pi + 1}) ${p.promiseText}`).join("")}`
@@ -2234,6 +2243,7 @@ Respond with JSON only:
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
         const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+        const batchVerdicts: { ref: string; verdict: EvidenceVerdict }[] = [];
         for (const inp of batch) {
           const res = byRef.get(inp.ref);
           const verdict = (["Met", "Partial", "Not met"] as EvidenceVerdict[]).includes(res?.verdict as EvidenceVerdict)
@@ -2259,13 +2269,16 @@ Respond with JSON only:
             bestByRef.set(inp.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])], promiseChecks: mergePromiseChecks(prev.promiseChecks, promiseChecks) });
           }
           failedRefs.delete(inp.ref); // a later window recovered this line
+          batchVerdicts.push({ ref: inp.ref, verdict });
         }
+        opts.onEvent?.({ type: "batch-done", verdicts: batchVerdicts, usage });
       } catch (err) {
         // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
         if (stopRequested()) { stoppedEarly = true; break; }
         // Mark the batch's lines as failed and CONTINUE — one stuck/timed-out
         // call must not abort the rest of the assessment.
         for (const inp of batch) if (!bestByRef.has(inp.ref)) failedRefs.add(inp.ref);
+        opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref) });
         console.error("[EvidenceAssessment]", windows.length > 1 ? `window ${win.index + 1}/${win.total}` : "call failed", err instanceof Error ? err.message : String(err));
       }
       unitsDone++;

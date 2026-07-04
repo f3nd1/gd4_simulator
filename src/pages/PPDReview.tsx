@@ -10,7 +10,8 @@ import { NextStepBanner } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 import { findingTypeForStatus, findingTypeTone } from "../lib/findingClassification";
 import { resolvePpdSelection, ppdResultSummary } from "../lib/ppdSelection";
-import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck } from "../types";
+import { TONE } from "../lib/theme";
+import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
 //   • PPD Review — policy only, one row per GD4 requirement line (3 columns).
@@ -436,6 +437,132 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
   );
 }
 
+// ─── Detailed live-activity panel for a running evidence assessment ─────────
+// Collapsible: a compact summary line always shows; "Show detail" reveals the
+// full live view (stage, window, per-line status, files, log, AI usage). All
+// data comes from evidenceAssessmentProgress — no assessment logic here.
+const STAGE_LABEL: Record<NonNullable<EvidenceAssessmentProgress["stage"]>, string> = {
+  reading: "Reading files", assessing: "Assessing evidence", verifying: "Verifying citations", synthesising: "Synthesising", done: "Done",
+};
+const LOG_TONE: Record<NonNullable<import("../types").EvidenceRunLogLine["tone"]>, string> = {
+  info: "#475569", good: "#166534", warn: "#92600a", bad: "#b23121",
+};
+
+function EvidenceRunPanel({ progress, onCancel }: { progress: EvidenceAssessmentProgress | null; onCancel: () => void }) {
+  const [open, setOpen] = useState(true);
+  // 1s tick so the elapsed timer and "no activity for Ns" heartbeat move even
+  // when a slow window produces no events — the run must never look frozen.
+  const [, setTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+
+  const p = progress;
+  const pct = p?.pct ?? 5;
+  const stage = p?.stage ? STAGE_LABEL[p.stage] : "Starting…";
+  const elapsedS = p?.startedAt ? Math.max(0, Math.floor((Date.now() - p.startedAt) / 1000)) : 0;
+  const elapsedLabel = elapsedS >= 60 ? `${Math.floor(elapsedS / 60)}m ${elapsedS % 60}s` : `${elapsedS}s`;
+  const sinceBeatS = p?.heartbeatAt ? Math.floor((Date.now() - p.heartbeatAt) / 1000) : 0;
+  const lineRefs = p?.lineRefs ?? [];
+  const doneLines = lineRefs.filter((r) => p?.lineStatus?.[r] === "done").length;
+  const filesRead = p?.filesRead ?? [];
+  const log = p?.log ?? [];
+
+  const R = 26, CIRC = 2 * Math.PI * R;
+  const chip = (label: string, value: string, tone: { fg: string; bg: string }) => (
+    <span style={{ fontSize: 11, fontWeight: 700, color: tone.fg, background: tone.bg, borderRadius: 999, padding: "3px 10px", whiteSpace: "nowrap" }}>{value} {label}</span>
+  );
+  const lineTone = (s?: string) => s === "done" ? TONE.good : s === "assessing" ? TONE.progress : TONE.neutral;
+
+  return (
+    <div style={{ marginBottom: 12, border: "1px solid #c7d2fe", background: "#f5f7ff", borderRadius: 12, padding: "12px 14px" }}>
+      {/* Compact summary line — always visible */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ position: "relative", width: 60, height: 60, flexShrink: 0 }}>
+          <svg width={60} height={60}>
+            <circle cx={30} cy={30} r={R} fill="none" stroke={TONE.neutral.bg} strokeWidth={6} />
+            <circle cx={30} cy={30} r={R} fill="none" stroke={TONE.progress.fg} strokeWidth={6} strokeLinecap="round"
+              strokeDasharray={CIRC} strokeDashoffset={CIRC * (1 - pct / 100)} transform="rotate(-90 30 30)" style={{ transition: "stroke-dashoffset 0.4s ease" }} />
+          </svg>
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800, color: "#0f172a" }}>{pct}%</div>
+        </div>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#3730a3" }}>
+            {stage}{p?.window && p.window.total > 1 ? ` · window ${p.window.current} of ${p.window.total}` : ""}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 2 }}>
+            {p?.detail ?? "Working…"} · {doneLines}/{lineRefs.length} lines · elapsed {elapsedLabel}
+            {sinceBeatS > 12 && <span style={{ color: "#92600a", fontWeight: 700 }}> · no activity {sinceBeatS}s (still working, a window can be slow)</span>}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={() => setOpen((o) => !o)} style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: "1px solid #c7d2fe", background: "#fff", color: "#4338ca" }}>
+            {open ? "Hide detail ▲" : "Show detail ▼"}
+          </button>
+          <button onClick={onCancel} title="Stops the assessment: the in-flight AI call is aborted" style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "5px 12px", borderRadius: 7, border: "1px solid #fca5a5", background: "#fff5f5", color: "#b23121" }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Stat chips */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {chip("files read", String(filesRead.length + (p?.filesTotal ? `/${p.filesTotal}` : "")), TONE.good)}
+            {chip("lines done", `${doneLines}/${lineRefs.length}`, TONE.progress)}
+            {chip(p?.ai && p.ai.calls === 1 ? "AI call" : "AI calls", String(p?.ai?.calls ?? 0), TONE.neutral)}
+            {p?.ai && p.ai.totalTokens > 0 && chip("tokens", p.ai.totalTokens.toLocaleString(), TONE.neutral)}
+            {p?.ai?.model && chip("model", p.ai.model, TONE.neutral)}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {/* Per-line status */}
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 5 }}>Requirement lines</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
+                {lineRefs.length === 0 ? <div style={{ fontSize: 12, color: "#94a3b8" }}>Preparing…</div> : lineRefs.map((r) => {
+                  const st = p?.lineStatus?.[r];
+                  const tone = lineTone(st);
+                  const v = p?.lineVerdict?.[r];
+                  return (
+                    <div key={r} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11.5 }}>
+                      <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: tone.fg, flexShrink: 0, opacity: st === "waiting" || !st ? 0.4 : 1 }} />
+                      <span style={{ fontFamily: "ui-monospace,monospace", fontWeight: 700, color: tone.fg }}>{r}</span>
+                      <span style={{ color: tone.fg, opacity: 0.85 }}>{st === "done" ? (v ?? "done") : st === "assessing" ? "assessing…" : "waiting"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Files read */}
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 5 }}>
+                Files read{p?.filesTotal ? ` (${filesRead.length}/${p.filesTotal})` : ""}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
+                {p?.currentFile && <div style={{ fontSize: 11.5, color: TONE.progress.fg, fontWeight: 600 }}>▸ {p.currentFile} …</div>}
+                {filesRead.length === 0 && !p?.currentFile ? <div style={{ fontSize: 12, color: "#94a3b8" }}>None yet</div> : filesRead.slice().reverse().map((f, i) => (
+                  <div key={i} style={{ fontSize: 11.5, color: "#166534", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>✓ {f}</div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Live log — newest at the bottom */}
+          <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 11px", maxHeight: 160, overflowY: "auto" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Live activity log</div>
+            {log.length === 0 ? <div style={{ fontSize: 11.5, color: "#64748b" }}>Waiting for activity…</div> : log.map((l, i) => (
+              <div key={i} style={{ fontSize: 11.5, fontFamily: "ui-monospace,monospace", color: l.tone ? LOG_TONE[l.tone] : "#cbd5e1", lineHeight: 1.6 }}>
+                <span style={{ color: "#64748b" }}>{new Date(l.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>{" "}{l.text}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Evidence tab (PPD verdict + Actual Evidence, 4 columns) ────────────────
 function EvidenceTab({ selectedId }: { selectedId: string }) {
   const busy = useWorkspaceStore((s) => s.busy);
@@ -445,6 +572,7 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
   const progress = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
+  const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
 
   const ppd = ppdReviewResults[selectedId];
   const ppdReady = !!ppd && ppd.rows.length > 0 && !ppd.rows.some((r) => !r.ref);
@@ -531,18 +659,10 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
         </Link>
       </div>
 
-      {/* Fix 2 — visible progress bar + heartbeat while a fresh assessment runs. */}
-      {isRunning && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-            <span style={{ fontSize: 12, color: "#4338ca", fontWeight: 600 }}>{runProgress?.detail ?? "Assessing…"}</span>
-            <span style={{ fontSize: 11, color: "#94a3b8" }}>{runProgress ? `${runProgress.pct}%` : ""}</span>
-          </div>
-          <div style={{ height: 8, background: "#eef2ff", borderRadius: 999, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${runProgress?.pct ?? 5}%`, background: "#4338ca", borderRadius: 999, transition: "width 0.3s" }} />
-          </div>
-        </div>
-      )}
+      {/* Detailed live-activity panel while a fresh assessment runs (collapsible
+          to a compact summary). Surfaces the backend activity the run already
+          performs: stage, window, per-line status, files read, live log, AI usage. */}
+      {isRunning && <EvidenceRunPanel progress={runProgress} onCancel={cancelBusy} />}
 
       {assessment?.derivedFromAudit && !isRunning && (
         <div style={{ fontSize: 12, color: "#166534", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "6px 11px", marginBottom: 8 }}>

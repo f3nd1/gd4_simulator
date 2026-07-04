@@ -1225,8 +1225,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
           }
         };
-        const setEvProgress = (detail: string, pct: number) =>
-          set({ evidenceAssessmentProgress: { subCriterionId, pct, detail } });
+        // Merge-based progress updaters so the detailed live-activity fields
+        // (stage, window, per-line status, files, log, AI usage) survive every
+        // update — a plain replace would wipe them on each pct tick.
+        const EV_LOG_CAP = 60;
+        const curEv = (): EvidenceAssessmentProgress => {
+          const p = get().evidenceAssessmentProgress;
+          return p && p.subCriterionId === subCriterionId ? p : { subCriterionId, pct: 0, detail: "" };
+        };
+        const patchEv = (patch: Partial<EvidenceAssessmentProgress>) =>
+          set({ evidenceAssessmentProgress: { ...curEv(), ...patch, subCriterionId, heartbeatAt: Date.now() } });
+        const logEv = (text: string, tone?: "info" | "good" | "warn" | "bad") =>
+          patchEv({ log: [...(curEv().log ?? []), { at: Date.now(), text, tone }].slice(-EV_LOG_CAP) });
+        const setEvProgress = (detail: string, pct: number) => patchEv({ detail, pct });
 
         try {
           if (!ppd || ppd.rows.length === 0) { finish(null, false, "Run the PPD review first — the Evidence tab reuses its per-line verdicts."); return; }
@@ -1238,7 +1249,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set({ driveBlockedReason: null });
           if (!token || !evidenceId) return; // unreachable past the guard; narrows for TS
 
-          setEvProgress("Reading the Actual Evidence folder…", 3);
+          const lineRefs = ppd.rows.map((r) => r.ref);
+          patchEv({
+            stage: "reading", startedAt: Date.now(), pct: 3, detail: "Reading the Actual Evidence folder…",
+            lineRefs, lineStatus: Object.fromEntries(lineRefs.map((r) => [r, "waiting" as const])),
+            lineVerdict: {}, filesRead: [], log: [], ai: { calls: 0, totalTokens: 0 },
+          });
+          logEv("Listing the Actual Evidence folder…");
           const allFiles = await listFolderFilesRecursive(evidenceId, token, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS));
           // Dedicated evidence folder -> all files are evidence; shared
           // single-folder convention -> keep only the "Actual Evidence" bucket.
@@ -1251,7 +1268,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const chunkFileNames: Record<string, string> = {};
           const chunkFileRefs: Record<string, EvidenceFileRef> = {};
           let chunkCounter = 0;
+          patchEv({ filesTotal: evidenceFiles.length });
+          let filesReadCount = 0;
           for (const file of evidenceFiles) {
+            const readFileName = file.path.split("/").pop() || file.path;
+            patchEv({ currentFile: readFileName, detail: `Reading ${readFileName}…`, pct: Math.min(24, 4 + Math.round((filesReadCount / Math.max(1, evidenceFiles.length)) * 20)) });
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
             let body: string | null;
@@ -1269,7 +1290,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 body = null;
               }
             }
-            if (!body) continue;
+            if (!body) { logEv(`Skipped ${readFileName} (empty or unreadable)`, "warn"); continue; }
+            filesReadCount++;
+            patchEv({ filesRead: [...(curEv().filesRead ?? []), readFileName], currentFile: undefined });
+            logEv(`Read ${readFileName}${cached ? " (cached)" : ""}`, "good");
             const fileName = file.path.split("/").pop() || file.path;
             const fileUrl = `https://drive.google.com/file/d/${file.id}/view`;
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
@@ -1283,6 +1307,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
           }
           const evidenceDocText = docParts.join("\n\n=== ACTUAL EVIDENCE ===\n\n");
+          logEv(`Read ${filesReadCount} file${filesReadCount === 1 ? "" : "s"} — assessing ${lineRefs.length} requirement line${lineRefs.length === 1 ? "" : "s"}.`);
+          patchEv({ stage: "assessing", currentFile: undefined });
 
           const aiSettings = useAISettingsStore.getState();
           if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, aiOfflineReason(aiSettings) ?? "AI is disabled or no API key is configured in Settings."); return; }
@@ -1299,10 +1325,32 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }));
           const result = await runEvidenceAssessment(inputs, evidenceDocText, analysisSettings, {
             criterionId: subCriterionId,
-            onProgress: (detail, pct) => setEvProgress(detail, typeof pct === "number" ? Math.max(3, Math.min(99, pct)) : 50),
+            onProgress: (detail, pct) => setEvProgress(detail, typeof pct === "number" ? Math.max(25, Math.min(98, pct)) : 50),
+            onEvent: (ev) => {
+              if (ev.type === "window-start") {
+                const ls = { ...(curEv().lineStatus ?? {}) };
+                for (const r of ev.refs) if (ls[r] !== "done") ls[r] = "assessing";
+                patchEv({ stage: "assessing", window: ev.window, lineStatus: ls });
+                logEv(`Assessing lines ${ev.firstLine}–${ev.lastLine}${ev.window.total > 1 ? ` · window ${ev.window.current}/${ev.window.total}` : ""}…`);
+              } else if (ev.type === "batch-done") {
+                const cur = curEv();
+                const ls = { ...(cur.lineStatus ?? {}) };
+                const lv = { ...(cur.lineVerdict ?? {}) };
+                for (const v of ev.verdicts) { ls[v.ref] = "done"; lv[v.ref] = v.verdict; }
+                // usage.totalTokens is CUMULATIVE across batches; count each call.
+                const ai = ev.usage ? { calls: (cur.ai?.calls ?? 0) + 1, model: ev.usage.model, totalTokens: ev.usage.totalTokens } : cur.ai;
+                patchEv({ lineStatus: ls, lineVerdict: lv, ai });
+                for (const v of ev.verdicts) logEv(`Assessed ${v.ref} → ${v.verdict}`, v.verdict === "Met" ? "good" : v.verdict === "Not met" ? "bad" : "warn");
+                if (ev.usage) logEv(`AI call done — ${ev.usage.model}, ${ev.usage.totalTokens.toLocaleString()} tokens so far`);
+              } else if (ev.type === "batch-failed") {
+                logEv(`Batch failed for ${ev.refs.join(", ")} — will retry in a later window`, "bad");
+              }
+            },
             shouldStop: () => get().busy !== "evidenceassess" + subCriterionId,
             signal: runAbort.signal,
           });
+          patchEv({ stage: "verifying", detail: "Verifying citations…", pct: 99 });
+          logEv("Verifying quoted excerpts against the source documents…");
 
           // Merge AI line results with the reused PPD data + resolved file refs.
           const byRef = new Map(result.rows.map((r) => [r.ref, r]));

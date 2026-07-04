@@ -969,10 +969,31 @@ export type EvidenceAssessmentResult = {
 
 // Lightweight progress for the Evidence tab's fresh assessment run, so the
 // user sees a bar + heartbeat instead of a static "Assessing…" button.
+// Per-line live state during an evidence assessment run.
+export type EvidenceLineRunStatus = "waiting" | "assessing" | "done";
+
+// One entry in the live activity log surfaced in the detailed progress panel.
+export type EvidenceRunLogLine = { at: number; text: string; tone?: "info" | "good" | "warn" | "bad" };
+
 export type EvidenceAssessmentProgress = {
   subCriterionId: string;
   pct: number;      // 0–100
   detail: string;
+  // ── Detailed live-activity fields (optional; populated as the run proceeds).
+  // Surfaced by the PPD/Evidence detailed progress panel — NOT part of the
+  // assessment logic, just a live view of the backend activity it already does.
+  stage?: "reading" | "assessing" | "verifying" | "synthesising" | "done";
+  startedAt?: number;      // Date.now() at run start — drives the elapsed timer
+  heartbeatAt?: number;    // Date.now() bumped on every event — freeze detection
+  window?: { current: number; total: number };
+  filesTotal?: number;
+  filesRead?: string[];    // names read so far, in order
+  currentFile?: string;    // file being read right now
+  lineRefs?: string[];     // all requirement-line refs, in order
+  lineStatus?: Record<string, EvidenceLineRunStatus>;
+  lineVerdict?: Record<string, string>; // ref → last verdict once assessed
+  log?: EvidenceRunLogLine[];           // running activity log, newest last
+  ai?: { calls: number; model?: string; totalTokens: number }; // live AI usage
 };
 
 // ─── Change Log ─────────────────────────────────────────────────────────────
