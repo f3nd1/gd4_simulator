@@ -107,6 +107,9 @@ export const DEVELOPER_TOOL_PATHS = [
   "/human-decision-log",
   "/human-review",
   "/evidence-matrix",
+  // Measurement/benchmark tooling (Benchmark + Consistency + A vs B tabs) —
+  // an advanced feature, gated with the other diagnostic surfaces.
+  "/ai-calibration",
 ];
 
 // NAV with developer-only entries removed when the toggle is off. Groups that

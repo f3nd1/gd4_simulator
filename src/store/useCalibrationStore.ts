@@ -4,6 +4,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import type { ConsistencyTestResult, ABTestResult } from "../lib/calibrationTesting";
 
 export type MatchStatus = "caught" | "partial" | "missed" | "unassessed";
 
@@ -40,6 +41,13 @@ type CalibrationState = {
   setAiMatch: (afiId: string, status: MatchStatus, justification: string) => void;
   // Called once per completed match-analysis sweep with the resulting totals.
   recordRun: (totals: Omit<CalibrationRunRecord, "runAt">) => void;
+  // Consistency tab: latest repeatability test per sub-criterion (scratch —
+  // measurement results only, never audit data).
+  consistencyTests: Record<string, ConsistencyTestResult>;
+  setConsistencyTest: (r: ConsistencyTestResult) => void;
+  // A vs B tab: latest comparison per sub-criterion.
+  abTests: Record<string, ABTestResult>;
+  setAbTest: (r: ABTestResult) => void;
 };
 
 export const useCalibrationStore = create<CalibrationState>()(
@@ -63,6 +71,10 @@ export const useCalibrationStore = create<CalibrationState>()(
           const runAt = new Date().toISOString();
           return { lastRunAt: runAt, runHistory: [{ runAt, ...totals }, ...s.runHistory].slice(0, RUN_HISTORY_CAP) };
         }),
+      consistencyTests: {},
+      setConsistencyTest: (r) => set((s) => ({ consistencyTests: { ...s.consistencyTests, [r.subCriterionId]: r } })),
+      abTests: {},
+      setAbTest: (r) => set((s) => ({ abTests: { ...s.abTests, [r.subCriterionId]: r } })),
     }),
     { name: "ucc-gd4-calibration:v1", storage: createJSONStorage(() => localStorage) }
   )

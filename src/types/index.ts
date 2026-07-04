@@ -573,7 +573,7 @@ export type EvidenceFolder = {
   lastAuditAuditor?: string;
 };
 
-export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation" | "Finding" | "CrossCriterion";
+export type AIReviewType = "Evidence" | "Scoring" | "Closure" | "Checklist" | "Interview" | "Finalisation" | "Finding" | "CrossCriterion" | "Calibration";
 
 // Per-file record built during a folder audit — emitted to the progress modal
 // so users can see exactly which files were read and what happened to each one.

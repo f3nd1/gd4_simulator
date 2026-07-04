@@ -11,6 +11,7 @@ import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
+import { ConsistencyTab, AvsBTab } from "./CalibrationLab";
 import type { Finding } from "../types";
 
 const PATTERNS: BenchmarkFindingPattern[] = [
@@ -84,7 +85,37 @@ function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
 }
 
+// Tab shell: Benchmark (the original calibration content, unchanged) plus
+// the two measurement tabs (Consistency, A vs B) from CalibrationLab.tsx.
 export function AICalibration() {
+  const [tab, setTab] = useState<"benchmark" | "consistency" | "ab">("benchmark");
+  return (
+    <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
+      <Card style={{ paddingBottom: 0 }}>
+        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e2e8f0" }}>
+          {([["benchmark", "Benchmark"], ["consistency", "Consistency"], ["ab", "A vs B"]] as const).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              style={{
+                cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", border: "none",
+                borderBottom: `2px solid ${tab === id ? "#4338ca" : "transparent"}`,
+                background: "transparent", color: tab === id ? "#4338ca" : "#64748b", marginBottom: -1,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </Card>
+      {tab === "benchmark" && <BenchmarkTab />}
+      {tab === "consistency" && <ConsistencyTab />}
+      {tab === "ab" && <AvsBTab />}
+    </div>
+  );
+}
+
+function BenchmarkTab() {
   const subCriteria = benchmarkSubCriteria();
   const [selected, setSelected] = useState<string>("all");
   const matches = useCalibrationStore((s) => s.matches);

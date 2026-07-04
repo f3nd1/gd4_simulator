@@ -71,6 +71,7 @@ export default function App() {
             <Route path="/ai-debug" element={<AIDebugLog />} />
             <Route path="/human-review" element={<HumanReview />} />
             <Route path="/evidence-matrix" element={<EvidenceMatrix />} />
+            <Route path="/ai-calibration" element={<AICalibration />} />
           </Route>
           {/* Version History merged into Draft Workspace; keep the old path working. */}
           <Route path="/version-history" element={<Navigate to="/draft-workspace" replace />} />
@@ -80,7 +81,6 @@ export default function App() {
           <Route path="/export" element={<ExportCentre />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/ai-memories" element={<AIMemories />} />
-          <Route path="/ai-calibration" element={<AICalibration />} />
           <Route path="/change-log" element={<ChangeLog />} />
         </Route>
       </Routes>
