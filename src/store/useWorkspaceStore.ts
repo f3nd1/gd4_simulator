@@ -315,12 +315,16 @@ const DEMO_CYCLE_FIELDS: Partial<AuditCycle> = {
   owner: "SQ",
 };
 
-const DEFAULT_AUDITORS: AuditorProfile[] = [
-  { id: "AUD-1", auditCycleId: "cycle-1", name: "Rachel Tan", type: "Internal", departmentId: "SQ", role: "Audit Lead", strictness: 70, focusArea: "Overall audit setup and finalisation", checklistTemplateId: "Audit Lead Checklist" },
-  { id: "AUD-2", auditCycleId: "cycle-1", name: "Marcus Lim", type: "Internal", departmentId: "SGL", role: "Department Reviewer", strictness: 60, focusArea: "Leadership and governance evidence", checklistTemplateId: "Management Review Checklist" },
-  { id: "AUD-3", auditCycleId: "cycle-1", name: "Priya Nair", type: "Internal", departmentId: "ALI / CM", role: "Department Reviewer", strictness: 75, focusArea: "Academic process evidence", checklistTemplateId: "Academic Process Checklist" },
-  { id: "AUD-4", auditCycleId: "cycle-1", name: "Faizal Rahman", type: "Internal", departmentId: "AD / AN", role: "Department Reviewer", strictness: 80, focusArea: "Student protection and contract evidence", checklistTemplateId: "Student Protection Checklist" },
-  { id: "AUD-5", auditCycleId: "cycle-1", name: "Jennifer Wong", type: "External", departmentId: undefined, role: "External Reviewer", strictness: 85, focusArea: "Simulated SSG/EduTrust assessor view", checklistTemplateId: "GD4 Criterion Checklist" },
+// Single source of truth for the five preset auditors — one per review
+// perspective — used both by the Dashboard "Use demo data" seeding and the
+// Auditor Creation "Load preset auditors" button, so both routes produce
+// identical profiles (with perspectives) and a ready 5-seat review panel.
+export const DEFAULT_AUDITORS: AuditorProfile[] = [
+  { id: "AUD-1", auditCycleId: "cycle-1", name: "Rachel Tan", type: "Internal", departmentId: "SQ", role: "Audit Lead", strictness: 70, focusArea: "Overall audit setup and finalisation", checklistTemplateId: "Audit Lead Checklist", reviewPerspective: "strict-auditor" },
+  { id: "AUD-2", auditCycleId: "cycle-1", name: "Marcus Lim", type: "Internal", departmentId: "SGL", role: "Department Reviewer", strictness: 60, focusArea: "Leadership and governance evidence", checklistTemplateId: "Management Review Checklist", reviewPerspective: "optimistic-process-owner" },
+  { id: "AUD-3", auditCycleId: "cycle-1", name: "Priya Nair", type: "Internal", departmentId: "ALI / CM", role: "Department Reviewer", strictness: 75, focusArea: "Academic process evidence", checklistTemplateId: "Academic Process Checklist", reviewPerspective: "risk-challenger" },
+  { id: "AUD-4", auditCycleId: "cycle-1", name: "Faizal Rahman", type: "Internal", departmentId: "AD / AN", role: "Department Reviewer", strictness: 80, focusArea: "Student protection and contract evidence", checklistTemplateId: "Student Protection Checklist", reviewPerspective: "academic-qa-guardian" },
+  { id: "AUD-5", auditCycleId: "cycle-1", name: "Jennifer Wong", type: "External", departmentId: undefined, role: "External Reviewer", strictness: 85, focusArea: "Simulated SSG/EduTrust assessor view", checklistTemplateId: "GD4 Criterion Checklist", reviewPerspective: "management-reviewer" },
 ];
 
 // Workspace-wide department directory, seeded from the acronyms and full
@@ -538,6 +542,11 @@ export type WorkspaceState = {
   addAuditor: (a: AuditorProfile) => void;
   updateAuditor: (id: string, patch: Partial<AuditorProfile>) => void;
   removeAuditor: (id: string) => void;
+  // Seeds the five preset auditors (with perspectives) and puts them on the
+  // review panel in one click. "add" skips presets whose name already exists;
+  // "replace" swaps the whole roster for the presets. Returns how many were
+  // added so the page can message the result.
+  loadPresetAuditors: (mode: "add" | "replace") => number;
 
   addDepartment: (d: Department) => void;
   updateDepartment: (id: string, patch: Partial<Department>) => void;
@@ -1816,6 +1825,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return {
             evidence,
             auditors: DEFAULT_AUDITORS,
+            // Seed the review panel with all five so the demo route and the
+            // "Load preset auditors" button both land on "Panel ready".
+            reviewPanelAuditorIds: DEFAULT_AUDITORS.map((a) => a.id).slice(0, MAX_PANEL),
             seedFindingsLoaded: true,
             cycle: { ...s.cycle, ...DEMO_CYCLE_FIELDS },
             ...buildDemoDataset(evidence),
@@ -2317,6 +2329,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       addAuditor: (a) => set((s) => ({ auditors: [...s.auditors, a] })),
       updateAuditor: (id, patch) => set((s) => ({ auditors: s.auditors.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
       removeAuditor: (id) => set((s) => ({ auditors: s.auditors.filter((a) => a.id !== id) })),
+
+      loadPresetAuditors: (mode) => {
+        const s = get();
+        if (mode === "replace") {
+          set({ auditors: [...DEFAULT_AUDITORS], reviewPanelAuditorIds: DEFAULT_AUDITORS.map((a) => a.id).slice(0, MAX_PANEL) });
+          return DEFAULT_AUDITORS.length;
+        }
+        // add: skip any preset whose name already exists (case-insensitive) so
+        // repeat clicks never create duplicates.
+        const existing = new Set(s.auditors.map((a) => a.name.trim().toLowerCase()));
+        const toAdd = DEFAULT_AUDITORS.filter((p) => !existing.has(p.name.trim().toLowerCase()));
+        const panelIds = [...s.reviewPanelAuditorIds];
+        for (const p of toAdd) {
+          if (panelIds.length < MAX_PANEL && !panelIds.includes(p.id)) panelIds.push(p.id);
+        }
+        set({ auditors: [...s.auditors, ...toAdd], reviewPanelAuditorIds: panelIds });
+        return toAdd.length;
+      },
 
       addDepartment: (d) => set((s) => ({ departments: [...s.departments, d] })),
       updateDepartment: (id, patch) => set((s) => ({ departments: s.departments.map((d) => (d.id === id ? { ...d, ...patch } : d)) })),

@@ -23,9 +23,32 @@ export function AuditorCreation() {
   const setAgentStrictness = useWorkspaceStore((s) => s.setAgentStrictness);
   const reviewPanelAuditorIds = useWorkspaceStore((s) => s.reviewPanelAuditorIds);
   const setReviewPanelAuditorIds = useWorkspaceStore((s) => s.setReviewPanelAuditorIds);
+  const loadPresetAuditors = useWorkspaceStore((s) => s.loadPresetAuditors);
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Confirmation prompt for "Load preset auditors" when a roster already
+  // exists, so repeat clicks don't silently create duplicates.
+  const [presetPrompt, setPresetPrompt] = useState(false);
+  const [presetNote, setPresetNote] = useState<string | null>(null);
+
+  function seedPresets(mode: "add" | "replace") {
+    const added = loadPresetAuditors(mode);
+    setPresetPrompt(false);
+    setPresetNote(
+      mode === "replace"
+        ? "Replaced the roster with the 5 preset auditors and set the review panel."
+        : added > 0
+          ? `Added ${added} preset auditor${added === 1 ? "" : "s"} and added them to the review panel.`
+          : "All 5 presets already exist — nothing to add.",
+    );
+  }
+
+  function onLoadPresets() {
+    setPresetNote(null);
+    if (auditors.length === 0) seedPresets("add");
+    else setPresetPrompt(true);
+  }
 
   function submit() {
     if (!form.name.trim() || !form.role.trim()) return;
@@ -93,7 +116,38 @@ export function AuditorCreation() {
               Cancel
             </button>
           )}
+          {!editingId && (
+            <button
+              onClick={onLoadPresets}
+              title="Create the 5 ready-made auditors (one per review perspective) and add them all to the review panel"
+              style={{ cursor: "pointer", border: "1px solid #7c3aed", background: "#faf5ff", color: "#5b21b6", fontWeight: 700, padding: "8px 14px", borderRadius: 8, marginLeft: "auto" }}
+            >
+              Load preset auditors
+            </button>
+          )}
         </div>
+        {presetPrompt && (
+          <div style={{ marginTop: 10, padding: "10px 12px", border: "1px solid #e2e8f0", borderRadius: 8, background: "#f8fafc" }}>
+            <p style={{ fontSize: 12.5, color: "#374151", margin: "0 0 8px" }}>
+              You already have {auditors.length} auditor{auditors.length === 1 ? "" : "s"}. Add the 5 presets (skipping any
+              whose name already exists), or replace the whole roster with them?
+            </p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={() => seedPresets("add")} style={{ cursor: "pointer", border: "none", background: GOLD, color: "#16202e", fontWeight: 700, padding: "7px 12px", borderRadius: 8 }}>
+                Add presets
+              </button>
+              <button onClick={() => seedPresets("replace")} style={{ cursor: "pointer", border: "1px solid #ef4444", background: "#fff", color: "#b91c1c", fontWeight: 700, padding: "7px 12px", borderRadius: 8 }}>
+                Replace existing with presets
+              </button>
+              <button onClick={() => setPresetPrompt(false)} style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", color: "#475569", fontWeight: 600, padding: "7px 12px", borderRadius: 8 }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {presetNote && (
+          <p style={{ marginTop: 8, fontSize: 12, color: "#15803d", fontWeight: 600 }}>{presetNote}</p>
+        )}
       </Card>
 
       <Card>
