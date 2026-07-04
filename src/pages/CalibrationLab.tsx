@@ -18,7 +18,7 @@ import { useCalibrationStore } from "../store/useCalibrationStore";
 import { toCsv, downloadCsv } from "../lib/auditCsvExport";
 import { foldersConnected, aiReady, runScratch, judgeVsBenchmark, type ScratchRunOutput } from "../lib/calibrationRunner";
 import {
-  consistencyAgreement, consistencySummary, bandStabilityLabel, gapVariationLabel,
+  consistencyAgreement, consistencySummary, bandStabilityLabel, gapVariationLabel, formatRunOn,
   abWinner, abVerdictLine, abOverallTally,
   type ConsistencyLine, type ConsistencyTestResult, type ABTestResult, type ABPathOutcome,
 } from "../lib/calibrationTesting";
@@ -114,6 +114,8 @@ function RunProgress({ headline, stage, startedAt, onCancel }: { headline: strin
 export function ConsistencyTab() {
   const tests = useCalibrationStore((s) => s.consistencyTests);
   const setConsistencyTest = useCalibrationStore((s) => s.setConsistencyTest);
+  const deleteConsistencyTest = useCalibrationStore((s) => s.deleteConsistencyTest);
+  const clearConsistencyTests = useCalibrationStore((s) => s.clearConsistencyTests);
   const infos = useSubCritInfo(tests);
   const [selectedId, setSelectedId] = useState("");
   const [path, setPath] = useState<"A" | "B">("B");
@@ -151,6 +153,11 @@ export function ConsistencyTab() {
       const lines: ConsistencyLine[] = refOrder.map(({ ref, text }) => ({
         ref, text,
         verdicts: outputs.map((out) => out?.lines.find((l) => l.ref === ref)?.status ?? null),
+        // Reasoning + cited evidence behind each run's verdict, for drill-in.
+        details: outputs.map((out) => {
+          const l = out?.lines.find((x) => x.ref === ref);
+          return l ? { note: l.note, evidence: l.evidence } : null;
+        }),
       }));
       const bands = outputs.map((o) => (o ? o.bandEstimate : null));
       const gapCounts = outputs.map((o) => (o ? o.gapCount : null));
@@ -172,12 +179,23 @@ export function ConsistencyTab() {
 
   function exportCsv() {
     const all = Object.values(tests);
-    const rows = all.flatMap((t) =>
-      t.lines.map((l) => [t.subCriterionId, t.path, t.runAt, t.runs, t.agreementPct ?? "", t.bands.map((b) => b ?? "failed").join(" | "), t.gapCounts.map((c) => c ?? "failed").join(" | "), l.ref, l.text, ...l.verdicts.map((v) => v ?? "run failed")])
-    );
     const maxRuns = Math.max(1, ...all.map((t) => t.runs));
+    const rows = all.flatMap((t) =>
+      t.lines.map((l) => [
+        t.subCriterionId, t.path, t.runAt, formatRunOn(t.runAt), t.runs, t.agreementPct ?? "",
+        t.bands.map((b) => b ?? "failed").join(" | "), t.gapCounts.map((c) => c ?? "failed").join(" | "),
+        l.ref, l.text,
+        ...l.verdicts.map((v) => v ?? "run failed"),
+        // Reasoning per run, so the drill-in detail travels to the CSV too.
+        ...Array.from({ length: maxRuns }, (_, i) => l.details?.[i]?.note ?? ""),
+      ])
+    );
     downloadCsv(
-      toCsv(["Sub-criterion", "Path", "Tested at", "Runs", "Agreement %", "Band estimates", "Gap counts", "Line ref", "Requirement", ...Array.from({ length: maxRuns }, (_, i) => `Run ${i + 1} verdict`)], rows),
+      toCsv([
+        "Sub-criterion", "Path", "Run on (ISO)", "Run on", "Runs", "Agreement %", "Band estimates", "Gap counts", "Line ref", "Requirement",
+        ...Array.from({ length: maxRuns }, (_, i) => `Run ${i + 1} verdict`),
+        ...Array.from({ length: maxRuns }, (_, i) => `Run ${i + 1} reasoning`),
+      ], rows),
       `gd4-consistency-tests-${new Date().toISOString().slice(0, 10)}.csv`);
   }
 
@@ -213,7 +231,15 @@ export function ConsistencyTab() {
             {running ? "Running…" : saved ? "Re-run test" : `Run test (${runs} runs)`}
           </button>
           {Object.keys(tests).length > 0 && (
-            <button onClick={exportCsv} style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>Export CSV</button>
+            <>
+              <button onClick={exportCsv} style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>Export CSV</button>
+              <button
+                onClick={() => { if (confirm(`Clear all ${Object.keys(tests).length} consistency test result(s)? This deletes only these measurement records — your real audit results are not affected. This cannot be undone.`)) clearConsistencyTests(); }}
+                style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c" }}
+              >
+                Clear all results
+              </button>
+            </>
           )}
         </div>
         <div style={{ fontSize: 11, color: "#b45309", marginBottom: 6 }}>⚠ Real AI calls: cost ≈ {runs} × a normal run. Tokens are logged in the AI Review Log as usual.</div>
@@ -222,18 +248,19 @@ export function ConsistencyTab() {
         {error && <div style={{ fontSize: 12, color: "#b91c1c" }}>{error}</div>}
       </Card>
 
-      {saved && <ConsistencyResult result={saved} />}
+      {saved && <ConsistencyResult result={saved} onDelete={() => { deleteConsistencyTest(saved.subCriterionId); setSelectedId(""); }} />}
 
-      {/* Past tests on other sub-criteria stay reviewable + individually re-runnable. */}
+      {/* Past tests on other sub-criteria stay reviewable + individually re-runnable + deletable. */}
       {Object.values(tests).filter((t) => t.subCriterionId !== selectedId).map((t) => (
         <Card key={t.subCriterionId} style={{ padding: "10px 14px" }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <b style={{ fontSize: 12.5 }}>{t.subCriterionId}</b>
             <Pill s="neutral">Option {t.path} × {t.runs}</Pill>
             <span style={{ fontSize: 12, color: "#475569", flex: 1 }}>{t.summary}</span>
-            <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>{new Date(t.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+            <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>Run on {formatRunOn(t.runAt)}</span>
             <button onClick={() => setSelectedId(t.subCriterionId)} style={{ cursor: "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}>View</button>
             <button disabled={!!running} onClick={() => { setSelectedId(t.subCriterionId); setPath(t.path); runTest(t.subCriterionId, t.path, t.runs); }} style={{ cursor: running ? "not-allowed" : "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #c7d2fe", background: "#eef2ff", color: "#4338ca", fontWeight: 600 }}>Re-run</button>
+            <button onClick={() => { if (confirm(`Delete the consistency test for ${t.subCriterionId}? Only this measurement record is removed — audit results are untouched.`)) deleteConsistencyTest(t.subCriterionId); }} title="Delete this test record" style={{ cursor: "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c" }}>Delete</button>
           </div>
         </Card>
       ))}
@@ -241,22 +268,23 @@ export function ConsistencyTab() {
   );
 }
 
-function ConsistencyResult({ result }: { result: ConsistencyTestResult }) {
+function ConsistencyResult({ result, onDelete }: { result: ConsistencyTestResult; onDelete: () => void }) {
   const disagreeing = result.lines.filter((l) => {
     const vs = l.verdicts.filter((v): v is string => v != null);
     return vs.length >= 2 && !vs.every((v) => v === vs[0]);
   }).length;
   return (
     <Card>
-      <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap", marginBottom: 6 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Consistency — {result.subCriterionId} · Option {result.path} × {result.runs}</h3>
-        <span style={{ fontSize: 11.5, color: "#94a3b8" }}>tested {new Date(result.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#334155", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 6, padding: "2px 9px" }}>Run on {formatRunOn(result.runAt)}</span>
+        <button onClick={onDelete} title="Delete this test record (scratch only — audit results untouched)" style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11.5, padding: "3px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 600 }}>Delete</button>
       </div>
       <div style={{ fontSize: 12.5, fontWeight: 600, color: result.agreementPct != null && result.agreementPct < 75 ? "#b45309" : "#15803d", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", marginBottom: 10 }}>
         {result.summary}
       </div>
       <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 6 }}>
-        {bandStabilityLabel(result.bands)} · {gapVariationLabel(result.gapCounts)} · {disagreeing} line{disagreeing === 1 ? "" : "s"} with disagreement (highlighted)
+        {bandStabilityLabel(result.bands)} · {gapVariationLabel(result.gapCounts)} · {disagreeing} line{disagreeing === 1 ? "" : "s"} with disagreement (highlighted) · click any row to see the reasoning behind each run's verdict
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
@@ -269,22 +297,57 @@ function ConsistencyResult({ result }: { result: ConsistencyTestResult }) {
             </tr>
           </thead>
           <tbody>
-            {result.lines.map((l) => {
-              const vs = l.verdicts.filter((v): v is string => v != null);
-              const disagree = vs.length >= 2 && !vs.every((v) => v === vs[0]);
-              return (
-                <tr key={l.ref} style={{ background: disagree ? "#fff7ed" : undefined, borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={{ padding: "5px 8px", maxWidth: 480 }}><span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#6b7280" }}>{l.ref}</span> {l.text.slice(0, 140)}{l.text.length > 140 ? "…" : ""}</td>
-                  {l.verdicts.map((v, i) => (
-                    <td key={i} style={{ padding: "5px 8px", fontWeight: 600, color: v ? STATUS_COLOR[v] ?? "#374151" : "#94a3b8", whiteSpace: "nowrap" }}>{v ?? "run failed"}</td>
-                  ))}
-                </tr>
-              );
-            })}
+            {result.lines.map((l) => <ConsistencyLineRow key={l.ref} line={l} runs={result.runs} />)}
           </tbody>
         </table>
       </div>
     </Card>
+  );
+}
+
+// One requirement line: the verdict cells, expandable to the per-run reasoning
+// + cited evidence so the user sees WHY the runs (dis)agreed, side by side.
+function ConsistencyLineRow({ line, runs }: { line: ConsistencyLine; runs: number }) {
+  const [open, setOpen] = useState(false);
+  const vs = line.verdicts.filter((v): v is string => v != null);
+  const disagree = vs.length >= 2 && !vs.every((v) => v === vs[0]);
+  const hasDetail = (line.details ?? []).some((d) => d && (d.note || d.evidence.length));
+  return (
+    <>
+      <tr onClick={() => hasDetail && setOpen((o) => !o)} style={{ background: disagree ? "#fff7ed" : undefined, borderBottom: "1px solid #f1f5f9", cursor: hasDetail ? "pointer" : "default" }}>
+        <td style={{ padding: "5px 8px", maxWidth: 480 }}>
+          {hasDetail && <span style={{ color: "#94a3b8", marginRight: 4 }}>{open ? "▾" : "▸"}</span>}
+          <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#6b7280" }}>{line.ref}</span> {line.text.slice(0, 140)}{line.text.length > 140 ? "…" : ""}
+        </td>
+        {line.verdicts.map((v, i) => (
+          <td key={i} style={{ padding: "5px 8px", fontWeight: 600, color: v ? STATUS_COLOR[v] ?? "#374151" : "#94a3b8", whiteSpace: "nowrap" }}>{v ?? "run failed"}</td>
+        ))}
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={runs + 1} style={{ padding: "0 8px 10px", background: disagree ? "#fffbf5" : "#fafafa" }}>
+            {/* Per-run reasoning side by side — compare why the verdicts differ. */}
+            <div style={{ display: "grid", gap: 8, gridTemplateColumns: `repeat(${runs}, minmax(0, 1fr))`, marginTop: 4 }}>
+              {Array.from({ length: runs }, (_, i) => {
+                const v = line.verdicts[i];
+                const d = line.details?.[i] ?? null;
+                return (
+                  <div key={i} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px", background: "#fff" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 4 }}>Run {i + 1} — <span style={{ color: v ? STATUS_COLOR[v] ?? "#374151" : "#94a3b8" }}>{v ?? "run failed"}</span></div>
+                    <div style={{ fontSize: 11.5, color: "#1e293b", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{d?.note || (v ? "(no reasoning captured)" : "This run did not produce a result for this line.")}</div>
+                    {d?.evidence.length ? (
+                      <div style={{ fontSize: 11, color: "#475569", marginTop: 6 }}>
+                        <b>Evidence cited:</b> {d.evidence.join(", ")}
+                      </div>
+                    ) : d ? <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6 }}>No evidence cited.</div> : null}
+                  </div>
+                );
+              })}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -293,6 +356,8 @@ function ConsistencyResult({ result }: { result: ConsistencyTestResult }) {
 export function AvsBTab() {
   const tests = useCalibrationStore((s) => s.abTests);
   const setAbTest = useCalibrationStore((s) => s.setAbTest);
+  const deleteAbTest = useCalibrationStore((s) => s.deleteAbTest);
+  const clearAbTests = useCalibrationStore((s) => s.clearAbTests);
   const infos = useSubCritInfo(tests);
   const [selectedId, setSelectedId] = useState("");
   const [running, setRunning] = useState<{ headline: string; stage: string; startedAt: number } | null>(null);
@@ -317,7 +382,7 @@ export function AvsBTab() {
       if (!out.ok) return { ran: false, error: out.error, findingsTotal: 0, byType: { NC: 0, OFI: 0, OBS: 0 }, bandEstimate: null, judged: false, caught: 0, partial: 0, missed: 0 };
       setRunning({ headline: `Running Option ${label}…`, stage: "Judging against benchmark findings…", startedAt });
       const judge = await judgeVsBenchmark(subCriterionId, out.digest, abort.signal);
-      return { ran: true, findingsTotal: out.gapCount, byType: out.byType, bandEstimate: out.bandEstimate, ...judge };
+      return { ran: true, findingsTotal: out.gapCount, byType: out.byType, bandEstimate: out.bandEstimate, ...judge, lines: out.lines.map((l) => ({ ref: l.ref, text: l.text, status: l.status, note: l.note, evidence: l.evidence })) };
     };
     try {
       const a = await toOutcome("A");
@@ -341,13 +406,13 @@ export function AvsBTab() {
 
   function exportCsv() {
     const rows = Object.values(tests).map((t) => [
-      t.subCriterionId, t.runAt, t.benchmarkCount, t.patterns.join(" | "),
+      t.subCriterionId, t.runAt, formatRunOn(t.runAt), t.benchmarkCount, t.patterns.join(" | "),
       t.a.caught, t.a.partial, t.a.missed, t.a.findingsTotal, t.a.byType.NC, t.a.byType.OFI, t.a.bandEstimate ?? "",
       t.b.caught, t.b.partial, t.b.missed, t.b.findingsTotal, t.b.byType.NC, t.b.byType.OFI, t.b.bandEstimate ?? "",
       t.winner, t.verdictLine,
     ]);
     downloadCsv(
-      toCsv(["Sub-criterion", "Tested at", "Benchmark AFIs", "Patterns", "A caught", "A partial", "A missed", "A findings", "A NC", "A OFI", "A band est.", "B caught", "B partial", "B missed", "B findings", "B NC", "B OFI", "B band est.", "Winner", "Verdict"], rows),
+      toCsv(["Sub-criterion", "Run on (ISO)", "Run on", "Benchmark AFIs", "Patterns", "A caught", "A partial", "A missed", "A findings", "A NC", "A OFI", "A band est.", "B caught", "B partial", "B missed", "B findings", "B NC", "B OFI", "B band est.", "Winner", "Verdict"], rows),
       `gd4-a-vs-b-tests-${new Date().toISOString().slice(0, 10)}.csv`);
   }
 
@@ -381,7 +446,15 @@ export function AvsBTab() {
             {running ? "Running…" : saved ? "Re-run A vs B" : "Run A vs B"}
           </button>
           {Object.keys(tests).length > 0 && (
-            <button onClick={exportCsv} style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>Export CSV</button>
+            <>
+              <button onClick={exportCsv} style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>Export CSV</button>
+              <button
+                onClick={() => { if (confirm(`Clear all ${Object.keys(tests).length} A-vs-B test result(s)? This deletes only these measurement records — your real audit results are not affected. This cannot be undone.`)) clearAbTests(); }}
+                style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c" }}
+              >
+                Clear all results
+              </button>
+            </>
           )}
         </div>
         <div style={{ fontSize: 11, color: "#b45309", marginBottom: 6 }}>⚠ Real AI calls: cost ≈ two full runs. Tokens are logged in the AI Review Log as usual.</div>
@@ -390,7 +463,7 @@ export function AvsBTab() {
         {error && <div style={{ fontSize: 12, color: "#b91c1c" }}>{error}</div>}
       </Card>
 
-      {saved && <ABResult result={saved} />}
+      {saved && <ABResult result={saved} onDelete={() => { deleteAbTest(saved.subCriterionId); setSelectedId(""); }} />}
 
       {Object.values(tests).filter((t) => t.subCriterionId !== selectedId).map((t) => (
         <Card key={t.subCriterionId} style={{ padding: "10px 14px" }}>
@@ -398,9 +471,10 @@ export function AvsBTab() {
             <b style={{ fontSize: 12.5 }}>{t.subCriterionId}</b>
             <Pill s={t.winner === "A" || t.winner === "B" ? "good" : "neutral"}>{t.winner === "no-truth" ? "no truth" : t.winner === "tie" ? "tie" : `${t.winner} wins`}</Pill>
             <span style={{ fontSize: 12, color: "#475569", flex: 1 }}>{t.verdictLine.slice(0, 160)}{t.verdictLine.length > 160 ? "…" : ""}</span>
-            <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>{new Date(t.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+            <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>Run on {formatRunOn(t.runAt)}</span>
             <button onClick={() => setSelectedId(t.subCriterionId)} style={{ cursor: "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}>View</button>
             <button disabled={!!running} onClick={() => { setSelectedId(t.subCriterionId); runAB(t.subCriterionId); }} style={{ cursor: running ? "not-allowed" : "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #c7d2fe", background: "#eef2ff", color: "#4338ca", fontWeight: 600 }}>Re-run</button>
+            <button onClick={() => { if (confirm(`Delete the A-vs-B test for ${t.subCriterionId}? Only this measurement record is removed — audit results are untouched.`)) deleteAbTest(t.subCriterionId); }} title="Delete this test record" style={{ cursor: "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c" }}>Delete</button>
           </div>
         </Card>
       ))}
@@ -433,13 +507,15 @@ function PathColumn({ label, outcome, benchmarkCount }: { label: string; outcome
   );
 }
 
-function ABResult({ result }: { result: ABTestResult }) {
+function ABResult({ result, onDelete }: { result: ABTestResult; onDelete: () => void }) {
   const realAFIs = BENCHMARK_AFIS.filter((a) => a.subCriterion === result.subCriterionId && a.kind === "AFI");
+  const [drill, setDrill] = useState(false);
   return (
     <Card>
-      <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap", marginBottom: 6 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>A vs B — {result.subCriterionId}</h3>
-        <span style={{ fontSize: 11.5, color: "#94a3b8" }}>tested {new Date(result.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#334155", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 6, padding: "2px 9px" }}>Run on {formatRunOn(result.runAt)}</span>
+        <button onClick={onDelete} title="Delete this test record (scratch only — audit results untouched)" style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11.5, padding: "3px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 600 }}>Delete</button>
       </div>
       <div style={{ fontSize: 12.5, fontWeight: 600, color: "#1e293b", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", marginBottom: 10, lineHeight: 1.5 }}>
         {result.verdictLine}
@@ -463,6 +539,50 @@ function ABResult({ result }: { result: ABTestResult }) {
           )}
         </div>
       </div>
+      {(result.a.lines?.length || result.b.lines?.length) ? (
+        <div style={{ marginTop: 10 }}>
+          <button onClick={() => setDrill((d) => !d)} style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#4338ca", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 7, padding: "5px 11px" }}>
+            {drill ? "Hide per-line detail ▾" : "Show what each path actually raised, line by line ▸"}
+          </button>
+          {drill && <ABLineDetail result={result} />}
+        </div>
+      ) : null}
     </Card>
+  );
+}
+
+// Per requirement line: Option A's verdict+reasoning+evidence beside Option
+// B's, so the user sees exactly where and why the two paths diverged.
+function ABLineDetail({ result }: { result: ABTestResult }) {
+  const aByRef = new Map((result.a.lines ?? []).map((l) => [l.ref, l]));
+  const bByRef = new Map((result.b.lines ?? []).map((l) => [l.ref, l]));
+  const refs: { ref: string; text: string }[] = [];
+  const seen = new Set<string>();
+  for (const l of [...(result.a.lines ?? []), ...(result.b.lines ?? [])]) if (!seen.has(l.ref)) { seen.add(l.ref); refs.push({ ref: l.ref, text: l.text }); }
+  return (
+    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+      {refs.map(({ ref, text }) => {
+        const a = aByRef.get(ref);
+        const b = bByRef.get(ref);
+        const differ = a && b && a.status !== b.status;
+        return (
+          <div key={ref} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", background: differ ? "#fffbf5" : "#fff" }}>
+            <div style={{ fontSize: 11.5, fontWeight: 600, marginBottom: 6 }}>
+              <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#6b7280" }}>{ref}</span> {text.slice(0, 160)}{text.length > 160 ? "…" : ""}
+              {differ && <span style={{ marginLeft: 6, color: "#b45309", fontWeight: 700 }}>· paths differ</span>}
+            </div>
+            <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr" }}>
+              {([["Option A", a], ["Option B", b]] as const).map(([label, ln]) => (
+                <div key={label} style={{ border: "1px solid #f1f5f9", borderRadius: 6, padding: "6px 9px", background: "#f8fafc" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 3 }}>{label} — <span style={{ color: ln ? STATUS_COLOR[ln.status] ?? "#374151" : "#94a3b8" }}>{ln?.status ?? "no result"}</span></div>
+                  <div style={{ fontSize: 11.5, color: "#1e293b", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{ln?.note || "(no reasoning captured)"}</div>
+                  {ln?.evidence.length ? <div style={{ fontSize: 11, color: "#475569", marginTop: 5 }}><b>Evidence:</b> {ln.evidence.join(", ")}</div> : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }

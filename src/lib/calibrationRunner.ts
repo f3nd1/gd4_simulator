@@ -40,8 +40,9 @@ export type ScratchProgress = (stage: string) => void;
 export type ScratchRunOutput = {
   ok: boolean;
   error?: string;
-  // Per requirement line: normalised Met/Partial/Not met status.
-  lines: { ref: string; text: string; status: ScratchStatus; note: string }[];
+  // Per requirement line: normalised status + the engine's reasoning and the
+  // evidence (chunk file names / refs) it cited, so the UI can drill in.
+  lines: { ref: string; text: string; status: ScratchStatus; note: string; evidence: string[] }[];
   gapCount: number;
   byType: { NC: number; OFI: number; OBS: number };
   bandEstimate: number | null;
@@ -67,7 +68,7 @@ export function aiReady(): string | null {
 // "[CHUNK:Cnnn] --- path ---" text format the real runs feed the engines.
 // Uses (and fills) the workspace fileTextCache exactly like a normal run;
 // failed reads are skipped and reported, never fabricated.
-async function gatherText(folderLink: string | undefined, label: string, signal: AbortSignal, onProgress: ScratchProgress, chunkStart: { n: number }): Promise<{ text: string; files: number; failed: string[] }> {
+async function gatherText(folderLink: string | undefined, label: string, signal: AbortSignal, onProgress: ScratchProgress, chunkStart: { n: number }, chunkFiles: Record<string, string>): Promise<{ text: string; files: number; failed: string[] }> {
   const folderId = parseFolderId(folderLink || "");
   if (!folderId) return { text: "", files: 0, failed: [] };
   const token = useGoogleDriveStore.getState().getValidToken();
@@ -98,11 +99,13 @@ async function gatherText(folderLink: string | undefined, label: string, signal:
       }
     }
     if (!body) continue;
+    const fileName = file.path.split("/").pop() || file.path;
     const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
     for (let pi = 0; pi < totalParts; pi++) {
       const chunkId = `C${String(++chunkStart.n).padStart(3, "0")}`;
       const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
       parts.push(`[CHUNK:${chunkId}] --- ${file.path}${partLabel} ---\n${body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS)}`);
+      chunkFiles[chunkId] = fileName;
     }
   }
   return { text: parts.join("\n\n"), files: files.length, failed };
@@ -149,7 +152,8 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
     );
     if (requirements.length === 0) return fail("No requirement lines for this sub-criterion.");
     const chunkStart = { n: 0 };
-    const policy = await gatherText(folder.policyLink || folder.folderLink, "policy", signal, onProgress, chunkStart);
+    const chunkFiles: Record<string, string> = {};
+    const policy = await gatherText(folder.policyLink || folder.folderLink, "policy", signal, onProgress, chunkStart, chunkFiles);
     if (!policy.text) return fail("No readable Policy & Procedure text — link/check the policy folder first.");
     const settings = analysisSettings();
     onProgress("Option A — PPD requirements review…");
@@ -159,8 +163,9 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
     logRun("Calibration · Option A (PPD)", subCriterionId, `${ppd.rows.length} lines reviewed`, ppd.usage);
 
     const byRef = new Map(requirements.map((r) => [r.ref, r]));
+    const cite = (ids: string[] | undefined) => [...new Set((ids ?? []).map((id) => chunkFiles[id] ?? id))];
     let lines: ScratchRunOutput["lines"];
-    const evidence = await gatherText(folder.folderLink, "evidence", signal, onProgress, chunkStart);
+    const evidence = await gatherText(folder.folderLink, "evidence", signal, onProgress, chunkStart, chunkFiles);
     if (evidence.text) {
       onProgress("Option A — evidence assessment…");
       const inputs: EvidenceAssessmentInput[] = ppd.rows.map((r) => ({ ref: r.ref, requirementText: r.requirementText, ppdVerdict: r.verdict, ppdExtract: r.fullComment || r.shortComment, promises: r.promises }));
@@ -174,10 +179,10 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
         const status: ScratchStatus = e && !e.failed && (e.verdict === "Met" || e.verdict === "Partial" || e.verdict === "Not met")
           ? e.verdict
           : ppdVerdictToStatus(r.verdict);
-        return { ref: r.ref, text: byRef.get(r.ref)?.requirementText ?? r.requirementText, status, note: e?.comment || r.shortComment };
+        return { ref: r.ref, text: byRef.get(r.ref)?.requirementText ?? r.requirementText, status, note: e?.comment || r.fullComment || r.shortComment, evidence: cite([...(r.chunkIds ?? []), ...(e?.chunkIds ?? [])]) };
       });
     } else {
-      lines = ppd.rows.map((r) => ({ ref: r.ref, text: r.requirementText, status: ppdVerdictToStatus(r.verdict), note: r.shortComment }));
+      lines = ppd.rows.map((r) => ({ ref: r.ref, text: r.requirementText, status: ppdVerdictToStatus(r.verdict), note: r.fullComment || r.shortComment, evidence: cite(r.chunkIds) }));
     }
     const statuses = lines.map((l) => l.status);
     return { ok: true, lines, gapCount: countGaps(statuses), byType: countByType(statuses), bandEstimate: bandEstimate(statuses), digest: buildDigest(lines) };
@@ -198,8 +203,9 @@ export async function runScratchB(subCriterionId: string, signal: AbortSignal, o
     const points = items.flatMap((item) => item.flatAuditPoints ?? []);
     if (points.length === 0) return fail("No audit points for this sub-criterion.");
     const chunkStart = { n: 0 };
-    const policy = await gatherText(folder.policyLink || folder.folderLink, "policy", signal, onProgress, chunkStart);
-    const evidence = await gatherText(folder.folderLink !== folder.policyLink ? folder.folderLink : undefined, "evidence", signal, onProgress, chunkStart);
+    const chunkFiles: Record<string, string> = {};
+    const policy = await gatherText(folder.policyLink || folder.folderLink, "policy", signal, onProgress, chunkStart, chunkFiles);
+    const evidence = await gatherText(folder.folderLink !== folder.policyLink ? folder.folderLink : undefined, "evidence", signal, onProgress, chunkStart, chunkFiles);
     if (!policy.text && !evidence.text) return fail("No readable documents — link/check the folders first.");
     const settings = analysisSettings();
 
@@ -214,11 +220,13 @@ export async function runScratchB(subCriterionId: string, signal: AbortSignal, o
     const polByRef = new Map(pol.rows.map((r) => [r.ref, r]));
     const evByRef = new Map(ev.rows.map((r) => [r.ref, r]));
     const outByRef = new Map(out.rows.map((r) => [r.ref, r]));
+    const cite = (ids: string[]) => [...new Set(ids.map((id) => chunkFiles[id] ?? id))];
     const lines = points.map((p) => {
       const apsr = buildStagedApsr(polByRef.get(p.ref), evByRef.get(p.ref), outByRef.get(p.ref));
       const status = deriveApsrStatus(apsr);
       const note = [apsr.approach.note, apsr.processes.note].filter(Boolean).join(" | ");
-      return { ref: p.ref, text: p.text, status, note };
+      const evidence = cite([...(apsr.approach.sourceChunkIds ?? []), ...(apsr.processes.sourceChunkIds ?? []), ...(apsr.systemsOutcomes.sourceChunkIds ?? [])]);
+      return { ref: p.ref, text: p.text, status, note, evidence };
     });
     const statuses = lines.map((l) => l.status);
     return { ok: true, lines, gapCount: countGaps(statuses), byType: countByType(statuses), bandEstimate: bandEstimate(statuses), digest: buildDigest(lines) };

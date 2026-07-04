@@ -42,12 +42,17 @@ type CalibrationState = {
   // Called once per completed match-analysis sweep with the resulting totals.
   recordRun: (totals: Omit<CalibrationRunRecord, "runAt">) => void;
   // Consistency tab: latest repeatability test per sub-criterion (scratch —
-  // measurement results only, never audit data).
+  // measurement results only, never audit data). Delete/clear touch ONLY
+  // these scratch records, never the real audit stores.
   consistencyTests: Record<string, ConsistencyTestResult>;
   setConsistencyTest: (r: ConsistencyTestResult) => void;
+  deleteConsistencyTest: (subCriterionId: string) => void;
+  clearConsistencyTests: () => void;
   // A vs B tab: latest comparison per sub-criterion.
   abTests: Record<string, ABTestResult>;
   setAbTest: (r: ABTestResult) => void;
+  deleteAbTest: (subCriterionId: string) => void;
+  clearAbTests: () => void;
 };
 
 export const useCalibrationStore = create<CalibrationState>()(
@@ -73,8 +78,12 @@ export const useCalibrationStore = create<CalibrationState>()(
         }),
       consistencyTests: {},
       setConsistencyTest: (r) => set((s) => ({ consistencyTests: { ...s.consistencyTests, [r.subCriterionId]: r } })),
+      deleteConsistencyTest: (id) => set((s) => { const { [id]: _drop, ...rest } = s.consistencyTests; return { consistencyTests: rest }; }),
+      clearConsistencyTests: () => set({ consistencyTests: {} }),
       abTests: {},
       setAbTest: (r) => set((s) => ({ abTests: { ...s.abTests, [r.subCriterionId]: r } })),
+      deleteAbTest: (id) => set((s) => { const { [id]: _drop, ...rest } = s.abTests; return { abTests: rest }; }),
+      clearAbTests: () => set({ abTests: {} }),
     }),
     { name: "ucc-gd4-calibration:v1", storage: createJSONStorage(() => localStorage) }
   )

@@ -10,6 +10,13 @@
 
 import { coverageCap } from "./checklistBanding";
 
+// Single "Run on 04 Jul 2026, 14:30" formatter, used identically on both
+// tabs' result blocks and re-used (as ISO) in the CSV exports, so timestamps
+// read the same everywhere.
+export function formatRunOn(iso: string): string {
+  return new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 // Line status shared by both paths after normalisation (Option A's PPD
 // verdicts are mapped onto it; Option B's staged APSR already derives it).
 export type ScratchStatus = "Met" | "Partial" | "Not met";
@@ -51,10 +58,18 @@ export function bandEstimate(statuses: ScratchStatus[]): number | null {
 
 // ── Consistency (repeatability of one path) ─────────────────────────────
 
+// The underlying result behind ONE verdict: the reasoning/comment the engine
+// produced and the evidence it cited. Lets the user drill in to see WHY a
+// verdict was reached (and why two runs disagreed), not just the label.
+export type LineDetail = { note: string; evidence: string[] };
+
 // One requirement line across N repeat runs. verdicts[i] is run i's verdict
 // for this line, or null when that run failed / did not assess the line —
-// failures are carried honestly, never fabricated into a verdict.
-export type ConsistencyLine = { ref: string; text: string; verdicts: (string | null)[] };
+// failures are carried honestly, never fabricated into a verdict. details[i]
+// is the reasoning/evidence behind verdicts[i] (null when that run had no
+// result for this line). Kept parallel to `verdicts` so the scoring math
+// (which reads only `verdicts`) is unaffected.
+export type ConsistencyLine = { ref: string; text: string; verdicts: (string | null)[]; details?: (LineDetail | null)[] };
 
 export type ConsistencyTestResult = {
   subCriterionId: string;
@@ -112,6 +127,11 @@ export function consistencySummary(agreementPct: number | null, bands: (number |
 
 // ── A vs B (accuracy against the benchmark truth) ────────────────────────
 
+// One path's per-line result, kept so the user can drill into WHAT each path
+// actually raised (verdict + reasoning + evidence) and compare A against B
+// line by line.
+export type ABLine = { ref: string; text: string; status: string; note: string; evidence: string[] };
+
 export type ABPathOutcome = {
   ran: boolean;
   error?: string;
@@ -124,6 +144,7 @@ export type ABPathOutcome = {
   caught: number;
   partial: number;
   missed: number;
+  lines?: ABLine[];
 };
 
 export type ABTestResult = {
