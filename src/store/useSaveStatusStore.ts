@@ -7,7 +7,6 @@ export type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 export const useSaveStatusStore = create<{
   status: SaveStatus;
-  lastSavedAt: number | null;
   // Set when writing the local cache itself failed (e.g. QuotaExceededError).
   // Shown as a persistent non-blocking banner — unlike `status`, which only
   // reflects the remote sync.
@@ -19,10 +18,9 @@ export const useSaveStatusStore = create<{
   clearLocalSaveError: () => void;
 }>((set) => ({
   status: "idle",
-  lastSavedAt: null,
   localSaveError: null,
   markSaving: () => set({ status: "saving" }),
-  markSaved: () => set({ status: "saved", lastSavedAt: Date.now() }),
+  markSaved: () => set({ status: "saved" }),
   markError: () => set({ status: "error" }),
   markLocalSaveError: (message) => set({ localSaveError: message }),
   clearLocalSaveError: () => set({ localSaveError: null }),

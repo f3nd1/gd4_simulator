@@ -5,8 +5,6 @@ import { GD4_SUB_CRITERIA } from "./gd4Requirements";
 // official criterion/sub-criterion numbering and title so the folder
 // structure maps 1:1 onto the official GD4 criteria, not an invented
 // department-based grouping.
-export const FOLDER_STRUCTURE = GD4_SUB_CRITERIA.map((s) => `${s.id} ${s.title}`);
-
 export function seedFolders(): EvidenceFolder[] {
   return GD4_SUB_CRITERIA.map((s) => ({
     id: `FOLD-${s.id}`,

@@ -79,9 +79,6 @@ export type FindingDraftState = {
   // Discard a single draft.
   discardDraft: (subCriterionId: string, draftId: string) => void;
 
-  // Discard all pending/error drafts for a sub-criterion.
-  discardDrafts: (subCriterionId: string) => void;
-
   // Discard all pending/error drafts across all sub-criteria.
   discardAllDrafts: () => void;
 
@@ -107,7 +104,6 @@ export type FindingDraftState = {
     patch: Partial<Pick<GroupedFindingDraft, "title" | "observation" | "criteria" | "effect" | "rootCause" | "corrective" | "preventive" | "apsrBullets">>
   ) => void;
 
-  getDrafts: (subCriterionId: string) => GroupedFindingDraft[];
 };
 
 export const useFindingDraftStore = create<FindingDraftState>()(
@@ -116,8 +112,6 @@ export const useFindingDraftStore = create<FindingDraftState>()(
       draftsBySubCriterion: {},
       busy: false,
       generationProgress: null,
-
-      getDrafts: (subCriterionId) => get().draftsBySubCriterion[subCriterionId] ?? [],
 
       cancelGeneration: () => {
         _genAbort?.abort();
@@ -412,16 +406,6 @@ export const useFindingDraftStore = create<FindingDraftState>()(
           draftsBySubCriterion: {
             ...s.draftsBySubCriterion,
             [subCriterionId]: (s.draftsBySubCriterion[subCriterionId] ?? []).filter((d) => d.id !== draftId),
-          },
-        })),
-
-      discardDrafts: (subCriterionId) =>
-        set((s) => ({
-          draftsBySubCriterion: {
-            ...s.draftsBySubCriterion,
-            [subCriterionId]: (s.draftsBySubCriterion[subCriterionId] ?? []).filter(
-              (d) => d.status === "confirmed"
-            ),
           },
         })),
 

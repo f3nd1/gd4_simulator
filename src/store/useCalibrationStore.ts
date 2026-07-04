@@ -40,7 +40,6 @@ type CalibrationState = {
   setAiMatch: (afiId: string, status: MatchStatus, justification: string) => void;
   // Called once per completed match-analysis sweep with the resulting totals.
   recordRun: (totals: Omit<CalibrationRunRecord, "runAt">) => void;
-  clearMatches: () => void;
 };
 
 export const useCalibrationStore = create<CalibrationState>()(
@@ -64,7 +63,6 @@ export const useCalibrationStore = create<CalibrationState>()(
           const runAt = new Date().toISOString();
           return { lastRunAt: runAt, runHistory: [{ runAt, ...totals }, ...s.runHistory].slice(0, RUN_HISTORY_CAP) };
         }),
-      clearMatches: () => set({ matches: {} }),
     }),
     { name: "ucc-gd4-calibration:v1", storage: createJSONStorage(() => localStorage) }
   )

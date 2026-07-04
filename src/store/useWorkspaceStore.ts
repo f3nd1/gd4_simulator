@@ -679,8 +679,6 @@ export type WorkspaceState = {
   incrementMemoryUsage: (id: string) => void;
   updateMemoryEffectiveness: (id: string, score: number) => void;
 
-  setBusy: (id: string | null) => void;
-
   // Running markdown log of every folder audit in this workspace.
   // Auto-updated after each auditFolderContents call; fed into subsequent AI
   // calls so the model can flag recurring cross-criterion gaps.
@@ -5119,8 +5117,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       updateMemoryEffectiveness: (id, score) =>
         set((s) => ({ calibrationMemories: s.calibrationMemories.map((m) => m.id === id ? { ...m, effectivenessScore: score } : m) })),
-
-      setBusy: (id) => set({ busy: id }),
     }),
     // Bumped to v2 so existing sessions pick up the new blank-by-default
     // evidence baseline (previously seeded with sample ratings) instead of

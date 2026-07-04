@@ -88,8 +88,8 @@ function tiersFrom(t: { provisional: number; fourYear: number; star: number }) {
 }
 
 // Derive the achieved tier index from the scoring engine's award string so it
-// can't diverge from the actual score logic.
-export function attainmentFromAward(award: string): { index: number; capped: boolean } {
+// can't diverge from the actual score logic. Internal to this module.
+function attainmentFromAward(award: string): { index: number; capped: boolean } {
   // Gate failure now denies the tier outright (scoring.ts): the award IS
   // "Not certified", with capped=true so the ladder explains why.
   if (award.includes("critical gate not met")) return { index: 0, capped: true };

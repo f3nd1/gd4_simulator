@@ -73,7 +73,6 @@ export type ChecklistModuleState = {
   discardGenerated: (itemId: string) => void;
 
   addSpecificLine: (itemId: string, text: string, clause?: string) => void;
-  updateSpecificLine: (itemId: string, lineId: string, patch: Partial<SpecificChecklistLine>) => void;
   removeSpecificLine: (itemId: string, lineId: string) => void;
   clearSpecificLines: (itemId: string) => void;
   setSpecificStatus: (itemId: string, lineId: string, status: SpecificLineStatus) => void;
@@ -282,8 +281,6 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           }))
         );
       },
-
-      updateSpecificLine: (itemId, lineId, patch) => set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, ...patch })))),
 
       removeSpecificLine: (itemId, lineId) => set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: e.specific.filter((l) => l.id !== lineId) }))),
 

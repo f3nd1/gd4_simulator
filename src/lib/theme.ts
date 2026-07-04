@@ -34,7 +34,3 @@ export function toneFor(status: string): Tone {
 export function bandTone(b: number): Tone {
   return b >= 4 ? "good" : b === 3 ? "progress" : b === 2 ? "medium" : "critical";
 }
-
-export function gateTone(g: string): Tone {
-  return g === "Pass" ? "good" : g === "At risk" ? "medium" : "critical";
-}

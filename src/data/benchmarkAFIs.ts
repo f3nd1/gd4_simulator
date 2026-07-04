@@ -644,10 +644,6 @@ export const BENCHMARK_AFIS: BenchmarkAFI[] = [
   },
 ];
 
-export function benchmarkForSubCriterion(subCriterionId: string): BenchmarkAFI[] {
-  return BENCHMARK_AFIS.filter((a) => a.subCriterion === subCriterionId);
-}
-
 // Sub-criteria that appear anywhere in the benchmark — drives the page's
 // selector and the over-rating sweep.
 export function benchmarkSubCriteria(): string[] {
