@@ -55,6 +55,7 @@ import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverage
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
 import { checkAuditorForRun } from "../lib/auditorGuard";
+import { checkDriveForRun, type DriveRunBlock } from "../lib/driveGuard";
 import { DEFAULT_SHOW_DEVELOPER_TOOLS } from "../nav";
 
 // Sequential auto-run queue for the review panel (auto modes). Findings are
@@ -655,6 +656,13 @@ export type WorkspaceState = {
   // when a run starts successfully or the auditor selection changes. Pages
   // render it as a blocking banner next to their run buttons.
   auditBlockedReason: string | null;
+
+  // Why the last attempted run was refused for a Drive reason (no folder link,
+  // or not connected to Google Drive). Set by the same pre-run guard; the
+  // Evidence Folder page renders it as a banner with a "Connect to Google
+  // Drive" button when canConnect. Cleared when a run starts or Drive connects.
+  driveBlockedReason: (DriveRunBlock & { subCriterionId?: string }) | null;
+  setDriveBlockedReason: (reason: (DriveRunBlock & { subCriterionId?: string }) | null) => void;
 };
 
 // ---- Audit Journal helpers -----------------------------------------------
@@ -797,6 +805,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       restoreLog: [],
       activeAuditorId: null,
       auditBlockedReason: null,
+      driveBlockedReason: null,
+      setDriveBlockedReason: (reason) => set({ driveBlockedReason: reason }),
 
       // Changing the selection clears any "run blocked" banner — the user has
       // acted on exactly what the message asked for.
@@ -931,8 +941,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
           const policyId = parseFolderId(folder.policyLink) || parseFolderId(folder.folderLink);
           const token = useGoogleDriveStore.getState().getValidToken();
-          if (!policyId) { finish(null, false, "No Policy & Procedure folder linked."); return; }
-          if (!token) { finish(null, false, "Not connected to Google Drive."); return; }
+          // Drive guard: block with a clear message + Connect action (via the
+          // Evidence Folder banner) instead of failing silently — Option A used
+          // to just stop here with no visible error.
+          const drive = checkDriveForRun(!!policyId, !!token);
+          if (drive) { set({ driveBlockedReason: { ...drive, subCriterionId } }); finish(null, false, drive.message); return; }
+          set({ driveBlockedReason: null });
+          if (!token || !policyId) return; // unreachable past the guard; narrows for TS
 
           const allFiles = await listFolderFilesRecursive(policyId, token, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS));
           // If policyLink is a dedicated folder, every file in it is policy;
@@ -1198,8 +1213,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
           const evidenceId = parseFolderId(folder.folderLink) || parseFolderId(folder.policyLink);
           const token = useGoogleDriveStore.getState().getValidToken();
-          if (!evidenceId) { finish(null, false, "No Actual Evidence folder linked."); return; }
-          if (!token) { finish(null, false, "Not connected to Google Drive."); return; }
+          const drive = checkDriveForRun(!!evidenceId, !!token);
+          if (drive) { set({ driveBlockedReason: { ...drive, subCriterionId } }); finish(null, false, drive.message); return; }
+          set({ driveBlockedReason: null });
+          if (!token || !evidenceId) return; // unreachable past the guard; narrows for TS
 
           setEvProgress("Reading the Actual Evidence folder…", 3);
           const allFiles = await listFolderFilesRecursive(evidenceId, token, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS));
@@ -2488,16 +2505,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const evidenceId = parseFolderId(folder.folderLink);
         const policyId = parseFolderId(folder.policyLink);
         const token = useGoogleDriveStore.getState().getValidToken();
-        if (!evidenceId && !policyId) {
+        const drive = checkDriveForRun(!!(evidenceId || policyId), !!token);
+        if (drive) {
           auditHadError = true;
-          finish("No Drive folder linked. Add a Policy & Procedure and/or Actual Evidence folder link first.", false);
+          set({ driveBlockedReason: { ...drive, subCriterionId: folder.subCriterionId } });
+          finish(drive.message, false);
           return;
         }
-        if (!token) {
-          auditHadError = true;
-          finish("Not connected to Google Drive. Connect your Google account in Settings, then run the audit again.", false);
-          return;
-        }
+        set({ driveBlockedReason: null });
+        if (!token) return; // unreachable past the guard; narrows token for TS
 
         const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === folder.subCriterionId);
         if (items.length === 0) {
@@ -3650,8 +3666,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const evidenceId = parseFolderId(folder.folderLink);
         const policyId = parseFolderId(folder.policyLink);
         const token = useGoogleDriveStore.getState().getValidToken();
-        if (!evidenceId && !policyId) { auditHadError = true; finish("No Drive folder linked.", false); return; }
-        if (!token) { auditHadError = true; finish("Not connected to Google Drive.", false); return; }
+        const drive = checkDriveForRun(!!(evidenceId || policyId), !!token);
+        if (drive) {
+          auditHadError = true;
+          set({ driveBlockedReason: { ...drive, subCriterionId: folder.subCriterionId } });
+          finish(drive.message, false);
+          return;
+        }
+        set({ driveBlockedReason: null });
+        if (!token) return; // unreachable past the guard; narrows token for TS
 
         const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === folder.subCriterionId);
         if (items.length === 0) { auditHadError = true; finish("No GD4 items map to this sub-criterion.", false); return; }
@@ -4400,6 +4423,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set({ bulkAuditStatus: null });
           return;
         }
+        // One up-front connection check for the whole run — otherwise every
+        // folder would fail individually with the same not-connected message.
+        const bulkToken = useGoogleDriveStore.getState().getValidToken();
+        const bulkDrive = checkDriveForRun(true, !!bulkToken);
+        if (bulkDrive) { set({ driveBlockedReason: bulkDrive, bulkAuditStatus: null }); return; }
+        set({ driveBlockedReason: null });
         // Read the school-wide Additional-info folder ONCE and reuse it for
         // every sub-criterion (vs re-reading it 24×). "" means "no context /
         // don't read again" to each auditFolderContents call.

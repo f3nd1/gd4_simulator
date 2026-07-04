@@ -14,6 +14,8 @@ import type { FullAuditEntry } from "../lib/fullAudit";
 import { NextStepBanner, Walkthrough, WalkthroughLink, useTip } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 import { runAuditorDisplay, panelUnderMinNotice, MSG_NO_AUDITORS_EXIST, AUDITOR_CREATION_PATH } from "../lib/auditorGuard";
+import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
+import { DRIVE_CONNECT_PATH, driveReadFailureMessage } from "../lib/driveGuard";
 
 const SUMMARY_CAP = 320;
 
@@ -862,8 +864,11 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
   let failedStep: string;
   let guidance: string;
   if (filesFound === 0 && filesRead === 0) {
-    failedStep = "Connecting to Google Drive";
-    guidance = "Check that your Google Drive is still connected (Settings → Google Drive) and that the folder link is correct. If the folder is in a Shared Drive, make sure your Google account has at least Viewer access.";
+    // The pre-run guard already blocks the not-connected case, so reaching here
+    // means Drive IS connected but the folder couldn't be read (Fix 5): don't
+    // tell the user to connect something already connected.
+    failedStep = "Reading the Drive folder";
+    guidance = driveReadFailureMessage();
   } else if (filesRead === 0 || (p.filesTotal != null && filesRead < p.filesTotal)) {
     failedStep = "Reading evidence files";
     guidance = "One or more files could not be read. Password-protected PDFs and unsupported file types are skipped automatically — this error usually means a network issue or an unusually large file. Try running the audit again.";
@@ -1728,6 +1733,11 @@ export function EvidenceFolder() {
   const effectiveAuditor =
     auditors.find((a) => a.id === activeAuditorId) || auditors.find((a) => a.role === "Audit Lead") || auditors[0];
   const auditBlockedReason = useWorkspaceStore((s) => s.auditBlockedReason);
+  const driveBlockedReason = useWorkspaceStore((s) => s.driveBlockedReason);
+  const setDriveBlockedReason = useWorkspaceStore((s) => s.setDriveBlockedReason);
+  const driveToken = useGoogleDriveStore((s) => s.accessToken);
+  const driveConnecting = useGoogleDriveStore((s) => s.connecting);
+  const driveClientId = useGoogleDriveStore((s) => s.clientId);
   const reviewPanelMode = useWorkspaceStore((s) => s.reviewPanelMode);
   const reviewPanelAuditorIds = useWorkspaceStore((s) => s.reviewPanelAuditorIds);
   const auditorDisplay = runAuditorDisplay(auditors, activeAuditorId);
@@ -1737,6 +1747,35 @@ export function EvidenceFolder() {
   const [searchParams] = useSearchParams();
   const focusSub = searchParams.get("sub");
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // Once a Drive token arrives, clear any "not connected" block so the banner
+  // and per-row status flip to Connected without a reload (Fix 1).
+  useEffect(() => {
+    if (driveToken && driveBlockedReason?.reason === "not-connected") setDriveBlockedReason(null);
+  }, [driveToken, driveBlockedReason, setDriveBlockedReason]);
+
+  // Shared Connect action for every "Connect to Google Drive" affordance. If no
+  // Client ID is configured yet, connect() can't run — send the user to
+  // Settings where they set it. Otherwise kick off the OAuth token request.
+  const connectDrive = () => {
+    if (!driveClientId) { navigate(DRIVE_CONNECT_PATH); return; }
+    useGoogleDriveStore.getState().connect().catch(() => {/* lastError shown in Settings */});
+  };
+  const ConnectDriveButton = ({ compact }: { compact?: boolean }) => (
+    <button
+      type="button"
+      onClick={connectDrive}
+      disabled={driveConnecting}
+      style={{
+        fontSize: compact ? 11 : 12, fontWeight: 700, color: "#fff",
+        background: driveConnecting ? "#94a3b8" : "#2563eb", border: "none",
+        borderRadius: 6, padding: compact ? "3px 9px" : "5px 12px",
+        cursor: driveConnecting ? "default" : "pointer", whiteSpace: "nowrap",
+      }}
+    >
+      {driveConnecting ? "Connecting…" : "Connect to Google Drive"}
+    </button>
+  );
   // Card chip-to-editor toggles: Owner/Status render as compact chips and
   // expand to their dropdowns only when clicked; the Drive link inputs show
   // only while a card's links are being edited.
@@ -2040,6 +2079,18 @@ export function EvidenceFolder() {
         </div>
       )}
 
+      {/* Drive-connection guard — a run was refused because the folder isn't
+          connected (or nothing is linked). Distinct from a genuine read
+          failure, which surfaces on the row's audit result. Offers Connect
+          inline when connecting would fix it (Fixes 2-5). */}
+      {driveBlockedReason && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 8, fontSize: 12.5, color: "#92600a", fontWeight: 600 }}>
+          <span aria-hidden>🔌</span>
+          <span style={{ flex: 1, minWidth: 240 }}>{driveBlockedReason.message}</span>
+          {driveBlockedReason.canConnect && <ConnectDriveButton />}
+        </div>
+      )}
+
       {/* Auditor + scope selectors */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10, padding: "8px 10px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
         <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.3 }}>Run audit as</span>
@@ -2154,14 +2205,21 @@ export function EvidenceFolder() {
             const status = kind === "policy" ? f.policyAccessStatus : f.accessCheckStatus;
             const connected = status === "Connected";
             const label = kind === "policy" ? "Policy" : "Evidence";
+            // A link exists but Google Drive isn't connected at all → offer to
+            // connect right here (Fix 1). Once a token arrives the chip status
+            // and this button update on their own.
+            const showConnect = !!link && !driveToken;
             return (
-              <button
-                onClick={() => toggleEditingLinks(f.id)}
-                title={tip(`${label} folder: ${link ? (connected ? "connected" : "linked, access not confirmed") : "no Drive link yet"}. Click to ${link ? "edit" : "add"} the link.`)}
-                style={{ ...chipBtn, color: connected ? TONE.good.fg : link ? TONE.medium.fg : TONE.neutral.fg, background: connected ? TONE.good.bg : link ? TONE.medium.bg : TONE.neutral.bg, border: "none" }}
-              >
-                {label}: {connected ? "Connected" : link ? "Linked" : "Not linked"}
-              </button>
+              <span style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
+                <button
+                  onClick={() => toggleEditingLinks(f.id)}
+                  title={tip(`${label} folder: ${link ? (driveToken ? (connected ? "connected" : "linked, access not confirmed") : "linked, but Google Drive is not connected") : "no Drive link yet"}. Click to ${link ? "edit" : "add"} the link.`)}
+                  style={{ ...chipBtn, color: connected ? TONE.good.fg : link ? TONE.medium.fg : TONE.neutral.fg, background: connected ? TONE.good.bg : link ? TONE.medium.bg : TONE.neutral.bg, border: "none" }}
+                >
+                  {label}: {!link ? "Not linked" : !driveToken ? "Not connected" : connected ? "Connected" : "Linked"}
+                </button>
+                {showConnect && <ConnectDriveButton compact />}
+              </span>
             );
           };
           const primaryStyle: React.CSSProperties = { cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 10px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", textDecoration: "none", display: "inline-block", width: 128, maxWidth: "100%", boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
