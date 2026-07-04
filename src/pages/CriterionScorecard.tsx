@@ -7,10 +7,23 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { bandTone, BLUE } from "../lib/theme";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
+import { buildProvenance, provenanceLine } from "../lib/provenance";
 
 export function CriterionScorecard() {
   const scored = useScored();
   const reviewer = useWorkspaceStore((s) => s.reviewer);
+  const folders = useWorkspaceStore((s) => s.folders);
+  const aiReviewLog = useWorkspaceStore((s) => s.aiReviewLog);
+  // Folder audit stamp per sub-criterion, so each row can say when (and how)
+  // its item was last audited instead of presenting an unqualified band.
+  const folderBySubCrit = new Map(folders.map((f) => [f.subCriterionId, f]));
+  const stampFor = (itemId: string) => {
+    const sub = itemId.split(".").slice(0, 2).join(".");
+    const f = folderBySubCrit.get(sub);
+    if (!f?.lastAuditAt) return null;
+    const when = new Date(f.lastAuditAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+    return `${when}${f.lastAuditLive === false ? " · offline estimate" : ""}`;
+  };
   const justify = useWorkspaceStore((s) => s.justify);
   const setReviewerScore = useWorkspaceStore((s) => s.setReviewerScore);
   const setJustify = useWorkspaceStore((s) => s.setJustify);
@@ -25,6 +38,11 @@ export function CriterionScorecard() {
       <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
         AI suggests, you may set a reviewer score, then confirm. Confirming a score that differs from AI by 5 or more, or upgrading a gate item, requires a justification.
       </p>
+      {/* Provenance strip — the screenshot-able answer to "what was assessed,
+          when, by which model": coverage, audit-date range, offline count. */}
+      <div style={{ fontSize: 11.5, color: "#475569", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 10px", marginBottom: 10 }}>
+        <b>Coverage:</b> {provenanceLine(buildProvenance(scored.items, folders, aiReviewLog.map((e) => e.model)))}
+      </div>
       <div style={{ fontSize: 12, color: BLUE, background: "#eaeef6", borderRadius: 8, padding: "8px 11px", marginBottom: 12 }}>
         Items marked <Pill s="progress">via Checklist</Pill> take their band from the <Link to="/sub-checklist">Sub-Criterion Checklist</Link>,
         which is the source of truth for scoring. For those items the AI/reviewer/confirmed columns are kept for the record but do not change the band.
@@ -66,6 +84,11 @@ export function CriterionScorecard() {
                   <td>
                     {it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}
                     {it.checklistOverride && <Pill s="progress">via Checklist</Pill>}
+                    {stampFor(it.id) && (
+                      <div style={{ fontSize: 10, color: stampFor(it.id)!.includes("offline") ? "#b45309" : "#94a3b8", marginTop: 2, whiteSpace: "nowrap" }}>
+                        audited {stampFor(it.id)}
+                      </div>
+                    )}
                   </td>
                   <td>
                     {needJ && it.conf == null && (

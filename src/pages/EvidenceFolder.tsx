@@ -2604,6 +2604,12 @@ export function EvidenceFolder() {
                       {f.lastAuditAuditor && <span style={{ fontSize: 11.5, color: "#374151" }}><span style={{ color: "#6b7280" }}>Auditor:</span> <b>{f.lastAuditAuditor}</b></span>}
                       {f.lastAuditAt && <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>Audited {new Date(f.lastAuditAt).toLocaleString()}</span>}
                     </div>
+                    {/* The summary below (incl. its Band lines) is a SNAPSHOT
+                        from this run — checklist edits made since can change
+                        the live band shown on the Scorecard. */}
+                    <div style={{ fontSize: 10.5, color: "#64748b", fontStyle: "italic", marginBottom: 6 }}>
+                      Snapshot as at this run — later checklist edits can change the current bands (see Scorecard).
+                    </div>
                     <div style={{ color: "#334155", lineHeight: 1.55, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
                       {f.lastAuditSummary.length > SUMMARY_CAP && !expanded[f.id]
                         ? `${f.lastAuditSummary.slice(0, SUMMARY_CAP)}…`

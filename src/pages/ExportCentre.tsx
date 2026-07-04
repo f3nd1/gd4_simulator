@@ -7,6 +7,10 @@ import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 import { resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
+import { buildFindingsRegisterCsv, downloadCsv } from "../lib/auditCsvExport";
+import { buildProvenance, provenanceLine } from "../lib/provenance";
+import { buildBoardSummaryMd } from "../lib/boardSummary";
+import { buildQaAppendixMd } from "../lib/qaAppendix";
 
 // The same NC/OFI/OBS + Major/Minor label the register and QA/AFI screens
 // show — exports must never contradict the screen (raw f.type/f.severity
@@ -23,9 +27,29 @@ export function ExportCentre() {
   const closures = useWorkspaceStore((s) => s.closures);
   const exportLog = useWorkspaceStore((s) => s.exportLog);
   const addExportLogEntry = useWorkspaceStore((s) => s.addExportLogEntry);
+  const folders = useWorkspaceStore((s) => s.folders);
+  const aiReviewLog = useWorkspaceStore((s) => s.aiReviewLog);
+  const humanDecisionLog = useWorkspaceStore((s) => s.humanDecisionLog);
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
   const scored = useScored();
   const findings = useAllFindings();
+  // What / when / which model / what coverage — stamped on every export.
+  const provenance = useMemo(
+    () => buildProvenance(scored.items, folders, aiReviewLog.map((e) => e.model)),
+    [scored.items, folders, aiReviewLog],
+  );
+  const isClosed = (id: string) => (closures[id]?.human || "") === "Accepted";
+
+  function downloadMd(md: string, filename: string) {
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    addExportLogEntry({ id: `EXP-${Date.now()}`, auditCycleId: cycle.id, exportName: filename, format: "Markdown", exportedAt: new Date().toLocaleString(), exportedBy: cycle.owner });
+  }
 
   // Items with band ≥ 1 via checklist but NO evidence attached to any specific
   // line — scored but completely unverifiable. These must be flagged in exports.
@@ -41,7 +65,7 @@ export function ExportCentre() {
   }, [scored.items, checklistEntries]);
 
   function exportPack() {
-    let md = `# Management Review Pack — ${cycle.name}\n\n${cycle.periodStart} to ${cycle.periodEnd} · ${cycle.version} · ${cycle.status}\n\n`;
+    let md = `# Management Review Pack — ${cycle.name}\n\n${cycle.periodStart} to ${cycle.periodEnd} · ${cycle.version} · ${cycle.status}\n\n**Assessment coverage:** ${provenanceLine(provenance)}\n\n`;
     if (zeroEvidenceItems.length > 0) {
       md += `## ⚠ WARNING — Unverified scored items\n\n**${zeroEvidenceItems.length} sub-criterion/criteria are scored via the checklist but have NO evidence attached to any specific line: ${zeroEvidenceItems.join(", ")}.**\n\nBands for these items are based solely on self-reported checklist status with no supporting documents. EduTrust assessors will not accept these scores without evidence. Attach evidence before submitting.\n\n`;
     }
@@ -54,47 +78,13 @@ export function ExportCentre() {
         .join("\n") +
       "\n\n";
     md += `_Internal simulation. Band over 5 times criterion points. Not an official SSG result._\n`;
-    const blob = new Blob([md], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "GD4_Management_Pack.md";
-    a.click();
-    URL.revokeObjectURL(url);
-    addExportLogEntry({
-      id: `EXP-${Date.now()}`,
-      auditCycleId: cycle.id,
-      exportName: "GD4_Management_Pack.md",
-      format: "Markdown",
-      exportedAt: new Date().toLocaleString(),
-      exportedBy: cycle.owner,
-    });
+    downloadMd(md, "GD4_Management_Pack.md");
   }
 
-  function csvCell(v: string) {
-    return `"${v.replace(/"/g, '""')}"`;
-  }
-
+  // Full-fidelity register: classification + audit trail + closure narrative,
+  // through the shared CSV helpers (UTF-8 BOM, CRLF) so Excel renders it.
   function exportFindingsCsv() {
-    const header = ["ID", "GD4 item", "Issue", "Type", "Severity", "Owner", "Due date", "Status"];
-    const rows = findings.map((f) => [
-      f.id,
-      f.gd4ItemId,
-      f.issue,
-      resolveFindingType(f),
-      resolveNcSeverity(f) ?? "—",
-      f.owner,
-      f.dueDate,
-      (closures[f.id]?.human || "") === "Accepted" ? "Closed" : "Open",
-    ]);
-    const csv = [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "GD4_Findings.csv";
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(buildFindingsRegisterCsv(findings, closures), "GD4_Findings.csv");
     addExportLogEntry({
       id: `EXP-${Date.now()}`,
       auditCycleId: cycle.id,
@@ -103,6 +93,38 @@ export function ExportCentre() {
       exportedAt: new Date().toLocaleString(),
       exportedBy: cycle.owner,
     });
+  }
+
+  // One-page Board/Chairman readiness summary.
+  function exportBoardSummary() {
+    const md = buildBoardSummaryMd({
+      cycleName: cycle.name || "GD4 audit cycle",
+      periodStart: cycle.periodStart,
+      periodEnd: cycle.periodEnd,
+      generatedAt: new Date(),
+      total: scored.total,
+      award: scored.award,
+      gatePass: scored.gatePass,
+      gateFailIds: scored.gateFail.map((g) => g.id),
+      crits: scored.crits,
+      findings,
+      isClosed,
+      provenance,
+    });
+    downloadMd(md, "GD4_Board_Summary.md");
+  }
+
+  // Internal-QA appendix: human oversight + AI run log + closure evidence.
+  function exportQaAppendix() {
+    const md = buildQaAppendixMd({
+      cycleName: cycle.name || "GD4 audit cycle",
+      generatedAt: new Date(),
+      humanDecisionLog,
+      aiReviewLog,
+      findings,
+      closures,
+    });
+    downloadMd(md, "GD4_Internal_QA_Appendix.md");
   }
 
   return (
@@ -128,6 +150,23 @@ export function ExportCentre() {
           >
             Export findings register (CSV)
           </button>
+          <button
+            onClick={exportBoardSummary}
+            title="One page for the Board/Chairman: score, award, gates, criterion bands, top risks, coverage"
+            style={{ cursor: "pointer", border: "1px solid #4338ca", background: "#eef2ff", color: "#3730a3", fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
+          >
+            Board summary (1 page)
+          </button>
+          <button
+            onClick={exportQaAppendix}
+            title="Evidence of internal QA: human oversight decisions, AI run log, and finding closures with evidence"
+            style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
+          >
+            Internal QA appendix
+          </button>
+        </div>
+        <div style={{ fontSize: 11.5, color: "#475569", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 10px", marginTop: 10 }}>
+          <b>Coverage:</b> {provenanceLine(provenance)}
         </div>
         {zeroEvidenceItems.length > 0 && (
           <div style={{ background: "#fff7ed", border: "1px solid #f97316", borderRadius: 8, padding: "10px 14px", marginTop: 12 }}>

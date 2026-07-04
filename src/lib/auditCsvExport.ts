@@ -10,7 +10,7 @@ export function csvCell(value: unknown): string {
   return s;
 }
 
-function toCsv(headers: string[], rows: unknown[][]): string {
+export function toCsv(headers: string[], rows: unknown[][]): string {
   const lines = [headers.map(csvCell).join(",")];
   for (const row of rows) {
     lines.push(row.map(csvCell).join(","));
@@ -162,4 +162,46 @@ export function progressToRunRecord(p: {
     errorMessage: p.errorMessage,
     folderWarnings: p.folderWarnings,
   };
+}
+
+// ── Findings register CSV ────────────────────────────────────────────────────
+// Full-fidelity export: classification as shown on screen, PLUS the audit
+// trail (source, run id, created) and the closure narrative — an exported
+// register must be able to stand alone as a CAR tracking sheet.
+import type { Finding } from "../types";
+import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
+
+export type FindingClosureLite = { root?: string; corr?: string; prev?: string; evid?: string; human?: "" | "Accepted" };
+
+export function buildFindingsRegisterCsv(
+  findings: Finding[],
+  closures: Record<string, FindingClosureLite>
+): string {
+  const headers = [
+    "ID", "GD4 item", "Issue", "Type", "NC severity", "Risk category",
+    "Owner", "Due date", "Status", "Source", "Audit run", "Created at",
+    "Root cause", "Corrective action", "Preventive action", "Closure evidence",
+  ];
+  const rows = findings.map((f) => {
+    const c = closures[f.id] ?? {};
+    return [
+      f.id,
+      f.gd4ItemId,
+      f.issue,
+      resolveFindingType(f),
+      resolveNcSeverity(f) ?? "",
+      f.riskCategory ?? "",
+      f.owner,
+      f.dueDate,
+      c.human === "Accepted" ? "Closed" : "Open",
+      f.source ?? "",
+      f.auditRunId ?? f.createdFromAuditRunId ?? "",
+      f.createdAt ?? "",
+      c.root ?? f.rootCause ?? "",
+      c.corr ?? f.corrective ?? "",
+      c.prev ?? f.preventive ?? "",
+      c.evid ?? "",
+    ];
+  });
+  return toCsv(headers, rows);
 }

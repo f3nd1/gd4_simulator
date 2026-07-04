@@ -180,6 +180,11 @@ export function EvidenceIntelligence() {
           {review && (
             <div style={{ marginBottom: 12, background: TONE.progress.bg, borderRadius: 8, padding: "9px 11px", fontSize: 12.5 }}>
               <Pill s={review.live ? "progress" : "medium"}>{review.live ? "AI" : "Offline estimate"}</Pill>{" "}
+              {/* The verdict caches the band it reviewed — flag it once the live
+                  band moves so a stale narrative never reads as current. */}
+              {item && review.band !== item.band && (
+                <Pill s="medium">outdated — band is now {item.band}, reviewed at Band {review.band}</Pill>
+              )}{" "}
               <b>{review.by} · Band {review.band} ({review.confidence}):</b> {review.justification} <i>Higher band: {review.higherBand}</i>
             </div>
           )}

@@ -15,6 +15,7 @@ import { Pill } from "../components/ui/Pill";
 import { Gauge, HBars, VBars, BAND_COLOR, AttainmentLadder } from "../components/ui/charts";
 import { GOLD, INK, bandTone } from "../lib/theme";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
+import { buildProvenance, provenanceLine } from "../lib/provenance";
 
 const SEV_TONE: Record<string, string> = { Critical: "critical", High: "critical", Medium: "medium", Low: "progress", Major: "critical", Minor: "medium" };
 
@@ -24,6 +25,7 @@ export function FinalReport() {
   const findings = useAllFindings();
   const folders = useWorkspaceStore((s) => s.folders);
   const closures = useWorkspaceStore((s) => s.closures);
+  const aiReviewLog = useWorkspaceStore((s) => s.aiReviewLog);
   const cycle = useWorkspaceStore((s) => s.cycle);
   const schoolContext = useWorkspaceStore((s) => s.schoolContext);
   const aiSettings = useAISettingsStore();
@@ -116,6 +118,14 @@ export function FinalReport() {
             <h2 style={{ margin: "2px 0", fontSize: 20 }}>{cycle.name || "GD4 Audit"}</h2>
             <div style={{ fontSize: 12, color: "#aeb8c7" }}>
               {cycle.periodStart} to {cycle.periodEnd} · {cycle.version} · {cycle.status} · owner {cycle.owner}
+            </div>
+            {/* Provenance — what a sceptical reader (or a printed copy) needs:
+                coverage, audit dates, offline count, model, auditors, and when
+                this view was generated. */}
+            <div style={{ fontSize: 11.5, color: "#cbd5e1", marginTop: 5 }}>
+              {provenanceLine(buildProvenance(scored.items, folders, aiReviewLog.map((e) => e.model)))}
+              {" · generated "}
+              {new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
             </div>
           </div>
           <div className="no-print" style={{ display: "flex", gap: 8 }}>
