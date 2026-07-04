@@ -10,12 +10,11 @@ import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { BENCHMARK_AFIS } from "../data/benchmarkAFIs";
 import { useRuleTuningStore } from "../store/useRuleTuningStore";
-import { useCalibrationStore } from "../store/useCalibrationStore";
 import { foldersConnected, aiReady, runScratch, judgeVsBenchmark } from "../lib/calibrationRunner";
 import { consistencyAgreement } from "../lib/calibrationTesting";
 import {
   CRITERION_IDS, CRITERION_LABELS, buildRuleInjection, scoreCompareText, isWorseThanChampion,
-  RULE_OVERFITTING_CAUTION, criterionOf, type RuleContent, type RuleVersion,
+  RULE_OVERFITTING_CAUTION, type RuleContent, type RuleVersion,
 } from "../lib/ruleTuning";
 
 const TA: React.CSSProperties = { width: "100%", minHeight: 80, fontSize: 12.5, padding: "7px 9px", border: "1px solid #cbd5e1", borderRadius: 7, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 };
