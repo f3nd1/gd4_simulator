@@ -92,6 +92,18 @@ export type PanelAuditorReview = {
   error?: string;
 };
 
+// One AI call the panel made, captured so the AI Review Log can show its REAL
+// input prompt and output separately — per-auditor Round 1, each rebuttal, and
+// the chair synthesis. `kind` labels the sub-call for grouping.
+export type PanelCallLog = {
+  kind: "round1" | "rebuttal" | "synthesis";
+  label: string;      // e.g. "Panel · Rachel Tan · Strict Auditor · Round 1"
+  promptSent: string; // the actual model input: SYSTEM + USER
+  output: string;     // the model's raw response
+  verdict: string;    // short summary for the log row (classification / "rebuttal" / final)
+  failed?: boolean;
+};
+
 // The synthesised conclusion combining all panellists, structured to fill the
 // existing Quality Action / AFI closure scaffold.
 export type PanelSynthesis = {
@@ -118,6 +130,9 @@ export type PanelReviewResult = {
   // True when Round-1 positions materially disagreed and a Round-2 rebuttal
   // round was run before synthesis.
   discussionTriggered?: boolean;
+  // Every AI sub-call this run made, with its real input prompt + output, so
+  // each is inspectable in the AI Review Log (not just the synthesis).
+  callLog?: PanelCallLog[];
 };
 
 export type GD4SubCriterion = {

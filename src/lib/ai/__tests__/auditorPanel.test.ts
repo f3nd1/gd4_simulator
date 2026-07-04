@@ -50,6 +50,23 @@ describe("runAuditorPanel", () => {
     expect(result.synthesis.correctiveAction).toContain("signed-contract gate");
     expect(result.synthesis.finalClassification).toContain("NC");
     expect(result.findingHash).toBe("h1");
+
+    // callLog: one entry per sub-call, each with the REAL input prompt (not the
+    // output) so the AI Review Log "Prompt Sent" tab is correct.
+    const log = result.callLog ?? [];
+    expect(log.map((c) => c.kind)).toEqual(["round1", "round1", "round1", "synthesis"]);
+    for (const c of log) {
+      // Prompt Sent = input: has SYSTEM/USER framing and differs from the output.
+      expect(c.promptSent).toMatch(/^SYSTEM:\n[\s\S]*\n\nUSER:\n/);
+      expect(c.output).not.toBe(c.promptSent);                // input and output are not the same text
+      expect(c.output).not.toMatch(/^SYSTEM:\n/);             // the output is not a prompt
+    }
+    // The synthesis entry's OUTPUT carries the chair's JSON; its PROMPT carries the assembled reviews.
+    const synth = log.find((c) => c.kind === "synthesis")!;
+    expect(synth.label).toBe("Panel · chair synthesis");
+    expect(synth.output).toContain("Balanced summary");        // the mocked synthesis response
+    expect(synth.promptSent).toContain("Panellists' reviews:"); // the assembled input
+    expect(log[0].label).toContain("· Round 1");
   });
 
   it("when one panellist call fails, it is noted and the panel synthesises from the rest — never hangs", async () => {
@@ -111,6 +128,17 @@ describe("runAuditorPanel", () => {
     // Each keeps its own perspective through the rebuttal.
     expect(result.reviews.map((r) => r.perspectiveLabel)).toEqual(["Strict Auditor", "Optimistic Process Owner"]);
     expect(result.runWarnings?.some((w) => /disagreed/i.test(w))).toBe(true);
+
+    // callLog captures all 5 sub-calls: 2 round-1 + 2 rebuttal + 1 synthesis,
+    // each labelled and each with its own input prompt.
+    const log = result.callLog ?? [];
+    expect(log.map((c) => c.kind)).toEqual(["round1", "round1", "rebuttal", "rebuttal", "synthesis"]);
+    expect(log.filter((c) => c.kind === "rebuttal").map((c) => c.label)).toEqual([
+      "Panel · Ana · Strict Auditor · rebuttal",
+      "Panel · Ben · Optimistic Process Owner · rebuttal",
+    ]);
+    // A rebuttal's prompt contains the other panellists' Round-1 views (its real input).
+    expect(log.find((c) => c.kind === "rebuttal")!.promptSent).toContain("other panellists' Round-1 views");
   });
 
   it("when Round-1 positions agree, no rebuttal round runs", async () => {

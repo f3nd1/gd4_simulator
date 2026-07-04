@@ -1545,17 +1545,48 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             corr: [syn.immediateCorrection, syn.correctiveAction].filter(Boolean).join("\n\n") || undefined,
             prev: syn.evidenceForClosure || undefined,
           });
-          get().pushAIReviewLog({
-            agent: "Auditor Review Panel",
-            reviewType: "Closure",
-            subjectId: finding.gd4ItemId,
-            verdict: syn.finalClassification || "Panel reviewed",
-            confidence: "Medium",
-            keyConcerns: [syn.summary || `Panel of ${panel.length} auditor(s) reviewed this finding.`],
-            recommendedAction: "Review the synthesised conclusion and each panellist's view in the Findings / Quality Action panel.",
-            live: true,
-            generatedContent: `RISK/IMPACT:\n${syn.riskImpact}\n\nROOT CAUSE:\n${syn.rootCause}\n\nCORRECTIVE:\n${syn.correctiveAction}\n\nEVIDENCE FOR CLOSURE:\n${syn.evidenceForClosure}\n\nFINAL CLASSIFICATION:\n${syn.finalClassification}`,
-          });
+          // Log EVERY AI sub-call the panel made — each auditor's Round-1
+          // review, any rebuttals, and the chair synthesis — as its own AI
+          // Review Log entry with its REAL input prompt (promptSent) and output
+          // (generatedContent). runId = findingId groups them together. This
+          // replaces the previous single synthesis-only entry that carried no
+          // promptSent at all.
+          const callLog = result.callLog ?? [];
+          if (callLog.length > 0) {
+            for (const c of callLog) {
+              get().pushAIReviewLog({
+                agent: "Auditor Review Panel",
+                reviewType: "Closure",
+                subjectId: finding.gd4ItemId,
+                verdict: `${c.label} — ${c.verdict}`,
+                confidence: "Medium",
+                keyConcerns: [c.label],
+                recommendedAction: c.kind === "synthesis"
+                  ? "Review the synthesised conclusion and each panellist's view in the Findings / Quality Action panel."
+                  : "One panel sub-call — see the chair synthesis entry for the combined conclusion.",
+                live: true,
+                liveError: c.failed ? c.output : undefined,
+                generatedContent: c.output,      // Output tab = the model response
+                promptSent: c.promptSent,         // Prompt Sent tab = the real input
+                runId: findingId,
+              });
+            }
+          } else {
+            // Defensive fallback (e.g. all calls failed before any log entry):
+            // still record the run so it isn't invisible.
+            get().pushAIReviewLog({
+              agent: "Auditor Review Panel",
+              reviewType: "Closure",
+              subjectId: finding.gd4ItemId,
+              verdict: syn.finalClassification || "Panel reviewed",
+              confidence: "Medium",
+              keyConcerns: [syn.summary || `Panel of ${panel.length} auditor(s) reviewed this finding.`],
+              recommendedAction: "Review the synthesised conclusion and each panellist's view in the Findings / Quality Action panel.",
+              live: true,
+              generatedContent: `FINAL CLASSIFICATION:\n${syn.finalClassification}`,
+              runId: findingId,
+            });
+          }
         } catch (err) {
           console.error("[AuditorPanel] failed", err instanceof Error ? err.message : String(err));
         } finally {

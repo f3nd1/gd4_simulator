@@ -11,7 +11,7 @@ import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, 
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
 import { buildSystemPrompt, buildDomainBlock, type SkillCalibrationExample, type SkillCalibrationMemory } from "./skills";
 import { domainExpertiseFor } from "../../data/skills/domainExpertise";
-import type { AuditorProfile, PanelAuditorReview, PanelReviewPosition, PanelReviewResult, PanelSynthesis } from "../../types";
+import type { AuditorProfile, PanelAuditorReview, PanelCallLog, PanelReviewPosition, PanelReviewResult, PanelSynthesis } from "../../types";
 import { perspectiveOf, perspectiveLabel, perspectiveGuidance, detectPanelDisagreement } from "../reviewPanel";
 
 export { AIClientError };
@@ -440,6 +440,9 @@ export async function runAuditorPanel(
 
   const warnings: string[] = [];
   const reviews: PanelAuditorReview[] = [];
+  // Every AI sub-call, captured with its REAL input prompt (system + user) and
+  // output so each is inspectable in the AI Review Log — not just the synthesis.
+  const callLog: PanelCallLog[] = [];
 
   // One review call per panellist. A failed call is noted and skipped — the
   // synthesis proceeds from whoever succeeded, so one bad call never hangs
@@ -478,11 +481,26 @@ Respond with JSON only: {"analysis": string, "classification": string, "severity
         rootCauseDirection: ps("rootCauseDirection"),
       };
       reviews.push({ auditorId: auditor.id, auditorName: auditor.name, perspective, perspectiveLabel: label, analysis, position });
+      callLog.push({
+        kind: "round1",
+        label: `Panel · ${auditor.name} · ${label} · Round 1`,
+        promptSent: `SYSTEM:\n${system}\n\nUSER:\n${findingBlock}`,
+        output: content,
+        verdict: position.classification ? `${position.classification}${position.severity && position.severity.toLowerCase() !== "none" ? ` (${position.severity})` : ""}` : "Reviewed",
+      });
     } catch (err) {
       if (opts.signal?.aborted) { warnings.push("Panel review cancelled mid-run."); break; }
       const msg = err instanceof Error ? err.message : String(err);
       warnings.push(`${auditor.name} (${label}) review failed — ${msg}. Synthesised from the remaining panellists.`);
       reviews.push({ auditorId: auditor.id, auditorName: auditor.name, perspective, perspectiveLabel: label, analysis: "", failed: true, error: msg });
+      callLog.push({
+        kind: "round1",
+        label: `Panel · ${auditor.name} · ${label} · Round 1`,
+        promptSent: `SYSTEM:\n${system}\n\nUSER:\n${findingBlock}`,
+        output: `Call failed — ${msg}`,
+        verdict: "Call failed",
+        failed: true,
+      });
     }
   }
 
@@ -527,10 +545,25 @@ Respond with JSON only: {"rebuttal": string}.${buildSystemPrompt("findingWriter"
         const parsed = parseJSONObject(content);
         const rebRaw = typeof parsed.rebuttal === "string" && parsed.rebuttal.trim() ? parsed.rebuttal.trim() : content.trim();
         review.rebuttal = verifyAgainst ? flagUnverifiedQuotes(rebRaw, verifyAgainst) : rebRaw;
+        callLog.push({
+          kind: "rebuttal",
+          label: `Panel · ${auditor.name} · ${label} · rebuttal`,
+          promptSent: `SYSTEM:\n${rebSystem}\n\nUSER:\n${rebUser}`,
+          output: content,
+          verdict: "Rebuttal",
+        });
       } catch (err) {
         if (opts.signal?.aborted) { warnings.push("Rebuttal round cancelled mid-run."); break; }
         const msg = err instanceof Error ? err.message : String(err);
         warnings.push(`${auditor.name} (${label}) rebuttal failed — ${msg}. Synthesised from their Round-1 view.`);
+        callLog.push({
+          kind: "rebuttal",
+          label: `Panel · ${auditor.name} · ${label} · rebuttal`,
+          promptSent: `SYSTEM:\n${rebSystem}\n\nUSER:\n${rebUser}`,
+          output: `Call failed — ${msg}`,
+          verdict: "Call failed",
+          failed: true,
+        });
       }
     }
   }
@@ -573,8 +606,24 @@ Respond with JSON only, all fields plain text:
         evidenceForClosure: vq(s("evidenceForClosure")),
         finalClassification: s("finalClassification"),
       };
+      callLog.push({
+        kind: "synthesis",
+        label: "Panel · chair synthesis",
+        promptSent: `SYSTEM:\n${synthSystem}\n\nUSER:\n${synthUser}`,
+        output: content,
+        verdict: synthesis.finalClassification || "Synthesised",
+      });
     } catch (err) {
-      if (!opts.signal?.aborted) warnings.push(`Synthesis call failed — ${err instanceof Error ? err.message : String(err)}. Showing the individual reviews only.`);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!opts.signal?.aborted) warnings.push(`Synthesis call failed — ${msg}. Showing the individual reviews only.`);
+      callLog.push({
+        kind: "synthesis",
+        label: "Panel · chair synthesis",
+        promptSent: `SYSTEM:\n${synthSystem}\n\nUSER:\n${synthUser}`,
+        output: `Call failed — ${msg}`,
+        verdict: "Call failed",
+        failed: true,
+      });
     }
   }
 
@@ -586,6 +635,7 @@ Respond with JSON only, all fields plain text:
     runWarnings: warnings.length > 0 ? warnings : undefined,
     findingHash: finding.findingHash,
     discussionTriggered,
+    callLog,
   };
 }
 
