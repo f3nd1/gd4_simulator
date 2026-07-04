@@ -20,6 +20,12 @@ export type GoogleDriveState = {
   connectSilently: () => Promise<void>;
   disconnect: () => void;
   getValidToken: () => string | null;
+  // Returns a currently-valid token, silently re-authing first if the cached
+  // one has expired (Google tokens last ~1 hour; a long audit sweep will cross
+  // that). Returns null when a fresh token cannot be minted without user
+  // interaction — callers must then STOP the run with a clear message rather
+  // than proceed with unreadable files.
+  getFreshToken: () => Promise<string | null>;
 };
 
 export const useGoogleDriveStore = create<GoogleDriveState>()(
@@ -68,6 +74,21 @@ export const useGoogleDriveStore = create<GoogleDriveState>()(
         const { accessToken, tokenExpiresAt } = get();
         if (!accessToken || !tokenExpiresAt || Date.now() >= tokenExpiresAt) return null;
         return accessToken;
+      },
+
+      getFreshToken: async () => {
+        // Refresh slightly BEFORE expiry so a token that dies mid-file-read
+        // never gets used: treat anything within 60s of expiry as expired.
+        const { accessToken, tokenExpiresAt, clientId } = get();
+        if (accessToken && tokenExpiresAt && Date.now() < tokenExpiresAt - 60_000) return accessToken;
+        if (!clientId) return null;
+        try {
+          const { accessToken: token, expiresInSeconds } = await requestDriveAccessToken(clientId, { silent: true });
+          set({ accessToken: token, tokenExpiresAt: Date.now() + expiresInSeconds * 1000 });
+          return token;
+        } catch {
+          return null; // silent re-auth failed — caller must stop the run
+        }
       },
     }),
     {

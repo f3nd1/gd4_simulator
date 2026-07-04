@@ -13,6 +13,7 @@ import { buildSystemPrompt, buildDomainBlock, type SkillCalibrationExample, type
 import { domainExpertiseFor } from "../../data/skills/domainExpertise";
 import type { AuditorProfile, PanelAuditorReview, PanelCallLog, PanelReviewPosition, PanelReviewResult, PanelSynthesis } from "../../types";
 import { perspectiveOf, perspectiveLabel, perspectiveGuidance, detectPanelDisagreement } from "../reviewPanel";
+import { normalizeAuditRef } from "../gd4Refs";
 
 export { AIClientError };
 
@@ -321,18 +322,27 @@ export async function runLiveEvidenceFill(
   lineText: string,
   settings: AISettings
 ): Promise<Omit<EvidenceFillDraft, "live"> & { live: true; usage?: AIUsage; promptSent?: string }> {
-  const system = `You are an evidence intake assistant for an EduTrust GD4 internal audit. You are given only a document link/filename and the checklist line it is meant to support — you cannot open or read the document, so never assume or invent its content. Suggest plausible metadata from the link/filename alone, and draft a short auditor note (1-2 sentences) that explicitly tells the human auditor what they still need to verify themselves. Respond with JSON only: {"title": string, "type": "Policy/Procedure" | "Record/Log" | "System screenshot" | "Minutes" | "Survey/Feedback" | "Other", "date": string (YYYY-MM-DD, guess if unknown), "sufficiency": "Present" | "Weak" | "Missing", "auditorNote": string}.${buildSystemPrompt("evidenceTracking", null, "runLiveEvidenceFill")}`;
+  const system = `You are an evidence intake assistant for an EduTrust GD4 internal audit. You are given only a document link/filename and the checklist line it is meant to support — you cannot open or read the document, so never assume or invent its content. Suggest plausible metadata from the link/filename alone, and draft a short auditor note (1-2 sentences) that explicitly tells the human auditor what they still need to verify themselves. Respond with JSON only: {"title": string, "type": "Policy/Procedure" | "Record/Log" | "System screenshot" | "Minutes" | "Survey/Feedback" | "Other", "date": string (YYYY-MM-DD, or "" when the date cannot be determined from the link/filename — NEVER guess a date), "sufficiency": "Present" | "Weak" | "Missing", "auditorNote": string}.${buildSystemPrompt("evidenceTracking", null, "runLiveEvidenceFill")}`;
   const user = `Evidence link: ${link}\nChecklist line this evidence is meant to support: ${lineText}`;
 
   let usage: AIUsage | undefined;
   const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { onUsage: (u) => { usage = u; } });
   const parsed = parseJSONObject(content);
 
+  // Validate against the allowed set and default UNFAVOURABLY: a missing or
+  // malformed sufficiency must never self-certify as "Present" (the only
+  // favourable default in the app was here), and an unknown date stays blank
+  // rather than being stamped with today (fabricated dates would feed the
+  // evidence-timeliness checks).
+  const sufficiency: EvidenceFillDraft["sufficiency"] =
+    parsed.sufficiency === "Present" || parsed.sufficiency === "Weak" || parsed.sufficiency === "Missing"
+      ? parsed.sufficiency : "Missing";
+  const date = typeof parsed.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : "";
   return {
     title: (parsed.title as string) || link,
     type: (parsed.type as string) || "Other",
-    date: (parsed.date as string) || new Date().toISOString().slice(0, 10),
-    sufficiency: (parsed.sufficiency as EvidenceFillDraft["sufficiency"]) || "Present",
+    date,
+    sufficiency,
     auditorNote: (parsed.auditorNote as string) || `Verify this evidence actually demonstrates: "${lineText}".`,
     live: true,
     usage,
@@ -813,24 +823,6 @@ async function runBatchWithRetry(
   return { ok: false, batchLines, error: lastError };
 }
 
-// Placeholder verdicts inserted for lines whose batch exhausted retries so the
-// rest of the audit result is not discarded. These are clearly marked and show
-// "Not met" conservatively — the auditor is prompted to re-run.
-function placeholderVerdicts(batchLines: { id: string; text: string }[]): FolderAuditLineVerdict[] {
-  return batchLines.map((l) => ({
-    lineId: l.id,
-    status: "Not met" as const,
-    reason: "AI audit timed out for this line — result unavailable. Re-run the audit to try again.",
-    sources: [],
-    apsr: {
-      approach: { status: "Not evident" as const, note: "Audit timed out — no verdict available. Re-run the audit." },
-      processes: { status: "Not evident" as const, note: "" },
-      systemsOutcomes: { status: "Not evident" as const, note: "" },
-      review: { status: "Not evident" as const, note: "" },
-    },
-  }));
-}
-
 export async function runLiveFolderAudit(
   lines: { id: string; text: string }[],
   docText: string,
@@ -855,8 +847,10 @@ export async function runLiveFolderAudit(
   }
 
   // Multi-batch: run all in parallel, but resilient — a single timeout does
-  // NOT cancel sibling batches. Each failed batch gets placeholder verdicts so
-  // the completed work from other batches is not discarded.
+  // NOT cancel sibling batches. A failed batch's lines get NO verdict at all
+  // (they are reported via timedOutLineIds and left "not assessed") — a
+  // fabricated "Not met" placeholder must never reach the checklist or raise
+  // findings. The completed work from other batches is kept.
   const outcomes = await Promise.all(
     batches.map(async (batchLines) => {
       // For the challenge pass, only surface prior verdicts that belong to the
@@ -881,10 +875,7 @@ export async function runLiveFolderAudit(
   // folderWarnings deduplicated because every batch sees the same documents and
   // would emit the same mis-filing warning independently; usage summed.
   return {
-    verdicts: [
-      ...succeeded.flatMap((o) => o.result.verdicts),
-      ...failed.flatMap((o) => placeholderVerdicts(o.batchLines)),
-    ],
+    verdicts: succeeded.flatMap((o) => o.result.verdicts),
     parseWarnings: succeeded.flatMap((o) => o.result.parseWarnings),
     truncationNote: succeeded.find((o) => o.result.truncationNote)?.result.truncationNote,
     folderWarnings: [...new Set(succeeded.flatMap((o) => o.result.folderWarnings))],
@@ -1256,9 +1247,9 @@ Respond with JSON only:
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-        const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+        const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
         for (const p of batch) {
-          const r = byRef.get(p.ref);
+          const r = byRef.get(normalizeAuditRef(p.ref));
           const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
             ? (r!.covered as StagedCoverageStatus) : "No";
           const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
@@ -1288,11 +1279,9 @@ Respond with JSON only:
         const errNote = `${label} failed — ${msg}`;
         windowErrors.push(errNote);
         console.error("[StagedPolicyAudit]", errNote);
-        for (const p of batch) {
-          if (!bestByRef.has(p.ref)) {
-            bestByRef.set(p.ref, { covered: "No", notes: [], chunkIds: [] });
-          }
-        }
+        // Do NOT seed a "No" for the failed batch's points — an API failure is
+        // not an assessed gap. Points that never get a verdict in ANY window
+        // become "Not assessed" rows below, exactly like a stopped run.
       }
     }
     // A window whose batch sweep was cut short is NOT a completed window —
@@ -1301,31 +1290,37 @@ Respond with JSON only:
     windowsCompleted++;
   }
 
-  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length;
-
   const rows: PolicyCoverageRow[] = auditPoints.map((p) => {
     const best = bestByRef.get(p.ref);
-    // A stopped run leaves later batches' points with no verdict at all —
-    // mark them Not assessed instead of fabricating a "No" (a false negative
-    // that would flow into checklist statuses and findings).
-    if (!best && stoppedEarly) {
-      return { ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "Not assessed — the run was stopped before this audit point was reviewed. No verdict was produced.", chunkIds: [], notAssessed: true };
+    // A stopped run OR a batch whose AI call failed in every window leaves the
+    // point with no verdict at all — mark it Not assessed instead of
+    // fabricating a "No" (a false negative that would flow into checklist
+    // statuses and findings).
+    if (!best) {
+      const reason = stoppedEarly
+        ? "the run was stopped before this audit point was reviewed"
+        : "the AI call for this audit point failed in every window it was sent to";
+      return { ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: `Not assessed — ${reason}. No verdict was produced.`, chunkIds: [], notAssessed: true };
     }
     const fallback = `No relevant policy evidence found in the ${windowsCompleted} window(s) reviewed.`;
     // Positive-coverage notes win; for a pure gap, surface the retained
     // negative note (specific SSG observation) instead of the generic fallback.
-    const noteParts = best ? (best.notes.length ? best.notes : best.negNote ? [best.negNote] : []) : [];
+    const noteParts = best.notes.length ? best.notes : best.negNote ? [best.negNote] : [];
     return {
       ref: p.ref, pointText: p.text,
-      covered: best?.covered ?? "No",
-      note: best ? renderWindowNotes(noteParts, fallback, opts.resolveChunkFile) : fallback,
-      chunkIds: best?.chunkIds ?? [],
+      covered: best.covered,
+      note: renderWindowNotes(noteParts, fallback, opts.resolveChunkFile),
+      chunkIds: best.chunkIds,
     };
   });
 
   const notAssessedCount = rows.filter((r) => r.notAssessed).length;
+  // Full coverage means every window completed AND every point actually got a
+  // verdict — a run where a batch failed in all windows is PARTIAL even though
+  // the window loop technically finished.
+  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length && notAssessedCount === 0;
   const truncationNote = !fullCoverage
-    ? `Policy content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).${stoppedEarly ? ` Run stopped early — ${notAssessedCount} audit point(s) were not assessed; results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
+    ? `Policy content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). Assessed ${auditPoints.length - notAssessedCount} of ${auditPoints.length} audit points.${notAssessedCount > 0 ? ` ${notAssessedCount} audit point(s) were NOT assessed (${stoppedEarly ? "run stopped early" : "AI call failures"}); results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
     : undefined;
 
   return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
@@ -1409,9 +1404,9 @@ Respond with JSON only:
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-        const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+        const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
         for (const p of batch) {
-          const r = byRef.get(p.ref);
+          const r = byRef.get(normalizeAuditRef(p.ref));
           const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
             ? (r!.covered as StagedCoverageStatus) : "No";
           const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
@@ -1440,39 +1435,39 @@ Respond with JSON only:
         const errNote = `${label} failed — ${msg}`;
         windowErrors.push(errNote);
         console.error("[StagedEvidenceAudit]", errNote);
-        for (const p of batch) {
-          if (!bestByRef.has(p.ref)) {
-            bestByRef.set(p.ref, { covered: "No", notes: [], chunkIds: [] });
-          }
-        }
+        // See runStagedPolicyAudit: an API failure is not an assessed gap —
+        // never-assessed points become "Not assessed" rows below.
       }
     }
     if (stoppedEarly) break;
     windowsCompleted++;
   }
 
-  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length;
-
   const rows: EvidenceCoverageRow[] = auditPoints.map((p) => {
     const best = bestByRef.get(p.ref);
-    if (!best && stoppedEarly) {
-      return { ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "Not assessed — the run was stopped before this audit point was reviewed. No verdict was produced.", chunkIds: [], notAssessed: true };
+    if (!best) {
+      const reason = stoppedEarly
+        ? "the run was stopped before this audit point was reviewed"
+        : "the AI call for this audit point failed in every window it was sent to";
+      return { ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: `Not assessed — ${reason}. No verdict was produced.`, chunkIds: [], notAssessed: true };
     }
     const fallback = `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`;
     // Positive-coverage notes win; for a pure gap, surface the retained
     // negative note (specific SSG observation) instead of the generic fallback.
-    const noteParts = best ? (best.notes.length ? best.notes : best.negNote ? [best.negNote] : []) : [];
+    const noteParts = best.notes.length ? best.notes : best.negNote ? [best.negNote] : [];
     return {
       ref: p.ref, pointText: p.text,
-      covered: best?.covered ?? "No",
-      note: best ? renderWindowNotes(noteParts, fallback, opts.resolveChunkFile) : fallback,
-      chunkIds: best?.chunkIds ?? [],
+      covered: best.covered,
+      note: renderWindowNotes(noteParts, fallback, opts.resolveChunkFile),
+      chunkIds: best.chunkIds,
     };
   });
 
   const notAssessedCount = rows.filter((r) => r.notAssessed).length;
+  // See runStagedPolicyAudit: an all-window batch failure makes the run PARTIAL.
+  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length && notAssessedCount === 0;
   const truncationNote = !fullCoverage
-    ? `Evidence content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).${stoppedEarly ? ` Run stopped early — ${notAssessedCount} audit point(s) were not assessed; results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
+    ? `Evidence content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). Assessed ${auditPoints.length - notAssessedCount} of ${auditPoints.length} audit points.${notAssessedCount > 0 ? ` ${notAssessedCount} audit point(s) were NOT assessed (${stoppedEarly ? "run stopped early" : "AI call failures"}); results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
     : undefined;
 
   return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
@@ -1550,9 +1545,9 @@ Respond with JSON only:
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-        const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+        const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
         for (const p of batch) {
-          const r = byRef.get(p.ref);
+          const r = byRef.get(normalizeAuditRef(p.ref));
           const outcomeEvident = r?.outcomeEvident === true;
           const reviewEvident = r?.reviewEvident === true;
           const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
@@ -1583,40 +1578,40 @@ Respond with JSON only:
         const errNote = `${label} failed — ${msg}`;
         windowErrors.push(errNote);
         console.error("[StagedOutcomeReviewAudit]", errNote);
-        for (const p of batch) {
-          if (!bestByRef.has(p.ref)) {
-            bestByRef.set(p.ref, { outcomeEvident: false, reviewEvident: false, notes: [], chunkIds: [] });
-          }
-        }
+        // See runStagedPolicyAudit: an API failure is not an assessed gap —
+        // never-assessed points become "Not assessed" rows below.
       }
     }
     if (stoppedEarly) break;
     windowsCompleted++;
   }
 
-  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length;
-
   const rows: OutcomeReviewRow[] = auditPoints.map((p) => {
     const best = bestByRef.get(p.ref);
-    if (!best && stoppedEarly) {
-      return { ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "Not assessed — the run was stopped before this audit point was reviewed. No verdict was produced.", chunkIds: [], notAssessed: true };
+    if (!best) {
+      const reason = stoppedEarly
+        ? "the run was stopped before this audit point was reviewed"
+        : "the AI call for this audit point failed in every window it was sent to";
+      return { ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: `Not assessed — ${reason}. No verdict was produced.`, chunkIds: [], notAssessed: true };
     }
     const fallback = `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`;
     // When neither outcome nor review evidence was found, surface the retained
     // negative note (specific SSG observation) instead of the generic fallback.
-    const noteParts = best ? (best.notes.length ? best.notes : best.negNote ? [best.negNote] : []) : [];
+    const noteParts = best.notes.length ? best.notes : best.negNote ? [best.negNote] : [];
     return {
       ref: p.ref, pointText: p.text,
-      outcomeEvident: best?.outcomeEvident ?? false,
-      reviewEvident: best?.reviewEvident ?? false,
-      note: best ? renderWindowNotes(noteParts, fallback, opts.resolveChunkFile) : fallback,
-      chunkIds: best?.chunkIds ?? [],
+      outcomeEvident: best.outcomeEvident,
+      reviewEvident: best.reviewEvident,
+      note: renderWindowNotes(noteParts, fallback, opts.resolveChunkFile),
+      chunkIds: best.chunkIds,
     };
   });
 
   const notAssessedCount = rows.filter((r) => r.notAssessed).length;
+  // See runStagedPolicyAudit: an all-window batch failure makes the run PARTIAL.
+  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length && notAssessedCount === 0;
   const truncationNote = !fullCoverage
-    ? `Outcome/review content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap).${stoppedEarly ? ` Run stopped early — ${notAssessedCount} audit point(s) were not assessed; results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
+    ? `Outcome/review content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). Assessed ${auditPoints.length - notAssessedCount} of ${auditPoints.length} audit points.${notAssessedCount > 0 ? ` ${notAssessedCount} audit point(s) were NOT assessed (${stoppedEarly ? "run stopped early" : "AI call failures"}); results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
     : undefined;
 
   return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
@@ -1913,9 +1908,9 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-        const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+        const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
         for (const r of batch) {
-          const res = byRef.get(r.ref);
+          const res = byRef.get(normalizeAuditRef(r.ref));
           const verdict = (["Adequate", "Partial", "Not documented"] as PPDVerdict[]).includes(res?.verdict as PPDVerdict)
             ? (res!.verdict as PPDVerdict) : "Not documented";
           const shortComment = typeof res?.shortComment === "string" ? res.shortComment : "";
@@ -2183,8 +2178,12 @@ Respond with JSON only:
   type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[] };
   const bestByRef = new Map<string, BestEv>();
   // Per-promise best verdict across sliding windows: evidence found in ANY
-  // window proves the promise; a contradiction outranks a bare "no record".
-  const PROMISE_VERDICT_ORDER: Record<PromiseCheck["verdict"], number> = { "not evidenced": 0, "contradicted": 1, "evidenced": 2 };
+  // window proves the promise over a bare "no record" — but a CONTRADICTION is
+  // STICKY and outranks everything. A record showing the opposite of the PPD
+  // promise (found in one window) must not be erased by a supporting record in
+  // another window: "evidenced somewhere AND contradicted somewhere" is itself
+  // the finding, and erasing it would also bypass the promise hard-gate cap.
+  const PROMISE_VERDICT_ORDER: Record<PromiseCheck["verdict"], number> = { "not evidenced": 0, "evidenced": 1, "contradicted": 2 };
   const mergePromiseChecks = (prev: PromiseCheck[] | undefined, next: PromiseCheck[]): PromiseCheck[] => {
     const out = [...(prev ?? [])];
     for (const n of next) {
@@ -2242,10 +2241,10 @@ Respond with JSON only:
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-        const byRef = new Map(results.map((r) => [String(r.ref ?? ""), r]));
+        const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
         const batchVerdicts: { ref: string; verdict: EvidenceVerdict }[] = [];
         for (const inp of batch) {
-          const res = byRef.get(inp.ref);
+          const res = byRef.get(normalizeAuditRef(inp.ref));
           const verdict = (["Met", "Partial", "Not met"] as EvidenceVerdict[]).includes(res?.verdict as EvidenceVerdict)
             ? (res!.verdict as EvidenceVerdict) : "Not met";
           const evidenceSummary = typeof res?.evidenceSummary === "string" ? res.evidenceSummary : "";

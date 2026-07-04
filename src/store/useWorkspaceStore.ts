@@ -56,7 +56,7 @@ import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
 import { computePanelConclusion } from "../lib/panelConclusion";
 import { checkAuditorForRun } from "../lib/auditorGuard";
-import { checkDriveForRun, type DriveRunBlock } from "../lib/driveGuard";
+import { checkDriveForRun, DRIVE_EXPIRED_MID_RUN, type DriveRunBlock } from "../lib/driveGuard";
 import { DEFAULT_SHOW_DEVELOPER_TOOLS } from "../nav";
 
 // Sequential auto-run queue for the review panel (auto modes). Findings are
@@ -967,7 +967,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const drive = checkDriveForRun(!!policyId, !!token);
           if (drive) { set({ driveBlockedReason: { ...drive, subCriterionId } }); finish(null, false, drive.message); return; }
           set({ driveBlockedReason: null });
-          if (!token || !policyId) return; // unreachable past the guard; narrows for TS
+          if (!token || !policyId) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; } // should be unreachable past the guard; never strand busy
 
           const allFiles = await listFolderFilesRecursive(policyId, token, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS));
           // If policyLink is a dedicated folder, every file in it is policy;
@@ -982,6 +982,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const docParts: string[] = [];
           const chunkFileNames: Record<string, string> = {};
           let chunkCounter = 0;
+          // Files whose Drive read ERRORED (network/permission/timeout) — kept
+          // separate from genuinely empty files so the run summary can say
+          // "results may be incomplete" instead of silently assessing without them.
+          const readFailedFiles: string[] = [];
           for (const file of policyFiles) {
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
@@ -989,8 +993,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (cached) {
               body = cached.text;
             } else {
+              // Refresh the Drive token per uncached read and HARD-STOP when it
+              // can't be refreshed — see auditFolderContents.
+              const readToken = await useGoogleDriveStore.getState().getFreshToken();
+              if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
-                body = await exportFileText(file, token, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
+                body = await exportFileText(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
                 // Only cache successful extractions — caching `text: null`
                 // made a transient read failure stick until the Drive file's
                 // modifiedTime changed, with no way to retry.
@@ -1000,6 +1008,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 }
               } catch {
                 body = null;
+                readFailedFiles.push(file.path.split("/").pop() || file.path);
               }
             }
             if (!body) continue;
@@ -1034,6 +1043,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const runWarnings: string[] = [
             ...(result.windowErrors ?? []),
             ...(result.stoppedEarly ? ["Run stopped before every requirement line was reviewed — unreviewed lines are marked Not assessed."] : []),
+            ...(readFailedFiles.length ? [`${readFailedFiles.length} of ${policyFiles.length} Policy file(s) could not be read (Drive errors) and were NOT assessed: ${readFailedFiles.slice(0, 5).join(", ")}${readFailedFiles.length > 5 ? ", …" : ""}. Results may be incomplete — fix access and re-run.`] : []),
           ];
           const liveError = result.windowErrors?.length
             ? `${result.windowErrors.length} AI call(s) failed during the review — results may be incomplete. First error: ${result.windowErrors[0]}`
@@ -1139,11 +1149,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const runAbort = new AbortController();
         _currentRunAbort = runAbort;
 
-        const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>) => {
+        const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, coverageNote?: string) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           const notAssessedCount = rows ? rows.filter((r) => r.verdict === "Not assessed").length : 0;
           const summary = rows
-            ? `Evidence assessment${notAssessedCount > 0 ? " (PARTIAL — stopped early)" : ""}: ${rows.filter((r) => r.verdict === "Met").length} Met, ${rows.filter((r) => r.verdict === "Partial").length} Partial, ${rows.filter((r) => r.verdict === "Not met").length} Not met${notAssessedCount > 0 ? `, ${notAssessedCount} Not assessed` : ""} (of ${rows.length}).`
+            ? `Evidence assessment${notAssessedCount > 0 ? " (PARTIAL)" : ""}: ${rows.filter((r) => r.verdict === "Met").length} Met, ${rows.filter((r) => r.verdict === "Partial").length} Partial, ${rows.filter((r) => r.verdict === "Not met").length} Not met${notAssessedCount > 0 ? `, ${notAssessedCount} Not assessed` : ""} (assessed ${rows.length - notAssessedCount} of ${rows.length} lines).${coverageNote ? `\n⚠ ${coverageNote}` : ""}`
             : `Evidence assessment failed${liveError ? `: ${liveError}` : "."}`;
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
@@ -1247,7 +1257,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const drive = checkDriveForRun(!!evidenceId, !!token);
           if (drive) { set({ driveBlockedReason: { ...drive, subCriterionId } }); finish(null, false, drive.message); return; }
           set({ driveBlockedReason: null });
-          if (!token || !evidenceId) return; // unreachable past the guard; narrows for TS
+          if (!token || !evidenceId) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; } // should be unreachable past the guard; never strand busy
 
           const lineRefs = ppd.rows.map((r) => r.ref);
           patchEv({
@@ -1270,6 +1280,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           let chunkCounter = 0;
           patchEv({ filesTotal: evidenceFiles.length });
           let filesReadCount = 0;
+          // Drive read ERRORS, kept separate from genuinely empty files, so the
+          // run summary can flag incompleteness — see runPPDReview.
+          const readFailedFiles: string[] = [];
           for (const file of evidenceFiles) {
             const readFileName = file.path.split("/").pop() || file.path;
             patchEv({ currentFile: readFileName, detail: `Reading ${readFileName}…`, pct: Math.min(24, 4 + Math.round((filesReadCount / Math.max(1, evidenceFiles.length)) * 20)) });
@@ -1279,8 +1292,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (cached) {
               body = cached.text;
             } else {
+              // Refresh the Drive token per uncached read and HARD-STOP when it
+              // can't be refreshed — see auditFolderContents.
+              const readToken = await useGoogleDriveStore.getState().getFreshToken();
+              if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
-                body = await exportFileText(file, token, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
+                body = await exportFileText(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
                 // Only cache successful extractions — see runPPDReview.
                 if (body != null) {
                   const text = body;
@@ -1288,9 +1305,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 }
               } catch {
                 body = null;
+                readFailedFiles.push(readFileName);
               }
             }
-            if (!body) { logEv(`Skipped ${readFileName} (empty or unreadable)`, "warn"); continue; }
+            if (!body) { logEv(readFailedFiles.includes(readFileName) ? `FAILED to read ${readFileName} (Drive error) — not assessed` : `Skipped ${readFileName} (empty)`, readFailedFiles.includes(readFileName) ? "bad" : "warn"); continue; }
             filesReadCount++;
             patchEv({ filesRead: [...(curEv().filesRead ?? []), readFileName], currentFile: undefined });
             logEv(`Read ${readFileName}${cached ? " (cached)" : ""}`, "good");
@@ -1379,7 +1397,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               promiseChecks: ev?.promiseChecks,
             };
           });
-          finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames);
+          const coverageNote = readFailedFiles.length
+            ? `${readFailedFiles.length} of ${evidenceFiles.length} evidence file(s) could not be read (Drive errors) and were NOT assessed: ${readFailedFiles.slice(0, 5).join(", ")}${readFailedFiles.length > 5 ? ", …" : ""}. Results may be incomplete — fix access and re-run.`
+            : undefined;
+          finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames, coverageNote);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
         }
@@ -2659,7 +2680,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return;
         }
         set({ driveBlockedReason: null });
-        if (!token) return; // unreachable past the guard; narrows token for TS
+        if (!token) { auditHadError = true; finish(DRIVE_EXPIRED_MID_RUN, false, DRIVE_EXPIRED_MID_RUN); return; } // should be unreachable past the guard; never strand busy
 
         const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === folder.subCriterionId);
         if (items.length === 0) {
@@ -2952,6 +2973,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             continue;
           }
 
+          // Drive tokens last ~1 hour; a long multi-file run WILL cross that.
+          // Refresh silently before each uncached read — and HARD-STOP if a
+          // fresh token can't be minted, so the run never silently skips the
+          // remaining files and scores "no evidence" against unread evidence.
+          const readToken = await useGoogleDriveStore.getState().getFreshToken();
+          if (!readToken) {
+            auditHadError = true;
+            finish(DRIVE_EXPIRED_MID_RUN, false, DRIVE_EXPIRED_MID_RUN);
+            return;
+          }
+
           // Per-file abort: allows skipCurrentFile() and cancelBusy() to break
           // out of the current Drive download or AI description call immediately.
           const fileAbort = new AbortController();
@@ -2971,7 +3003,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             | { kind: "skip" };
 
           const readPromise = (async (): Promise<FileReadResult> => {
-            const text = await exportFileText(file, token, fileAbort.signal);
+            const text = await exportFileText(file, readToken, fileAbort.signal);
             if (text !== null) {
               let pdfQuality: ReturnType<typeof classifyPdfTextQuality> | undefined;
               if (file.mimeType === "application/pdf") pdfQuality = classifyPdfTextQuality(text);
@@ -2979,7 +3011,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
             if (isImage && canDescribeImages && imagesDescribed < MAX_IMAGES) {
               imagesDescribed++;
-              const dataUrl = await exportFileImageDataUrl(file, token, fileAbort.signal);
+              const dataUrl = await exportFileImageDataUrl(file, readToken, fileAbort.signal);
               const description = await describeImage(dataUrl, utilitySettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
               return { kind: "image", description };
             }
@@ -3219,12 +3251,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             parseWarnings = windowResults.flatMap((r) => r.parseWarnings);
             folderWarnings = [...new Set(windowResults.flatMap((r) => r.folderWarnings))];
             auditUsage = windowResults.reduce<AIUsage | undefined>((acc, r) => addUsage(acc, r.usage), undefined);
-            const timedOutIds = [...new Set(windowResults.flatMap((r) => r.timedOutLineIds ?? []))];
+            // A line that timed out in one window may still have been assessed
+            // in another — only lines with NO verdict anywhere count as not
+            // assessed. Failed batches produce no verdicts at all now (never a
+            // fabricated "Not met" placeholder), so these lines are simply
+            // absent from `verdicts`: nothing is written to the checklist for
+            // them and no findings are raised.
+            const assessedLineIds = new Set(verdicts.map((v) => v.lineId));
+            const timedOutIds = [...new Set(windowResults.flatMap((r) => r.timedOutLineIds ?? []))].filter((lid) => !assessedLineIds.has(lid));
             timedOutCount = timedOutIds.length;
             if (timedOutCount > 0) {
               folderWarnings = [
                 ...folderWarnings,
-                `${timedOutCount} checklist line${timedOutCount === 1 ? "" : "s"} could not be audited — the AI call timed out after retrying. Those lines show "Not met" as a placeholder. Re-run the audit to try them again.`,
+                `${timedOutCount} checklist line${timedOutCount === 1 ? "" : "s"} could not be audited — the AI call failed/timed out after retrying. Those lines were NOT assessed: their previous checklist status is unchanged and no findings were raised for them. Re-run the audit to assess them.`,
               ];
             }
             // Strict mode: challenge pass runs against the first (largest) window.
@@ -3234,7 +3273,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 setProgress("auditing", { stageDetail: "Running strict challenge pass…" });
                 try {
                   const r2 = await runLiveFolderAudit(lines, docWindows[0], analysisSettings, { strictness, standard, criterionId: folder.subCriterionId, challenge: toChallenge, calibration: auditCalibration, memories: auditMemories });
-                  verdicts = r2.verdicts;
+                  // Challenge results replace first-pass verdicts per line, but a
+                  // line the challenge pass failed to re-assess (its batch timed
+                  // out → no verdict at all now) KEEPS its first-pass verdict —
+                  // never lose an assessed verdict to a failed re-check.
+                  const challengeByLine = new Map(r2.verdicts.map((v) => [v.lineId, v]));
+                  const firstPassIds = new Set(verdicts.map((v) => v.lineId));
+                  verdicts = [
+                    ...verdicts.map((v) => challengeByLine.get(v.lineId) ?? v),
+                    // A line the FIRST pass failed on but the challenge pass assessed
+                    // is recovered here rather than dropped.
+                    ...r2.verdicts.filter((v) => !firstPassIds.has(v.lineId)),
+                  ];
                   parseWarnings = [...parseWarnings, ...r2.parseWarnings];
                   folderWarnings = [...new Set([...folderWarnings, ...r2.folderWarnings])];
                   auditUsage = addUsage(auditUsage, r2.usage);
@@ -3515,7 +3565,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // 1. Headline — the verdict, first. Run id leads so it can be matched to
         // the AI Review Log, the checklist evidence, and the journal entry.
         lineParts.push(`Run ${runId} · Auditor: ${auditorLabel}.`);
-        lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${verdicts.length} checklist line${verdicts.length === 1 ? "" : "s"}).`);
+        lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (assessed ${verdicts.length} of ${lines.length} checklist line${lines.length === 1 ? "" : "s"}${timedOutCount > 0 ? `; ${timedOutCount} NOT assessed — AI call failed, previous status unchanged` : ""}).`);
         if (bandParts.length) lineParts.push(`Band: ${bandParts.join(", ")}.`);
         if (autoRaised > 0) lineParts.push(`Raised ${autoRaised} new finding${autoRaised === 1 ? "" : "s"} from the gaps — see the Findings register.${live ? " AI agents are drafting finding bodies and closure actions in the background." : ""}`);
         // 2. Files read.
@@ -3820,7 +3870,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return;
         }
         set({ driveBlockedReason: null });
-        if (!token) return; // unreachable past the guard; narrows token for TS
+        if (!token) { auditHadError = true; finish(DRIVE_EXPIRED_MID_RUN, false, DRIVE_EXPIRED_MID_RUN); return; } // should be unreachable past the guard; never strand busy
 
         const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === folder.subCriterionId);
         if (items.length === 0) { auditHadError = true; finish("No GD4 items map to this sub-criterion.", false); return; }
@@ -3960,6 +4010,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             continue;
           }
 
+          // See auditFolderContents: refresh the Drive token per uncached read
+          // and HARD-STOP when it can't be refreshed (never skip files silently).
+          const readToken = await useGoogleDriveStore.getState().getFreshToken();
+          if (!readToken) {
+            auditHadError = true;
+            finish(DRIVE_EXPIRED_MID_RUN, false, DRIVE_EXPIRED_MID_RUN);
+            return;
+          }
+
           const fileAbort = new AbortController();
           const fileTimeoutMs = isImage ? FILE_IMAGE_TIMEOUT_MS : FILE_TEXT_TIMEOUT_MS;
           let fileTimeoutTimer: ReturnType<typeof setTimeout>;
@@ -3968,7 +4027,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
           type FileReadResult = { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality> } | { kind: "image"; description: string } | { kind: "skip" };
           const readPromise = (async (): Promise<FileReadResult> => {
-            const text = await exportFileText(file, token, fileAbort.signal);
+            const text = await exportFileText(file, readToken, fileAbort.signal);
             if (text !== null) {
               let pdfQuality: ReturnType<typeof classifyPdfTextQuality> | undefined;
               if (file.mimeType === "application/pdf") pdfQuality = classifyPdfTextQuality(text);
@@ -3976,7 +4035,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
             if (isImage && canDescribeImages && imagesDescribed < MAX_IMAGES) {
               imagesDescribed++;
-              const dataUrl = await exportFileImageDataUrl(file, token, fileAbort.signal);
+              const dataUrl = await exportFileImageDataUrl(file, readToken, fileAbort.signal);
               const description = await describeImage(dataUrl, utilitySettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
               return { kind: "image", description };
             }
@@ -4290,7 +4349,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return [{ lineId: line.id, apsr, status }];
         });
         if (linesNotAssessed > 0) {
-          truncationNotes.push(`[PARTIAL RUN] ${linesNotAssessed} checklist line(s) were NOT assessed (run stopped/skipped before their audit points were reviewed) — their previous status was left unchanged and no findings were raised for them.`);
+          truncationNotes.push(`[PARTIAL RUN] ${linesNotAssessed} checklist line(s) were NOT assessed (run stopped/skipped early, or their AI calls failed) — their previous status was left unchanged and no findings were raised for them.`);
         }
 
         // Stage 6: Write to Sub-Criterion Checklist — gated by the automation
@@ -4423,7 +4482,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Fallback / partial-run banners lead the summary so they cannot be
         // missed under the detail lines.
         if (fallbackStages.length > 0) lineParts.push(`⚠ OFFLINE FALLBACK — ${fallbackStages.join(", ")} stage(s) failed live AI and used keyword simulation. This run is NOT a full live AI audit.`);
-        if (linesNotAssessed > 0) lineParts.push(`⚠ PARTIAL RUN — ${linesNotAssessed} line(s) not assessed (run stopped/skipped early); their previous status was left unchanged.`);
+        if (linesNotAssessed > 0) lineParts.push(`⚠ PARTIAL RUN — ${linesNotAssessed} line(s) not assessed (run stopped/skipped early, or their AI calls failed); their previous status was left unchanged.`);
         lineParts.push(`Run ${runId} · Staged audit (${mode} mode) · Mode: ${auditModeLabel(automationMode)} · Auditor: ${auditorLabel}.`);
         if (queuedForReview > 0) lineParts.push(`⏸ ${queuedForReview} verdict${queuedForReview === 1 ? "" : "s"} NOT committed — waiting for your review on the Evidence Folder page ("Needs your review"). Findings for those lines are raised only when you accept them.`);
         if (specialistLabel) lineParts.push(`Specialist lens: ${specialistLabel}.`);

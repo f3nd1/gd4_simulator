@@ -41,6 +41,13 @@ export function driveReadFailureMessage(detail?: string): string {
   return detail ? `${base} (${detail})` : base;
 }
 
+// Shown when the Drive session expires mid-run and cannot be refreshed
+// silently. The run must HARD-STOP on this — proceeding would silently skip
+// every remaining file and let the AI score "no evidence found" against
+// evidence it never saw.
+export const DRIVE_EXPIRED_MID_RUN =
+  "Google Drive session expired mid-run and could not be refreshed automatically. The run was stopped so no verdicts were produced from unread files. Reconnect Google Drive and run again.";
+
 // The specific underlying cause of a "connected but couldn't read" failure,
 // parsed from the Drive API error string that the audit surfaces in
 // AuditProgressState.errorMessage (e.g. "…Drive API request failed (403):
