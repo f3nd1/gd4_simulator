@@ -16,6 +16,7 @@ import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { BENCHMARK_AFIS } from "../data/benchmarkAFIs";
 import { useCalibrationStore } from "../store/useCalibrationStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
+import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { verdictTemp } from "../lib/ai/aiClient";
 import { toCsv, downloadCsv } from "../lib/auditCsvExport";
 import { foldersConnected, aiReady, runScratch, judgeVsBenchmark, type ScratchRunOutput } from "../lib/calibrationRunner";
@@ -24,8 +25,93 @@ import {
   abWinner, abVerdictLine, abOverallTally,
   type ConsistencyLine, type ConsistencyTestResult, type ABTestResult, type ABPathOutcome,
 } from "../lib/calibrationTesting";
+import { OVERFITTING_CAUTION, recommendFromConsistency, recommendFromAB, type Recommendation } from "../lib/tuningAdvisor";
 
 const STATUS_COLOR: Record<string, string> = { Met: "#15803d", Partial: "#b45309", "Not met": "#b91c1c" };
+
+// ── Tuning Advisor panel ─────────────────────────────────────────────────
+// Auto-generated after each test. AI recommends; the human decides. Only
+// temperature + path-defaults carry a one-click Apply (visible, reversible);
+// prompt/skill work is advisory with a copyable Claude Code instruction.
+// Benchmark-derived recommendations show the standing overfitting caution.
+export function RecommendationsPanel({ source, recommendations }: { source: "consistency" | "a-vs-b" | "benchmark"; recommendations: Recommendation[] }) {
+  const setVerdictTemperature = useAISettingsStore((s) => s.setVerdictTemperature);
+  const setAnalysisPath = useWorkspaceStore((s) => s.setAnalysisPath);
+  const logApplied = useCalibrationStore((s) => s.logAppliedRecommendation);
+  const applied = useCalibrationStore((s) => s.appliedRecommendations);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  if (recommendations.length === 0) return null;
+  const anyBenchmark = recommendations.some((r) => r.benchmarkDerived);
+
+  const apply = (r: Recommendation) => {
+    if (!r.apply) return;
+    let summary = "";
+    if (r.apply.type === "temperature") {
+      setVerdictTemperature(r.apply.value);
+      summary = `Set verdict temperature to ${r.apply.value.toFixed(2)}`;
+    } else {
+      for (const [sc, p] of Object.entries(r.apply.paths)) setAnalysisPath(sc, p);
+      summary = `Set path default: ${Object.entries(r.apply.paths).map(([sc, p]) => `${sc}→${p}`).join(", ")}`;
+    }
+    logApplied({ source, recommendationId: r.id, summary });
+  };
+
+  const TONE: Record<Recommendation["severity"], { bg: string; border: string; label: string; labelColor: string }> = {
+    action: { bg: "#fffbeb", border: "#fde68a", label: "Recommended action", labelColor: "#b45309" },
+    advisory: { bg: "#eff6ff", border: "#bfdbfe", label: "Advisory", labelColor: "#1d4ed8" },
+    ok: { bg: "#f0fdf4", border: "#bbf7d0", label: "Healthy", labelColor: "#15803d" },
+  };
+
+  return (
+    <Card>
+      <h3 style={{ marginTop: 0, fontSize: 14 }}>Tuning Advisor <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· auto-generated · AI recommends, you decide</span></h3>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {recommendations.map((r) => {
+          const tone = TONE[r.severity];
+          const wasApplied = applied.some((a) => a.recommendationId === r.id);
+          return (
+            <div key={r.id} style={{ background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, color: tone.labelColor }}>{tone.label}</span>
+                <b style={{ fontSize: 12.5, color: "#1e293b", flex: 1 }}>{r.title}</b>
+              </div>
+              <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.5, marginBottom: r.evidence.length || r.apply || r.copyableInstruction ? 6 : 0 }}>{r.reasoning}</div>
+              {r.evidence.length > 0 && (
+                <div style={{ fontSize: 11, color: "#64748b", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 6, padding: "6px 9px", marginBottom: 6, maxHeight: 130, overflowY: "auto" }}>
+                  <div style={{ fontWeight: 700, marginBottom: 2 }}>Based on:</div>
+                  {r.evidence.map((e, i) => <div key={i} style={{ lineHeight: 1.45 }}>· {e}</div>)}
+                </div>
+              )}
+              {r.apply && (
+                <button
+                  disabled={wasApplied}
+                  onClick={() => apply(r)}
+                  style={{ cursor: wasApplied ? "default" : "pointer", fontSize: 12, fontWeight: 700, padding: "5px 12px", borderRadius: 7, border: "1px solid #4338ca", background: wasApplied ? "#e0e7ff" : "#4338ca", color: wasApplied ? "#4338ca" : "#fff" }}
+                >
+                  {wasApplied ? "✓ Applied" : r.apply.type === "temperature" ? "Apply — lower temperature" : "Apply path defaults"}
+                </button>
+              )}
+              {r.copyableInstruction && (
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 3 }}>Advisory only (no auto-apply) — copy this instruction for a deliberate prompt/skill change:</div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                    <textarea readOnly value={r.copyableInstruction} style={{ flex: 1, minHeight: 54, fontSize: 11, fontFamily: "ui-monospace,monospace", padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, resize: "vertical", background: "#fff" }} />
+                    <button onClick={() => { navigator.clipboard?.writeText(r.copyableInstruction!); setCopiedId(r.id); setTimeout(() => setCopiedId(null), 1500); }} style={{ cursor: "pointer", fontSize: 11.5, padding: "5px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", whiteSpace: "nowrap" }}>{copiedId === r.id ? "Copied" : "Copy"}</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {anyBenchmark && (
+        <div style={{ fontSize: 11, color: "#7c2d12", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "7px 10px", marginTop: 8 }}>
+          ⚠ Overfitting caution: {OVERFITTING_CAUTION}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 // ── Shared picker with guidance ──────────────────────────────────────────
 
@@ -256,6 +342,7 @@ export function ConsistencyTab() {
       </Card>
 
       {saved && <ConsistencyResult result={saved} onDelete={() => { deleteConsistencyTest(saved.subCriterionId); setSelectedId(""); }} />}
+      {saved && <RecommendationsPanel source="consistency" recommendations={recommendFromConsistency(saved)} />}
 
       {/* Past tests on other sub-criteria stay reviewable + individually re-runnable + deletable. */}
       {Object.values(tests).filter((t) => t.subCriterionId !== selectedId).map((t) => (
@@ -473,6 +560,7 @@ export function AvsBTab() {
       </Card>
 
       {saved && <ABResult result={saved} onDelete={() => { deleteAbTest(saved.subCriterionId); setSelectedId(""); }} />}
+      {Object.keys(tests).length > 0 && <RecommendationsPanel source="a-vs-b" recommendations={recommendFromAB(Object.values(tests))} />}
 
       {Object.values(tests).filter((t) => t.subCriterionId !== selectedId).map((t) => (
         <Card key={t.subCriterionId} style={{ padding: "10px 14px" }}>

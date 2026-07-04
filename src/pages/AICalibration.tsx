@@ -11,7 +11,8 @@ import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import { ConsistencyTab, AvsBTab } from "./CalibrationLab";
+import { ConsistencyTab, AvsBTab, RecommendationsPanel } from "./CalibrationLab";
+import { recommendFromBenchmark } from "../lib/tuningAdvisor";
 import type { Finding } from "../types";
 
 const PATTERNS: BenchmarkFindingPattern[] = [
@@ -327,6 +328,11 @@ Give a one-line justification naming what matched or what was missed. Respond wi
           </div>
         )}
       </Card>
+
+      {/* Tuning Advisor — auto-generated from the missed/partial findings. */}
+      {lastRunAt && (
+        <RecommendationsPanel source="benchmark" recommendations={recommendFromBenchmark(matches, BENCHMARK_AFIS)} />
+      )}
 
       {/* Over-rating check */}
       {overRated.length > 0 && (

@@ -53,7 +53,20 @@ type CalibrationState = {
   setAbTest: (r: ABTestResult) => void;
   deleteAbTest: (subCriterionId: string) => void;
   clearAbTests: () => void;
+  // Trail of every one-click Tuning Advisor apply: what changed, when, and
+  // which test it came from.
+  appliedRecommendations: AppliedRecommendation[];
+  logAppliedRecommendation: (entry: Omit<AppliedRecommendation, "appliedAt">) => void;
 };
+
+export type AppliedRecommendation = {
+  appliedAt: string; // ISO
+  source: "consistency" | "a-vs-b" | "benchmark";
+  recommendationId: string;
+  summary: string; // human-readable "what changed"
+};
+
+const APPLIED_CAP = 100;
 
 export const useCalibrationStore = create<CalibrationState>()(
   persist(
@@ -84,6 +97,9 @@ export const useCalibrationStore = create<CalibrationState>()(
       setAbTest: (r) => set((s) => ({ abTests: { ...s.abTests, [r.subCriterionId]: r } })),
       deleteAbTest: (id) => set((s) => { const { [id]: _drop, ...rest } = s.abTests; return { abTests: rest }; }),
       clearAbTests: () => set({ abTests: {} }),
+      appliedRecommendations: [],
+      logAppliedRecommendation: (entry) =>
+        set((s) => ({ appliedRecommendations: [{ ...entry, appliedAt: new Date().toISOString() }, ...s.appliedRecommendations].slice(0, APPLIED_CAP) })),
     }),
     { name: "ucc-gd4-calibration:v1", storage: createJSONStorage(() => localStorage) }
   )
