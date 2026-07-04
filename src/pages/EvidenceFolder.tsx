@@ -1932,26 +1932,48 @@ export function EvidenceFolder() {
     (f) => (!critFilter || f.subCriterionId.split(".")[0] === critFilter) && (!subFilter || f.subCriterionId === subFilter)
   );
 
-  // Fix 4: one at-a-glance completion summary per sub-criterion, from the
-  // same stores the other pages read (so counts always agree across screens).
+  // One at-a-glance completion summary per sub-criterion, from the same
+  // stores the other pages read (so counts always agree across screens).
+  // Split PER PATH so the Progress chips and "View results" can follow the
+  // row's A/B toggle: `a` reflects Option A's PPD review / Evidence
+  // assessment, `b` reflects the Option B staged run (its policy + evidence
+  // passes, from the run record's scope). findingsCount/bandLabel stay
+  // sub-criterion-level — both paths write to the SAME checklist and
+  // register (the one-truth design), so those numbers are shared; the chips
+  // gate them on whether the selected path has actually run.
   const subCritProgress = useMemo(() => {
-    const map: Record<string, { ppdDone: boolean; evidenceDone: boolean; compileDone: boolean; findingsCount: number; bandLabel: string }> = {};
+    const map: Record<string, {
+      a: { ppdDone: boolean; evidenceDone: boolean; run: boolean };
+      b: { policyDone: boolean; evidenceDone: boolean; run: boolean };
+      compileDone: boolean; findingsCount: number; bandLabel: string;
+    }> = {};
     for (const f of folders) {
       const sc = f.subCriterionId;
       const itemIds = new Set(GD4_REQUIREMENTS.filter((r) => r.subCriterionId === sc).map((r) => r.id));
       const ppd = ppdReviewResults[sc];
       const ev = evidenceAssessments[sc];
-      const ppdDone = !!ppd && ppd.rows.length > 0;
-      // Evidence assessed either via Option A's Evidence tab or an Option B
-      // staged-audit run on this folder.
-      const evidenceDone = (!!ev && ev.rows.length > 0) || !!f.lastAuditAt;
+      const a = {
+        ppdDone: !!ppd && ppd.rows.length > 0,
+        evidenceDone: !!ev && ev.rows.length > 0,
+        run: (!!ppd && ppd.rows.length > 0) || (!!ev && ev.rows.length > 0),
+      };
+      // Option B: the last staged/classic run on this folder. The run
+      // record's scope says which passes ran; a legacy lastAuditAt without a
+      // record counts as a full run.
+      const rec = lastAuditRuns[f.id];
+      const bRun = !!rec || !!f.lastAuditAt;
+      const b = {
+        policyDone: rec ? rec.scope !== "evidence" : bRun,
+        evidenceDone: rec ? rec.scope !== "policy" : bRun,
+        run: bRun,
+      };
       // Compile done when any Evidence-tab row or PPD contradiction has been
       // compiled into the register (Option B auto-raises, so a completed
       // staged audit also counts).
       const compileDone =
         (!!ev && ev.rows.some((r) => r.savedFindingId)) ||
         (!!ppd?.contradictions && ppd.contradictions.some((c) => c.savedFindingId)) ||
-        (!!f.lastAuditAt && customFindings.some((cf) => itemIds.has(cf.gd4ItemId)));
+        (bRun && customFindings.some((cf) => itemIds.has(cf.gd4ItemId)));
       const findingsCount = customFindings.filter((cf) => itemIds.has(cf.gd4ItemId)).length;
       const startedBands = scored.items.filter((i) => i.subCriterionId === sc && i.started).map((i) => i.band);
       const bandLabel = startedBands.length === 0
@@ -1959,10 +1981,10 @@ export function EvidenceFolder() {
         : Math.min(...startedBands) === Math.max(...startedBands)
           ? String(startedBands[0])
           : `${Math.min(...startedBands)}–${Math.max(...startedBands)}`;
-      map[sc] = { ppdDone, evidenceDone, compileDone, findingsCount, bandLabel };
+      map[sc] = { a, b, compileDone, findingsCount, bandLabel };
     }
     return map;
-  }, [folders, ppdReviewResults, evidenceAssessments, customFindings, scored.items]);
+  }, [folders, ppdReviewResults, evidenceAssessments, customFindings, scored.items, lastAuditRuns]);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showHelp, setShowHelp] = useState(false);
@@ -2475,23 +2497,25 @@ export function EvidenceFolder() {
                 <span style={rowLabel}>Path</span>
                 <button
                   onClick={() => setAnalysisPath(f.subCriterionId, "A")}
-                  title={tip("Option A (PPD + Evidence), two steps: checks whether the PPD documents each requirement, then checks the evidence against it. Slower, but mirrors how SSG assessors work.")}
+                  title={tip("Option A (PPD + Evidence), two steps: checks whether the PPD documents each requirement, then checks the evidence against it. Slower, but mirrors how SSG assessors work." + (prog?.a.run ? " Option A has saved results." : ""))}
                   style={{ ...chipBtn, border: `1.5px solid ${path === "A" ? "#7c3aed" : "#e2e8f0"}`, background: path === "A" ? "#faf5ff" : "#fff", color: path === "A" ? "#5b21b6" : "#64748b", fontWeight: 700 }}
                 >
                   {path === "A" ? "◉" : "○"} A · PPD + Evidence
+                  {prog?.a.run && <span title="Option A has saved results" style={{ marginLeft: 4, color: "#15803d", fontWeight: 800 }}>✓</span>}
                 </button>
                 <button
                   onClick={() => setAnalysisPath(f.subCriterionId, "B")}
-                  title={tip("Option B (Staged audit): a single pass straight to APSR verdicts on the Sub-Criterion Checklist. Faster and cheaper; best for a quick first sweep.")}
+                  title={tip("Option B (Staged audit): a single pass straight to APSR verdicts on the Sub-Criterion Checklist. Faster and cheaper; best for a quick first sweep." + (prog?.b.run ? " Option B has saved results." : ""))}
                   style={{ ...chipBtn, border: `1.5px solid ${path === "B" ? "#7c3aed" : "#e2e8f0"}`, background: path === "B" ? "#faf5ff" : "#fff", color: path === "B" ? "#5b21b6" : "#64748b", fontWeight: 700 }}
                 >
                   {path === "B" ? "◉" : "○"} B · Staged audit
+                  {prog?.b.run && <span title="Option B has saved results" style={{ marginLeft: 4, color: "#15803d", fontWeight: 800 }}>✓</span>}
                 </button>
                 {path === "A" && (
                   <span style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 10.5, flexWrap: "wrap" }} title="Option A runs in three steps in the full-screen review (PPD → Evidence → Compile findings)">
                     {([
-                      { n: 1, label: "PPD", done: !!prog?.ppdDone },
-                      { n: 2, label: "Evidence", done: !!prog?.evidenceDone && !!prog?.ppdDone },
+                      { n: 1, label: "PPD", done: !!prog?.a.ppdDone },
+                      { n: 2, label: "Evidence", done: !!prog?.a.evidenceDone && !!prog?.a.ppdDone },
                       { n: 3, label: "Compile", done: !!prog?.compileDone },
                     ]).map((st, i) => (
                       <Fragment key={st.n}>
@@ -2508,17 +2532,26 @@ export function EvidenceFolder() {
               </div>
               {/* RIGHT COLUMN — status + what to do: Progress + Action */}
               <div className="ef-col-right">
-              {/* Progress: completion chips */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "3px 0" }} title={tip("Completion summary for this sub-criterion: PPD review run, evidence assessed, findings raised, checklist band")}>
+              {/* Progress: completion chips for the SELECTED path (the A/B
+                  toggle is the single source of "which path am I viewing").
+                  PPD/Evidence reflect that path's own passes; Findings/Band
+                  are the shared checklist truth, shown once the selected
+                  path has run and "–" otherwise. */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "3px 0" }} title={tip(`Completion summary for Option ${path} on this sub-criterion: ${path === "A" ? "PPD review run, evidence assessed" : "policy pass, evidence pass"}, findings raised, checklist band. Toggle the path to see the other option's progress.`)}>
                 <span style={rowLabel}>Progress</span>
-                {prog ? (
-                  <>
-                    {progChip("PPD", prog.ppdDone ? "✓" : "–", prog.ppdDone, "#15803d")}
-                    {progChip("Evidence", prog.evidenceDone ? "✓" : "–", prog.evidenceDone, "#15803d")}
-                    {progChip("Findings", String(prog.findingsCount), prog.findingsCount > 0, "#b45309")}
-                    {progChip("Band", prog.bandLabel, prog.bandLabel !== "–", "#4338ca")}
-                  </>
-                ) : (
+                {prog ? (() => {
+                  const sel = path === "A"
+                    ? { ppd: prog.a.ppdDone, ev: prog.a.evidenceDone, run: prog.a.run }
+                    : { ppd: prog.b.policyDone, ev: prog.b.evidenceDone, run: prog.b.run };
+                  return (
+                    <>
+                      {progChip(path === "A" ? "PPD" : "Policy", sel.ppd ? "✓" : "–", sel.ppd, "#15803d")}
+                      {progChip("Evidence", sel.ev ? "✓" : "–", sel.ev, "#15803d")}
+                      {progChip("Findings", sel.run ? String(prog.findingsCount) : "–", sel.run && prog.findingsCount > 0, "#b45309")}
+                      {progChip("Band", sel.run ? prog.bandLabel : "–", sel.run && prog.bandLabel !== "–", "#4338ca")}
+                    </>
+                  );
+                })() : (
                   <span style={{ fontSize: 11, color: "#94a3b8" }}>–</span>
                 )}
               </div>
@@ -2579,20 +2612,21 @@ export function EvidenceFolder() {
                       </button>
                     )}
                     {/* ONE "View results" re-open per row — identical label,
-                        style and position for both paths. Re-opens the last
-                        SAVED result with no AI call: the Option A review modal,
-                        or Option B's audit-run record — chosen by the row's
-                        current path, falling back to whichever result exists.
-                        When BOTH exist, the other result stays reachable via
-                        the ⋯ overflow menu. */}
+                        style and position for both paths. It opens the saved
+                        result for the path currently SELECTED in the A/B
+                        toggle (the single source of "which path am I
+                        viewing") with no AI call: A → the review modal,
+                        B → the audit-run record. Shown only when the SELECTED
+                        path has a saved result; toggling A/B is a pure view
+                        switch — both results coexist untouched. */}
                     {(() => {
                       const hasA = !!(ppdReviewResults[f.subCriterionId] || evidenceAssessments[f.subCriterionId]);
-                      if (!hasA && !lastRun) return null;
-                      const openA = hasA && (path === "A" || !lastRun);
+                      const selectedHasResult = path === "A" ? hasA : !!lastRun;
+                      if (!selectedHasResult) return null;
                       return (
                         <button
-                          onClick={() => (openA ? setOptionAModal(f.subCriterionId) : setViewingRun(lastRun!))}
-                          title={openA
+                          onClick={() => (path === "A" ? setOptionAModal(f.subCriterionId) : setViewingRun(lastRun!))}
+                          title={path === "A"
                             ? (ppdReviewResults[f.subCriterionId] ? `View the saved PPD + Evidence review (last run ${new Date(ppdReviewResults[f.subCriterionId].runAt).toLocaleDateString()}) — instant, no AI call` : "View the saved evidence assessment — instant, no AI call")
                             : `View run ${lastRun!.runId} — ${new Date(lastRun!.startedAt).toLocaleDateString()} — instant, no AI call`}
                           style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #ddd6fe", background: "#faf5ff", color: "#5b21b6", whiteSpace: "nowrap", fontWeight: 600 }}
@@ -2612,18 +2646,6 @@ export function EvidenceFolder() {
                       </button>
                       {overflowOpen === f.id && (
                         <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 14px #0002", zIndex: 30, minWidth: 230, overflow: "hidden" }}>
-                          {/* When BOTH paths have saved results, the row's
-                              "View results" opens the path-matching one; the
-                              other stays reachable here. */}
-                          {(ppdReviewResults[f.subCriterionId] || evidenceAssessments[f.subCriterionId]) && lastRun && (
-                            path === "A"
-                              ? overflowItem("View results (Option B run record)", () => setViewingRun(lastRun), {
-                                  title: `View run ${lastRun.runId} — ${new Date(lastRun.startedAt).toLocaleDateString()} — instant, no AI call`,
-                                })
-                              : overflowItem("View results (PPD + Evidence review)", () => setOptionAModal(f.subCriterionId), {
-                                  title: "View the saved PPD + Evidence review — instant, no AI call",
-                                })
-                          )}
                           {auditMode === "hybrid" && path === "A" &&
                             overflowItem("Run staged audit (Option B)", () => auditFolderStaged(f.id, "all"), {
                               title: "Runs the Option B engine on this folder even though Option A is selected — verdicts land on the Sub-Criterion Checklist",
