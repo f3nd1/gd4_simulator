@@ -75,12 +75,24 @@ function csvCell(v: string | number | boolean): string {
   return `"${String(v).replace(/"/g, '""')}"`;
 }
 
+// "04 Jul 2026, 14:30" / "04 Jul" — every timestamp on this page goes through
+// these so the format is consistent.
+function fmtDateTime(iso: string): string {
+  return new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function fmtDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+}
+
 export function AICalibration() {
   const subCriteria = benchmarkSubCriteria();
   const [selected, setSelected] = useState<string>("all");
   const matches = useCalibrationStore((s) => s.matches);
   const setMatch = useCalibrationStore((s) => s.setMatch);
   const setAiMatch = useCalibrationStore((s) => s.setAiMatch);
+  const recordRun = useCalibrationStore((s) => s.recordRun);
+  const lastRunAt = useCalibrationStore((s) => s.lastRunAt);
+  const runHistory = useCalibrationStore((s) => s.runHistory);
   const aiSettings = useAISettingsStore((s) => s);
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
@@ -158,6 +170,14 @@ Give a one-line justification naming what matched or what was missed. Respond wi
           if (id && status && afis.some((a) => a.id === id)) setAiMatch(id, status, String(r.justification ?? ""));
         }
       }
+      // Stamp the completed sweep with its scoreboard totals (always across
+      // ALL benchmark gap AFIs, regardless of the page filter, so the trend
+      // compares like with like). Read fresh store state — the component's
+      // `matches` snapshot predates the setAiMatch calls above.
+      const fresh = useCalibrationStore.getState().matches;
+      const totals = { caught: 0, partial: 0, missed: 0, unassessed: 0 };
+      for (const a of BENCHMARK_AFIS.filter((x) => x.kind === "AFI")) totals[fresh[a.id]?.status ?? "unassessed"]++;
+      recordRun(totals);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -166,10 +186,10 @@ Give a one-line justification naming what matched or what was missed. Respond wi
   }
 
   function exportCsv() {
-    const header = ["AFI ID", "Year", "Sub-criterion", "GD4 ref", "Pattern", "Has named example", "Real finding text", "Match status", "Human override", "Justification"];
+    const header = ["AFI ID", "Year", "Sub-criterion", "GD4 ref", "Pattern", "Has named example", "Real finding text", "Match status", "Human override", "Justification", "Verdict assessed at", "Match analysis last run"];
     const rows = gapAFIs.map((a) => {
       const m = matches[a.id];
-      return [a.id, a.year, a.subCriterion, a.gd4Ref ?? "", a.findingPattern, a.hasNamedExample, a.findingText, m?.status ?? "unassessed", m?.humanOverride ?? false, m?.justification ?? ""];
+      return [a.id, a.year, a.subCriterion, a.gd4Ref ?? "", a.findingPattern, a.hasNamedExample, a.findingText, m?.status ?? "unassessed", m?.humanOverride ?? false, m?.justification ?? "", m?.assessedAt ?? "", lastRunAt ?? ""];
     });
     const csv = [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -220,7 +240,12 @@ Give a one-line justification naming what matched or what was missed. Respond wi
 
       {/* Scoreboard */}
       <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Scoreboard</h3>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+          <h3 style={{ marginTop: 0, fontSize: 14 }}>Scoreboard</h3>
+          <span style={{ fontSize: 12, fontWeight: 600, color: lastRunAt ? "#374151" : "#b45309" }}>
+            {lastRunAt ? `Last match analysis run: ${fmtDateTime(lastRunAt)}` : "Match analysis has not been run yet — verdicts below are from earlier runs or manual edits."}
+          </span>
+        </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
           <Pill s="good">Caught {scoreboard.total.caught}</Pill>
           <Pill s="medium">Partially caught {scoreboard.total.partial}</Pill>
@@ -253,6 +278,23 @@ Give a one-line justification naming what matched or what was missed. Respond wi
             })}
           </tbody>
         </table>
+        {runHistory.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Run history (all benchmark AFIs)</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              {runHistory.slice(0, 6).map((r, i) => (
+                <div key={r.runAt} style={{ fontSize: 12, color: i === 0 ? "#1e293b" : "#6b7280", fontWeight: i === 0 ? 600 : 400 }}>
+                  {fmtDateTime(r.runAt)}: Caught {r.caught} · Partial {r.partial} · Missed {r.missed} · Unassessed {r.unassessed}
+                  {i === 0 && runHistory.length > 1 && (() => {
+                    const d = r.caught - runHistory[1].caught;
+                    return <span style={{ marginLeft: 6, color: d > 0 ? "#15803d" : d < 0 ? "#b91c1c" : "#94a3b8" }}>({d > 0 ? `+${d}` : d} caught vs previous run)</span>;
+                  })()}
+                </div>
+              ))}
+              {runHistory.length > 6 && <div style={{ fontSize: 11, color: "#94a3b8" }}>… {runHistory.length - 6} older run{runHistory.length - 6 === 1 ? "" : "s"}</div>}
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* Over-rating check */}
@@ -284,7 +326,7 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
   subCriterionId: string;
   afis: BenchmarkAFI[];
   statusOf: (a: BenchmarkAFI) => MatchStatus;
-  matchesJustification: (id: string) => { justification: string; humanOverride?: boolean } | undefined;
+  matchesJustification: (id: string) => { justification: string; humanOverride?: boolean; assessedAt?: string } | undefined;
   setMatch: (afiId: string, status: MatchStatus, justification: string, humanOverride: boolean) => void;
 }) {
   const { ppd, ev, findings } = useAppResults(subCriterionId);
@@ -295,7 +337,10 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
     <Card>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Sub-criterion {subCriterionId}</h3>
-        <span style={{ fontSize: 11.5, color: "#6b7280" }}>{afis.length} real finding{afis.length === 1 ? "" : "s"} · app: {ppd ? "PPD ✓" : "PPD —"} · {ev ? "Evidence ✓" : "Evidence —"} · {findings.length} compiled finding{findings.length === 1 ? "" : "s"}</span>
+        <span style={{ fontSize: 11.5, color: "#6b7280" }}>
+          {afis.length} real finding{afis.length === 1 ? "" : "s"} · app: {ppd ? `PPD ✓ (audit ${fmtDate(ppd.runAt)})` : "PPD —"} · {ev ? `Evidence ✓ (audit ${fmtDate(ev.runAt)})` : "Evidence —"} · {findings.length} compiled finding{findings.length === 1 ? "" : "s"}
+          {!ppd && !ev && " · no app audit to compare against"}
+        </span>
         <button onClick={() => setShowApp((v) => !v)} style={{ cursor: "pointer", fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", marginLeft: "auto" }}>
           {showApp ? "Hide app results" : "Show app results"}
         </button>
@@ -342,6 +387,12 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
                     placeholder="Justification — what matched, or what the AI missed"
                     style={{ ...inputStyle, flex: 1, minWidth: 240, padding: "3px 6px", fontSize: 11.5 }}
                   />
+                </div>
+              )}
+              {isGap && m?.assessedAt && (
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+                  assessed {fmtDateTime(m.assessedAt)}
+                  {m.humanOverride && <span style={{ color: "#7c3aed" }}> · edited by you {fmtDate(m.assessedAt)} — re-runs won't overwrite this verdict</span>}
                 </div>
               )}
             </div>

@@ -17,11 +17,29 @@ export type MatchAssessment = {
   assessedAt?: string;
 };
 
+// One completed "Run match analysis" sweep: when it ran and the scoreboard
+// totals it produced, so the page can show a trend over time.
+export type CalibrationRunRecord = {
+  runAt: string; // ISO
+  caught: number;
+  partial: number;
+  missed: number;
+  unassessed: number;
+};
+
+const RUN_HISTORY_CAP = 20;
+
 type CalibrationState = {
   matches: Record<string, MatchAssessment>;
+  // When the last "Run match analysis" finished (null = never run).
+  lastRunAt: string | null;
+  // Newest-first history of past sweeps' scoreboard totals.
+  runHistory: CalibrationRunRecord[];
   setMatch: (afiId: string, status: MatchStatus, justification: string, humanOverride: boolean) => void;
   // AI-run result: only applied when the row has no human override.
   setAiMatch: (afiId: string, status: MatchStatus, justification: string) => void;
+  // Called once per completed match-analysis sweep with the resulting totals.
+  recordRun: (totals: Omit<CalibrationRunRecord, "runAt">) => void;
   clearMatches: () => void;
 };
 
@@ -29,6 +47,8 @@ export const useCalibrationStore = create<CalibrationState>()(
   persist(
     (set, get) => ({
       matches: {},
+      lastRunAt: null,
+      runHistory: [],
       setMatch: (afiId, status, justification, humanOverride) =>
         set((s) => ({
           matches: { ...s.matches, [afiId]: { afiId, status, justification, humanOverride, assessedAt: new Date().toISOString() } },
@@ -39,6 +59,11 @@ export const useCalibrationStore = create<CalibrationState>()(
           matches: { ...s.matches, [afiId]: { afiId, status, justification, humanOverride: false, assessedAt: new Date().toISOString() } },
         }));
       },
+      recordRun: (totals) =>
+        set((s) => {
+          const runAt = new Date().toISOString();
+          return { lastRunAt: runAt, runHistory: [{ runAt, ...totals }, ...s.runHistory].slice(0, RUN_HISTORY_CAP) };
+        }),
       clearMatches: () => set({ matches: {} }),
     }),
     { name: "ucc-gd4-calibration:v1", storage: createJSONStorage(() => localStorage) }
