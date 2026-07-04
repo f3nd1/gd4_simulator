@@ -6,7 +6,8 @@ import { Pill } from "../components/ui/Pill";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
-import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "../data/gd4Requirements";
+import { PpdReviewContent } from "./PPDReview";
 import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
 import { TONE } from "../lib/theme";
@@ -1395,6 +1396,55 @@ function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => v
   );
 }
 
+// Near-fullscreen modal hosting the FULL PPD + Evidence review (Option A) for
+// one sub-criterion, layered over the Evidence Folder — the same content the
+// PPD Requirements Review page shows (PpdReviewContent is shared verbatim, so
+// the two surfaces cannot drift). Handles all three states through the shared
+// content: running (PpdTab/EvidenceTab live progress panels), loaded-saved
+// (instant render from ppdReviewResults/evidenceAssessments, no AI call) and
+// empty (the tabs' own "Run…" buttons). zIndex 110: above the row modals
+// (100), below the Full-auto overlay (120).
+function OptionAReviewModal({ subCriterionId, onClose }: { subCriterionId: string; onClose: () => void }) {
+  const sub = GD4_SUB_CRITERIA.find((s) => s.id === subCriterionId);
+  const runPPDReview = useWorkspaceStore((s) => s.runPPDReview);
+  const busy = useWorkspaceStore((s) => s.busy);
+  const rerunning = busy === "ppdreview" + subCriterionId;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 110 }} onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ position: "absolute", inset: 18, background: "#fff", borderRadius: 12, boxShadow: "0 10px 44px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", overflow: "hidden" }}
+      >
+        {/* Fixed header: title + Re-run + close */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 18px", borderBottom: "1px solid #e2e8f0", background: "#f8fafc", flexShrink: 0 }}>
+          <h3 style={{ margin: 0, fontSize: 14 }}>
+            PPD + Evidence Review — {subCriterionId}{sub ? ` ${sub.title}` : ""}
+          </h3>
+          <button
+            onClick={() => runPPDReview(subCriterionId)}
+            disabled={rerunning}
+            title="Runs the PPD review again with fresh AI calls (usual progress and cost). The Evidence tab has its own re-run button."
+            style={{ marginLeft: "auto", cursor: rerunning ? "wait" : "pointer", fontSize: 12, fontWeight: 700, padding: "5px 12px", borderRadius: 7, border: "1px solid #c7d2fe", background: rerunning ? "#e0e7ff" : "#eef2ff", color: "#4338ca", whiteSpace: "nowrap" }}
+          >
+            {rerunning ? "Re-running…" : "↻ Re-run"}
+          </button>
+          <button
+            onClick={onClose}
+            title="Close — the review stays saved and can be re-opened with 'View results'"
+            style={{ cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#64748b", lineHeight: 1, padding: "0 4px" }}
+          >
+            ✕
+          </button>
+        </div>
+        {/* Internally scrolling body with the full shared review content */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "14px 18px" }}>
+          <PpdReviewContent selectedId={subCriterionId} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 const STATUSES: FolderStatus[] = ["Good", "In Progress", "Partial", "Missing"];
@@ -1792,6 +1842,9 @@ export function EvidenceFolder() {
 
   const [checkingAdditional, setCheckingAdditional] = useState(false);
   const [viewingRun, setViewingRun] = useState<AuditRunRecord | null>(null);
+  // Sub-criterion whose Option A (PPD + Evidence) review is open in the
+  // near-fullscreen modal; null = closed. Running and re-opening both land here.
+  const [optionAModal, setOptionAModal] = useState<string | null>(null);
 
   const effectiveAuditor =
     auditors.find((a) => a.id === activeAuditorId) || auditors.find((a) => a.role === "Audit Lead") || auditors[0];
@@ -1981,6 +2034,9 @@ export function EvidenceFolder() {
     )}
     {viewingRun && (
       <AuditRunModal run={viewingRun} onClose={() => setViewingRun(null)} />
+    )}
+    {optionAModal && (
+      <OptionAReviewModal subCriterionId={optionAModal} onClose={() => setOptionAModal(null)} />
     )}
     <Card>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -2432,7 +2488,7 @@ export function EvidenceFolder() {
                   {path === "B" ? "◉" : "○"} B · Staged audit
                 </button>
                 {path === "A" && (
-                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 10.5, flexWrap: "wrap" }} title="Option A runs in three steps on the PPD Requirements Review page">
+                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 10.5, flexWrap: "wrap" }} title="Option A runs in three steps in the full-screen review (PPD → Evidence → Compile findings)">
                     {([
                       { n: 1, label: "PPD", done: !!prog?.ppdDone },
                       { n: 2, label: "Evidence", done: !!prog?.evidenceDone && !!prog?.ppdDone },
@@ -2498,18 +2554,19 @@ export function EvidenceFolder() {
                         Open checklist →
                       </Link>
                     ) : path === "A" ? (
-                      // Option A is multi-step (PPD → evidence → compile) and
-                      // lives on the PPD Review page. Clicking here STARTS the
-                      // first step (PPD review) and opens that page — so an
-                      // Option-A row runs on one click, symmetric with Option
-                      // B's "Run audit →", instead of only navigating.
+                      // Option A is multi-step (PPD → evidence → compile).
+                      // Clicking here STARTS the first step (PPD review) and
+                      // opens the near-fullscreen review MODAL over this page
+                      // — same action shape as Option B's "Run audit", no
+                      // page navigation. (The PPD Review page route still
+                      // works for deep links.)
                       <button
-                        onClick={() => { runPPDReview(f.subCriterionId); navigate(`/ppd-review?item=${f.subCriterionId}`); }}
+                        onClick={() => { runPPDReview(f.subCriterionId); setOptionAModal(f.subCriterionId); }}
                         disabled={noAuditors}
-                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option A (PPD + Evidence): starts the PPD review now and opens the PPD Review page, where you continue with the evidence assessment and compile findings. You approve each result before it commits (Hybrid mode).")}
+                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option A (PPD + Evidence): starts the PPD review now and opens the full review over this page, where you continue with the evidence assessment and compile findings. You approve each result before it commits (Hybrid mode).")}
                         style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >
-                        Run review →
+                        Run review
                       </button>
                     ) : (
                       <button
@@ -2519,6 +2576,19 @@ export function EvidenceFolder() {
                         style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >
                         Run audit →
+                      </button>
+                    )}
+                    {/* Option A re-open: mirrors Option B's "Last run ↗" — opens
+                        the saved review instantly in the modal, no AI call. Shown
+                        whenever a saved Option A result exists, regardless of the
+                        currently selected path or mode. */}
+                    {(ppdReviewResults[f.subCriterionId] || evidenceAssessments[f.subCriterionId]) && (
+                      <button
+                        onClick={() => setOptionAModal(f.subCriterionId)}
+                        title={ppdReviewResults[f.subCriterionId] ? `View the saved PPD + Evidence review (last run ${new Date(ppdReviewResults[f.subCriterionId].runAt).toLocaleDateString()}) — instant, no AI call` : "View the saved evidence assessment — instant, no AI call"}
+                        style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #ddd6fe", background: "#faf5ff", color: "#5b21b6", whiteSpace: "nowrap", fontWeight: 600 }}
+                      >
+                        View results
                       </button>
                     )}
                     {lastRun && (

@@ -60,7 +60,6 @@ export function PPDReview() {
   const setLastPpdSubCriterion = useWorkspaceStore((s) => s.setLastPpdSubCriterion);
   const selectedId = resolvePpdSelection(searchParams.get("item"), lastPpdSubCriterionId, ppdReviewResults);
   const sub = GD4_SUB_CRITERIA.find((s) => s.id === selectedId);
-  const [tab, setTab] = useState<"ppd" | "evidence">("ppd");
 
   // Remember the resolved sub-criterion so a later bare-link return restores it.
   useEffect(() => {
@@ -70,21 +69,6 @@ export function PPDReview() {
   const pickSubCriterion = (id: string) => {
     if (id) setSearchParams({ item: id }); else setSearchParams({});
   };
-
-  const folders = useWorkspaceStore((s) => s.folders);
-  const folder = folders.find((f) => f.subCriterionId === selectedId);
-
-  const requirementItems = useMemo(
-    () => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === selectedId),
-    [selectedId]
-  );
-  const totalLines = useMemo(
-    () => requirementItems.reduce((n, r) => n + (r.flatAuditPoints?.filter((p) => p.sourceType === "describeShow").length ?? 0), 0),
-    [requirementItems]
-  );
-
-  const savedResult = ppdReviewResults[selectedId];
-  const savedSummary = ppdResultSummary(savedResult?.rows);
 
   return (
     <Card>
@@ -107,9 +91,49 @@ export function PPDReview() {
         </select>
       </div>
 
+      {!sub && (
+        <p style={{ fontSize: 12.5, color: "#94a3b8" }}>
+          Pick a sub-criterion above to review its Policy &amp; Procedure Document, or open it from the{" "}
+          <Link to="/evidence-folder" style={{ color: "#4338ca", fontWeight: 600 }}>Evidence Folder</Link> page's "Run review" button.
+          Sub-criteria you have already reviewed are marked ●.
+        </p>
+      )}
+
+      {sub && <PpdReviewContent selectedId={selectedId} />}
+    </Card>
+  );
+}
+
+// The full PPD + Evidence review body for ONE sub-criterion: saved-state
+// banner, next-step guidance, tab bar, and the PPD / Evidence tabs (each with
+// its own run button, live progress panel and results). Extracted from the
+// page so the Evidence Folder's near-fullscreen Option A modal can host the
+// EXACT same content — one component, two surfaces, zero drift.
+export function PpdReviewContent({ selectedId }: { selectedId: string }) {
+  const sub = GD4_SUB_CRITERIA.find((s) => s.id === selectedId);
+  const [tab, setTab] = useState<"ppd" | "evidence">("ppd");
+  const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
+  const folders = useWorkspaceStore((s) => s.folders);
+  const folder = folders.find((f) => f.subCriterionId === selectedId);
+
+  const requirementItems = useMemo(
+    () => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === selectedId),
+    [selectedId]
+  );
+  const totalLines = useMemo(
+    () => requirementItems.reduce((n, r) => n + (r.flatAuditPoints?.filter((p) => p.sourceType === "describeShow").length ?? 0), 0),
+    [requirementItems]
+  );
+
+  const savedResult = ppdReviewResults[selectedId];
+  const savedSummary = ppdResultSummary(savedResult?.rows);
+
+  if (!sub) return null;
+  return (
+    <>
       {/* Saved-state banner: proves the results are saved and current, and
           points at where the same verdicts also live (checklist + scoring). */}
-      {sub && savedResult && (
+      {savedResult && (
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 11.5, color: "#334155", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "7px 11px", marginBottom: 8 }}>
           <span><b>Last reviewed {new Date(savedResult.runAt).toLocaleString("en-SG", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</b> · {savedSummary.adequate} adequate / {savedSummary.partial} partial / {savedSummary.gaps} gaps{savedSummary.notAssessed ? ` / ${savedSummary.notAssessed} not assessed` : ""}</span>
           <span style={{ marginLeft: "auto", color: "#64748b" }}>
@@ -120,45 +144,33 @@ export function PPDReview() {
         </div>
       )}
 
-      {!sub && (
-        <p style={{ fontSize: 12.5, color: "#94a3b8" }}>
-          Pick a sub-criterion above to review its Policy &amp; Procedure Document, or open this page from the{" "}
-          <Link to="/evidence-folder" style={{ color: "#4338ca", fontWeight: 600 }}>Evidence Folder</Link> page's "Run review →" link.
-          Sub-criteria you have already reviewed are marked ●.
-        </p>
-      )}
+      <PpdNextStep selectedId={selectedId} />
 
-      {sub && <PpdNextStep selectedId={selectedId} />}
+      <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: -2, marginBottom: 10 }}>
+        {sub.title} — {sub.description}
+        {" "}· {totalLines} requirement line{totalLines === 1 ? "" : "s"} across {requirementItems.length} item{requirementItems.length === 1 ? "" : "s"}
+        {!folder?.policyLink && !folder?.folderLink && <span style={{ color: "#b23121" }}> · No folder linked yet (Evidence Folder page).</span>}
+      </p>
 
-      {sub && (
-        <>
-          <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: -2, marginBottom: 10 }}>
-            {sub.title} — {sub.description}
-            {" "}· {totalLines} requirement line{totalLines === 1 ? "" : "s"} across {requirementItems.length} item{requirementItems.length === 1 ? "" : "s"}
-            {!folder?.policyLink && !folder?.folderLink && <span style={{ color: "#b23121" }}> · No folder linked yet (Evidence Folder page).</span>}
-          </p>
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "1px solid #e2e8f0" }}>
+        {([["ppd", "PPD Review"], ["evidence", "Evidence"]] as const).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            style={{
+              cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", border: "none",
+              borderBottom: `2px solid ${tab === id ? "#4338ca" : "transparent"}`,
+              background: "transparent", color: tab === id ? "#4338ca" : "#64748b", marginBottom: -1,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-          {/* Tab bar */}
-          <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "1px solid #e2e8f0" }}>
-            {([["ppd", "PPD Review"], ["evidence", "Evidence"]] as const).map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setTab(id)}
-                style={{
-                  cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", border: "none",
-                  borderBottom: `2px solid ${tab === id ? "#4338ca" : "transparent"}`,
-                  background: "transparent", color: tab === id ? "#4338ca" : "#64748b", marginBottom: -1,
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {tab === "ppd" ? <PpdTab selectedId={selectedId} totalLines={totalLines} /> : <EvidenceTab selectedId={selectedId} />}
-        </>
-      )}
-    </Card>
+      {tab === "ppd" ? <PpdTab selectedId={selectedId} totalLines={totalLines} /> : <EvidenceTab selectedId={selectedId} />}
+    </>
   );
 }
 
