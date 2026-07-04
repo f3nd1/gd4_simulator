@@ -2,6 +2,8 @@ import { Fragment, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { devToolsRedirect } from "../nav";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useChangeLogStore } from "../store/useChangeLogStore";
+import { mergeChangeLogs } from "../lib/changeLogMerge";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 
@@ -20,7 +22,11 @@ function formatTs(iso: string): string {
 type ActionFilter = "All" | "push" | "pull";
 
 export function ChangeLog() {
-  const changeLog = useWorkspaceStore((s) => s.changeLog);
+  // The dedicated, durable store is the source of truth; union in any legacy
+  // workspace-store entries so nothing recorded before the migration is hidden.
+  const durableLog = useChangeLogStore((s) => s.changeLog);
+  const legacyLog = useWorkspaceStore((s) => s.changeLog);
+  const changeLog = useMemo(() => mergeChangeLogs(durableLog, legacyLog), [durableLog, legacyLog]);
   const showDeveloperTools = useWorkspaceStore((s) => s.showDeveloperTools);
   const [actionFilter, setActionFilter] = useState<ActionFilter>("All");
   const [search, setSearch] = useState("");

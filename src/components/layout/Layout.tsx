@@ -4,6 +4,7 @@ import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { useGoogleDriveStore } from "../../store/useGoogleDriveStore";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
+import { useChangeLogStore } from "../../store/useChangeLogStore";
 import { useSaveStatusStore } from "../../store/useSaveStatusStore";
 import { flushPendingSaves } from "../../store/supabaseStorage";
 
@@ -80,7 +81,15 @@ function LocalSaveErrorBanner() {
 function ChangeLogRecorder() {
   const info = __GIT_INFO__;
   const pushed = info.ahead === 0;
-  const recordChangeLogEntry = useWorkspaceStore((s) => s.recordChangeLogEntry);
+  const recordChangeLogEntry = useChangeLogStore((s) => s.recordChangeLogEntry);
+  const importEntries = useChangeLogStore((s) => s.importEntries);
+  // One-time migration: fold any entries still sitting in the legacy
+  // workspace-store changeLog into the dedicated, durable store so the existing
+  // history is preserved (append-only — never removes the legacy copy).
+  const legacyLog = useWorkspaceStore((s) => s.changeLog);
+  useEffect(() => {
+    if (legacyLog.length) importEntries(legacyLog);
+  }, [legacyLog, importEntries]);
   useEffect(() => {
     if (!pushed || !info.hash || info.hash === "unknown") return;
     recordChangeLogEntry({
