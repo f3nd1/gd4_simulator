@@ -40,3 +40,35 @@ export function driveReadFailureMessage(detail?: string): string {
   const base = "Connected to Google Drive, but couldn't read this folder. Check that the connected account has at least Viewer access (for a Shared Drive, that it's a member of that drive), and that the folder actually contains files.";
   return detail ? `${base} (${detail})` : base;
 }
+
+// The specific underlying cause of a "connected but couldn't read" failure,
+// parsed from the Drive API error string that the audit surfaces in
+// AuditProgressState.errorMessage (e.g. "…Drive API request failed (403):
+// insufficientFilePermissions"). Lets the error dialog tell the user WHICH of
+// the suggested checks is the real problem instead of a generic message.
+export type DriveReadCause = "permission" | "not-found" | "auth" | "empty" | "unknown";
+
+export function classifyDriveReadError(message?: string): { cause: DriveReadCause; detail: string } {
+  const m = (message || "").toLowerCase();
+  if (/\b403\b|permission|insufficient|forbidden/.test(m))
+    return {
+      cause: "permission",
+      detail: "Permission denied — the connected Google account doesn't have at least Viewer access to this folder. If the folder lives in a Shared Drive, the account must be a MEMBER of that Shared Drive, not just have the link.",
+    };
+  if (/\b404\b|not found|notfound/.test(m))
+    return {
+      cause: "not-found",
+      detail: "Folder not found — the link may point to a wrong, moved, or deleted folder (or to a file rather than a folder). Open folder settings and re-check the link.",
+    };
+  if (/\b401\b|unauthor|invalid credentials|token|expired/.test(m))
+    return {
+      cause: "auth",
+      detail: "Authorisation has expired — reconnect Google Drive to refresh access, then run the audit again.",
+    };
+  if (/\bempty\b|no files found|no readable/.test(m))
+    return {
+      cause: "empty",
+      detail: "The folder was reachable but has no readable files. Add the evidence documents, or check you linked the intended folder.",
+    };
+  return { cause: "unknown", detail: "" };
+}

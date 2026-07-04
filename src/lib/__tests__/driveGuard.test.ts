@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkDriveForRun, driveReadFailureMessage } from "../driveGuard";
+import { checkDriveForRun, driveReadFailureMessage, classifyDriveReadError } from "../driveGuard";
 
 describe("checkDriveForRun", () => {
   it("blocks with a paste-the-link message when nothing is linked, and offers no Connect", () => {
@@ -37,5 +37,32 @@ describe("driveReadFailureMessage", () => {
 
   it("appends an optional detail in parentheses", () => {
     expect(driveReadFailureMessage("403 Forbidden")).toContain("(403 Forbidden)");
+  });
+});
+
+describe("classifyDriveReadError — the specific 6.1-style cause (Fix 4)", () => {
+  it("maps a 403 / insufficient-permissions error to a permission cause", () => {
+    const r = classifyDriveReadError("Could not list folder(s): Actual Evidence: Drive API request failed (403): insufficientFilePermissions");
+    expect(r.cause).toBe("permission");
+    expect(r.detail).toMatch(/Viewer access/i);
+    expect(r.detail).toMatch(/Shared Drive/i);
+  });
+
+  it("maps a 404 / not-found error to a not-found cause", () => {
+    expect(classifyDriveReadError("Drive API request failed (404): File not found").cause).toBe("not-found");
+  });
+
+  it("maps a 401 / expired token to an auth cause", () => {
+    expect(classifyDriveReadError("Drive API request failed (401): Invalid Credentials").cause).toBe("auth");
+  });
+
+  it("maps an empty-folder message to an empty cause", () => {
+    expect(classifyDriveReadError("No files found in the linked folder(s).").cause).toBe("empty");
+  });
+
+  it("falls back to unknown (no misleading specific claim) when unrecognised", () => {
+    const r = classifyDriveReadError("some other network blip");
+    expect(r.cause).toBe("unknown");
+    expect(r.detail).toBe("");
   });
 });

@@ -15,7 +15,7 @@ import { NextStepBanner, Walkthrough, WalkthroughLink, useTip } from "../compone
 import { nextStepText } from "../lib/guidanceText";
 import { runAuditorDisplay, panelUnderMinNotice, MSG_NO_AUDITORS_EXIST, AUDITOR_CREATION_PATH } from "../lib/auditorGuard";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
-import { DRIVE_CONNECT_PATH, driveReadFailureMessage } from "../lib/driveGuard";
+import { DRIVE_CONNECT_PATH, driveReadFailureMessage, classifyDriveReadError } from "../lib/driveGuard";
 
 const SUMMARY_CAP = 320;
 
@@ -856,19 +856,30 @@ function CompleteDetail({ p, onExportFileLedger, onExportAISummary }: { p: Audit
 }
 
 function ErrorDetail({ p }: { p: AuditProgressState }) {
+  const navigate = useNavigate();
+  const driveToken = useGoogleDriveStore((s) => s.accessToken);
+  const driveConnecting = useGoogleDriveStore((s) => s.connecting);
+  const driveClientId = useGoogleDriveStore((s) => s.clientId);
+  const folder = useWorkspaceStore((s) => s.folders.find((f) => f.id === p.folderId));
+
   const filesFound = p.filesFound?.length ?? 0;
   const filesRead = p.filesRead ?? 0;
   const linesAssessed = p.linesAssessed ?? 0;
   const partialSaved = linesAssessed > 0;
 
+  // A Drive-access failure (nothing could be listed/read) vs a downstream
+  // (file-read / AI) failure. Only the first offers Connect/Reconnect + checks.
+  const isDriveFailure = filesFound === 0 && filesRead === 0;
+  const readCause = isDriveFailure ? classifyDriveReadError(p.errorMessage) : null;
+
   let failedStep: string;
   let guidance: string;
-  if (filesFound === 0 && filesRead === 0) {
-    // The pre-run guard already blocks the not-connected case, so reaching here
-    // means Drive IS connected but the folder couldn't be read (Fix 5): don't
-    // tell the user to connect something already connected.
-    failedStep = "Reading the Drive folder";
-    guidance = driveReadFailureMessage();
+  if (isDriveFailure) {
+    // The pre-run guard blocks a total not-connected state, so here Drive is
+    // usually connected but this folder couldn't be read. Report the SPECIFIC
+    // cause when the Drive API gave one (Fix 4); otherwise the general check.
+    failedStep = driveToken ? "Reading the Drive folder" : "Connecting to Google Drive";
+    guidance = readCause && readCause.cause !== "unknown" ? readCause.detail : driveReadFailureMessage();
   } else if (filesRead === 0 || (p.filesTotal != null && filesRead < p.filesTotal)) {
     failedStep = "Reading evidence files";
     guidance = "One or more files could not be read. Password-protected PDFs and unsupported file types are skipped automatically — this error usually means a network issue or an unusually large file. Try running the audit again.";
@@ -876,6 +887,30 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
     failedStep = "Asking AI to assess";
     guidance = "The AI call timed out or was rejected. Check your OpenAI key in Settings → AI Settings. If the folder has more than 15–20 files, try reducing it to the most relevant ones.";
   }
+
+  const connectDrive = () => {
+    if (!driveClientId) { navigate(DRIVE_CONNECT_PATH); return; }
+    useGoogleDriveStore.getState().connect().catch(() => {/* lastError shown in Settings */});
+  };
+  const openFolderSettings = () => {
+    navigate(p.subCriterionId ? `/evidence-folder?sub=${p.subCriterionId}` : "/evidence-folder");
+  };
+
+  const btn = (label: string, onClick: () => void, primary: boolean): React.ReactNode => (
+    <button
+      onClick={onClick}
+      disabled={primary && driveConnecting}
+      style={{
+        cursor: primary && driveConnecting ? "default" : "pointer", fontSize: 11.5, fontWeight: 700,
+        padding: "6px 12px", borderRadius: 7, whiteSpace: "nowrap",
+        border: primary ? "none" : "1px solid #cbd5e1",
+        background: primary ? (driveConnecting ? "#94a3b8" : "#2563eb") : "#fff",
+        color: primary ? "#fff" : "#334155",
+      }}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <div>
@@ -894,9 +929,40 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
           No verdicts saved — you can safely run the audit again once the issue is fixed.
         </div>
       )}
-      <div style={{ fontSize: 11.5, color: "#374151" }}>
+      <div style={{ fontSize: 11.5, color: "#374151", marginBottom: isDriveFailure ? 8 : 0 }}>
         <b>What to do:</b> {guidance}
       </div>
+
+      {/* Fix 1/3 — a Drive failure always gives a clickable way forward, not
+          just advice: Connect (not connected) or Reconnect (connected but the
+          read failed), plus a jump to the folder link settings. */}
+      {isDriveFailure && (
+        <>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4, marginBottom: 8 }}>
+            {btn(
+              driveToken ? (driveConnecting ? "Reconnecting…" : "Reconnect Google Drive") : (driveConnecting ? "Connecting…" : "Connect to Google Drive"),
+              connectDrive,
+              true,
+            )}
+            {btn("Open folder settings", openFolderSettings, false)}
+          </div>
+          {/* The specific checks + the folder link so the user can verify it. */}
+          <div style={{ fontSize: 11, color: "#64748b", background: "#f8fafc", border: "1px solid #eef1f5", borderRadius: 7, padding: "7px 10px" }}>
+            <div style={{ fontWeight: 700, marginBottom: 3 }}>Checks for this folder:</div>
+            <ul style={{ margin: "0 0 0 16px", padding: 0, lineHeight: 1.6 }}>
+              <li>The connected Google account has at least <b>Viewer</b> access to the folder.</li>
+              <li>If it's in a <b>Shared Drive</b>, the account is a <b>member</b> of that drive (link-sharing alone is not enough).</li>
+              <li>The folder actually <b>contains files</b> (not just subfolders that are themselves empty).</li>
+            </ul>
+            {(folder?.folderLink || folder?.policyLink) && (
+              <div style={{ marginTop: 5, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {folder?.policyLink && <a href={folder.policyLink} target="_blank" rel="noreferrer" style={{ color: "#3b82f6", textDecoration: "none" }}>Open Policy folder ↗</a>}
+                {folder?.folderLink && <a href={folder.folderLink} target="_blank" rel="noreferrer" style={{ color: "#16a34a", textDecoration: "none" }}>Open Evidence folder ↗</a>}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1761,7 +1827,7 @@ export function EvidenceFolder() {
     if (!driveClientId) { navigate(DRIVE_CONNECT_PATH); return; }
     useGoogleDriveStore.getState().connect().catch(() => {/* lastError shown in Settings */});
   };
-  const ConnectDriveButton = ({ compact }: { compact?: boolean }) => (
+  const ConnectDriveButton = ({ compact, label }: { compact?: boolean; label?: string }) => (
     <button
       type="button"
       onClick={connectDrive}
@@ -1773,7 +1839,7 @@ export function EvidenceFolder() {
         cursor: driveConnecting ? "default" : "pointer", whiteSpace: "nowrap",
       }}
     >
-      {driveConnecting ? "Connecting…" : "Connect to Google Drive"}
+      {driveConnecting ? "Connecting…" : label || "Connect to Google Drive"}
     </button>
   );
   // Card chip-to-editor toggles: Owner/Status render as compact chips and
@@ -2204,21 +2270,33 @@ export function EvidenceFolder() {
             const link = kind === "policy" ? f.policyLink : f.folderLink;
             const status = kind === "policy" ? f.policyAccessStatus : f.accessCheckStatus;
             const connected = status === "Connected";
+            const readFailed = !!link && !!driveToken && status === "Error";
             const label = kind === "policy" ? "Policy" : "Evidence";
-            // A link exists but Google Drive isn't connected at all → offer to
-            // connect right here (Fix 1). Once a token arrives the chip status
-            // and this button update on their own.
+            // Two distinct problem states, each with its own action (Fix 2/3):
+            //  • no token at all  → "Connect to Google Drive" (starts auth).
+            //  • connected but this folder's access check failed → "Reconnect".
             const showConnect = !!link && !driveToken;
+            const statusText = !link
+              ? "Not linked"
+              : !driveToken
+                ? "Not connected"
+                : connected
+                  ? "Connected"
+                  : readFailed
+                    ? "Can't read"
+                    : "Linked";
+            const chipTone = connected ? TONE.good : readFailed ? TONE.critical : link ? TONE.medium : TONE.neutral;
             return (
               <span style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
                 <button
                   onClick={() => toggleEditingLinks(f.id)}
-                  title={tip(`${label} folder: ${link ? (driveToken ? (connected ? "connected" : "linked, access not confirmed") : "linked, but Google Drive is not connected") : "no Drive link yet"}. Click to ${link ? "edit" : "add"} the link.`)}
-                  style={{ ...chipBtn, color: connected ? TONE.good.fg : link ? TONE.medium.fg : TONE.neutral.fg, background: connected ? TONE.good.bg : link ? TONE.medium.bg : TONE.neutral.bg, border: "none" }}
+                  title={tip(`${label} folder: ${link ? (driveToken ? (connected ? "connected" : readFailed ? "connected, but this folder could not be read — check Viewer access / Shared Drive membership" : "linked, access not confirmed") : "linked, but Google Drive is not connected") : "no Drive link yet"}. Click to ${link ? "edit" : "add"} the link.`)}
+                  style={{ ...chipBtn, color: chipTone.fg, background: chipTone.bg, border: "none" }}
                 >
-                  {label}: {!link ? "Not linked" : !driveToken ? "Not connected" : connected ? "Connected" : "Linked"}
+                  {label}: {statusText}
                 </button>
                 {showConnect && <ConnectDriveButton compact />}
+                {readFailed && <ConnectDriveButton compact label="Reconnect" />}
               </span>
             );
           };
