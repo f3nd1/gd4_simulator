@@ -20,6 +20,32 @@ const FINDING: PanelFindingInput = { issue: "Fees collected before contract sign
 beforeEach(() => { mockChat.mockReset(); });
 
 describe("runAuditorPanel", () => {
+  it("captures real token usage on every sub-call so the log shows model + tokens, not a dash", async () => {
+    const panel = [auditor("Ana"), auditor("Ben")];
+    // The real client reports usage via onUsage — the panel must record it per call.
+    mockChat.mockImplementation(async (messages, _settings, o) => {
+      const sys = String(messages[0]?.content ?? "");
+      o?.onUsage?.({ model: "gpt-test-mini", promptTokens: 100, completionTokens: 40, totalTokens: 140 });
+      if (sys.includes("chair of a GD4 EduTrust audit review panel")) {
+        return JSON.stringify({ summary: "s", rootCause: "process gap", correctiveAction: "fix", evidenceForClosure: "records", finalClassification: "NC" });
+      }
+      return JSON.stringify({ analysis: "view", classification: "NC", severity: "Major", rootCauseDirection: "process" });
+    });
+
+    const result = await runAuditorPanel(FINDING, panel, SETTINGS);
+    const log = result.callLog ?? [];
+    expect(log.length).toBe(3); // 2 round-1 + synthesis (positions agree → no rebuttal)
+    // Every entry carries the real model + a positive token count.
+    for (const c of log) {
+      expect(c.usage?.model).toBe("gpt-test-mini");
+      expect(c.usage?.totalTokens).toBe(140);
+    }
+    // The run total is the sum across all sub-calls (3 × 140).
+    const total = log.reduce((n, c) => n + (c.usage?.totalTokens ?? 0), 0);
+    expect(total).toBe(420);
+  });
+
+
   it("makes one review call per panellist plus one synthesis, and fills the closure scaffold", async () => {
     const panel = [
       auditor("Ana", { reviewPerspective: "strict-auditor" }),

@@ -102,6 +102,9 @@ export type PanelCallLog = {
   output: string;     // the model's raw response
   verdict: string;    // short summary for the log row (classification / "rebuttal" / final)
   failed?: boolean;
+  // Real token usage the API reported for THIS sub-call, so each panel log
+  // entry shows its actual model + tokens + cost instead of "live · —".
+  usage?: { model: string; promptTokens: number; completionTokens: number; totalTokens: number };
 };
 
 // The synthesised conclusion combining all panellists, structured to fill the

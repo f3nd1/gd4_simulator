@@ -1579,6 +1579,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // promptSent at all.
           const callLog = result.callLog ?? [];
           if (callLog.length > 0) {
+            // Roll up the whole panel run's token spend so the synthesis entry
+            // can state the per-finding total (a 5-auditor + rebuttal + synthesis
+            // run is a meaningful cost) — mirrors AIUsage accumulation elsewhere.
+            const panelUsage = callLog.reduce<AIUsage | undefined>((acc, c) => addUsage(acc, c.usage), undefined);
+            const panelTotalNote = panelUsage?.totalTokens
+              ? `Panel run total: ${callLog.length} AI call${callLog.length === 1 ? "" : "s"} · ${panelUsage.totalTokens.toLocaleString()} tokens (${panelUsage.model}). See the Token & cost estimate for the dollar total.`
+              : undefined;
             for (const c of callLog) {
               get().pushAIReviewLog({
                 agent: "Auditor Review Panel",
@@ -1588,12 +1595,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 confidence: "Medium",
                 keyConcerns: [c.label],
                 recommendedAction: c.kind === "synthesis"
-                  ? "Review the synthesised conclusion and each panellist's view in the Findings / Quality Action panel."
+                  ? `Review the synthesised conclusion and each panellist's view in the Findings / Quality Action panel.${panelTotalNote ? `\n${panelTotalNote}` : ""}`
                   : "One panel sub-call — see the chair synthesis entry for the combined conclusion.",
                 live: true,
                 liveError: c.failed ? c.output : undefined,
                 generatedContent: c.output,      // Output tab = the model response
                 promptSent: c.promptSent,         // Prompt Sent tab = the real input
+                // Real per-call usage → the log row shows model + tokens + cost
+                // instead of "live · —", and it rolls into the cost estimate.
+                usage: c.usage,
                 runId: findingId,
               });
             }

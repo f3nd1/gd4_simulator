@@ -466,10 +466,11 @@ Also state your STRUCTURED POSITION so the panel can detect disagreement:
 
 Respond with JSON only: {"analysis": string, "classification": string, "severity": string, "rootCauseDirection": string}.${buildSystemPrompt("findingWriter", null, `runAuditorPanel · ${auditor.name} (${label})`, criterionId, domainSkill)}${domainBlock}`;
     try {
+      let callUsage: AIUsage | undefined;
       const content = await chatComplete(
         [{ role: "system", content: system }, { role: "user", content: findingBlock }],
         settings,
-        { temperature: 0.35, onUsage: opts.onUsage, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+        { temperature: 0.35, onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
       );
       const parsed = parseJSONObject(content);
       const analysisRaw = typeof parsed.analysis === "string" && parsed.analysis.trim() ? parsed.analysis.trim() : content.trim();
@@ -487,6 +488,7 @@ Respond with JSON only: {"analysis": string, "classification": string, "severity
         promptSent: `SYSTEM:\n${system}\n\nUSER:\n${findingBlock}`,
         output: content,
         verdict: position.classification ? `${position.classification}${position.severity && position.severity.toLowerCase() !== "none" ? ` (${position.severity})` : ""}` : "Reviewed",
+        usage: callUsage,
       });
     } catch (err) {
       if (opts.signal?.aborted) { warnings.push("Panel review cancelled mid-run."); break; }
@@ -537,10 +539,11 @@ Apply a ${strictness} standard and KEEP your perspective. Read the other panelli
 Respond with JSON only: {"rebuttal": string}.${buildSystemPrompt("findingWriter", null, `runAuditorPanel · rebuttal · ${auditor.name} (${label})`, criterionId, domainSkill)}${domainBlock}`;
       const rebUser = `The finding under review:\n${findingBlock}\n\nYour Round-1 view:\n${review.analysis}\n\nThe other panellists' Round-1 views:\n${othersDigest}\n\nRespond to the panel.`;
       try {
+        let callUsage: AIUsage | undefined;
         const content = await chatComplete(
           [{ role: "system", content: rebSystem }, { role: "user", content: rebUser }],
           settings,
-          { temperature: 0.35, onUsage: opts.onUsage, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { temperature: 0.35, onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const rebRaw = typeof parsed.rebuttal === "string" && parsed.rebuttal.trim() ? parsed.rebuttal.trim() : content.trim();
@@ -551,6 +554,7 @@ Respond with JSON only: {"rebuttal": string}.${buildSystemPrompt("findingWriter"
           promptSent: `SYSTEM:\n${rebSystem}\n\nUSER:\n${rebUser}`,
           output: content,
           verdict: "Rebuttal",
+          usage: callUsage,
         });
       } catch (err) {
         if (opts.signal?.aborted) { warnings.push("Rebuttal round cancelled mid-run."); break; }
@@ -589,10 +593,11 @@ Respond with JSON only, all fields plain text:
 {"summary": "Balanced Finding Summary", "riskImpact": "Risk / Impact", "rootCause": "system/process root cause", "immediateCorrection": "Immediate Correction", "correctiveAction": "Corrective Action", "evidenceForClosure": "Evidence Required for Closure", "finalClassification": "one of NC / Observation / OFI / CAR / improvement, with a brief justification and no overstatement"}.${buildSystemPrompt("afiClosure", null, "runAuditorPanel · synthesis", criterionId, domainSkill)}${domainBlock}`;
     const synthUser = `The finding under review:\n${findingBlock}\n\nPanellists' reviews:\n${panelDigest}\n\nWrite the panel's combined conclusion.`;
     try {
+      let callUsage: AIUsage | undefined;
       const content = await chatComplete(
         [{ role: "system", content: synthSystem }, { role: "user", content: synthUser }],
         settings,
-        { temperature: 0.3, onUsage: opts.onUsage, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+        { temperature: 0.3, onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
       );
       const p = parseJSONObject(content);
       const s = (k: string) => (typeof p[k] === "string" ? (p[k] as string).trim() : "");
@@ -612,6 +617,7 @@ Respond with JSON only, all fields plain text:
         promptSent: `SYSTEM:\n${synthSystem}\n\nUSER:\n${synthUser}`,
         output: content,
         verdict: synthesis.finalClassification || "Synthesised",
+        usage: callUsage,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
