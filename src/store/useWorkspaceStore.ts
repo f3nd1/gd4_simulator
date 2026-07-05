@@ -5255,6 +5255,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       //        the old ids left the new ids absent, and buildScored indexed them
       //        without a guard → aiScore read `undefined.approach` and white-
       //        screened the app. Ensure every current item id has an entry.
+      //   v4 — collapse the four outcome-area items (7.1.2–7.1.5) into 7.1.1;
+      //        drop any runtime state still keyed to those removed item ids.
       // Persisted workspaces still hold the old folders (and runtime state keyed
       // to removed sub-criterion ids), so reconcile them on rehydrate: drop
       // folders/state for sub-criteria that no longer exist (the user's chosen
@@ -5262,16 +5264,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
       // to a surviving item id) is untouched. The reconcile is idempotent, so a
       // workspace at an earlier version is safely brought up to the latest.
-      version: 3,
+      version: 4,
       migrate: (persisted, fromVersion) => {
         const s = persisted as WorkspaceState;
-        if (!s || fromVersion >= 3) return s;
+        if (!s || fromVersion >= 4) return s;
         const validSub = new Set(GD4_SUB_CRITERIA.map((sc) => sc.id));
         // Ids removed by the sub-criterion re-align. The split coarse ids
         // (2.1, 2.3, 2.4, 5.1, 5.2) plus the 7.2 fold into 7.1 (its old item
         // ids 7.2.1–7.2.4 became 7.1.2–7.1.5). Anything keyed to these is
         // discarded; item ids beneath the split ones (2.1.1, 2.3.2, …) survive.
-        const removedSub = new Set(["2.1", "2.3", "2.4", "5.1", "5.2", "7.2", "7.2.1", "7.2.2", "7.2.3", "7.2.4"]);
+        const removedSub = new Set([
+          "2.1", "2.3", "2.4", "5.1", "5.2",           // split into finer sub-criteria
+          "7.2", "7.2.1", "7.2.2", "7.2.3", "7.2.4",   // 7.2 folded into 7.1
+          "7.1.2", "7.1.3", "7.1.4", "7.1.5",          // outcome areas collapsed into 7.1.1
+        ]);
         const reconciled = s.folders ? reconcileFolders(s.folders) : s.folders;
         const keptFolderIds = new Set((reconciled ?? []).map((f) => f.id));
         const pruneBySubCrit = <V,>(rec: Record<string, V> | undefined) =>

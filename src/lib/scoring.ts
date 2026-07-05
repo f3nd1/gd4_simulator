@@ -84,8 +84,8 @@ function capBandForEvidence(band: Band, ev: ItemEvidence): Band {
 export type ScoredItem = ReturnType<typeof buildScoredItem>;
 
 // A blank, unrated evidence limb-set. Used as a fallback when the evidence map
-// has no entry for an item — e.g. a persisted workspace saved before an item
-// id existed (the GD4 re-align added/renamed items like 7.1.2). blankEvidence()
+// has no entry for an item — e.g. a persisted workspace whose map lags the code
+// after the GD4 re-align added, renamed or removed items. blankEvidence()
 // documents that every current item should have an entry, but persisted state
 // can lag the code; without this guard a single missing key threw in aiScore
 // and white-screened the whole app. A missing entry scores as an unstarted

@@ -63,10 +63,13 @@ export const GD4_SUB_CRITERIA: GD4SubCriterion[] = [
   { id: "6.2", criterionId: "6", title: "Management Review", description: "This sub-criterion examines how the Management reviews overall organisational performance to ensure that the PEI is on track to achieve its vision and mission." },
   { id: "6.3", criterionId: "6", title: "Innovation and Continual Improvement", description: "This sub-criterion examines how you commit yourself to involve stakeholders in efforts towards organisation excellence and innovation. It also examines your commitment towards making appropriate investments to enhance your institutional quality." },
 
-  // 7.2 "Achievement of Outcomes" is folded into 7.1: its four outcome areas
-  // become items 7.1.2–7.1.5 under this single Criterion-7 sub-criterion, and
-  // 7.2 is removed as a separate Evidence Folder line. This is a deliberate
-  // departure from the GD4 Library's 7.1/7.2 split (confirmed 2026-07-05).
+  // Criterion 7 is a single sub-criterion 7.1 with one item, 7.1.1. 7.2
+  // "Achievement of Outcomes" was folded in, and its four outcome areas
+  // (student & graduate, service quality, operational, people development) are
+  // all evidenced under 7.1.1 Measurement of Outcomes for this PEI, so they are
+  // covered by that one item rather than tracked as separate lines. This is a
+  // deliberate departure from the GD4 Library's 7.1/7.2 split (confirmed
+  // 2026-07-05).
   { id: "7.1", criterionId: "7", title: "Measurement of Outcomes", description: "This sub-criterion examines how you identify, track and improve the outcomes of your systems to improve institution and academic quality, including the achievement of student and graduate, service quality, operational and people development outcomes." },
 ];
 
@@ -506,57 +509,6 @@ const RAW_ITEMS: RawItem[] = [
     ],
     notes: ["An example of a framework for outcomes measurement is provided in the official GD4 document."],
     expectedEvidence: ["Outcomes measurement framework", "Benchmark/comparative data sources", "Performance vs target analysis", "Performance measurement process review records"],
-  },
-  {
-    id: "7.1.2",
-    subCriterionId: "7.1",
-    title: "Student and Graduate Outcomes",
-    describeShow: [
-      "Your performance in producing quality outcomes from the courses you offered will be measured using relevant indicators and benchmarks",
-      "For all courses, you shall need to measure performance of your students and graduates against appropriate benchmarks from comparable local or international institutions and/or standards",
-      "Analyse three years' performance trends and take corrective actions to address the gaps where targets/benchmarks are not met",
-    ],
-    notes: [
-      "For students of your courses, you shall track and measure the following student indicators: a. attrition rate; b. passing rate; c. quality of passes, for example distinctions, honours etc., or equivalent.",
-      "For graduates of your External Degree Programmes, the measurement of graduate employment outcomes shall include results of the GES. For other courses, you shall track and measure the following graduate outcomes: a. graduation rate; b. graduate achievements, for example employment rate, graduate results in major examinations such as IB or IGCE, placement in tertiary institutions, TRAQOM for SSG Registered Training Providers, or equivalent.",
-    ],
-    expectedEvidence: ["Student attrition/passing/quality-of-passes data", "Graduate outcomes data (GES where applicable)", "Three-year trend and benchmark comparison", "Improvement actions for unmet targets"],
-  },
-  {
-    id: "7.1.3",
-    subCriterionId: "7.1",
-    title: "Service Quality Outcomes",
-    describeShow: [
-      "Your performance in achieving targets for key performance indicators (KPIs) identified for Service Quality",
-      "You shall track three-year trends and measure the performance against comparative targets or appropriate benchmarks",
-      "Analyse three years' performance trends and take corrective actions to address the gaps where targets/benchmarks are not met",
-    ],
-    notes: ["You shall track and measure the following service quality indicators: a. student satisfaction rate on quality of teaching; b. service level agreement on resolving complaints; c. overall student satisfaction rate."],
-    expectedEvidence: ["Service quality KPI data", "Three-year trend data", "Improvement actions for unmet targets"],
-  },
-  {
-    id: "7.1.4",
-    subCriterionId: "7.1",
-    title: "Operational Outcomes",
-    describeShow: [
-      "Your performance in producing intended outcomes from your day-to-day operations to ensure effectiveness and efficiency",
-      "You shall track three-year trends and measure the performance against comparative targets or appropriate benchmarks",
-      "Analyse three years' performance trends and take corrective actions to address the gaps where targets/benchmarks are not met",
-    ],
-    notes: ["You shall track and measure the following operational indicators: a. liquidity ratio, Current Assets/Current Liabilities; b. debt-equity ratio, Total Liabilities/Shareholders' Equity; c. cost/time saving or investment in appropriate resources, technologies, learning support services and facilities development and upgrading for organisation excellence and innovation, or equivalent."],
-    expectedEvidence: ["Operational KPI / financial ratio data", "Three-year trend data", "Improvement actions for unmet targets"],
-  },
-  {
-    id: "7.1.5",
-    subCriterionId: "7.1",
-    title: "People Development Outcomes",
-    describeShow: [
-      "Your performance in producing intended outcomes from your human resource systems and processes, in the areas of staff satisfaction, training and development",
-      "You shall track three-year trends and measure the performance against comparative targets or appropriate benchmarks",
-      "Analyse three years' performance trends and take corrective actions to address the gaps where targets/benchmarks are not met",
-    ],
-    notes: ["You shall track and measure the following people indicators: a. overall staff satisfaction rate; b. average training hours per staff including for part-time academic staff, or equivalent."],
-    expectedEvidence: ["Staff satisfaction / training hours data", "Three-year trend data", "Improvement actions for unmet targets"],
   },
 ];
 
