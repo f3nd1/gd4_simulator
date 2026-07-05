@@ -4746,11 +4746,34 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             return [];
           }
 
+          // No-fabrication-under-failure: a stage gives a real basis for this
+          // line only if it has EITHER a matched, genuinely-assessed row, OR a
+          // folder overall computed from ≥1 genuinely-assessed row. A stage that
+          // ran but produced zero assessed rows (a pass that stopped, or whose
+          // AI calls all failed) is baseless — its overall defaults to "No" /
+          // false, which buildStagedApsr would turn into a CONFIDENT "Not
+          // evident" on every dimension. When a line would rest on such a
+          // baseless fallback, mark it Not assessed (previous status kept, no
+          // finding raised) and let the [PARTIAL RUN] warning below fire —
+          // never present an un-assessed line as a real negative verdict.
+          // (Synthetic "stage not run in policy/evidence-only mode" rows are not
+          // flagged notAssessed, so they still count as a basis and mode
+          // behaviour is unchanged. Matched rows already passed the notAssessed
+          // guard above, so `pRow ? true` is safe.)
+          const policyBasis = pRow ? true : assessedPolicyRows.length > 0;
+          const evidenceBasis = eRow ? true : assessedEvidenceRows.length > 0;
+          const outcomeBasis = oRow ? true : assessedOutcomeRows.length > 0;
+          if (!(policyBasis && evidenceBasis && outcomeBasis)) {
+            linesNotAssessed++;
+            return [];
+          }
+
           // This checklist line has no sourceRef matching a specific flatAuditPoint
           // ref, so there is no window-level note or chunk citation to inherit —
-          // fall back to the folder-wide coverage overall. This is a genuinely
-          // different case from "the AI didn't find anything for this ref": here
-          // there was no ref to look up in the first place.
+          // fall back to the folder-wide coverage overall (which we've just
+          // confirmed is backed by ≥1 genuinely-assessed row). This is a
+          // genuinely different case from "the AI didn't find anything for this
+          // ref": here there was no ref to look up in the first place.
           const effectivePRow = pRow ?? { ref: "", pointText: "", covered: policyOverall, note: "No specific audit point maps to this checklist line — using overall policy coverage for the folder.", chunkIds: [] };
           const effectiveERow = eRow ?? { ref: "", pointText: "", covered: evidenceOverall, note: "No specific audit point maps to this checklist line — using overall evidence coverage for the folder.", chunkIds: [] };
           const effectiveORow = oRow ?? { ref: "", pointText: "", outcomeEvident: outcomeOverall, reviewEvident: reviewOverall, note: "No specific audit point maps to this checklist line — using overall outcome/review coverage for the folder.", chunkIds: [] };
