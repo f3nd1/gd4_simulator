@@ -2202,6 +2202,8 @@ Ties/borderline cases resolve DOWN, never up: if you are unsure between two adja
 
 EVIDENCE RULES:
 - A policy/SOP/procedure filed in the evidence folder does NOT count as implementation evidence — only actual records of doing something count.
+- IMPLEMENTATION RECORD OVER POLICY DOCUMENT: When BOTH a policy/approach document (staff handbook, manual, SOP, framework) AND a dedicated implementation record (a completed/signed form, a dated log or register entry, minutes, a filled checklist) are present for the same requirement, cite the RECORD as the evidence — the policy only proves the approach exists on paper, while the record proves the process actually ran. Never accept a handbook/manual/SOP as implementation evidence when an actual record of the activity is available; treat "cited a policy document as proof it was done" as an ungrounded citation.
+- CITE EVERY ON-POINT RECORD, IN EVERY WINDOW: Cite ALL of the concrete implementation records that directly evidence the line — not just the first one you find, and do not stop citing once the line already looks Met. This document is one window of the evidence; the strongest, most specific record for a line may appear here even if weaker support appeared elsewhere, so always cite the on-point record present in THIS window rather than assuming it is already captured.
 - NAMED EXAMPLES ARE MANDATORY on every negative: each "Partial"/"Not met" line verdict and each "not evidenced"/"contradicted" promise MUST cite at least one concrete example — the specific document name, version, date or record entry that demonstrates the gap, quoted with its chunk ID; or, where nothing exists, name what was searched and absent. Where dates or versions can be compared (a record dated after the period it governs; documents that never move past V0), PERFORM the comparison and state it explicitly. A negative verdict without a concrete example is unsupported and unacceptable.
 - SSG REGISTER on negatives: "It was not evident that the PEI had [implemented/established]…, in accordance with its documented PPD. Example: …". Positive verdicts stay factual and specific (which record, where) — no praise adjectives.
 
@@ -2217,7 +2219,15 @@ Respond with JSON only:
 
   const windows = noEvidence ? [] : buildDocWindows(evidenceDocText);
 
-  type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[] };
+  // groundScore = how well the HELD summary/comment is grounded in cited
+  // evidence: verified promises that carry a citation dominate, then the number
+  // of chunks cited. Used ONLY to break verdict TIES between windows — see the
+  // merge below (F1). It is not a verdict input.
+  type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[]; groundScore: number };
+  const groundScoreOf = (cids: string[], checks: PromiseCheck[]): number => {
+    const citedPromises = checks.filter((p) => p.verdict === "evidenced" && p.chunkIds.length > 0).length;
+    return citedPromises * 1000 + cids.length;
+  };
   const bestByRef = new Map<string, BestEv>();
   // Per-promise best verdict across sliding windows: evidence found in ANY
   // window proves the promise over a bare "no record" — but a CONTRADICTION is
@@ -2304,9 +2314,28 @@ Respond with JSON only:
                 }))
             : [];
           const prev = bestByRef.get(inp.ref);
+          const thisGround = groundScoreOf(chunkIds, promiseChecks);
           if (!prev || EVIDENCE_VERDICT_ORDER[verdict] > EVIDENCE_VERDICT_ORDER[prev.verdict]) {
-            bestByRef.set(inp.ref, { evidenceSummary, verdict, comment, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])], promiseChecks: mergePromiseChecks(prev?.promiseChecks, promiseChecks) });
+            // Strictly higher verdict wins outright — adopt its summary/comment.
+            bestByRef.set(inp.ref, { evidenceSummary, verdict, comment, groundScore: thisGround, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])], promiseChecks: mergePromiseChecks(prev?.promiseChecks, promiseChecks) });
+          } else if (EVIDENCE_VERDICT_ORDER[verdict] === EVIDENCE_VERDICT_ORDER[prev.verdict]) {
+            // F1 — verdict TIE. Reading order must NOT decide which justification
+            // survives: keep the summary/comment from the better-grounded window
+            // (more citation-backed verified promises, then more cited chunks),
+            // not simply the first. The verdict is unchanged (same rank) and the
+            // citation list still accumulates across BOTH windows, so neither the
+            // verdict nor the cited-evidence list regresses — only the displayed
+            // reasoning improves.
+            const better = thisGround > prev.groundScore;
+            bestByRef.set(inp.ref, {
+              ...prev,
+              ...(better ? { evidenceSummary, comment, groundScore: thisGround } : {}),
+              chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])],
+              promiseChecks: mergePromiseChecks(prev.promiseChecks, promiseChecks),
+            });
           } else {
+            // Strictly lower verdict — keep prev's verdict/summary/comment; only
+            // accumulate this window's citations and promise checks.
             bestByRef.set(inp.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])], promiseChecks: mergePromiseChecks(prev.promiseChecks, promiseChecks) });
           }
           failedRefs.delete(inp.ref); // a later window recovered this line
