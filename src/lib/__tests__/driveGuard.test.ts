@@ -1,5 +1,47 @@
 import { describe, it, expect } from "vitest";
-import { checkDriveForRun, driveReadFailureMessage, classifyDriveReadError } from "../driveGuard";
+import { checkDriveForRun, driveReadFailureMessage, classifyDriveReadError, classifyFileBucket, analyzeFolderProbe, type ProbeFile } from "../driveGuard";
+
+const pf = (path: string, readable = true, readError?: string): ProbeFile => ({ name: path.split("/").pop() || path, path, bucket: classifyFileBucket(path), readable, readError });
+
+describe("classifyFileBucket", () => {
+  it("routes policy-named top segments to policy, everything else to evidence", () => {
+    expect(classifyFileBucket("1. Policy & Procedure/PPD-v3.pdf")).toBe("policy");
+    expect(classifyFileBucket("Procedures/SOP.docx")).toBe("policy");
+    expect(classifyFileBucket("2. Actual Evidence/register.xlsx")).toBe("evidence");
+    expect(classifyFileBucket("register.xlsx")).toBe("evidence"); // no subfolder → evidence
+  });
+});
+
+describe("analyzeFolderProbe — the silent-band-depression warnings", () => {
+  it("shared folder with no policy subfolder → warns everything is treated as evidence", () => {
+    const r = analyzeFolderProbe([pf("PPD.pdf"), pf("2. Actual Evidence/reg.xlsx")], true);
+    expect(r.policyCount).toBe(0);
+    expect(r.evidenceCount).toBe(2);
+    expect(r.warnings.some((w) => w.includes("treated as EVIDENCE") && w.includes("silently depressed"))).toBe(true);
+  });
+  it("shared folder with no evidence subfolder → warns nothing counts as evidence", () => {
+    const r = analyzeFolderProbe([pf("1. Policy & Procedure/PPD.pdf")], true);
+    expect(r.warnings.some((w) => w.includes("NONE are being treated as actual evidence"))).toBe(true);
+  });
+  it("does NOT raise the bucket warnings when two separate folders are linked", () => {
+    const r = analyzeFolderProbe([pf("PPD.pdf"), pf("reg.xlsx")], false);
+    expect(r.warnings.some((w) => w.includes("EVIDENCE"))).toBe(false);
+  });
+  it("flags unreadable files with a count and names", () => {
+    const r = analyzeFolderProbe([pf("1. Policy & Procedure/PPD.pdf"), pf("2. Actual Evidence/x.docx", false, "Permission denied")], true);
+    expect(r.unreadable).toHaveLength(1);
+    expect(r.warnings.some((w) => w.includes("could not be read") && w.includes("x.docx"))).toBe(true);
+  });
+  it("empty folder → warns no files", () => {
+    expect(analyzeFolderProbe([], false).warnings[0]).toContain("No files found");
+  });
+  it("clean split folder → no warnings", () => {
+    const r = analyzeFolderProbe([pf("1. Policy & Procedure/PPD.pdf"), pf("2. Actual Evidence/reg.xlsx")], true);
+    expect(r.warnings).toEqual([]);
+    expect(r.ok).toBe(true);
+  });
+});
+
 
 describe("checkDriveForRun", () => {
   it("blocks with a paste-the-link message when nothing is linked, and offers no Connect", () => {

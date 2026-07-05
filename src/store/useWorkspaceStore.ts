@@ -55,7 +55,7 @@ import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
 import { computePanelConclusion } from "../lib/panelConclusion";
 import { checkAuditorForRun, independenceNotice } from "../lib/auditorGuard";
-import { checkDriveForRun, DRIVE_EXPIRED_MID_RUN, type DriveRunBlock } from "../lib/driveGuard";
+import { checkDriveForRun, DRIVE_EXPIRED_MID_RUN, classifyFileBucket, classifyDriveReadError, analyzeFolderProbe, type DriveRunBlock, type ProbeFile, type FolderProbeResult } from "../lib/driveGuard";
 import { applyCarryover, type PriorCycleArchive } from "../lib/cycleCarryover";
 import { useRuleTuningStore } from "./useRuleTuningStore";
 import { FINDINGS } from "../data/findings";
@@ -155,10 +155,8 @@ function formatDraftedClosureText(text: string): string {
     .join("\n");
 }
 
-function classifyFileBucket(path: string): "policy" | "evidence" {
-  const topSegment = path.split("/")[0]?.toLowerCase() || "";
-  return /polic|procedure/.test(topSegment) ? "policy" : "evidence";
-}
+// classifyFileBucket now lives in driveGuard.ts (shared with the pre-flight
+// probe) — imported below. Re-aliased here so existing call sites are unchanged.
 
 // Strips savedFindingId back-pointers from evidence-assessment
 // rows when the finding they point at is deleted, so the source row shows
@@ -594,6 +592,10 @@ export type WorkspaceState = {
 
   setFolderField: <K extends keyof EvidenceFolder>(id: string, field: K, value: EvidenceFolder[K]) => void;
   checkFolderAccess: (id: string, tab?: "policy" | "evidence") => Promise<void>;
+  // Pre-flight probe: lists a folder's files, classifies them into the
+  // policy/evidence buckets, and read-checks each — with ZERO AI calls — so
+  // mis-bucketing and unreadable files are caught before a real audit is spent.
+  probeFolder: (id: string, tab?: "policy" | "evidence") => Promise<FolderProbeResult>;
   // extraContext (optional): school-wide "Additional info" folder text, fed in
   // as labeled background — never primary evidence (the evidence-sufficiency
   // caps still gate the band).
@@ -2680,6 +2682,64 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ),
           busy: null,
         }));
+      },
+
+      // Folder pre-flight probe — reuses classifyFileBucket (bucketing) and
+      // classifyDriveReadError (read failures); makes NO AI/OpenAI call. Lists
+      // the folder, then read-checks each file (warming the fileTextCache the
+      // real audit would fill anyway), and hands the results to the pure
+      // analyzeFolderProbe for the plain-English warnings.
+      probeFolder: async (id, tab = "evidence") => {
+        const s = get();
+        const folder = s.folders.find((f) => f.id === id);
+        const empty: FolderProbeResult = { ok: false, sharedFolder: false, files: [], policyCount: 0, evidenceCount: 0, unreadable: [], warnings: [] };
+        if (!folder) return empty;
+        const link = tab === "policy" ? folder.policyLink : folder.folderLink;
+        const folderId = parseFolderId(link);
+        const sharedFolder = !!folder.policyLink && folder.policyLink === folder.folderLink;
+        if (!folderId) return { ...empty, listError: `No Drive folder ID in the ${tab === "policy" ? "Policy & Procedure" : "Actual Evidence"} link. Paste a Google Drive folder link.` };
+        set({ busy: `probe:${tab}:` + id });
+        try {
+          const token = useGoogleDriveStore.getState().getValidToken();
+          if (!token) return { ...empty, listError: "Not connected to Google Drive — connect it in Settings, then probe again." };
+          let listed;
+          try {
+            listed = await listFolderFilesRecursive(folderId, token);
+          } catch (err) {
+            const { detail } = classifyDriveReadError(err instanceof Error ? err.message : String(err));
+            return { ...empty, listError: detail || (err instanceof Error ? err.message : String(err)) };
+          }
+          const probeFiles: ProbeFile[] = [];
+          for (const f of listed) {
+            if (IMAGE_MIME_TYPES.has(f.mimeType)) { probeFiles.push({ name: f.path.split("/").pop() || f.path, path: f.path, bucket: classifyFileBucket(f.path), readable: true }); continue; }
+            const cacheKey = `${f.id}:${f.modifiedTime ?? ""}`;
+            const cached = get().fileTextCache[cacheKey];
+            let readable = true; let readError: string | undefined;
+            if (cached) {
+              readable = !!cached.text;
+            } else {
+              try {
+                const readToken = await useGoogleDriveStore.getState().getFreshToken();
+                if (!readToken) { readable = false; readError = "Drive token could not be refreshed."; }
+                else {
+                  const body = await exportFileText(f, readToken, timeoutSignal(undefined, DRIVE_FILE_TIMEOUT_MS));
+                  readable = body != null && body.trim().length > 0;
+                  if (body != null) {
+                    const text = body;
+                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: f.mimeType, fileName: f.path.split("/").pop() || f.path, filePath: f.path, cachedAt: Date.now() } } }));
+                  }
+                }
+              } catch (err) {
+                readable = false;
+                readError = classifyDriveReadError(err instanceof Error ? err.message : String(err)).detail || (err instanceof Error ? err.message : String(err));
+              }
+            }
+            probeFiles.push({ name: f.path.split("/").pop() || f.path, path: f.path, bucket: classifyFileBucket(f.path), readable, readError });
+          }
+          return analyzeFolderProbe(probeFiles, sharedFolder);
+        } finally {
+          set({ busy: null });
+        }
       },
 
       // Classic single-pass folder audit. Reads every supported document in

@@ -79,3 +79,63 @@ export function classifyDriveReadError(message?: string): { cause: DriveReadCaus
     };
   return { cause: "unknown", detail: "" };
 }
+
+// ── Folder pre-flight probe ──────────────────────────────────────────────
+// Classifies a scanned file into the policy vs evidence bucket by its
+// top-level path segment (the audit's own convention: "1. Policy & Procedure"
+// / "2. Actual Evidence"). Files not under a policy-named subfolder default to
+// evidence — same rule the audit uses. Moved here (from the store) so the
+// probe UI and the audit share ONE definition. Pure + store-free = testable.
+export function classifyFileBucket(path: string): "policy" | "evidence" {
+  const topSegment = path.split("/")[0]?.toLowerCase() || "";
+  return /polic|procedure/.test(topSegment) ? "policy" : "evidence";
+}
+
+export type ProbeFile = { name: string; path: string; bucket: "policy" | "evidence"; readable: boolean; readError?: string };
+
+export type FolderProbeResult = {
+  ok: boolean;             // false when the folder itself could not be listed
+  listError?: string;      // classifyDriveReadError detail when listing failed
+  sharedFolder: boolean;   // true when one folder is linked for BOTH tabs
+  files: ProbeFile[];
+  policyCount: number;
+  evidenceCount: number;
+  unreadable: ProbeFile[];
+  warnings: string[];      // plain-English problems found, worst first
+};
+
+// Turns a listed-and-read-checked file set into the plain-English warnings the
+// probe shows — the silent-band-depression traps made loud. Pure so the exact
+// warning rules are unit-tested; the store action does the Drive I/O and calls
+// this. `sharedFolder` = the same folder linked for the Policy and Evidence
+// tabs, which is the only case where subfolder naming decides bucketing.
+export function analyzeFolderProbe(files: ProbeFile[], sharedFolder: boolean): FolderProbeResult {
+  const policy = files.filter((f) => f.bucket === "policy");
+  const evidence = files.filter((f) => f.bucket === "evidence");
+  const unreadable = files.filter((f) => !f.readable);
+  const warnings: string[] = [];
+
+  if (files.length === 0) {
+    warnings.push("No files found in this folder (including subfolders). Add the documents, or check you linked the intended folder.");
+  }
+  // The mis-bucketing trap: only meaningful when ONE folder feeds both tabs.
+  if (sharedFolder && files.length > 0 && policy.length === 0) {
+    warnings.push('No files are under a "Policy & Procedure" subfolder, so ALL files are being treated as EVIDENCE. If this folder holds policies, put them in a subfolder named exactly "1. Policy & Procedure" — otherwise the documented approach earns no credit and the band is silently depressed.');
+  }
+  if (sharedFolder && files.length > 0 && evidence.length === 0) {
+    warnings.push('Every file is under a policy-named subfolder, so NONE are being treated as actual evidence. Implementation records should sit in a subfolder named exactly "2. Actual Evidence".');
+  }
+  if (unreadable.length > 0) {
+    warnings.push(`${unreadable.length} of ${files.length} file${files.length === 1 ? "" : "s"} could not be read and would be skipped by the audit: ${unreadable.slice(0, 3).map((f) => f.name).join(", ")}${unreadable.length > 3 ? ", …" : ""}. Fix access before running so the audit isn't judging incomplete evidence.`);
+  }
+
+  return {
+    ok: true,
+    sharedFolder,
+    files,
+    policyCount: policy.length,
+    evidenceCount: evidence.length,
+    unreadable,
+    warnings,
+  };
+}

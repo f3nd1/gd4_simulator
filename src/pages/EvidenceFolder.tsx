@@ -3,6 +3,7 @@ import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { RunModeBanner } from "../components/ui/RunModeBanner";
+import type { FolderProbeResult } from "../lib/driveGuard";
 import { Pill } from "../components/ui/Pill";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
@@ -1446,6 +1447,47 @@ function OptionAReviewModal({ subCriterionId, onClose }: { subCriterionId: strin
   );
 }
 
+// Pre-flight probe results panel — zero AI calls. Shows the file list with
+// per-file bucket + read status, and the plain-English warnings (mis-named
+// subfolders, unreadable files) that would otherwise silently corrupt a run.
+function FolderProbePanel({ result, onClose }: { result: FolderProbeResult; onClose: () => void }) {
+  return (
+    <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "9px 12px", fontSize: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.4 }}>🔎 Folder pre-flight — no AI used</span>
+        {result.ok && <span style={{ color: "#64748b" }}>{result.files.length} file{result.files.length === 1 ? "" : "s"} · {result.policyCount} policy · {result.evidenceCount} evidence{result.unreadable.length ? ` · ${result.unreadable.length} unreadable` : ""}</span>}
+        <button onClick={onClose} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
+      </div>
+      {result.listError ? (
+        <div style={{ color: "#b91c1c", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "7px 10px" }}>{result.listError}</div>
+      ) : (
+        <>
+          {result.warnings.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: result.files.length ? 8 : 0 }}>
+              {result.warnings.map((w, i) => (
+                <div key={i} style={{ color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "7px 10px", lineHeight: 1.45 }}>⚠ {w}</div>
+              ))}
+            </div>
+          ) : result.files.length > 0 ? (
+            <div style={{ color: "#15803d", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, padding: "6px 10px", marginBottom: 8 }}>✓ No problems found — every file is readable and bucketed. Safe to audit.</div>
+          ) : null}
+          {result.files.length > 0 && (
+            <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6 }}>
+              {result.files.map((file, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 9px", borderTop: i ? "1px solid #f1f5f9" : "none", fontSize: 11.5 }}>
+                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: file.readable ? "#1e293b" : "#b91c1c" }} title={file.path}>{file.readable ? "" : "⚠ "}{file.path}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: file.bucket === "policy" ? "#5b21b6" : "#b45309", background: file.bucket === "policy" ? "#faf5ff" : "#fffbeb", border: "1px solid", borderColor: file.bucket === "policy" ? "#ddd6fe" : "#fde68a", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>{file.bucket}</span>
+                  {!file.readable && <span title={file.readError} style={{ fontSize: 10, color: "#b91c1c", whiteSpace: "nowrap" }}>unreadable</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 const STATUSES: FolderStatus[] = ["Good", "In Progress", "Partial", "Missing"];
@@ -1803,6 +1845,7 @@ export function EvidenceFolder() {
   const departments    = useWorkspaceStore((s) => s.departments);
   const setFolderField = useWorkspaceStore((s) => s.setFolderField);
   const checkFolderAccess   = useWorkspaceStore((s) => s.checkFolderAccess);
+  const probeFolder         = useWorkspaceStore((s) => s.probeFolder);
   const auditFolderStaged   = useWorkspaceStore((s) => s.auditFolderStaged);
   const runPPDReview        = useWorkspaceStore((s) => s.runPPDReview);
   const navigate            = useNavigate();
@@ -1846,6 +1889,8 @@ export function EvidenceFolder() {
   // Sub-criterion whose Option A (PPD + Evidence) review is open in the
   // near-fullscreen modal; null = closed. Running and re-opening both land here.
   const [optionAModal, setOptionAModal] = useState<string | null>(null);
+  // Folder pre-flight probe results, keyed by folder id (transient, not persisted).
+  const [probeResults, setProbeResults] = useState<Record<string, FolderProbeResult>>({});
 
   const effectiveAuditor =
     auditors.find((a) => a.id === activeAuditorId) || auditors.find((a) => a.role === "Audit Lead") || auditors[0];
@@ -2667,6 +2712,15 @@ export function EvidenceFolder() {
                           })}
                           {overflowItem(busy === `folderaccess:evidence:${f.id}` ? "Checking…" : "Check evidence access", () => checkFolderAccess(f.id, "evidence"), {
                             disabled: busy === `folderaccess:evidence:${f.id}`,
+                          })}
+                          {overflowItem(busy?.startsWith(`probe:`) && busy.endsWith(f.id) ? "Checking files…" : "🔎 Check folder before auditing", async () => {
+                            setOverflowOpen(null);
+                            const tab: "policy" | "evidence" = f.policyLink && !f.folderLink ? "policy" : "evidence";
+                            const res = await probeFolder(f.id, tab);
+                            setProbeResults((m) => ({ ...m, [f.id]: res }));
+                          }, {
+                            disabled: !!busy,
+                            title: "Lists this folder's files, flags mis-named subfolders and unreadable files — NO AI call. Run this before auditing to avoid a silently wrong result.",
                             last: true,
                           })}
                         </div>
@@ -2677,6 +2731,13 @@ export function EvidenceFolder() {
               </div>
 
               </div>{/* /right column */}
+              {/* Pre-flight probe results (zero AI calls) — shown whenever a
+                  probe has run for this row, regardless of expand state. */}
+              {probeResults[f.id] && (
+                <div style={{ padding: "0 12px 8px 30px" }}>
+                  <FolderProbePanel result={probeResults[f.id]} onClose={() => setProbeResults((m) => { const n = { ...m }; delete n[f.id]; return n; })} />
+                </div>
+              )}
               </div>{/* /ef-card-cols */}
 
               {/* Expandable detail: same-folder warning + access notes + audit result */}
