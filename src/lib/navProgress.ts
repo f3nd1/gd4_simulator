@@ -6,8 +6,8 @@
 // result, so when in doubt a step is left out of `NAV_DONE_SIGNALS`.
 
 // The real signals we can compute, one per core step that has one. Steps not
-// listed here (Profile of PEI, Start Audit, Findings, Management Review,
-// Final Report) have no reliable completion signal and stay number-only.
+// listed here (Profile of PEI, Start Audit, Findings, Final Report) have no
+// reliable completion signal and stay number-only.
 export type NavDoneSignals = {
   cyclePeriodSet: boolean;      // /audit-cycle   — period start+end and scope set
   auditorsAdded: boolean;       // /auditors      — at least one auditor exists

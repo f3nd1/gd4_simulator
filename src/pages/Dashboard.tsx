@@ -486,15 +486,6 @@ export function Dashboard() {
         </Link>
       </Card>
 
-      <Card>
-        <div style={{ fontSize: 12, color: "#6b7280" }}>Management decisions</div>
-        <div style={{ fontSize: 13, marginTop: 6 }}>
-          Findings needing a leadership decision: <b>{findings.filter((f) => f.managementDecisionNeeded).length}</b>
-        </div>
-        <Link to="/management-review" style={{ fontSize: 12, display: "inline-block", marginTop: 8 }}>
-          Open management review →
-        </Link>
-      </Card>
 
       {quickWins.length > 0 && (
         <Card style={{ gridColumn: "1 / -1" }}>

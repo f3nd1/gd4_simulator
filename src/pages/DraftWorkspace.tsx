@@ -67,7 +67,7 @@ export function DraftWorkspace() {
 
         <label style={{ display: "block", marginBottom: 8 }}>
           <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Version name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Pre-management-review draft" style={{ ...inputStyle, marginTop: 3 }} disabled={locked} />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Pre-submission draft" style={{ ...inputStyle, marginTop: 3 }} disabled={locked} />
         </label>
         <label style={{ display: "block", marginBottom: 8 }}>
           <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Note</span>

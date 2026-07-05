@@ -75,9 +75,8 @@ export const NAV: NavGroup[] = [
     items: [
       { path: "/scorecard", label: "Criterion Scorecard", hint: "Official band per item, criterion and overall — closeout step 1" },
       { path: "/final-report", label: "Final Report", hint: "Overall + per-item banding, strengths, AFIs and how to reach a higher band — closeout step 2" },
-      { path: "/management-review", label: "Management Review", hint: "Leadership decisions needed before closeout — closeout step 3" },
-      { path: "/finalisation", label: "Finalisation Checklist", hint: "Final checks before locking the audit — closeout step 4" },
-      { path: "/export", label: "Export Centre", hint: "Export the finished audit pack — closeout step 5" },
+      { path: "/finalisation", label: "Finalisation Checklist", hint: "Final checks before locking the audit — closeout step 3" },
+      { path: "/export", label: "Export Centre", hint: "Export the finished audit pack — closeout step 4" },
     ],
     tools: [
       { path: "/rubric-banding", label: "Rubric Banding", hint: "Reference: how coverage % and maturity ceiling produce each band" },

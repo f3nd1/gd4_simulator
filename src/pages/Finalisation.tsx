@@ -13,7 +13,6 @@ export function Finalisation() {
   const cycle = useWorkspaceStore((s) => s.cycle);
   const folders = useWorkspaceStore((s) => s.folders);
   const closures = useWorkspaceStore((s) => s.closures);
-  const managementReviewItems = useWorkspaceStore((s) => s.managementReviewItems);
   const lockCycle = useWorkspaceStore((s) => s.lockCycle);
   const scored = useScored();
   const findings = useAllFindings();
@@ -23,7 +22,6 @@ export function Finalisation() {
   // Cat A = SSG regulatory breach — these are hard-blocking: the cycle must not
   // be locked until every Cat A finding is accepted or escalated.
   const catAOpen = findings.filter((f) => f.riskCategory === "A" && (closures[f.id]?.human || "") !== "Accepted");
-  const decisionsOutstanding = managementReviewItems.filter((m) => m.decisionNeeded && !m.decision);
 
   // Forensic check: out-of-period evidence is a compliance risk.
   const forensicFlags = useMemo(
@@ -39,11 +37,10 @@ export function Finalisation() {
     ["All GD4 criteria scored", scored.items.every((i) => i.conf != null), "Confirm a score for every item in the GD4 Criterion Scorecard."],
     ["Score gate at Band 3+ on gate-sensitive items", scored.gatePass, "Resolve gate-sensitive items below Band 3."],
     ["No Cat A (SSG regulatory breach) findings open", catAOpen.length === 0, `Accept closure on all ${catAOpen.length} Cat A regulatory-breach finding(s) before locking. Cat A findings require management sign-off.`],
-    ["All Critical findings closed or escalated", criticalOpen.length === 0, "Accept closure on Critical findings or escalate via Management Review."],
+    ["All Critical findings closed or escalated", criticalOpen.length === 0, "Accept closure on Critical findings, or escalate them for leadership sign-off (handled outside this app)."],
     ["All AFIs / Improvement Actions accepted", scored.openAFIs === 0, "Accept closure on remaining findings in AFI Closure."],
     ["Human reviewer confirmed scores on overridden items", scored.items.every((i) => i.conf != null), "Confirm reviewer scores that differ from the AI suggestion."],
     ["No out-of-period evidence detected", !outOfPeriodFlag, outOfPeriodFlag ? `${outOfPeriodFlag.description} Review evidence dates before locking.` : ""],
-    ["Management review decisions recorded", decisionsOutstanding.length === 0, "Record decisions for items requiring management decision."],
     ["Cycle status is Ready for Management Review or Locked", cycle.status === "Ready for Management Review" || cycle.status === "Locked", "Move the cycle to Ready for Management Review in Draft Workspace."],
   ];
 

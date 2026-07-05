@@ -12,7 +12,6 @@ import type {
   WorkspaceSnapshot,
   SampleRecord,
   InterviewQuestion,
-  ManagementReviewItem,
   ExportLogEntry,
   AIReviewLogEntry,
   AIReviewType,
@@ -397,7 +396,6 @@ export type WorkspaceState = {
   calibrationMemories: CalibrationMemory[];
   samples: SampleRecord[];
   interviewQuestions: InterviewQuestion[];
-  managementReviewItems: ManagementReviewItem[];
   exportLog: ExportLogEntry[];
   customFindings: Finding[];
   // Gates the hard-coded sample findings register (data/findings.ts) so a
@@ -638,9 +636,6 @@ export type WorkspaceState = {
   setInterviewQuestions: (qs: InterviewQuestion[]) => void;
   setQuestionReadiness: (id: string, readiness: InterviewQuestion["readiness"], notes?: string) => void;
 
-  addManagementReviewItem: (item: ManagementReviewItem) => void;
-  setManagementDecision: (id: string, decision: string, decidedBy: string) => void;
-
   addExportLogEntry: (e: ExportLogEntry) => void;
 
   addCustomFinding: (f: Finding) => void;
@@ -812,7 +807,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       calibrationMemories: [],
       samples: [],
       interviewQuestions: [],
-      managementReviewItems: [],
       exportLog: [],
       customFindings: [],
       seedFindingsLoaded: false,
@@ -1987,7 +1981,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             folders: s.folders,
             samples: s.samples,
             interviewQuestions: s.interviewQuestions,
-            managementReviewItems: s.managementReviewItems,
             checklistEntries: useChecklistModuleStore.getState().entries,
             customFindings: s.customFindings,
             seedFindingsLoaded: s.seedFindingsLoaded,
@@ -2060,7 +2053,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             folders: snap.folders,
             samples: snap.samples,
             interviewQuestions: snap.interviewQuestions,
-            managementReviewItems: snap.managementReviewItems,
             customFindings: snap.customFindings ?? s.customFindings,
             seedFindingsLoaded: snap.seedFindingsLoaded ?? s.seedFindingsLoaded,
             // Restore the AI verdicts/log and context so nothing is silently
@@ -2116,7 +2108,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             folders: s.folders,
             samples: s.samples,
             interviewQuestions: s.interviewQuestions,
-            managementReviewItems: s.managementReviewItems,
             checklistEntries: useChecklistModuleStore.getState().entries,
             customFindings: s.customFindings,
             seedFindingsLoaded: s.seedFindingsLoaded,
@@ -2208,7 +2199,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           calibrationMemories: [],
           samples: [],
           interviewQuestions: [],
-          managementReviewItems: [],
           exportLog: [],
           customFindings: openFindings,
           seedFindingsLoaded: false,
@@ -5035,12 +5025,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setInterviewQuestions: (qs) => set({ interviewQuestions: qs }),
       setQuestionReadiness: (id, readiness, notes) =>
         set((s) => ({ interviewQuestions: s.interviewQuestions.map((q) => (q.id === id ? { ...q, readiness, notes: notes ?? q.notes } : q)) })),
-
-      addManagementReviewItem: (item) => set((s) => ({ managementReviewItems: [...s.managementReviewItems, item] })),
-      setManagementDecision: (id, decision, decidedBy) =>
-        set((s) => ({
-          managementReviewItems: s.managementReviewItems.map((m) => (m.id === id ? { ...m, decision, decidedBy, decidedAt: new Date().toLocaleString() } : m)),
-        })),
 
       addExportLogEntry: (e) => set((s) => ({ exportLog: [e, ...s.exportLog].slice(0, 300) })),
 

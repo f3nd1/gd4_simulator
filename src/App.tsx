@@ -21,7 +21,6 @@ import { PPDReview } from "./pages/PPDReview";
 import { AIReview } from "./pages/AIReview";
 import { HumanDecisionLog } from "./pages/HumanDecisionLog";
 import { AIDebugLog } from "./pages/AIDebugLog";
-import { ManagementReview } from "./pages/ManagementReview";
 import { Finalisation } from "./pages/Finalisation";
 import { ExportCentre } from "./pages/ExportCentre";
 import { Settings } from "./pages/Settings";
@@ -70,7 +69,6 @@ export default function App() {
           {/* Version History merged into Draft Workspace; keep the old path working. */}
           <Route path="/version-history" element={<Navigate to="/draft-workspace" replace />} />
           <Route path="/final-report" element={<FinalReport />} />
-          <Route path="/management-review" element={<ManagementReview />} />
           <Route path="/finalisation" element={<Finalisation />} />
           <Route path="/export" element={<ExportCentre />} />
           <Route path="/settings" element={<Settings />} />

@@ -1079,17 +1079,6 @@ export type CalibrationMemory = {
   tokenCount: number;
 };
 
-export type ManagementReviewItem = {
-  id: string;
-  auditCycleId: string;
-  section: string;
-  content: string;
-  decisionNeeded: boolean;
-  decision?: string;
-  decidedBy?: string;
-  decidedAt?: string;
-};
-
 // Snapshot+restore versioning: each saved version carries a full copy of the
 // working state so it can be restored later, not just a status label.
 export type WorkspaceSnapshot = {
@@ -1102,7 +1091,6 @@ export type WorkspaceSnapshot = {
   folders: EvidenceFolder[];
   samples: SampleRecord[];
   interviewQuestions: InterviewQuestion[];
-  managementReviewItems: ManagementReviewItem[];
   // Added so a version captures the full scoring picture: the Sub-Criterion
   // Checklist now drives item bands, and findings raised from it live in
   // customFindings. Optional for backward-compatibility with snapshots saved

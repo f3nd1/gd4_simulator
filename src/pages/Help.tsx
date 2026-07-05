@@ -103,10 +103,6 @@ const DETAILS: Record<string, Detail> = {
     what: "The consolidated report: EduTrust attainment ladder, overall + per-item banding, strengths, gaps, how to reach a higher band, the findings register with root cause/closure, and charts.",
     how: "Review it, optionally 'Generate AI summary', then 'Print / Save as PDF' for a clean report-only document.",
   },
-  "/management-review": {
-    what: "Leadership decisions needed before closeout.",
-    how: "Record management decisions on items that need sign-off.",
-  },
   "/finalisation": {
     what: "Final checks before locking the audit.",
     how: "Work through the checklist, then lock the final version.",

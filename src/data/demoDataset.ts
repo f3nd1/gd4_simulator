@@ -1,11 +1,10 @@
 // Fully-populated demo dataset for the workflow-progress fields that start
 // empty by default (reviewer drafts, sign-offs, closures, samples, interview
-// prep, management review pack, export log). Derived entirely from the
-// existing real GD4 items and findings — it does not invent any new GD4
-// criteria, sub-criteria, items or rubric text.
+// prep, export log). Derived entirely from the existing real GD4 items and
+// findings — it does not invent any new GD4 criteria, sub-criteria, items or
+// rubric text.
 import type {
   ItemEvidence,
-  ManagementReviewItem,
   SampleRecord,
   SampleRecordType,
   InterviewQuestion,
@@ -96,33 +95,6 @@ export function buildDemoDataset(evidence: Record<string, ItemEvidence>) {
     notes: idx % 3 === 0 ? "Practice run surfaced gaps consistent with the evidence rating." : "Practice run went well.",
   }));
 
-  const managementReviewItems: ManagementReviewItem[] = [
-    {
-      id: "MR-DEMO-1",
-      auditCycleId: "cycle-1",
-      section: "Evidence Gaps",
-      content: "Sub-criteria 5.1 and 5.5 carry the most severe AFIs (B13, B18) and need closure before the next mock audit.",
-      decisionNeeded: true,
-      decision: "Approved follow-up plan; ALI/CM to own closure by next quarter.",
-      decidedBy: "Marcus Lim",
-      decidedAt: new Date().toLocaleString(),
-    },
-    {
-      id: "MR-DEMO-2",
-      auditCycleId: "cycle-1",
-      section: "Gate Risk",
-      content: "Sub-criterion 4.6 and Criterion 5 averages are tracking close to the Band 3 gate threshold; recommend prioritising evidence refresh there.",
-      decisionNeeded: true,
-    },
-    {
-      id: "MR-DEMO-3",
-      auditCycleId: "cycle-1",
-      section: "Management Review Follow-up",
-      content: "B19: most 2025 Management Review follow-up actions lack execution timelines; propose a standard timeline field for future actions.",
-      decisionNeeded: false,
-    },
-  ];
-
   const exportLog: ExportLogEntry[] = [
     {
       id: "EXP-DEMO-1",
@@ -134,5 +106,5 @@ export function buildDemoDataset(evidence: Record<string, ItemEvidence>) {
     },
   ];
 
-  return { reviewer, confirmed, justify, closures, samples, interviewQuestions, managementReviewItems, exportLog };
+  return { reviewer, confirmed, justify, closures, samples, interviewQuestions, exportLog };
 }

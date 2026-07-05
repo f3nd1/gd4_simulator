@@ -1,13 +1,13 @@
 import { Link, useLocation } from "react-router-dom";
 
-// The closeout chain used to be 5 pages with zero forward links between them
-// (review finding #4 / Journey C). This strip sits at the top of each closeout
-// page, shows where you are in the chain, and links every other step — so
-// "what do I do after the Scorecard?" is answered on the page itself.
+// This strip sits at the top of each closeout page, shows where you are in the
+// chain, and links every other step — so "what do I do after the Scorecard?"
+// is answered on the page itself. Management sign-off was removed (it happens
+// outside the app), leaving four steps; numbers and the "Next →" link are
+// derived from this array, so they renumber automatically.
 export const CLOSEOUT_STEPS = [
   { path: "/scorecard", label: "Scorecard" },
   { path: "/final-report", label: "Final Report" },
-  { path: "/management-review", label: "Management sign-off" },
   { path: "/finalisation", label: "Finalise" },
   { path: "/export", label: "Export" },
 ] as const;
