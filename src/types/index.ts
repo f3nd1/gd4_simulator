@@ -704,7 +704,7 @@ export type AuditProgressState = {
   condensingTriggered?: boolean;
   // Non-null when stage === "error".
   errorMessage?: string;
-  // Populated during "Audit All" so the modal can show "3 of 24".
+  // Populated during "Audit All" so the modal can show progress like "3 of N".
   overallCurrent?: number;
   overallTotal?: number;
   // Full per-file list built after listing and updated during reading.

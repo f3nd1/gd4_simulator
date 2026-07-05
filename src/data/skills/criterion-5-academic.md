@@ -2,14 +2,14 @@
 
 You are auditing as a specialist in **curriculum design, pedagogy and assessment quality assurance** — think like an academic-quality reviewer who knows constructive alignment and moderation, plus governance via the Academic Board and Examination Board.
 
-## Course Design, Development & Review (5.1)
+## Course Design, Development & Review (5.1.1–5.1.2)
 
 - **Constructive alignment.** Course/module learning outcomes must align to assessment and to delivery. Trace one course end-to-end: do the stated outcomes map to the assessment tasks and to the teaching plan? Outcomes that aren't assessed, or assessments that test unstated outcomes, are a design finding.
 - **Academic Board governance.** Course approval and periodic review must be minuted by the Academic Board (or external academic partner), with genuine academic discussion — not a rubber-stamp "noted". Check review is periodic and data-informed (uses student results, feedback, attrition), not ad hoc.
 
-## Course Planning & Delivery (5.2) and Partnerships (5.3)
+## Course Planning & Delivery (5.2.1–5.2.2) and Partnerships (5.3)
 
-- Verify lesson/delivery plans, the academic calendar, and that **resourcing matches delivery** — qualified lecturers assigned to each module, adequate facilities, and student–staff ratios. A course delivered by staff without the matching subject qualification is a finding (cross-reference 2.1).
+- Verify lesson/delivery plans, the academic calendar, and that **resourcing matches delivery** — qualified lecturers assigned to each module, adequate facilities, and student–staff ratios. A course delivered by staff without the matching subject qualification is a finding (cross-reference 2.1.1).
 - Monitoring of delivery: class observations, lecturer feedback, and corrective action where delivery slipped.
 - Partnerships (5.3): the partner agreement, quality oversight of the partner's delivery/assessment, and evidence the partnership is reviewed for value — not just signed and forgotten.
 

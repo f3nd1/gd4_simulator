@@ -21,7 +21,7 @@ import { simulateGroupedFindingWriter, runLiveGroupedFindingWriter } from "../li
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useWorkspaceStore } from "./useWorkspaceStore";
 import { useAISettingsStore } from "./useAISettingsStore";
-import { effectiveSettings, type AIUsage } from "../lib/ai/aiClient";
+import { effectiveSettings } from "../lib/ai/aiClient";
 
 function newDraftId(): string {
   return `GFD-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;

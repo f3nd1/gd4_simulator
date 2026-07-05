@@ -22,9 +22,8 @@ import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 // Import pure text utilities for use within this module, and re-export so
 // callers don't need to import from textUtils directly.
-import { classifyPdfTextQuality as _classifyPdfTextQuality, extractSpreadsheetText as _extractSpreadsheetText } from "./textUtils";
+import { extractSpreadsheetText as _extractSpreadsheetText } from "./textUtils";
 export { classifyPdfTextQuality, extractSpreadsheetText } from "./textUtils";
-const classifyPdfTextQuality = _classifyPdfTextQuality;
 const extractSpreadsheetText = _extractSpreadsheetText;
 
 pdfjsLib.GlobalWorkerOptions.workerPort = new PdfjsWorker();

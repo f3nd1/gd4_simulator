@@ -8,7 +8,7 @@ import { buildAnalytics } from "../lib/analytics";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { Gauge, HBars, VBars, StackedBar, BAND_COLOR, AttainmentLadder } from "../components/ui/charts";
-import { GOLD, INK } from "../lib/theme";
+import { GOLD } from "../lib/theme";
 
 const SEV_COLOR: Record<string, string> = { Critical: "#c0392b", High: "#d97706", Medium: "#5b6ea8", Low: "#94a3b8" };
 

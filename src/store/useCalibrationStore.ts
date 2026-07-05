@@ -5,6 +5,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type { ConsistencyTestResult, ABTestResult } from "../lib/calibrationTesting";
+import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 
 export type MatchStatus = "caught" | "partial" | "missed" | "unassessed";
 
@@ -101,6 +102,23 @@ export const useCalibrationStore = create<CalibrationState>()(
       logAppliedRecommendation: (entry) =>
         set((s) => ({ appliedRecommendations: [{ ...entry, appliedAt: new Date().toISOString() }, ...s.appliedRecommendations].slice(0, APPLIED_CAP) })),
     }),
-    { name: "ucc-gd4-calibration:v1", storage: createJSONStorage(() => localStorage) }
+    {
+      name: "ucc-gd4-calibration:v1",
+      storage: createJSONStorage(() => localStorage),
+      // v1: consistencyTests / abTests are keyed by sub-criterion id, which the
+      // GD4 re-align changed (2.1 → 2.1.1/2.1.2, 7.2 removed, …). Drop entries
+      // for sub-criteria that no longer exist so this scratch store doesn't
+      // accumulate parentless keys. `matches` are keyed by stable benchmark
+      // AFI ids and need no reconciliation.
+      version: 1,
+      migrate: (persisted, fromVersion) => {
+        const s = persisted as CalibrationState;
+        if (!s || fromVersion >= 1) return s;
+        const validSub = new Set(GD4_SUB_CRITERIA.map((sc) => sc.id));
+        const prune = <V,>(rec: Record<string, V> | undefined): Record<string, V> =>
+          rec ? (Object.fromEntries(Object.entries(rec).filter(([k]) => validSub.has(k))) as Record<string, V>) : ({} as Record<string, V>);
+        return { ...s, consistencyTests: prune(s.consistencyTests), abTests: prune(s.abTests) };
+      },
+    }
   )
 );

@@ -1,7 +1,7 @@
 import type { EvidenceFolder } from "../types";
 import { GD4_SUB_CRITERIA } from "./gd4Requirements";
 
-// One evidence folder per GD4 sub-criterion (24 total), named after the
+// One evidence folder per GD4 sub-criterion, named after the
 // official criterion/sub-criterion numbering and title so the folder
 // structure maps 1:1 onto the official GD4 criteria, not an invented
 // department-based grouping.

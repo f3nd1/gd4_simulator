@@ -4,7 +4,7 @@ import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceSt
 import { CONTEXT_CHAR_CAP } from "../lib/ai/aiClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
-import type { PeiStatusRow, ShareholderRow, PersonnelRow, AcademicExamBoardRow, PeiCourseRow } from "../types/profileOfPei";
+import type { PeiStatusRow, ShareholderRow, PersonnelRow } from "../types/profileOfPei";
 
 // Last N chars of the audit journal fed into every AI folder audit — display
 // constant only (the injection cap lives with the audit code).

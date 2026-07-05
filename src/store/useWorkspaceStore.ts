@@ -32,6 +32,7 @@ import type {
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders, reconcileFolders } from "../data/folders";
+import { currentItemIds, currentSubIds, pruneRecordByKeys, reconcileEvidenceMap } from "../lib/structuralReconcile";
 import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore, needsJustification } from "../lib/scoring";
@@ -597,7 +598,7 @@ export type WorkspaceState = {
   // as labeled background — never primary evidence (the evidence-sufficiency
   // caps still gate the band).
   // overallProgress (optional): position within an "Audit All" run, used by
-  // the progress panel to show "3 of 24".
+  // the progress panel to show progress like "3 of N".
   auditFolderContents: (id: string, extraContext?: string, overallProgress?: { current: number; total: number }) => Promise<void>;
   // Staged audit: three focused AI passes (policy → evidence → outcome/review)
   // with a deterministic APSR verdict builder. Mode controls which stages run.
@@ -677,7 +678,6 @@ export type WorkspaceState = {
   addCalibrationMemory: (memory: Omit<CalibrationMemory, "id" | "timestamp" | "usageCount" | "effectivenessScore">) => string;
   updateMemoryStatus: (id: string, status: CalibrationMemoryStatus) => void;
   incrementMemoryUsage: (id: string) => void;
-  updateMemoryEffectiveness: (id: string, score: number) => void;
 
   // Running markdown log of every folder audit in this workspace.
   // Auto-updated after each auditFolderContents call; fed into subsequent AI
@@ -2042,21 +2042,35 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             fromVersion: entry.version,
             fromNote: entry.note || entry.name,
           };
+          // Reconcile the snapshot to the CURRENT GD4 structure before writing
+          // it back. A snapshot saved before a sub-criterion split / 7.2 fold /
+          // item collapse would otherwise reintroduce the old folders (leaving
+          // the Evidence Folder and item→folder resolution on a dead structure)
+          // and parentless item/sub-criterion keys. Reconciling here keeps
+          // ratings for every surviving item and drops only what no longer
+          // exists — the same guarantee the persist migration gives on load.
+          const validItem = currentItemIds();
+          const validSub = currentSubIds();
+          const restoredFolders = snap.folders ? reconcileFolders(snap.folders) : snap.folders;
+          const keptFolderIds = new Set((restoredFolders ?? []).map((f) => f.id));
+          const restoredRunHistory = Object.fromEntries(
+            Object.entries(snap.auditRunHistory ?? {}).filter(([folderId]) => keptFolderIds.has(folderId))
+          );
           return {
             cycle: { ...snap.cycle, updatedAt: new Date().toISOString() },
-            evidence: snap.evidence,
-            reviewer: snap.reviewer,
-            confirmed: snap.confirmed,
-            justify: snap.justify,
+            evidence: reconcileEvidenceMap(snap.evidence) ?? snap.evidence,
+            reviewer: pruneRecordByKeys(snap.reviewer, validItem) ?? snap.reviewer,
+            confirmed: pruneRecordByKeys(snap.confirmed, validItem) ?? snap.confirmed,
+            justify: pruneRecordByKeys(snap.justify, validItem) ?? snap.justify,
             closures: snap.closures as WorkspaceState["closures"],
-            folders: snap.folders,
-            samples: snap.samples,
-            interviewQuestions: snap.interviewQuestions,
+            folders: restoredFolders,
+            samples: snap.samples ? snap.samples.filter((x) => validItem.has(x.gd4ItemId)) : snap.samples,
+            interviewQuestions: snap.interviewQuestions ? snap.interviewQuestions.filter((x) => validItem.has(x.gd4ItemId)) : snap.interviewQuestions,
             customFindings: snap.customFindings ?? s.customFindings,
             seedFindingsLoaded: snap.seedFindingsLoaded ?? s.seedFindingsLoaded,
             // Restore the AI verdicts/log and context so nothing is silently
             // lost; fall back to current state for pre-existing snapshots.
-            itemReviews: (snap.itemReviews as WorkspaceState["itemReviews"]) ?? s.itemReviews,
+            itemReviews: pruneRecordByKeys((snap.itemReviews as WorkspaceState["itemReviews"]) ?? s.itemReviews, validItem) ?? s.itemReviews,
             aiReviewLog: snap.aiReviewLog ?? s.aiReviewLog,
             // Roster travels with the snapshot so the restored panel ids
             // (reviewPanelAuditorIds below) can't dangle against a different
@@ -2072,16 +2086,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // state — keeping it would leave PPD/evidence rows whose
             // savedFindingIds point at findings that no longer exist after
             // customFindings rolled back.
-            ppdReviewResults: snap.ppdReviewResults ?? {},
-            evidenceAssessments: snap.evidenceAssessments ?? {},
-            analysisPath: snap.analysisPath ?? {},
+            // Sub-criterion-keyed Option A state, pruned to current sub-criteria.
+            ppdReviewResults: pruneRecordByKeys(snap.ppdReviewResults ?? {}, validSub),
+            evidenceAssessments: pruneRecordByKeys(snap.evidenceAssessments ?? {}, validSub),
+            analysisPath: pruneRecordByKeys(snap.analysisPath ?? {}, validSub),
             auditMode: snap.auditMode ?? DEFAULT_AUDIT_MODE,
             reviewPanelAuditorIds: snap.reviewPanelAuditorIds ?? [],
             reviewPanelMode: snap.reviewPanelMode ?? "on-demand",
-            auditRunHistory: snap.auditRunHistory ?? {},
+            // Run history for folders that survive reconciliation only.
+            auditRunHistory: restoredRunHistory,
             // Derived from the restored history: latest run per folder.
             lastAuditRuns: Object.fromEntries(
-              Object.entries(snap.auditRunHistory ?? {})
+              Object.entries(restoredRunHistory)
                 .filter(([, runs]) => runs.length > 0)
                 .map(([folderId, runs]) => [folderId, runs[0]])
             ),
@@ -5213,11 +5229,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       incrementMemoryUsage: (id) =>
         set((s) => ({ calibrationMemories: s.calibrationMemories.map((m) => m.id === id ? { ...m, usageCount: m.usageCount + 1 } : m) })),
-
-      // Currently uncalled: awaits a per-memory feedback signal (none exists —
-      // system-level effectiveness is measured by the AI Calibration benchmark).
-      updateMemoryEffectiveness: (id, score) =>
-        set((s) => ({ calibrationMemories: s.calibrationMemories.map((m) => m.id === id ? { ...m, effectivenessScore: score } : m) })),
     }),
     // Bumped to v2 so existing sessions pick up the new blank-by-default
     // evidence baseline (previously seeded with sample ratings) instead of
@@ -5259,6 +5270,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       //        closures whose finding was dropped), so no parentless records
       //        linger. All are read by current-item id anyway, so this is
       //        cleanup, not a behaviour change.
+      //   v6 — also prune itemReviews (AI per-item verdicts) by current item id;
+      //        it was the one item-keyed slice v5 missed.
       // Persisted workspaces still hold the old folders (and runtime state keyed
       // to removed sub-criterion ids), so reconcile them on rehydrate: drop
       // folders/state for sub-criteria that no longer exist (the user's chosen
@@ -5266,12 +5279,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
       // to a surviving item id) is untouched. The reconcile is idempotent, so a
       // workspace at an earlier version is safely brought up to the latest.
-      version: 5,
+      version: 6,
       migrate: (persisted, fromVersion) => {
         const s = persisted as WorkspaceState;
-        if (!s || fromVersion >= 5) return s;
-        const validSub = new Set(GD4_SUB_CRITERIA.map((sc) => sc.id));
-        const validItem = new Set(GD4_REQUIREMENTS.map((r) => r.id));
+        if (!s || fromVersion >= 6) return s;
+        const validSub = currentSubIds();
+        const validItem = currentItemIds();
         // Ids removed by the sub-criterion re-align. The split coarse ids
         // (2.1, 2.3, 2.4, 5.1, 5.2) plus the 7.2 fold into 7.1 (its old item
         // ids 7.2.1–7.2.4 became 7.1.2–7.1.5). Anything keyed to these is
@@ -5292,14 +5305,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Findings dropped by the customFindings filter below — their closures
         // are orphaned and pruned to match.
         const droppedFindingIds = new Set((s.customFindings ?? []).filter((f) => removedSub.has(f.gd4ItemId)).map((f) => f.id));
-        // Reconcile the evidence map to the current item ids: keep existing
-        // ratings for surviving items, add a blank entry for any new/renamed
-        // item id (so no consumer indexes an undefined entry), and drop stale
-        // keys (e.g. the old 7.2.x ids).
-        const blankEv = blankEvidence();
-        const evidence = s.evidence
-          ? Object.fromEntries(Object.keys(blankEv).map((id) => [id, s.evidence[id] ?? blankEv[id]]))
-          : s.evidence;
+        // Reconcile the evidence map to the current item ids (see
+        // reconcileEvidenceMap): keep surviving ratings, blank-fill new item
+        // ids, drop stale keys (e.g. the old 7.2.x ids).
+        const evidence = reconcileEvidenceMap(s.evidence);
         return {
           ...s,
           folders: reconciled,
@@ -5321,11 +5330,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ? s.customFindings.filter((f) => !removedSub.has(f.gd4ItemId))
             : s.customFindings,
           lastPpdSubCriterionId: s.lastPpdSubCriterionId && validSub.has(s.lastPpdSubCriterionId) ? s.lastPpdSubCriterionId : null,
-          // Item-keyed reviewer/confirmed/justify scores for removed items are
-          // dropped; scores for surviving items are kept.
+          // Item-keyed reviewer/confirmed/justify scores and AI item reviews
+          // for removed items are dropped; those for surviving items are kept.
           reviewer: pruneByItem(s.reviewer),
           confirmed: pruneByItem(s.confirmed),
           justify: pruneByItem(s.justify),
+          itemReviews: pruneByItem(s.itemReviews),
           // Closures keyed to a dropped finding are pruned.
           closures: s.closures ? Object.fromEntries(Object.entries(s.closures).filter(([k]) => !droppedFindingIds.has(k))) : s.closures,
           // Samples / interview questions carrying a removed gd4ItemId are dropped.
