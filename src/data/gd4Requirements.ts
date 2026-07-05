@@ -671,7 +671,7 @@ export const SUBMISSION_PRIVACY_NOTE = "Note: omit NRIC/FIN details before uploa
 
 // Contextualised band descriptors: the generic four-dimension rubric
 // (Approach / Processes / Systems & Outcomes / Review) phrased against THIS
-// item's actual subject, instead of the same placeholder line for all 35.
+// item's actual subject, instead of the same placeholder line for every item.
 // Still an internal simulation aid, not official SSG wording.
 function bandDescriptorsFor(raw: RawItem): Record<string, string> {
   const subject = raw.title.toLowerCase();

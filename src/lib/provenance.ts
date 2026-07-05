@@ -59,7 +59,7 @@ function shortDate(iso?: string): string {
 }
 
 // One line a sceptical reader can check the numbers against:
-// "Assessed 31 of 35 items · 18 of 24 sub-criteria audited (28 Jun – 04 Jul 2026)
+// "Assessed 28 of 31 items · 18 of 23 sub-criteria audited (28 Jun – 04 Jul 2026)
 //  · 2 offline-estimate · model gpt-5-mini · auditor Rachel Tan"
 export function provenanceLine(p: RunProvenance): string {
   const parts: string[] = [];
