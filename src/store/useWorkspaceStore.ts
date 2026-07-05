@@ -437,6 +437,11 @@ export type WorkspaceState = {
   auditRunHistory: Record<string, AuditRunRecord[]>;
   // Most recent completed/failed run per folderId, for quick "View last run" access.
   lastAuditRuns: Record<string, AuditRunRecord>;
+  // Most recent "Check folder before auditing" pre-flight result per folderId,
+  // persisted so it survives a ✕ dismiss and reload and can be reopened later
+  // (viewable beside the audit result). A new probe replaces the stored one.
+  folderProbes: Record<string, { result: FolderProbeResult; probedAt: string }>;
+  setFolderProbe: (folderId: string, result: FolderProbeResult) => void;
   // Extracted-text cache keyed by "fileId:modifiedTime". Allows unchanged Drive
   // files to skip the download step on repeat audits.
   // readMethod records HOW the content was extracted ("text" = direct text
@@ -832,6 +837,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       auditScope: "both" as AuditScope,
       auditRunHistory: {},
       lastAuditRuns: {},
+      folderProbes: {},
+      setFolderProbe: (folderId, result) => set((s) => ({ folderProbes: { ...s.folderProbes, [folderId]: { result, probedAt: new Date().toISOString() } } })),
       fileTextCache: {},
       bulkAuditStatus: null,
       additionalInfo: { link: "" },

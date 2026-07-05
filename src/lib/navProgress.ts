@@ -13,7 +13,7 @@ export type NavDoneSignals = {
   auditorsAdded: boolean;       // /auditors      — at least one auditor exists
   foldersLinked: boolean;       // /evidence-folder — at least one folder has a Drive link
   checklistScored: boolean;     // /sub-checklist — at least one item's band comes from the checklist
-  ppdReviewed: boolean;         // /ppd-review    — a PPD requirements review has been run
+  ppdReviewed: boolean;         // /evidence-folder — a PPD (Option A) review has been run (the standalone page was retired; review now runs on the Evidence Folder page)
   allFindingsClosed: boolean;   // /afi-closure   — findings exist and none are still open
   allScoresConfirmed: boolean;  // /scorecard     — every item has a confirmed score
   cycleLocked: boolean;         // /finalisation  — the cycle has been locked
@@ -26,7 +26,9 @@ export const NAV_DONE_PATHS: Record<keyof NavDoneSignals, string> = {
   auditorsAdded: "/auditors",
   foldersLinked: "/evidence-folder",
   checklistScored: "/sub-checklist",
-  ppdReviewed: "/ppd-review",
+  // The standalone PPD Requirements Review page was retired; the Option A review
+  // now runs on the Evidence Folder page, so its progress tick lives there too.
+  ppdReviewed: "/evidence-folder",
   allFindingsClosed: "/afi-closure",
   allScoresConfirmed: "/scorecard",
   cycleLocked: "/finalisation",
@@ -38,8 +40,12 @@ export const NAV_DONE_PATHS: Record<keyof NavDoneSignals, string> = {
 // (still renders the step number). Everything else is number-only.
 export function navDoneMap(s: NavDoneSignals): Record<string, boolean> {
   const out: Record<string, boolean> = {};
+  // OR-combine when two signals share a path (e.g. foldersLinked AND ppdReviewed
+  // both tick /evidence-folder now that the PPD page is retired) — the step is
+  // "done" if EITHER signal is complete, never overwriting a done tick.
   (Object.keys(NAV_DONE_PATHS) as (keyof NavDoneSignals)[]).forEach((k) => {
-    out[NAV_DONE_PATHS[k]] = s[k];
+    const path = NAV_DONE_PATHS[k];
+    out[path] = (out[path] ?? false) || s[k];
   });
   return out;
 }

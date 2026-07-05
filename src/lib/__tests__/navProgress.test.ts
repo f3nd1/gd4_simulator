@@ -17,7 +17,8 @@ describe("navDoneMap — ticks are backed by real signals only", () => {
   it("only ever produces keys for signal-backed steps — never for number-only steps", () => {
     const m = navDoneMap(ALL_FALSE);
     const keys = Object.keys(m).sort();
-    expect(keys).toEqual(Object.values(NAV_DONE_PATHS).sort());
+    // Distinct paths only: foldersLinked and ppdReviewed now share /evidence-folder.
+    expect(keys).toEqual([...new Set(Object.values(NAV_DONE_PATHS))].sort());
     // Number-only steps must never appear (no fabricated tick surface).
     for (const p of ["/profile-of-pei", "/start-audit", "/findings", "/management-review", "/final-report", "/", "/settings"]) {
       expect(p in m).toBe(false);
@@ -27,6 +28,13 @@ describe("navDoneMap — ticks are backed by real signals only", () => {
   it("all-false input yields no ticks (every value false, none omitted)", () => {
     const m = navDoneMap(ALL_FALSE);
     expect(Object.values(m).every((v) => v === false)).toBe(true);
-    expect(Object.keys(m)).toHaveLength(9);
+    // 9 signals, but foldersLinked + ppdReviewed share /evidence-folder → 8 paths.
+    expect(Object.keys(m)).toHaveLength(8);
+  });
+
+  it("either foldersLinked OR ppdReviewed ticks /evidence-folder", () => {
+    expect(navDoneMap({ ...ALL_FALSE, foldersLinked: true })["/evidence-folder"]).toBe(true);
+    expect(navDoneMap({ ...ALL_FALSE, ppdReviewed: true })["/evidence-folder"]).toBe(true);
+    expect(navDoneMap(ALL_FALSE)["/evidence-folder"]).toBe(false);
   });
 });

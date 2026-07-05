@@ -51,10 +51,6 @@ const DETAILS: Record<string, Detail> = {
     what: "One Drive folder per sub-criterion, in two tabs: Policy & Procedure and Actual Evidence. Plus a school-wide Additional info folder.",
     how: "Paste the folder link, 'Check access' to confirm Drive can see it, then 'Run audit' — it reads the files (PDF/Word/text/images/spreadsheets) in three staged passes and routes the results to PPD Review or the checklist depending on the analysis path you chose.",
   },
-  "/ppd-review": {
-    what: "One row per GD4 requirement line: does the Policy & Procedure Document actually document it? Two tabs — PPD Review (documentation) and Evidence (combined documented-AND-implemented verdict).",
-    how: "Run the review, read each verdict and suggested rewrite, then 'Compile findings' on the Evidence tab to raise findings from the gaps. Rows already covered by an audit-raised finding link to it instead of duplicating.",
-  },
   "/sub-checklist": {
     what: "The source of truth for scoring. Each item is broken into testable Layer 2 lines with evidence attached and a maturity (Layer 1) check.",
     how: "Generate lines (AI or manual), attach evidence, mark each Met / Partial / Not met. The coverage % and maturity ceiling produce the band that feeds the overall score.",

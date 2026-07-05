@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Link, useSearchParams, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { DRIVE_CONNECT_PATH } from "../lib/driveGuard";
-import { Card, inputStyle } from "../components/ui/Card";
+import { inputStyle } from "../components/ui/Card";
 import { RunModeBanner } from "../components/ui/RunModeBanner";
 import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { NextStepBanner } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 import { findingTypeForStatus, findingTypeTone } from "../lib/findingClassification";
-import { resolvePpdSelection, ppdResultSummary } from "../lib/ppdSelection";
+import { ppdResultSummary } from "../lib/ppdSelection";
 import { auditModeLabel } from "../lib/runModes";
 import { TONE } from "../lib/theme";
 import { exportOptionASummaryCsv, exportFileLedgerCsvFor, downloadCsv, auditCsvFilename } from "../lib/auditCsvExport";
@@ -52,60 +52,11 @@ function overallPanelColors(v: PPDOverallVerdict): { bg: string; border: string 
 const PPD_GRID = "1fr 1fr 1fr";
 const EV_GRID = "1.1fr 1.1fr 1.1fr 0.9fr";
 
-export function PPDReview() {
-  // The sub-criterion comes from ?item= (an Evidence-Folder "Run review" click
-  // or a shared link). When absent — e.g. arriving via the bare sidebar link —
-  // fall back to the last one viewed, then the most recently run, so returning
-  // shows the saved work instead of a blank slate.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
-  const lastPpdSubCriterionId = useWorkspaceStore((s) => s.lastPpdSubCriterionId);
-  const setLastPpdSubCriterion = useWorkspaceStore((s) => s.setLastPpdSubCriterion);
-  const selectedId = resolvePpdSelection(searchParams.get("item"), lastPpdSubCriterionId, ppdReviewResults);
-  const sub = GD4_SUB_CRITERIA.find((s) => s.id === selectedId);
-
-  // Remember the resolved sub-criterion so a later bare-link return restores it.
-  useEffect(() => {
-    if (selectedId && selectedId !== lastPpdSubCriterionId) setLastPpdSubCriterion(selectedId);
-  }, [selectedId, lastPpdSubCriterionId, setLastPpdSubCriterion]);
-
-  const pickSubCriterion = (id: string) => {
-    if (id) setSearchParams({ item: id }); else setSearchParams({});
-  };
-
-  return (
-    <Card>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
-        <h3 style={{ margin: 0, fontSize: 14 }}>PPD Requirements Review</h3>
-        {/* Sub-criterion picker — so returning to this page (even via the bare
-            sidebar link) always lets you re-open a saved review, and reviewed
-            sub-criteria are marked. */}
-        <select
-          value={selectedId}
-          onChange={(e) => pickSubCriterion(e.target.value)}
-          style={{ ...inputStyle, width: "auto", minWidth: 260, padding: "5px 8px", fontSize: 12.5 }}
-        >
-          <option value="">Select a sub-criterion…</option>
-          {GD4_SUB_CRITERIA.map((sc) => (
-            <option key={sc.id} value={sc.id}>
-              {ppdReviewResults[sc.id] ? "● " : ""}{sc.id} {sc.title}{ppdReviewResults[sc.id] ? " — reviewed" : ""}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {!sub && (
-        <p style={{ fontSize: 12.5, color: "#94a3b8" }}>
-          Pick a sub-criterion above to review its Policy &amp; Procedure Document, or open it from the{" "}
-          <Link to="/evidence-folder" style={{ color: "#4338ca", fontWeight: 600 }}>Evidence Folder</Link> page's "Run review" button.
-          Sub-criteria you have already reviewed are marked ●.
-        </p>
-      )}
-
-      {sub && <PpdReviewContent selectedId={selectedId} />}
-    </Card>
-  );
-}
+// NOTE: the standalone PPD Requirements Review page (and its /ppd-review route)
+// was retired — the review now runs entirely in the Evidence Folder's review
+// modal, which imports the shared pieces below (PpdReviewContent, HybridGatePanel,
+// ResultNavLinks, OptionAExportButtons). Only the page wrapper was removed; these
+// exported building blocks stay.
 
 // Two jump-links shown on every "View result" surface (Option A modal / page
 // AND the Option B AuditRunModal) so an auditor can go straight from a run

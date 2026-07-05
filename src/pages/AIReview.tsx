@@ -29,17 +29,20 @@ function summarizeLedger(ledger: AuditFileRecord[]): { read: number; fresh: numb
 function ReadSummaryBadge({ ledger }: { ledger: AuditFileRecord[] }) {
   const s = summarizeLedger(ledger);
   if (!s) return null;
-  const parts = [
-    `${s.read} file${s.read === 1 ? "" : "s"} read`,
-    `${s.fresh} fresh · ${s.cached} cached`,
-    ...(s.vision > 0 ? [`${s.text} text · ${s.vision} vision`] : []),
-  ];
+  // Each metric is its own segment in a flex row with a real gap, so the parts
+  // never run together and wrap cleanly (as whole segments) on narrow widths —
+  // regardless of how many files or how large the counts get.
+  const seg: React.CSSProperties = { whiteSpace: "nowrap" };
   return (
     <span
       title="How this run's evidence was read — fresh vs cached, and text-extracted vs vision-transcribed. See 'Files read this run' under the Output tab for the full per-file detail."
-      style={{ display: "inline-block", maxWidth: "100%", fontSize: 10, color: "#475569", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 4, padding: "1px 6px", whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.4 }}
+      style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2, maxWidth: "100%", fontSize: 10, color: "#475569", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", lineHeight: 1.4 }}
     >
-      📄 {parts.join(" · ")}
+      <span style={seg}>📄 {s.read} file{s.read === 1 ? "" : "s"} read</span>
+      <span style={seg}>{s.fresh} fresh</span>
+      <span style={seg}>{s.cached} cached</span>
+      {s.vision > 0 && <span style={seg}>{s.text} text</span>}
+      {s.vision > 0 && <span style={seg}>{s.vision} vision</span>}
     </span>
   );
 }
@@ -445,7 +448,7 @@ export function AIReview() {
                         })}
                         {e.runId && ledgerRunIds.has(e.runId) && (
                           <Link
-                            to={`/evidence?run=${encodeURIComponent(e.runId)}`}
+                            to={`/evidence-folder?run=${encodeURIComponent(e.runId)}`}
                             onClick={(ev) => ev.stopPropagation()}
                             title="Open this run's File Ledger to see exactly what text was read/transcribed from each evidence file"
                             style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: "#4338ca", textDecoration: "none", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 5, padding: "3px 10px" }}

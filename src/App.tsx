@@ -17,7 +17,6 @@ import { Sampling } from "./pages/Sampling";
 import { Interview } from "./pages/Interview";
 import { Findings } from "./pages/Findings";
 import { AFIClosure } from "./pages/AFIClosure";
-import { PPDReview } from "./pages/PPDReview";
 import { AIReview } from "./pages/AIReview";
 import { HumanDecisionLog } from "./pages/HumanDecisionLog";
 import { AIDebugLog } from "./pages/AIDebugLog";
@@ -56,7 +55,6 @@ export default function App() {
           <Route path="/interview" element={<Interview />} />
           <Route path="/findings" element={<Findings />} />
           <Route path="/afi-closure" element={<AFIClosure />} />
-          <Route path="/ppd-review" element={<PPDReview />} />
           {/* Diagnostic / superseded surfaces — inaccessible when developer
               tools are hidden in Settings (see DEVELOPER_TOOL_PATHS). The
               ChangeLog page keeps its own in-page guard for back-compat. */}

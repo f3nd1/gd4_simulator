@@ -46,7 +46,6 @@ export const NAV: NavGroup[] = [
       { path: "/start-audit", label: "Start Audit", hint: "Choose how much the AI does: Full auto, Hybrid (step by step) or Manual" },
       { path: "/evidence-folder", label: "Evidence Folder", hint: "Link folders and run audits per sub-criterion — the main audit surface" },
       { path: "/sub-checklist", label: "Sub-Criterion Checklist", hint: "Source of truth for scoring — break each item into testable lines and attach evidence" },
-      { path: "/ppd-review", label: "PPD Requirements Review", hint: "Advanced (Option A, PPD-first): does the PPD document each GD4 requirement line, then a combined PPD-plus-evidence verdict with a compile-to-findings action" },
     ],
     tools: [
       { path: "/sampling", label: "Sampling", hint: "Risk-based sample sizes per item — pick samples to test the evidence" },

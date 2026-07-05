@@ -876,16 +876,15 @@ function CompleteDetail({ p, onExportFileLedger, onExportAISummary }: { p: Audit
   const totalCited   = files.filter((f) => f.auditStatus === "cited").length;
   const totalNotUsed = files.filter((f) => f.auditStatus === "not_used").length;
 
-  // Same Option A/B routing as the main "View results" button — Option A
-  // sends the auditor to PPD Review first, Option B straight to the checklist.
-  const analysisPath = useWorkspaceStore((s) => s.analysisPath);
-  const isOptionA = resolveAnalysisPath(analysisPath, p.subCriterionId ?? "") === "A";
+  // The "N checklist lines assessed" chip points at the Sub-Criterion Checklist
+  // for BOTH paths — that is where the assessed lines live (Option A verdicts are
+  // written there too). The rich Option A PPD+Evidence review opens from the
+  // primary "View results →" button (review modal); the standalone PPD page was
+  // retired, so there is no separate /ppd-review destination.
   const checklistHref = !p.subCriterionId
     ? "#/sub-checklist"
-    : isOptionA
-      ? `#/ppd-review?item=${p.subCriterionId}`
-      : `#/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === p.subCriterionId)?.id ?? ""}`;
-  const checklistLabel = isOptionA ? "PPD Requirements Review" : "Sub-Criterion Checklist";
+    : `#/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === p.subCriterionId)?.id ?? ""}`;
+  const checklistLabel = "Sub-Criterion Checklist";
   // ?subCrit= (a sub-criterion id like "1.2") — ?item= expects a requirement
   // id ("1.2.1") and would silently ignore a sub-criterion id.
   const findingsHref  = p.subCriterionId ? `#/findings?subCrit=${p.subCriterionId}` : "#/findings";
@@ -1117,14 +1116,16 @@ function AuditProgressModal({
   const isRunning = !isDone && !isError;
   const currentStep = stageToVisualStep(progress.stage);
 
-  // Same Option A/B routing as the folder table's "View Results" link — a
-  // staged audit run applies to either path, only the results destination
-  // differs (PPD Review first for Option A, straight to the checklist for B).
+  // Fallback destination for "View results →" when onViewResults isn't supplied
+  // (the render site always supplies it, opening the review modal directly). The
+  // standalone PPD page was retired, so Option A falls back to the Evidence
+  // Folder row (focused on its sub-criterion) rather than a dead /ppd-review URL;
+  // Option B falls back to the Sub-Criterion Checklist.
   const analysisPath = useWorkspaceStore((s) => s.analysisPath);
   const subCriterionId = progress.subCriterionId ?? "";
   const viewResultsHref =
     resolveAnalysisPath(analysisPath, subCriterionId) === "A"
-      ? `/ppd-review?item=${subCriterionId}`
+      ? `/evidence-folder?sub=${subCriterionId}`
       : `/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === subCriterionId)?.id ?? ""}`;
 
   const [selectedStep, setSelectedStep] = useState<number | null>(null);
@@ -1935,7 +1936,15 @@ export function EvidenceFolder() {
   // near-fullscreen modal; null = closed. Running and re-opening both land here.
   const [optionAModal, setOptionAModal] = useState<string | null>(null);
   // Folder pre-flight probe results, keyed by folder id (transient, not persisted).
-  const [probeResults, setProbeResults] = useState<Record<string, FolderProbeResult>>({});
+  // Pre-flight results now persist in the store (survive ✕ + reload). Local
+  // state only tracks per-folder VIEW: which run panel is hidden, and which tab
+  // (pre-flight vs audit result) is selected in the results carousel.
+  const folderProbes = useWorkspaceStore((s) => s.folderProbes);
+  const setFolderProbe = useWorkspaceStore((s) => s.setFolderProbe);
+  const [probeStripHidden, setProbeStripHidden] = useState<Set<string>>(new Set());
+  const [runViewTab, setRunViewTab] = useState<Record<string, "preflight" | "audit">>({});
+  const hideRunStrip = (id: string) => setProbeStripHidden((s) => new Set(s).add(id));
+  const showRunStrip = (id: string) => setProbeStripHidden((s) => { const n = new Set(s); n.delete(id); return n; });
 
   const effectiveAuditor =
     auditors.find((a) => a.id === activeAuditorId) || auditors.find((a) => a.role === "Audit Lead") || auditors[0];
@@ -2820,7 +2829,11 @@ export function EvidenceFolder() {
                             setOverflowOpen(null);
                             const tab: "policy" | "evidence" = f.policyLink && !f.folderLink ? "policy" : "evidence";
                             const res = await probeFolder(f.id, tab);
-                            setProbeResults((m) => ({ ...m, [f.id]: res }));
+                            // Persist the result (survives ✕ + reload), un-hide the
+                            // strip, and switch the carousel to the pre-flight tab.
+                            setFolderProbe(f.id, res);
+                            showRunStrip(f.id);
+                            setRunViewTab((t) => ({ ...t, [f.id]: "preflight" }));
                           }, {
                             disabled: !!busy,
                             title: "Lists this folder's files, flags mis-named subfolders and unreadable files — NO AI call. Run this before auditing to avoid a silently wrong result.",
@@ -2834,22 +2847,75 @@ export function EvidenceFolder() {
               </div>
 
               </div>{/* /right column */}
-              {/* Pre-flight probe results (zero AI calls) — shown whenever a
-                  probe has run for this row, regardless of expand state. While
-                  the probe is still running (busy = "probe:*:<id>"), show a
-                  loading panel so the check never looks frozen. */}
-              {busy?.startsWith("probe:") && busy.endsWith(f.id) ? (
-                <div style={{ padding: "0 12px 8px 30px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#475569", maxWidth: "100%", boxSizing: "border-box" }}>
-                    <Spinner />
-                    <span>Checking folder… listing files and testing each is readable (no AI used).</span>
+              {/* Results carousel (zero AI calls to render). Flip between the
+                  stored pre-flight check and the audit result; ✕ only HIDES the
+                  strip for this view — the stored pre-flight result is kept and
+                  can be reopened. While a probe runs, show a loading panel. */}
+              {(() => {
+                const probing = busy?.startsWith("probe:") && busy.endsWith(f.id);
+                if (probing) {
+                  return (
+                    <div style={{ padding: "0 12px 8px 30px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#475569", maxWidth: "100%", boxSizing: "border-box" }}>
+                        <Spinner />
+                        <span>Checking folder… listing files and testing each is readable (no AI used).</span>
+                      </div>
+                    </div>
+                  );
+                }
+                const stored = folderProbes[f.id];
+                const hasAudit = !!lastRun || !!f.lastAuditSummary;
+                if (!stored && !hasAudit) return null;
+                if (probeStripHidden.has(f.id)) {
+                  return (
+                    <div style={{ padding: "0 12px 6px 30px" }}>
+                      <button onClick={() => showRunStrip(f.id)} style={{ cursor: "pointer", fontSize: 11, color: "#475569", border: "1px solid #cbd5e1", background: "#f8fafc", borderRadius: 6, padding: "3px 9px" }}>
+                        {stored ? "🔎 Show pre-flight / audit result" : "📋 Show audit result"}
+                      </button>
+                    </div>
+                  );
+                }
+                let tab = runViewTab[f.id] ?? (stored ? "preflight" : "audit");
+                if (tab === "preflight" && !stored) tab = "audit";
+                if (tab === "audit" && !hasAudit) tab = "preflight";
+                const tabBtn = (key: "preflight" | "audit", label: string) => (
+                  <button
+                    onClick={() => setRunViewTab((t) => ({ ...t, [f.id]: key }))}
+                    style={{ cursor: "pointer", fontSize: 11, fontWeight: tab === key ? 700 : 500, padding: "3px 10px", borderRadius: 6, border: `1px solid ${tab === key ? "#8b5cf6" : "#e2e8f0"}`, background: tab === key ? "#f5f3ff" : "#fff", color: tab === key ? "#6d28d9" : "#64748b" }}
+                  >
+                    {label}
+                  </button>
+                );
+                return (
+                  <div style={{ padding: "0 12px 8px 30px" }}>
+                    <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff", maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 9px", borderBottom: "1px solid #f1f5f9", flexWrap: "wrap" }}>
+                        {stored && tabBtn("preflight", "🔎 Pre-flight check")}
+                        {hasAudit && tabBtn("audit", "📋 Audit result")}
+                        {stored && <span style={{ fontSize: 10, color: "#94a3b8" }}>checked {new Date(stored.probedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>}
+                        <button onClick={() => hideRunStrip(f.id)} title="Hide this panel (the pre-flight result is kept — reopen anytime)" style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
+                      </div>
+                      <div style={{ padding: "8px 10px" }}>
+                        {tab === "preflight" && stored ? (
+                          <FolderProbePanel result={stored.result} onClose={() => hideRunStrip(f.id)} />
+                        ) : (
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12, color: "#334155" }}>
+                            <span>✅ Audit result{f.lastAuditAt ? ` — ${new Date(f.lastAuditAt).toLocaleDateString()}` : ""}{lastRun ? ` · ${lastRun.linesAssessed} lines · ${lastRun.findingsDetected} finding${lastRun.findingsDetected === 1 ? "" : "s"}` : ""}</span>
+                            {(path === "A" || !!lastRun) && (
+                              <button
+                                onClick={() => (path === "A" ? setOptionAModal(f.subCriterionId) : setViewingRun(lastRun!))}
+                                style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 600, color: "#4338ca", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 6, padding: "4px 11px" }}
+                              >
+                                View full results →
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ) : probeResults[f.id] && (
-                <div style={{ padding: "0 12px 8px 30px" }}>
-                  <FolderProbePanel result={probeResults[f.id]} onClose={() => setProbeResults((m) => { const n = { ...m }; delete n[f.id]; return n; })} />
-                </div>
-              )}
+                );
+              })()}
               </div>{/* /ef-card-cols */}
 
               {/* Expandable detail: same-folder warning + access notes + audit result */}
