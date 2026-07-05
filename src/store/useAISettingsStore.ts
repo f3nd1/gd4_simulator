@@ -10,6 +10,7 @@ export type AISettingsState = AISettings & {
   setApiKey: (apiKey: string) => void;
   setModel: (model: string) => void;
   setUtilityModel: (model: string) => void;
+  setVisionModel: (model: string) => void;
   setEnabled: (enabled: boolean) => void;
   setVerdictTemperature: (t: number) => void;
   clearApiKey: () => void;
@@ -54,6 +55,9 @@ export const useAISettingsStore = create<AISettingsState>()(
       apiKey: loadLocalApiKey(),
       model: "gpt-5-mini",
       utilityModel: "gpt-5-nano",
+      // Defaults to the utility model so image/PDF-vision reading is unchanged
+      // from before this setting existed, until the user picks a different one.
+      visionModel: "gpt-5-nano",
       enabled: false,
       verdictTemperature: DEFAULT_VERDICT_TEMPERATURE,
 
@@ -63,6 +67,7 @@ export const useAISettingsStore = create<AISettingsState>()(
       },
       setModel: (model) => set({ model }),
       setUtilityModel: (utilityModel) => set({ utilityModel }),
+      setVisionModel: (visionModel) => set({ visionModel }),
       setEnabled: (enabled) => set({ enabled }),
       setVerdictTemperature: (t) => set({ verdictTemperature: Math.max(0, Math.min(1, t)) }),
       clearApiKey: () => {

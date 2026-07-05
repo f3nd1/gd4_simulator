@@ -239,6 +239,54 @@ async function extractPdfText(bytes: ArrayBuffer): Promise<string> {
   }
 }
 
+// Renders the first `maxPages` pages of a PDF's raw bytes to PNG data URLs so a
+// scanned / image-only PDF (one where extractPdfText found ~no text) can be
+// read through the SAME vision path used for standalone images. Browser-only:
+// uses a <canvas>, so this must never be imported in Node/Vitest (driveClient
+// is already worker-bound and excluded from tests for the same reason).
+// Returns the images plus the PDF's true page count so the caller can disclose
+// when only the first N of M pages were rendered (page/image budget cap).
+const PDF_RENDER_SCALE = 2.0; // ~144 DPI — legible for OCR-style transcription without huge payloads
+
+async function renderPdfBytesToImages(bytes: ArrayBuffer, maxPages: number): Promise<{ images: string[]; totalPages: number }> {
+  const loadingTask = pdfjsLib.getDocument({ data: bytes });
+  const pdf = await loadingTask.promise;
+  try {
+    const totalPages = pdf.numPages;
+    const images: string[] = [];
+    const n = Math.min(totalPages, Math.max(0, maxPages));
+    for (let i = 1; i <= n; i++) {
+      const page = await pdf.getPage(i);
+      try {
+        const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) continue;
+        // White backing so transparent (vector) PDFs don't render text on black.
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, canvas, viewport }).promise;
+        images.push(canvas.toDataURL("image/png"));
+      } finally {
+        page.cleanup();
+      }
+    }
+    return { images, totalPages };
+  } finally {
+    await loadingTask.destroy();
+  }
+}
+
+// Fetches a PDF from Drive and renders up to `maxPages` of its pages to images.
+// Used only as a fallback when text extraction genuinely failed — never for a
+// normal text PDF.
+export async function exportPdfPageImages(file: DriveFile, accessToken: string, maxPages: number, signal?: AbortSignal): Promise<{ images: string[]; totalPages: number }> {
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
+  return renderPdfBytesToImages(await res.arrayBuffer(), maxPages);
+}
+
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 export const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/tiff"]);

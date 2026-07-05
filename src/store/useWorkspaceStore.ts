@@ -49,7 +49,7 @@ import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useFindingDraftStore } from "./useFindingDraftStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
-import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
+import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
@@ -3075,12 +3075,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const aiSettings = useAISettingsStore.getState();
         const schoolCtx = composeSchoolContext(get().schoolContext);
         const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: schoolCtx });
-        const utilitySettings = effectiveSettings(aiSettings, { purpose: "utility", context: schoolCtx });
+        const visionSettings = effectiveSettings(aiSettings, { purpose: "vision", context: schoolCtx });
         const canDescribeImages = aiSettings.enabled && !!aiSettings.apiKey;
         // Each image costs one extra OpenAI vision call — capped separately
         // from the (unbounded) text-file count so a folder full of scanned
         // photos can't turn one "Run audit" click into dozens of API calls.
+        // Scanned-PDF pages rendered for the vision fallback draw from the SAME
+        // budget (one page = one image), with a per-file page cap on top.
         const MAX_IMAGES = 10;
+        const MAX_PDF_VISION_PAGES = 5;
         let imagesDescribed = 0;
         // Tokens spent on the audit's helper AI calls (image descriptions and
         // document condensing) — folded into the audit's total so the log
@@ -3222,7 +3225,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // file+version, reuse it and skip the Drive download entirely.
           const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
           const cachedEntry = get().fileTextCache[cacheKey];
-          if (cachedEntry) {
+          // A PDF cached with ~no text (from before the vision fallback existed,
+          // or a run with no key) must NOT be reused as empty when we could now
+          // read it via vision — treat it as a cache miss and re-read.
+          const cacheIsEmptyScannedPdf = !!cachedEntry && file.mimeType === "application/pdf" && (cachedEntry.text ?? "").trim().length < 50;
+          if (cachedEntry && !(cacheIsEmptyScannedPdf && canDescribeImages)) {
             fileRecords[fi] = {
               ...fileRecords[fi],
               readStatus: "read",
@@ -3271,23 +3278,65 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           type FileReadResult =
             | { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality> }
             | { kind: "image"; description: string }
+            | { kind: "pdfVision"; text: string }
+            | { kind: "unreadable"; reason: string }
+            | { kind: "capped"; reason: string }
             | { kind: "skip" };
 
           const readPromise = (async (): Promise<FileReadResult> => {
             const text = await exportFileText(file, readToken, fileAbort.signal);
             if (text !== null) {
-              let pdfQuality: ReturnType<typeof classifyPdfTextQuality> | undefined;
-              if (file.mimeType === "application/pdf") pdfQuality = classifyPdfTextQuality(text);
-              return { kind: "text", text, pdfQuality };
+              if (file.mimeType === "application/pdf") {
+                const pdfQuality = classifyPdfTextQuality(text);
+                // Vision fallback ONLY when text extraction genuinely failed
+                // (near-zero chars = scanned/image-only PDF). A normal text PDF
+                // keeps the fast, cheap text path.
+                if (pdfQuality.extractedTextQuality === "none") {
+                  return await readScannedPdfViaVision(readToken);
+                }
+                return { kind: "text", text, pdfQuality };
+              }
+              return { kind: "text", text };
             }
             if (isImage && canDescribeImages && imagesDescribed < MAX_IMAGES) {
               imagesDescribed++;
               const dataUrl = await exportFileImageDataUrl(file, readToken, fileAbort.signal);
-              const description = await describeImage(dataUrl, utilitySettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
+              const description = await describeImage(dataUrl, visionSettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
               return { kind: "image", description };
             }
             return { kind: "skip" };
           })();
+
+          // Scanned/image-only PDF → render pages and read them through the same
+          // vision path as standalone images. Never returns silent empty text:
+          // the file is either read via vision, flagged unreadable, or flagged
+          // as skipped-for-cap — always with a reason.
+          async function readScannedPdfViaVision(token: string): Promise<FileReadResult> {
+            if (!canDescribeImages) {
+              return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
+            }
+            if (imagesDescribed >= MAX_IMAGES) {
+              return { kind: "capped", reason: `Scanned/image-only PDF not read: the ${MAX_IMAGES}-image vision budget for this run was reached.` };
+            }
+            const pagesToRender = Math.min(MAX_PDF_VISION_PAGES, MAX_IMAGES - imagesDescribed);
+            const { images, totalPages } = await exportPdfPageImages(file, token, pagesToRender, fileAbort.signal);
+            if (images.length === 0) {
+              return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted and its pages could not be rendered for vision." };
+            }
+            const parts: string[] = [];
+            for (let p = 0; p < images.length; p++) {
+              imagesDescribed++;
+              const d = await describeImage(images[p], visionSettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
+              if (d.trim()) parts.push(images.length > 1 ? `--- Page ${p + 1} ---\n${d.trim()}` : d.trim());
+            }
+            if (parts.length === 0) {
+              return { kind: "unreadable", reason: "Scanned/image-only PDF: rendered pages produced no readable text via the vision model." };
+            }
+            const capNote = totalPages > images.length
+              ? `\n\n[Vision transcription of the first ${images.length} of ${totalPages} pages — page/image budget reached; later pages were not read.]`
+              : "";
+            return { kind: "pdfVision", text: parts.join("\n\n") + capNote };
+          }
 
           let fileResult: FileReadResult;
           try {
@@ -3346,6 +3395,38 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               scanned.push(file.path);
               pushPart(file.path, fileResult.description, file.bucket, "image", fi);
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: fileResult.description.length };
+              break;
+            case "pdfVision": {
+              // Scanned PDF read via the vision fallback — treat the transcription
+              // as the file's text and CACHE it, so the expensive vision pass is
+              // not repeated on every re-audit of an unchanged file.
+              scanned.push(file.path);
+              const q = classifyPdfTextQuality(fileResult.text);
+              pushPart(file.path, fileResult.text, file.bucket, "PDF", fi);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: fileResult.text.length, processingMode: "new", suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality };
+              set((st) => ({
+                fileTextCache: {
+                  ...st.fileTextCache,
+                  [cacheKey]: {
+                    text: fileResult.text,
+                    charCount: fileResult.text.length,
+                    fileKind: "PDF",
+                    fileName: file.path.split("/").pop() || file.path,
+                    filePath: file.path,
+                    cachedAt: Date.now(),
+                    pdfQuality: { suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality },
+                  },
+                },
+              }));
+              break;
+            }
+            case "unreadable":
+              skipped.push(file.path);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: fileResult.reason };
+              break;
+            case "capped":
+              skipped.push(file.path);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: fileResult.reason };
               break;
             case "skip":
               skipped.push(file.path);
@@ -4212,9 +4293,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const aiSettings = useAISettingsStore.getState();
         const schoolCtx = composeSchoolContext(get().schoolContext);
         const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: schoolCtx });
-        const utilitySettings = effectiveSettings(aiSettings, { purpose: "utility", context: schoolCtx });
+        const visionSettings = effectiveSettings(aiSettings, { purpose: "vision", context: schoolCtx });
         const canDescribeImages = aiSettings.enabled && !!aiSettings.apiKey;
+        // Scanned-PDF vision pages share the image budget (one page = one image),
+        // with a per-file page cap on top. See auditFolderContents.
         const MAX_IMAGES = 10;
+        const MAX_PDF_VISION_PAGES = 5;
         let imagesDescribed = 0;
         let auxUsage: AIUsage | undefined;
         const scanned: string[] = [];
@@ -4263,7 +4347,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
           const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
           const cachedEntry = get().fileTextCache[cacheKey];
-          if (cachedEntry) {
+          // A PDF cached with ~no text (pre-vision-fallback, or a no-key run) is
+          // re-read rather than reused-as-empty when vision can now read it.
+          const cacheIsEmptyScannedPdf = !!cachedEntry && file.mimeType === "application/pdf" && (cachedEntry.text ?? "").trim().length < 50;
+          if (cachedEntry && !(cacheIsEmptyScannedPdf && canDescribeImages)) {
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: cachedEntry.charCount, processingMode: "reused", ...(cachedEntry.pdfQuality ? { suspectedScannedPdf: cachedEntry.pdfQuality.suspectedScannedPdf, extractedTextQuality: cachedEntry.pdfQuality.extractedTextQuality } : {}) };
             if (cachedEntry.text !== null) {
               scanned.push(file.path);
@@ -4301,18 +4388,38 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const timeoutPromise = new Promise<never>((_, reject) => { fileTimeoutTimer = setTimeout(() => { fileAbort.abort(); reject(new Error("FILE_TIMEOUT")); }, fileTimeoutMs); });
           _currentFileAbort = () => { clearTimeout(fileTimeoutTimer); fileAbort.abort(); };
 
-          type FileReadResult = { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality> } | { kind: "image"; description: string } | { kind: "skip" };
+          type FileReadResult = { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality> } | { kind: "image"; description: string } | { kind: "pdfVision"; text: string } | { kind: "unreadable"; reason: string } | { kind: "capped"; reason: string } | { kind: "skip" };
+          // Scanned/image-only PDF → vision fallback. See auditFolderContents.
+          const readScannedPdfViaVision = async (token: string): Promise<FileReadResult> => {
+            if (!canDescribeImages) return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
+            if (imagesDescribed >= MAX_IMAGES) return { kind: "capped", reason: `Scanned/image-only PDF not read: the ${MAX_IMAGES}-image vision budget for this run was reached.` };
+            const pagesToRender = Math.min(MAX_PDF_VISION_PAGES, MAX_IMAGES - imagesDescribed);
+            const { images, totalPages } = await exportPdfPageImages(file, token, pagesToRender, fileAbort.signal);
+            if (images.length === 0) return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted and its pages could not be rendered for vision." };
+            const parts: string[] = [];
+            for (let p = 0; p < images.length; p++) {
+              imagesDescribed++;
+              const d = await describeImage(images[p], visionSettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
+              if (d.trim()) parts.push(images.length > 1 ? `--- Page ${p + 1} ---\n${d.trim()}` : d.trim());
+            }
+            if (parts.length === 0) return { kind: "unreadable", reason: "Scanned/image-only PDF: rendered pages produced no readable text via the vision model." };
+            const capNote = totalPages > images.length ? `\n\n[Vision transcription of the first ${images.length} of ${totalPages} pages — page/image budget reached; later pages were not read.]` : "";
+            return { kind: "pdfVision", text: parts.join("\n\n") + capNote };
+          };
           const readPromise = (async (): Promise<FileReadResult> => {
             const text = await exportFileText(file, readToken, fileAbort.signal);
             if (text !== null) {
-              let pdfQuality: ReturnType<typeof classifyPdfTextQuality> | undefined;
-              if (file.mimeType === "application/pdf") pdfQuality = classifyPdfTextQuality(text);
-              return { kind: "text", text, pdfQuality };
+              if (file.mimeType === "application/pdf") {
+                const pdfQuality = classifyPdfTextQuality(text);
+                if (pdfQuality.extractedTextQuality === "none") return await readScannedPdfViaVision(readToken);
+                return { kind: "text", text, pdfQuality };
+              }
+              return { kind: "text", text };
             }
             if (isImage && canDescribeImages && imagesDescribed < MAX_IMAGES) {
               imagesDescribed++;
               const dataUrl = await exportFileImageDataUrl(file, readToken, fileAbort.signal);
-              const description = await describeImage(dataUrl, utilitySettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
+              const description = await describeImage(dataUrl, visionSettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
               return { kind: "image", description };
             }
             return { kind: "skip" };
@@ -4371,6 +4478,34 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (isPolicy) policyDocParts.push(part); else evidenceDocParts.push(part);
               break;
             }
+            case "pdfVision": {
+              // Scanned PDF read via vision — chunk the transcription like text
+              // and cache it so the expensive vision pass isn't repeated.
+              const body = fileResult.text;
+              scanned.push(file.path);
+              const q = classifyPdfTextQuality(body);
+              set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: "PDF", fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), pdfQuality: { suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality } } } }));
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality };
+              const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
+              for (let pi = 0; pi < totalParts; pi++) {
+                const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+                const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
+                const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
+                evidenceChunks.push({ chunkId, filePath: file.path, fileName: file.path.split("/").pop() || file.path, bucket: resolvedBucket, fileKind: "PDF", text: chunkBody, charCount: chunkBody.length, evidenceType: inferEvidenceType("PDF", resolvedBucket, chunkBody) });
+                fileRecords[fi] = { ...fileRecords[fi], chunkIds: [...(fileRecords[fi].chunkIds || []), chunkId] };
+                const part = `[CHUNK:${chunkId}] --- ${file.path}${partLabel} [PDF] ---\n${chunkBody}`;
+                if (isPolicy) policyDocParts.push(part); else evidenceDocParts.push(part);
+              }
+              break;
+            }
+            case "unreadable":
+              skipped.push(file.path);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: fileResult.reason };
+              break;
+            case "capped":
+              skipped.push(file.path);
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: fileResult.reason };
+              break;
             case "skip":
               skipped.push(file.path);
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped" };

@@ -111,7 +111,7 @@ function PanelModeSettings() {
 }
 
 export function Settings() {
-  const { apiKey, model, utilityModel, enabled, setApiKey, setModel, setUtilityModel, setEnabled, clearApiKey, setVerdictTemperature } = useAISettingsStore();
+  const { apiKey, model, utilityModel, visionModel, enabled, setApiKey, setModel, setUtilityModel, setVisionModel, setEnabled, clearApiKey, setVerdictTemperature } = useAISettingsStore();
   const verdictTemperature = useAISettingsStore((s) => verdictTemp(s));
   const memory = useAgentMemoryStore((s) => s.memory);
   const clearMemory = useAgentMemoryStore((s) => s.clearMemory);
@@ -365,19 +365,21 @@ create policy "anon read/write" on public.workspace_state
           {modelsError && <span style={{ fontSize: 11.5, color: "#b23121" }}>{modelsError}</span>}
         </div>
 
-        {(["analysis", "utility"] as const).map((kind) => {
-          const value = kind === "analysis" ? model : utilityModel;
-          const setter = kind === "analysis" ? setModel : setUtilityModel;
+        {(["analysis", "utility", "vision"] as const).map((kind) => {
+          const value = kind === "analysis" ? model : kind === "utility" ? utilityModel : (visionModel || utilityModel);
+          const setter = kind === "analysis" ? setModel : kind === "utility" ? setUtilityModel : setVisionModel;
+          const label = kind === "analysis" ? "Analysis model" : kind === "utility" ? "Utility model" : "Image (vision) model";
+          const placeholder = kind === "analysis" ? "gpt-5" : "gpt-5-nano";
           const v = modelValidity(value);
           return (
             <div key={kind} style={{ marginBottom: 12 }}>
-              <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>{kind === "analysis" ? "Analysis model" : "Utility model"}</span>
+              <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>{label}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3 }}>
                 <ModelPicker
                   value={value}
                   onSelect={setter}
                   suggestions={suggestions}
-                  placeholder={kind === "analysis" ? "gpt-5" : "gpt-5-nano"}
+                  placeholder={placeholder}
                   testId={`model-${kind}`}
                 />
                 {v === "ok" && <span title="This model is available to your key." style={{ color: "#15803d", fontSize: 16, fontWeight: 700 }}>✓</span>}
@@ -388,7 +390,9 @@ create policy "anon read/write" on public.workspace_state
                   ? `"${value}" isn't in your key's available models — fix the spelling or pick from the list.`
                   : kind === "analysis"
                     ? "Audit verdicts, reviews, banding, checklist & finding drafting, closure review, cross-criterion analysis. Use a smarter model (e.g. gpt-5)."
-                    : "Reading evidence images and condensing/drafting metadata. A cheaper model is fine (e.g. gpt-5-nano, gpt-4o-mini, or gpt-4o)."}
+                    : kind === "utility"
+                      ? "Link-metadata drafting and other light text work. A cheaper model is fine (e.g. gpt-5-nano, gpt-4o-mini, or gpt-4o)."
+                      : "Transcribes evidence images and scanned/image-only PDFs. Must be a multimodal (vision-capable) model. A stronger vision model reads scans and photos more accurately but costs more per image (e.g. gpt-5-mini or gpt-4o); a cheaper one (gpt-5-nano) is fine for clean scans."}
               </span>
             </div>
           );

@@ -65,10 +65,14 @@ export function aiOfflineReason(s: Pick<AISettings, "enabled" | "apiKey">): stri
 // Builds a per-call settings object: picks the analysis vs utility model and
 // merges in the School Context briefing. One helper so every call site routes
 // the model and injects context consistently.
-export function effectiveSettings(base: AISettings, opts: { purpose: "analysis" | "utility"; context?: string }): AISettings {
+export function effectiveSettings(base: AISettings, opts: { purpose: "analysis" | "utility" | "vision"; context?: string }): AISettings {
+  const model =
+    opts.purpose === "vision" ? base.visionModel || base.utilityModel || base.model
+    : opts.purpose === "utility" ? base.utilityModel || base.model
+    : base.model;
   return {
     ...base,
-    model: opts.purpose === "utility" ? base.utilityModel || base.model : base.model,
+    model,
     context: opts.context,
   };
 }

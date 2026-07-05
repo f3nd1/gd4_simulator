@@ -1217,9 +1217,14 @@ export type AISettings = {
   // The smart "analysis" model — audit verdicts, reviews, banding, checklist
   // generation. (`model` kept as the field name for back-compat.)
   model: string;
-  // Cheaper "utility" model — image reading and link-metadata drafting, which
-  // don't need the analysis model's reasoning.
+  // Cheaper "utility" model — link-metadata drafting and other light text work
+  // that doesn't need the analysis model's reasoning.
   utilityModel: string;
+  // Vision model used to transcribe evidence images and scanned/image-only PDFs
+  // (the PDF vision fallback). Must be a multimodal model. Optional so
+  // pre-existing persisted settings fall back to the utility model — preserving
+  // the prior behaviour where image reading ran on the utility model.
+  visionModel?: string;
   enabled: boolean;
   // Temperature for VERDICT-DECIDING calls (staged audit passes, PPD review,
   // evidence assessment, auditor-panel classification). Lower = the same input
