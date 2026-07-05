@@ -41,7 +41,13 @@ export type BenchmarkAFI = {
 // Seeded verbatim from the two real SSG EduTrust assessment reports:
 //   • 18 July 2025 (desktop/onsite checks 20, 21 and 23 May 2025) — B1–B35 + C1
 //   • 22 June 2026 (desktop/onsite checks 21, 22 and 24 April 2026) — A1 + B1–B19 + C1–C3
-// findingText is the report's own wording — never edit or paraphrase it.
+// findingText is the report's own wording — never edit or paraphrase it, with
+// ONE exception: personal names of individuals (students/staff) named in the
+// reports' worked examples have been redacted to neutral role placeholders
+// (e.g. "[an academic staff member]", "[a student]") for privacy. This removes
+// PII while preserving each finding's pattern, dates, courses and document
+// references, which is what the calibration benchmark measures against. Do NOT
+// restore the real names.
 export const BENCHMARK_AFIS: BenchmarkAFI[] = [
   // ── July 2025 report — B-series AFIs ──────────────────────────────────────
   {
@@ -80,7 +86,7 @@ export const BENCHMARK_AFIS: BenchmarkAFI[] = [
     kind: "AFI",
     subCriterion: "2.1.1",
     gd4Ref: "2.1.1",
-    findingText: "It was not evident that the PEI’s recruitment process had adhered to all relevant laws, regulations and ethical standards as stated in its PPD.\nExample:\nThe teacher’s contract for [redacted] was signed on 8 August 2024, which was after her deployment period (1 June 2023 to 31 January 2024).",
+    findingText: "It was not evident that the PEI’s recruitment process had adhered to all relevant laws, regulations and ethical standards as stated in its PPD.\nExample:\nThe teacher’s contract for [an academic staff member] was signed on 8 August 2024, which was after the deployment period (1 June 2023 to 31 January 2024).",
     findingPattern: "not implemented per PPD",
     hasNamedExample: true,
   },
@@ -210,7 +216,7 @@ export const BENCHMARK_AFIS: BenchmarkAFI[] = [
     kind: "AFI",
     subCriterion: "4.2",
     gd4Ref: "4.2.1",
-    findingText: "It was not evident that the PEI had ensured that students acknowledge the Advisory Note to Students in Form 12 before signing the student contract.\nExample:\n[redacted], Diploma in Business Management (Mandarin)(E-Learning)",
+    findingText: "It was not evident that the PEI had ensured that students acknowledge the Advisory Note to Students in Form 12 before signing the student contract.\nExample:\n[a student], Diploma in Business Management (Mandarin)(E-Learning)",
     findingPattern: "not implemented per PPD",
     hasNamedExample: true,
   },
@@ -320,7 +326,7 @@ export const BENCHMARK_AFIS: BenchmarkAFI[] = [
     kind: "AFI",
     subCriterion: "5.5",
     gd4Ref: "5.5.1",
-    findingText: "It was not evident that PEI had briefed the invigilators performing student assessment on the code of conduct.\nExamples:\n(a) [redacted]\n(b) [redacted]",
+    findingText: "It was not evident that PEI had briefed the invigilators performing student assessment on the code of conduct.\nExamples:\n(a) [academic staff member 1]\n(b) [academic staff member 2]",
     findingPattern: "not implemented per PPD",
     hasNamedExample: true,
   },
@@ -330,7 +336,7 @@ export const BENCHMARK_AFIS: BenchmarkAFI[] = [
     kind: "AFI",
     subCriterion: "5.5",
     gd4Ref: "5.5.1",
-    findingText: "It was not evident that the PEI’s appointment of personnel for setting, vetting, marking and moderation of student assessment was executed appropriately.\nExamples:\n(a) The letter of appointment for [redacted] was acknowledged by [redacted].\n(b) The same individual was appointed for all the four different roles in the same assessment.",
+    findingText: "It was not evident that the PEI’s appointment of personnel for setting, vetting, marking and moderation of student assessment was executed appropriately.\nExamples:\n(a) The letter of appointment for [staff member 1] was acknowledged by [staff member 2].\n(b) The same individual was appointed for all the four different roles in the same assessment.",
     findingPattern: "not implemented per PPD",
     hasNamedExample: true,
   },
