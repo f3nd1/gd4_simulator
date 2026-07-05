@@ -4708,7 +4708,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (independenceWarn) lineParts.push(`⚠ ${independenceWarn}`);
         }
         lineParts.push(`Run ${runId} · Staged audit (${mode} mode) · Mode: ${auditModeLabel(automationMode)} · Auditor: ${auditorLabel}.`);
-        if (queuedForReview > 0) lineParts.push(`⏸ ${queuedForReview} verdict${queuedForReview === 1 ? "" : "s"} NOT committed — waiting for your review on the Evidence Folder page ("Needs your review"). Findings for those lines are raised only when you accept them.`);
+        if (queuedForReview > 0) lineParts.push(`⏸ ${queuedForReview} verdict${queuedForReview === 1 ? "" : "s"} NOT committed. The review panel ("Needs your review") opens automatically when this run finishes, beside each verdict's evidence; findings for those lines are raised only when you accept them.`);
         if (specialistLabel) lineParts.push(`Specialist lens: ${specialistLabel}.`);
         lineParts.push(`✓ ${counts.Met} Met · ◐ ${counts.Partial} Partial · ✗ ${counts["Not met"]} Not met (of ${stagedVerdicts.length} assessed line${stagedVerdicts.length === 1 ? "" : "s"}${linesNotAssessed > 0 ? `; ${linesNotAssessed} not assessed` : ""}).`);
         if (bandPartsStaged.length) lineParts.push(`Band: ${bandPartsStaged.join(", ")}.`);

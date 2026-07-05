@@ -2001,6 +2001,26 @@ export function EvidenceFolder() {
     return map;
   }, [auditRunHistory]);
 
+  // Surface the verdict review straight after a run. The moment a single
+  // staged (Option B) run completes, swap the live progress dialog for the
+  // run's review panel (AuditRunModal, which hosts the accept / reject / edit
+  // gate) so the auditor acts on the verdicts in place instead of closing this
+  // and reopening the previous run. Fires once per run; never during a
+  // full-auto sweep (that commits automatically and shows its own overlay).
+  // This only OPENS the panel - it never accepts, edits or discards anything,
+  // and it reuses the same lastAuditRuns record that "View results" reopens.
+  const autoOpenedRunIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!auditProgress || auditProgress.stage !== "complete") return;
+    if (fullAuditProgress?.status === "running") return;
+    const rec = lastAuditRuns[auditProgress.folderId];
+    if (!rec || rec.status !== "completed") return;
+    if (autoOpenedRunIdRef.current === rec.runId) return;
+    autoOpenedRunIdRef.current = rec.runId;
+    setViewingRun(rec);
+    clearAuditProgress();
+  }, [auditProgress, fullAuditProgress, lastAuditRuns, clearAuditProgress]);
+
   return (
     <>
     {/* During Full auto the per-folder detail is shown INSIDE FullAuditOverlay
