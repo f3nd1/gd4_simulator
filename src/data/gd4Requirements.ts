@@ -63,8 +63,11 @@ export const GD4_SUB_CRITERIA: GD4SubCriterion[] = [
   { id: "6.2", criterionId: "6", title: "Management Review", description: "This sub-criterion examines how the Management reviews overall organisational performance to ensure that the PEI is on track to achieve its vision and mission." },
   { id: "6.3", criterionId: "6", title: "Innovation and Continual Improvement", description: "This sub-criterion examines how you commit yourself to involve stakeholders in efforts towards organisation excellence and innovation. It also examines your commitment towards making appropriate investments to enhance your institutional quality." },
 
-  { id: "7.1", criterionId: "7", title: "Measurement of Outcomes", description: "This sub-criterion examines how you identify, track and improve the outcomes of your systems to improve institution and academic quality." },
-  { id: "7.2", criterionId: "7", title: "Achievement of Outcomes", description: "This sub-criterion examines the achievement of outcomes in four aspects: Student and Graduate Outcomes, Service Quality Outcomes, Operational Outcomes and People Development Outcomes." },
+  // 7.2 "Achievement of Outcomes" is folded into 7.1: its four outcome areas
+  // become items 7.1.2–7.1.5 under this single Criterion-7 sub-criterion, and
+  // 7.2 is removed as a separate Evidence Folder line. This is a deliberate
+  // departure from the GD4 Library's 7.1/7.2 split (confirmed 2026-07-05).
+  { id: "7.1", criterionId: "7", title: "Measurement of Outcomes", description: "This sub-criterion examines how you identify, track and improve the outcomes of your systems to improve institution and academic quality, including the achievement of student and graduate, service quality, operational and people development outcomes." },
 ];
 
 type RawItem = {
@@ -505,8 +508,8 @@ const RAW_ITEMS: RawItem[] = [
     expectedEvidence: ["Outcomes measurement framework", "Benchmark/comparative data sources", "Performance vs target analysis", "Performance measurement process review records"],
   },
   {
-    id: "7.2.1",
-    subCriterionId: "7.2",
+    id: "7.1.2",
+    subCriterionId: "7.1",
     title: "Student and Graduate Outcomes",
     describeShow: [
       "Your performance in producing quality outcomes from the courses you offered will be measured using relevant indicators and benchmarks",
@@ -520,8 +523,8 @@ const RAW_ITEMS: RawItem[] = [
     expectedEvidence: ["Student attrition/passing/quality-of-passes data", "Graduate outcomes data (GES where applicable)", "Three-year trend and benchmark comparison", "Improvement actions for unmet targets"],
   },
   {
-    id: "7.2.2",
-    subCriterionId: "7.2",
+    id: "7.1.3",
+    subCriterionId: "7.1",
     title: "Service Quality Outcomes",
     describeShow: [
       "Your performance in achieving targets for key performance indicators (KPIs) identified for Service Quality",
@@ -532,8 +535,8 @@ const RAW_ITEMS: RawItem[] = [
     expectedEvidence: ["Service quality KPI data", "Three-year trend data", "Improvement actions for unmet targets"],
   },
   {
-    id: "7.2.3",
-    subCriterionId: "7.2",
+    id: "7.1.4",
+    subCriterionId: "7.1",
     title: "Operational Outcomes",
     describeShow: [
       "Your performance in producing intended outcomes from your day-to-day operations to ensure effectiveness and efficiency",
@@ -544,8 +547,8 @@ const RAW_ITEMS: RawItem[] = [
     expectedEvidence: ["Operational KPI / financial ratio data", "Three-year trend data", "Improvement actions for unmet targets"],
   },
   {
-    id: "7.2.4",
-    subCriterionId: "7.2",
+    id: "7.1.5",
+    subCriterionId: "7.1",
     title: "People Development Outcomes",
     describeShow: [
       "Your performance in producing intended outcomes from your human resource systems and processes, in the areas of staff satisfaction, training and development",

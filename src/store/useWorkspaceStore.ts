@@ -5245,23 +5245,28 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     {
       name: "ucc-gd4-workspace:v3",
       storage: workspaceStorage,
-      // Schema version 1: the Evidence Folder sub-criteria were split to match
-      // the GD4 Library's finer breakdown (2.1 → 2.1.1/2.1.2, 2.3, 2.4, 5.1,
-      // 5.2). Persisted workspaces still hold the old coarse folders (and any
-      // runtime state keyed to the removed sub-criterion ids), so reconcile
-      // them on rehydrate: drop folders/state for sub-criteria that no longer
-      // exist (the user's chosen "discard & re-audit" for those areas) and add
-      // fresh empty folders for the new finer sub-criteria. Everything keyed to
-      // an unchanged sub-criterion (or to an item id like 2.1.1, which survives
-      // the split) is untouched.
-      version: 1,
+      // Schema migrations for the Evidence Folder sub-criterion re-align:
+      //   v1 — split 2.1 → 2.1.1/2.1.2 (and 2.3, 2.4, 5.1, 5.2) to match the
+      //        GD4 Library's finer breakdown.
+      //   v2 — fold 7.2 "Achievement of Outcomes" into 7.1 (its outcome areas
+      //        became items 7.1.2–7.1.5); 7.2 removed as an Evidence Folder line.
+      // Persisted workspaces still hold the old folders (and runtime state keyed
+      // to removed sub-criterion ids), so reconcile them on rehydrate: drop
+      // folders/state for sub-criteria that no longer exist (the user's chosen
+      // "discard & re-audit" for those areas) and add fresh empty folders for
+      // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
+      // to a surviving item id) is untouched. The reconcile is idempotent, so a
+      // workspace already at v1 is safely brought up to v2.
+      version: 2,
       migrate: (persisted, fromVersion) => {
         const s = persisted as WorkspaceState;
-        if (!s || fromVersion >= 1) return s;
+        if (!s || fromVersion >= 2) return s;
         const validSub = new Set(GD4_SUB_CRITERIA.map((sc) => sc.id));
-        // The coarse sub-criterion ids removed by the split. Anything keyed to
-        // these is discarded; item ids beneath them (2.1.1, 2.3.2, …) survive.
-        const removedSub = new Set(["2.1", "2.3", "2.4", "5.1", "5.2"]);
+        // Ids removed by the sub-criterion re-align. The split coarse ids
+        // (2.1, 2.3, 2.4, 5.1, 5.2) plus the 7.2 fold into 7.1 (its old item
+        // ids 7.2.1–7.2.4 became 7.1.2–7.1.5). Anything keyed to these is
+        // discarded; item ids beneath the split ones (2.1.1, 2.3.2, …) survive.
+        const removedSub = new Set(["2.1", "2.3", "2.4", "5.1", "5.2", "7.2", "7.2.1", "7.2.2", "7.2.3", "7.2.4"]);
         const reconciled = s.folders ? reconcileFolders(s.folders) : s.folders;
         const keptFolderIds = new Set((reconciled ?? []).map((f) => f.id));
         const pruneBySubCrit = <V,>(rec: Record<string, V> | undefined) =>

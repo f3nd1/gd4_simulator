@@ -27,6 +27,48 @@ import type {
   SubChecklistEvidenceItem,
 } from "../types";
 
+// ── Display-only parent grouping for the checklist item list ────────────────
+// Items are grouped by their "major.minor" key (e.g. "2.1") so every criterion
+// renders as a uniform two-level shape: a light, non-clickable parent TITLE
+// header, then its child item(s) as the clickable rows beneath. This keeps the
+// display consistent whether a sub-criterion has one child (1.1 → 1.1.1) or
+// several, and restores the umbrella header for sub-criteria that were split
+// into finer ones (2.1 → 2.1.1/2.1.2, etc.). Purely a view concern — the data
+// model, sub-criterion ids, labels and gate flags are unchanged.
+const PARENT_GROUP_TITLES: Record<string, string> = {
+  // Umbrella labels kept for the split sub-criteria, whose original merged
+  // title no longer exists as a single GD4_SUB_CRITERIA entry.
+  "2.1": "Human Resource",
+  "2.3": "Data, Information and Knowledge Management",
+  "2.4": "Feedback Management",
+  "5.1": "Course Design, Development and Review",
+  "5.2": "Course Planning and Delivery",
+};
+
+function parentGroupKey(itemId: string): string {
+  return itemId.split(".").slice(0, 2).join(".");
+}
+
+function parentGroupTitle(key: string): string {
+  return GD4_SUB_CRITERIA.find((s) => s.id === key)?.title ?? PARENT_GROUP_TITLES[key] ?? "";
+}
+
+// Ordered parent groups for one criterion, each with its child items in
+// canonical order.
+function parentGroupsForCriterion(criterionId: string): { key: string; title: string; items: GD4Requirement[] }[] {
+  const groups: { key: string; title: string; items: GD4Requirement[] }[] = [];
+  for (const r of GD4_REQUIREMENTS.filter((req) => req.criterion === criterionId)) {
+    const key = parentGroupKey(r.id);
+    let g = groups.find((x) => x.key === key);
+    if (!g) { g = { key, title: parentGroupTitle(key), items: [] }; groups.push(g); }
+    g.items.push(r);
+  }
+  return groups;
+}
+
+// Distinct parent-group count (for the list caption), e.g. 23.
+const PARENT_GROUP_COUNT = new Set(GD4_REQUIREMENTS.map((r) => parentGroupKey(r.id))).size;
+
 // Formats the short provenance label for a generated line.
 // Prefers the structured sourceRef (e.g. "6.2.1.DS1.a") over the legacy index-based label.
 function sourceLabel(sourceType: ChecklistSourceType, sourceIndex: number | null | undefined, sourceRef?: string): string {
@@ -353,7 +395,7 @@ export function SubCriterionChecklist() {
       {menuOpen && (
       <Card style={{ maxHeight: "calc(100vh - 140px)", overflowY: "auto" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h3 style={{ margin: 0, fontSize: 13 }}>24 sub-criteria · 35 items</h3>
+          <h3 style={{ margin: 0, fontSize: 13 }}>{PARENT_GROUP_COUNT} sub-criteria · {GD4_REQUIREMENTS.length} items</h3>
           <button onClick={() => setMenuOpen(false)} title="Hide list" style={{ cursor: "pointer", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 8px" }}>
             ✕ Hide
           </button>
@@ -369,10 +411,12 @@ export function SubCriterionChecklist() {
         {GD4_CRITERIA.filter((c) => menuCritFilter === "All" || c.id === menuCritFilter).map((c) => (
           <div key={c.id} style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: "#6b7280", margin: "8px 0 4px" }}>C{c.id} · {c.title}</div>
-            {GD4_SUB_CRITERIA.filter((s) => s.criterionId === c.id).map((s) => (
-              <div key={s.id} style={{ marginBottom: 4 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", paddingLeft: 4 }}>{s.id} {s.title}</div>
-                {GD4_REQUIREMENTS.filter((r) => r.subCriterionId === s.id).map((r) => {
+            {parentGroupsForCriterion(c.id).map((g) => (
+              <div key={g.key} style={{ marginBottom: 4 }}>
+                {/* Parent title header — display grouping only: non-clickable,
+                    no band, no gate, no actions. */}
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", paddingLeft: 4 }}>{g.key} {g.title}</div>
+                {g.items.map((r) => {
                   const e = entries[r.id];
                   const used = !!e && e.specific.length > 0;
                   const b = used ? computeBand(e.generic, e.specific, r.gateSensitive).finalBand : null;

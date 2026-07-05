@@ -2,10 +2,11 @@ import { describe, it, expect } from "vitest";
 import { GD4_REQUIREMENTS, GD4_CRITERIA, GD4_SUB_CRITERIA } from "../gd4Requirements";
 
 const EXPECTED_ITEM_COUNT = 35;
-// 30 = the 24 official sub-criteria minus the 5 that were split to align the
-// Evidence Folder to the GD4 Library's finer breakdown (2.1, 2.3, 2.4, 5.1,
-// 5.2), plus the 11 finer sub-criteria they were replaced with.
-const EXPECTED_SUB_CRITERION_COUNT = 30;
+// 29 = the 24 official sub-criteria, minus the 5 split to align the Evidence
+// Folder to the GD4 Library's finer breakdown (2.1, 2.3, 2.4, 5.1, 5.2) plus
+// the 11 finer sub-criteria replacing them (+6 → 30), minus 7.2 which was
+// folded into 7.1 (its outcome areas became items 7.1.2–7.1.5) (−1 → 29).
+const EXPECTED_SUB_CRITERION_COUNT = 29;
 const EXPECTED_CRITERION_COUNT = 7;
 const VALID_SOURCE_TYPES = new Set(["describeShow", "note", "expectedEvidence"]);
 
