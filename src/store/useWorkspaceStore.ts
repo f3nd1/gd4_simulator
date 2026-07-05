@@ -439,7 +439,11 @@ export type WorkspaceState = {
   lastAuditRuns: Record<string, AuditRunRecord>;
   // Extracted-text cache keyed by "fileId:modifiedTime". Allows unchanged Drive
   // files to skip the download step on repeat audits.
-  fileTextCache: Record<string, { text: string | null; charCount: number; fileKind: string; fileName?: string; filePath?: string; cachedAt?: number; pdfQuality?: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" } }>;
+  // readMethod records HOW the content was extracted ("text" = direct text
+  // extraction; "vision" = image/scanned-PDF transcription by the vision model).
+  // visionModel records WHICH vision model produced a vision read, so a cached
+  // vision read is invalidated and re-read when the user switches vision models.
+  fileTextCache: Record<string, { text: string | null; charCount: number; fileKind: string; fileName?: string; filePath?: string; cachedAt?: number; pdfQuality?: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" }; readMethod?: "text" | "vision"; visionModel?: string }>;
   // Persisted "Recheck all evidence" report so it survives navigation and
   // page refreshes. null means the report hasn't been run yet this session.
   evidenceAuditReport: { flags: EvidenceAuditFlag[]; generatedAt: string } | null;
@@ -1026,12 +1030,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
                 body = await exportFileText(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
-                // Only cache successful extractions — caching `text: null`
+                // Only cache genuine (non-empty) extractions — caching `text: null`
                 // made a transient read failure stick until the Drive file's
-                // modifiedTime changed, with no way to retry.
-                if (body != null) {
+                // modifiedTime changed, with no way to retry; caching an empty
+                // string would lock in a blank read AND could clobber a good
+                // vision transcription cached under the same key.
+                if (body != null && body.trim().length > 0) {
                   const text = body;
-                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
+                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: "text" } } }));
                 }
               } catch {
                 body = null;
@@ -1335,10 +1341,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
                 body = await exportFileText(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
-                // Only cache successful extractions — see runPPDReview.
-                if (body != null) {
+                // Only cache genuine (non-empty) extractions — see runPPDReview.
+                if (body != null && body.trim().length > 0) {
                   const text = body;
-                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
+                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: "text" } } }));
                 }
               } catch {
                 body = null;
@@ -2782,9 +2788,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 else {
                   const body = await exportFileText(f, readToken, timeoutSignal(undefined, DRIVE_FILE_TIMEOUT_MS));
                   readable = body != null && body.trim().length > 0;
-                  if (body != null) {
+                  // Only cache a genuine (non-empty) extraction — never lock in a
+                  // blank read or clobber a good vision transcription with "".
+                  if (body != null && body.trim().length > 0) {
                     const text = body;
-                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: f.mimeType, fileName: f.path.split("/").pop() || f.path, filePath: f.path, cachedAt: Date.now() } } }));
+                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: f.mimeType, fileName: f.path.split("/").pop() || f.path, filePath: f.path, cachedAt: Date.now(), readMethod: "text" } } }));
                   }
                 }
               } catch (err) {
@@ -3076,6 +3084,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const schoolCtx = composeSchoolContext(get().schoolContext);
         const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: schoolCtx });
         const visionSettings = effectiveSettings(aiSettings, { purpose: "vision", context: schoolCtx });
+        const visionModelId = visionSettings.model;
         const canDescribeImages = aiSettings.enabled && !!aiSettings.apiKey;
         // Each image costs one extra OpenAI vision call — capped separately
         // from the (unbounded) text-file count so a folder full of scanned
@@ -3229,12 +3238,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // or a run with no key) must NOT be reused as empty when we could now
           // read it via vision — treat it as a cache miss and re-read.
           const cacheIsEmptyScannedPdf = !!cachedEntry && file.mimeType === "application/pdf" && (cachedEntry.text ?? "").trim().length < 50;
-          if (cachedEntry && !(cacheIsEmptyScannedPdf && canDescribeImages)) {
+          // A cached VISION read done by a different vision model is stale — the
+          // user switched models to get a better/worse transcription, so re-read
+          // rather than serving the old model's output.
+          const cacheStaleVision = !!cachedEntry && cachedEntry.readMethod === "vision" && cachedEntry.visionModel !== visionModelId;
+          if (cachedEntry && !(cacheIsEmptyScannedPdf && canDescribeImages) && !(cacheStaleVision && canDescribeImages)) {
             fileRecords[fi] = {
               ...fileRecords[fi],
               readStatus: "read",
               charCount: cachedEntry.charCount,
               processingMode: "reused",
+              ...(cachedEntry.readMethod ? { readMethod: cachedEntry.readMethod } : {}),
               ...(cachedEntry.pdfQuality ? {
                 suspectedScannedPdf: cachedEntry.pdfQuality.suspectedScannedPdf,
                 extractedTextQuality: cachedEntry.pdfQuality.extractedTextQuality,
@@ -3372,29 +3386,56 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 readStatus: "read",
                 charCount: fileResult.text.length,
                 processingMode: "new",
+                readMethod: "text",
                 ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}),
               };
-              // Cache the extracted text so repeat audits can skip re-downloading unchanged files.
-              set((st) => ({
-                fileTextCache: {
-                  ...st.fileTextCache,
-                  [cacheKey]: {
-                    text: fileResult.text,
-                    charCount: fileResult.text.length,
-                    fileKind: fileKind(file.mimeType),
-                    fileName: file.path.split("/").pop() || file.path,
-                    filePath: file.path,
-                    cachedAt: Date.now(),
-                    ...(fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}),
+              // Cache the extracted text so repeat audits can skip re-downloading
+              // unchanged files — but only a genuine (non-empty) read. A 0-char
+              // extraction is a failed read and must NOT be cached as a success,
+              // or it would lock in the blank and never be re-attempted.
+              if (fileResult.text.trim().length > 0) {
+                set((st) => ({
+                  fileTextCache: {
+                    ...st.fileTextCache,
+                    [cacheKey]: {
+                      text: fileResult.text,
+                      charCount: fileResult.text.length,
+                      fileKind: fileKind(file.mimeType),
+                      fileName: file.path.split("/").pop() || file.path,
+                      filePath: file.path,
+                      cachedAt: Date.now(),
+                      readMethod: "text",
+                      ...(fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}),
+                    },
                   },
-                },
-              }));
+                }));
+              }
               break;
             }
             case "image":
               scanned.push(file.path);
               pushPart(file.path, fileResult.description, file.bucket, "image", fi);
-              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: fileResult.description.length };
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: fileResult.description.length, processingMode: "new", readMethod: "vision" };
+              // Cache the vision transcription (stamped with the vision model so a
+              // model switch re-reads) — only when non-empty. Previously bulk-audit
+              // images were never cached and got re-charged to vision every run.
+              if (fileResult.description.trim().length > 0) {
+                set((st) => ({
+                  fileTextCache: {
+                    ...st.fileTextCache,
+                    [cacheKey]: {
+                      text: fileResult.description,
+                      charCount: fileResult.description.length,
+                      fileKind: "image",
+                      fileName: file.path.split("/").pop() || file.path,
+                      filePath: file.path,
+                      cachedAt: Date.now(),
+                      readMethod: "vision",
+                      visionModel: visionModelId,
+                    },
+                  },
+                }));
+              }
               break;
             case "pdfVision": {
               // Scanned PDF read via the vision fallback — treat the transcription
@@ -3403,21 +3444,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               scanned.push(file.path);
               const q = classifyPdfTextQuality(fileResult.text);
               pushPart(file.path, fileResult.text, file.bucket, "PDF", fi);
-              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: fileResult.text.length, processingMode: "new", suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality };
-              set((st) => ({
-                fileTextCache: {
-                  ...st.fileTextCache,
-                  [cacheKey]: {
-                    text: fileResult.text,
-                    charCount: fileResult.text.length,
-                    fileKind: "PDF",
-                    fileName: file.path.split("/").pop() || file.path,
-                    filePath: file.path,
-                    cachedAt: Date.now(),
-                    pdfQuality: { suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality },
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: fileResult.text.length, processingMode: "new", readMethod: "vision", suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality };
+              if (fileResult.text.trim().length > 0) {
+                set((st) => ({
+                  fileTextCache: {
+                    ...st.fileTextCache,
+                    [cacheKey]: {
+                      text: fileResult.text,
+                      charCount: fileResult.text.length,
+                      fileKind: "PDF",
+                      fileName: file.path.split("/").pop() || file.path,
+                      filePath: file.path,
+                      cachedAt: Date.now(),
+                      readMethod: "vision",
+                      visionModel: visionModelId,
+                      pdfQuality: { suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality },
+                    },
                   },
-                },
-              }));
+                }));
+              }
               break;
             }
             case "unreadable":
@@ -4294,6 +4339,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const schoolCtx = composeSchoolContext(get().schoolContext);
         const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: schoolCtx });
         const visionSettings = effectiveSettings(aiSettings, { purpose: "vision", context: schoolCtx });
+        const visionModelId = visionSettings.model;
         const canDescribeImages = aiSettings.enabled && !!aiSettings.apiKey;
         // Scanned-PDF vision pages share the image budget (one page = one image),
         // with a per-file page cap on top. See auditFolderContents.
@@ -4350,8 +4396,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // A PDF cached with ~no text (pre-vision-fallback, or a no-key run) is
           // re-read rather than reused-as-empty when vision can now read it.
           const cacheIsEmptyScannedPdf = !!cachedEntry && file.mimeType === "application/pdf" && (cachedEntry.text ?? "").trim().length < 50;
-          if (cachedEntry && !(cacheIsEmptyScannedPdf && canDescribeImages)) {
-            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: cachedEntry.charCount, processingMode: "reused", ...(cachedEntry.pdfQuality ? { suspectedScannedPdf: cachedEntry.pdfQuality.suspectedScannedPdf, extractedTextQuality: cachedEntry.pdfQuality.extractedTextQuality } : {}) };
+          // A cached VISION read from a different vision model is stale — re-read.
+          const cacheStaleVision = !!cachedEntry && cachedEntry.readMethod === "vision" && cachedEntry.visionModel !== visionModelId;
+          if (cachedEntry && !(cacheIsEmptyScannedPdf && canDescribeImages) && !(cacheStaleVision && canDescribeImages)) {
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: cachedEntry.charCount, processingMode: "reused", ...(cachedEntry.readMethod ? { readMethod: cachedEntry.readMethod } : {}), ...(cachedEntry.pdfQuality ? { suspectedScannedPdf: cachedEntry.pdfQuality.suspectedScannedPdf, extractedTextQuality: cachedEntry.pdfQuality.extractedTextQuality } : {}) };
             if (cachedEntry.text !== null) {
               scanned.push(file.path);
               const body = cachedEntry.text;
@@ -4452,8 +4500,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const body = fileResult.text;
               scanned.push(file.path);
               const kind = fileKind(file.mimeType);
-              set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: kind, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), ...(fileResult.kind === "text" && fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}) } } }));
-              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}) };
+              // Only cache a genuine (non-empty) read — a 0-char extraction is a
+              // failed read and must be re-attempted next run, not locked in.
+              if (body.trim().length > 0) {
+                set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: kind, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: "text", ...(fileResult.kind === "text" && fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}) } } }));
+              }
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", readMethod: "text", ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}) };
               const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
               for (let pi = 0; pi < totalParts; pi++) {
                 const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
@@ -4469,8 +4521,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             case "image": {
               scanned.push(file.path);
               const desc = fileResult.description;
-              set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: desc, charCount: desc.length, fileKind: "image", fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
-              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: desc.length, processingMode: "new" };
+              // Cache the vision transcription stamped with the vision model (so a
+              // model switch re-reads), only when non-empty.
+              if (desc.trim().length > 0) {
+                set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: desc, charCount: desc.length, fileKind: "image", fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: "vision", visionModel: visionModelId } } }));
+              }
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: desc.length, processingMode: "new", readMethod: "vision" };
               const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
               evidenceChunks.push({ chunkId, filePath: file.path, fileName: file.path.split("/").pop() || file.path, bucket: resolvedBucket, fileKind: "image", text: desc, charCount: desc.length, evidenceType: "Other" });
               fileRecords[fi] = { ...fileRecords[fi], chunkIds: [...(fileRecords[fi].chunkIds || []), chunkId] };
@@ -4484,8 +4540,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const body = fileResult.text;
               scanned.push(file.path);
               const q = classifyPdfTextQuality(body);
-              set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: "PDF", fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), pdfQuality: { suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality } } } }));
-              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality };
+              if (body.trim().length > 0) {
+                set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: "PDF", fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: "vision", visionModel: visionModelId, pdfQuality: { suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality } } } }));
+              }
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", readMethod: "vision", suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality };
               const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
               for (let pi = 0; pi < totalParts; pi++) {
                 const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);

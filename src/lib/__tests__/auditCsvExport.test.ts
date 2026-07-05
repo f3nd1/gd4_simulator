@@ -181,6 +181,16 @@ describe("exportFileLedgerCsv", () => {
     expect(dataRow[citedIdx]).toBe("no");
   });
 
+  it("records the read method (text vs vision) per file", () => {
+    const run = makeRun({ fileLedger: [makeFile({ readMethod: "vision" })] });
+    const csv = exportFileLedgerCsv(run);
+    const headers = csv.split("\r\n")[0].split(",");
+    const dataRow = csv.split("\r\n")[1].split(",");
+    const idx = headers.indexOf("readMethod");
+    expect(idx).toBeGreaterThan(-1);
+    expect(dataRow[idx]).toBe("vision");
+  });
+
   it("populates processingMode as new by default", () => {
     const run = makeRun({ fileLedger: [makeFile({ processingMode: undefined })] });
     const csv = exportFileLedgerCsv(run);

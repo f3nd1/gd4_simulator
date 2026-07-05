@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import type { AIReviewLogEntry } from "../types";
 import { Card, inputStyle } from "../components/ui/Card";
@@ -111,6 +112,18 @@ export function AIReview() {
   // Distinct agents/types present, for the filter dropdowns.
   const agentOptions = useMemo(() => [...new Set(log.map((e) => e.agent))].sort(), [log]);
   const typeOptions = useMemo(() => [...new Set(log.map((e) => e.reviewType))].sort(), [log]);
+
+  // Run ids that have a stored File Ledger (folder audits) — so a log entry from
+  // such a run can link straight to "what was actually read from each file".
+  // Only these runIds get the link; other runs (e.g. closure drafts) have no ledger.
+  const auditRunHistory = useWorkspaceStore((s) => s.auditRunHistory);
+  const lastAuditRuns = useWorkspaceStore((s) => s.lastAuditRuns);
+  const ledgerRunIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const runs of Object.values(auditRunHistory)) for (const r of runs) ids.add(r.runId);
+    for (const r of Object.values(lastAuditRuns)) ids.add(r.runId);
+    return ids;
+  }, [auditRunHistory, lastAuditRuns]);
 
   // Date-scoped log: the calculator AND the rows both work off this, so the
   // totals shown always match the selected period.
@@ -363,7 +376,7 @@ export function AIReview() {
                           <div style={{ color: "#6b7280", fontWeight: 400 }}>Fell back to the offline simulation engine for this run — check your API key/model in Settings.</div>
                         </div>
                       )}
-                      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+                      <div style={{ display: "flex", gap: 4, marginBottom: 8, alignItems: "center" }}>
                         {(["output", "prompt"] as const).map((tab) => {
                           const isActive = (expandedTab[e.id] ?? "output") === tab;
                           const disabled = tab === "prompt" && !e.promptSent;
@@ -378,6 +391,16 @@ export function AIReview() {
                             </button>
                           );
                         })}
+                        {e.runId && ledgerRunIds.has(e.runId) && (
+                          <Link
+                            to={`/evidence?run=${encodeURIComponent(e.runId)}`}
+                            onClick={(ev) => ev.stopPropagation()}
+                            title="Open this run's File Ledger to see exactly what text was read/transcribed from each evidence file"
+                            style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: "#4338ca", textDecoration: "none", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 5, padding: "3px 10px" }}
+                          >
+                            📄 View file ledger (what was read) →
+                          </Link>
+                        )}
                       </div>
                       <div style={{ whiteSpace: "pre-wrap", fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>
                         {(expandedTab[e.id] ?? "output") === "output"

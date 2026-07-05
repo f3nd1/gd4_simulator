@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
@@ -150,6 +150,19 @@ function ProcessingModeBadge({ file }: { file: AuditFileRecord }) {
   );
 }
 
+function ReadMethodBadge({ file }: { file: AuditFileRecord }) {
+  if (!file.readMethod) return null;
+  const badge =
+    file.readMethod === "vision"
+      ? { label: "👁 Vision", color: "#7c2d12", bg: "#fff7ed", title: "Read by transcribing the image/scan with the vision model" }
+      : { label: "🔤 Text", color: "#334155", bg: "#f1f5f9", title: "Read by direct text extraction" };
+  return (
+    <span title={badge.title} style={{ fontSize: 9, padding: "0 4px", borderRadius: 3, background: badge.bg, color: badge.color, fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>
+      {badge.label}
+    </span>
+  );
+}
+
 function DimIcons({ file }: { file: AuditFileRecord }) {
   const dims = file.usedForDimensions;
   if (!dims) return null;
@@ -173,37 +186,87 @@ function DimIcons({ file }: { file: AuditFileRecord }) {
 type FileFilter = "all" | "read" | "cited" | "not_used" | "skipped" | "failed" | "new" | "changed" | "reused";
 type FileSort = "name" | "status" | "type";
 
-function FileRow({ file, isReading, onSkipFile }: { file: AuditFileRecord; isReading?: boolean; onSkipFile?: () => void }) {
+// Max chars of extracted text to render inline (the full text can be huge; a
+// generous window is enough to judge a good read from a bad one).
+const EXTRACTED_TEXT_VIEW_CAP = 40_000;
+
+function ExtractedTextPanel({ file, resolveText }: { file: AuditFileRecord; resolveText?: (f: AuditFileRecord) => string | null | undefined }) {
+  const text = resolveText?.(file);
+  let body: React.ReactNode;
+  if (file.readStatus === "skipped") {
+    body = <span style={{ color: "#9ca3af" }}>Not read — {file.skipReason || "skipped"}. Nothing was extracted, so this file contributed no evidence.</span>;
+  } else if (file.readStatus === "failed") {
+    body = <span style={{ color: "#b91c1c" }}>Read failed — {file.failReason || "unknown error"}. Nothing was extracted.</span>;
+  } else if ((file.charCount ?? 0) === 0 || (typeof text === "string" && text.trim().length === 0)) {
+    body = <span style={{ color: "#b45309" }}>0 characters — nothing readable was extracted from this file (image-only/blank). It was not cached and will be re-attempted next run.</span>;
+  } else if (typeof text === "string") {
+    const shown = text.length > EXTRACTED_TEXT_VIEW_CAP ? text.slice(0, EXTRACTED_TEXT_VIEW_CAP) : text;
+    body = (
+      <>
+        <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#1f2733", lineHeight: 1.45 }}>{shown}</div>
+        {text.length > EXTRACTED_TEXT_VIEW_CAP && (
+          <div style={{ marginTop: 4, color: "#94a3b8", fontStyle: "italic" }}>… showing first {EXTRACTED_TEXT_VIEW_CAP.toLocaleString()} of {text.length.toLocaleString()} characters.</div>
+        )}
+      </>
+    );
+  } else {
+    body = <span style={{ color: "#94a3b8" }}>Extracted text isn't in the cache (it may have been cleared). Re-run the audit to view what was read.</span>;
+  }
+  return (
+    <div style={{ padding: "6px 10px 9px 26px", borderBottom: "1px solid #f1f5f9", background: "#fbfcfe" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4, fontSize: 10, color: "#64748b" }}>
+        <span>Read via <b>{file.readMethod === "vision" ? "vision transcription" : file.readMethod === "text" ? "text extraction" : "—"}</b></span>
+        <span>· {(file.charCount ?? 0).toLocaleString()} characters</span>
+        {file.suspectedScannedPdf && <span style={{ color: "#92400e" }}>· suspected scanned PDF</span>}
+      </div>
+      <div style={{ maxHeight: 260, overflowY: "auto", padding: "6px 8px", border: "1px solid #e2e8f0", borderRadius: 5, background: "#fff", fontSize: 10.5 }}>{body}</div>
+    </div>
+  );
+}
+
+function FileRow({ file, isReading, onSkipFile, resolveText }: { file: AuditFileRecord; isReading?: boolean; onSkipFile?: () => void; resolveText?: (f: AuditFileRecord) => string | null | undefined }) {
   const bucketLabel = file.bucket === "policy" ? "Policy" : file.bucket === "evidence" ? "Evid" : "Auto";
   const bucketColor = file.bucket === "policy" ? "#1d4ed8" : file.bucket === "evidence" ? "#15803d" : "#9ca3af";
+  const [open, setOpen] = useState(false);
+  // Expandable only for files that were actually read/skipped/failed — a file
+  // still being read has nothing to show yet.
+  const canExpand = !!resolveText && !isReading && file.readStatus !== "found" && file.readStatus !== "reading";
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderBottom: "1px solid #f1f5f9", fontSize: 11, background: isReading ? "#fffbeb" : undefined }}>
-      <span style={{ fontSize: 9, color: bucketColor, background: bucketColor + "18", borderRadius: 3, padding: "1px 4px", flexShrink: 0 }}>{bucketLabel}</span>
-      <span style={{ flex: 1, color: isReading ? "#92400e" : "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: isReading ? 600 : undefined }} title={file.path}>{file.name}</span>
-      {isReading && <span style={{ fontSize: 9, color: "#92400e", flexShrink: 0 }}>reading…</span>}
-      <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.fileKind}</span>
-      {file.charCount != null && <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.charCount.toLocaleString()}c</span>}
-      {file.suspectedScannedPdf && (
-        <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#fef3c7", color: "#92400e", fontWeight: 600, flexShrink: 0 }} title="Suspected scanned PDF">Scan?</span>
-      )}
-      {file.extractedTextQuality && file.extractedTextQuality !== "high" && !file.suspectedScannedPdf && (
-        <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#f1f5f9", color: "#64748b", flexShrink: 0 }}>{file.extractedTextQuality}</span>
-      )}
-      <ProcessingModeBadge file={file} />
-      <DimIcons file={file} />
-      <FileStatusBadge file={file} />
-      {file.failReason && <span style={{ fontSize: 9.5, color: "#b91c1c", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.failReason}>{file.failReason}</span>}
-      {file.skipReason && file.readStatus === "skipped" && <span style={{ fontSize: 9.5, color: "#9ca3af", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.skipReason}>{file.skipReason}</span>}
-      {isReading && onSkipFile && (
-        <button
-          onClick={onSkipFile}
-          title="Abort reading this file and move on to the next one"
-          style={{ cursor: "pointer", fontSize: 9.5, padding: "2px 6px", borderRadius: 4, border: "1px solid #fbbf24", background: "#fffbeb", color: "#92400e", whiteSpace: "nowrap", flexShrink: 0 }}
-        >
-          Skip
-        </button>
-      )}
-    </div>
+    <>
+      <div
+        onClick={canExpand ? () => setOpen((o) => !o) : undefined}
+        style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderBottom: open ? "none" : "1px solid #f1f5f9", fontSize: 11, background: isReading ? "#fffbeb" : open ? "#fbfcfe" : undefined, cursor: canExpand ? "pointer" : undefined }}
+      >
+        <span style={{ width: 10, flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{canExpand ? (open ? "▾" : "▸") : ""}</span>
+        <span style={{ fontSize: 9, color: bucketColor, background: bucketColor + "18", borderRadius: 3, padding: "1px 4px", flexShrink: 0 }}>{bucketLabel}</span>
+        <span style={{ flex: 1, color: isReading ? "#92400e" : "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: isReading ? 600 : undefined }} title={file.path}>{file.name}</span>
+        {isReading && <span style={{ fontSize: 9, color: "#92400e", flexShrink: 0 }}>reading…</span>}
+        <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.fileKind}</span>
+        {file.charCount != null && <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.charCount.toLocaleString()}c</span>}
+        {file.suspectedScannedPdf && (
+          <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#fef3c7", color: "#92400e", fontWeight: 600, flexShrink: 0 }} title="Suspected scanned PDF">Scan?</span>
+        )}
+        {file.extractedTextQuality && file.extractedTextQuality !== "high" && !file.suspectedScannedPdf && (
+          <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#f1f5f9", color: "#64748b", flexShrink: 0 }}>{file.extractedTextQuality}</span>
+        )}
+        <ReadMethodBadge file={file} />
+        <ProcessingModeBadge file={file} />
+        <DimIcons file={file} />
+        <FileStatusBadge file={file} />
+        {file.failReason && <span style={{ fontSize: 9.5, color: "#b91c1c", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.failReason}>{file.failReason}</span>}
+        {file.skipReason && file.readStatus === "skipped" && <span style={{ fontSize: 9.5, color: "#9ca3af", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.skipReason}>{file.skipReason}</span>}
+        {isReading && onSkipFile && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onSkipFile(); }}
+            title="Abort reading this file and move on to the next one"
+            style={{ cursor: "pointer", fontSize: 9.5, padding: "2px 6px", borderRadius: 4, border: "1px solid #fbbf24", background: "#fffbeb", color: "#92400e", whiteSpace: "nowrap", flexShrink: 0 }}
+          >
+            Skip
+          </button>
+        )}
+      </div>
+      {open && canExpand && <ExtractedTextPanel file={file} resolveText={resolveText} />}
+    </>
   );
 }
 
@@ -226,6 +289,19 @@ function FileLedger({
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<FileSort>("status");
   const [expanded, setExpanded] = useState(false);
+
+  // Look up the actual extracted/transcribed text for a file from the cache,
+  // keyed by the same fileId:modifiedTime used at read time. Single source of
+  // truth — no per-run copy of the text is stored — so clearing the cache also
+  // clears the viewable text for old runs (by design).
+  const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
+  const resolveText = useCallback(
+    (f: AuditFileRecord): string | null | undefined => {
+      if (!f.driveFileId) return undefined;
+      return fileTextCache[`${f.driveFileId}:${f.driveModifiedTime ?? ""}`]?.text;
+    },
+    [fileTextCache]
+  );
 
   const muted: React.CSSProperties = { fontSize: 11.5, color: "#64748b" };
 
@@ -345,6 +421,7 @@ function FileLedger({
             file={file}
             isReading={isActive && file.readStatus === "reading"}
             onSkipFile={isActive && file.readStatus === "reading" ? onSkipFile : undefined}
+            resolveText={resolveText}
           />
         ))}
         {filtered.length === 0 && (
@@ -1828,7 +1905,20 @@ export function EvidenceFolder() {
 
   const [searchParams] = useSearchParams();
   const focusSub = searchParams.get("sub");
+  const focusRun = searchParams.get("run");
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const openedRunParamRef = useRef<string | null>(null);
+
+  // Deep link from the AI Review Log: ?run=<runId> opens that run's File Ledger
+  // (the "what was actually read" view) directly, searching every folder's run
+  // history and last-run records for the matching run.
+  useEffect(() => {
+    if (!focusRun || openedRunParamRef.current === focusRun) return;
+    let match: AuditRunRecord | undefined;
+    for (const runs of Object.values(auditRunHistory)) { const r = runs.find((x) => x.runId === focusRun); if (r) { match = r; break; } }
+    if (!match) match = Object.values(lastAuditRuns).find((r) => r.runId === focusRun);
+    if (match) { openedRunParamRef.current = focusRun; setViewingRun(match); }
+  }, [focusRun, auditRunHistory, lastAuditRuns]);
 
   // Once a Drive token arrives, clear any "not connected" block so the banner
   // and per-row status flip to Connected without a reload (Fix 1).

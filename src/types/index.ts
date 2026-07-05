@@ -606,6 +606,10 @@ export type AuditFileRecord = {
   driveModifiedTime?: string;
   // Whether this file was newly read, re-read after a change, or reused from cache.
   processingMode?: "new" | "changed" | "reused";
+  // How the content was extracted: "text" = direct text extraction (PDF/DOCX/
+  // spreadsheet/etc.); "vision" = image or scanned-PDF transcription by the
+  // vision model. Surfaced in the File Ledger so a bad read can be diagnosed.
+  readMethod?: "text" | "vision";
 };
 
 // A discrete chunk of evidence extracted from one file, assigned a stable ID
