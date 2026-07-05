@@ -1924,9 +1924,27 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+        // The call RETURNED but nothing parseable came back — truncated or
+        // malformed JSON (parseJSONObject yields {}), or a literal empty
+        // results array. Per "never fabricate verdicts from failures", record
+        // this as a FAILURE so the affected lines become "Not assessed", NOT a
+        // fabricated "Not documented" gap that reads as a real finding. Another
+        // window may still fill these lines. (Previously this silently produced
+        // a full set of empty "Not documented" verdicts — see the PPD review
+        // showing 5 "No verdict returned by the AI" gaps.)
+        if (results.length === 0) {
+          const label = windows.length > 1 ? `PPD window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD batch ${bi + 1}/${batches.length}`;
+          windowErrors.push(`${label} returned no parseable verdicts — the AI reply was empty or not valid JSON.`);
+          console.error("[PPDRequirementsReview]", label, "no parseable results");
+          continue;
+        }
         const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
-        for (const r of batch) {
-          const res = byRef.get(normalizeAuditRef(r.ref));
+        for (const [idx, r] of batch.entries()) {
+          // Positional recovery: some models keep the requirement order but drop
+          // or rename the per-result "ref". When the result count matches the
+          // batch, fall back to position so a missing ref never zeroes out an
+          // otherwise-good batch.
+          const res = byRef.get(normalizeAuditRef(r.ref)) ?? (results.length === batch.length ? results[idx] : undefined);
           const verdict = (["Adequate", "Partial", "Not documented"] as PPDVerdict[]).includes(res?.verdict as PPDVerdict)
             ? (res!.verdict as PPDVerdict) : "Not documented";
           const shortComment = typeof res?.shortComment === "string" ? res.shortComment : "";

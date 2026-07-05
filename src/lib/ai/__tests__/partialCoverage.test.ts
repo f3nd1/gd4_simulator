@@ -88,6 +88,33 @@ describe("PPD review — stopped runs do not fabricate results (Batch 4)", () =>
     // Lines the failed calls covered are Not assessed — not "Not documented".
     expect(result.rows.every((r) => r.verdict === "Not assessed")).toBe(true);
   });
+
+  it("a SUCCESSFUL call that returns unparseable/empty JSON is a failure, not 5 fake 'Not documented' gaps", async () => {
+    // Reproduces the reported Option A breakage: the AI replied (no throw) but
+    // the per-requirement JSON was empty/garbage, so every line came back
+    // "Not documented — No verdict returned by the AI". That is a fabricated
+    // finding; the honest outcome is "Not assessed".
+    mockChat.mockResolvedValue("not json at all — the model returned prose");
+    const result = await runPPDRequirementsReview(ppdInputs(5), SOURCE_TEXT, SETTINGS, {});
+    expect(result.rows.every((r) => r.verdict === "Not assessed")).toBe(true);
+    expect(result.rows.some((r) => r.verdict === "Not documented")).toBe(false);
+    expect(result.windowErrors!.some((e) => /no parseable verdicts/i.test(e))).toBe(true);
+  });
+
+  it("positional recovery: results in order but WITHOUT a ref field still match their lines", async () => {
+    // Some models keep the requirement order but drop the per-result "ref".
+    // The batch must still be assessed by position, not zeroed to Not documented.
+    mockChat.mockImplementation(async (messages) => {
+      const user = String(messages[1]?.content ?? "");
+      const n = [...user.matchAll(/\[(1\.1\.1\.DS\d+)\]/g)].length;
+      return JSON.stringify({
+        results: Array.from({ length: n }, () => ({ verdict: "Adequate", shortComment: "ok", fullComment: "Documented. \"the institution reviews its policies annually and records minutes\" (C001)", chunkIds: ["C001"] })),
+      });
+    });
+    const result = await runPPDRequirementsReview(ppdInputs(5), SOURCE_TEXT, SETTINGS, {});
+    expect(result.rows.every((r) => r.verdict === "Adequate")).toBe(true);
+    expect(result.rows.some((r) => r.verdict === "Not documented")).toBe(false);
+  });
 });
 
 describe("staged policy audit — stopped runs do not fabricate results (Batch 4)", () => {
