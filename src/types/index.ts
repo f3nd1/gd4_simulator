@@ -1098,6 +1098,9 @@ export type WorkspaceSnapshot = {
   checklistEntries?: Record<string, SubCriterionChecklistEntry>;
   customFindings?: Finding[];
   seedFindingsLoaded?: boolean;
+  // Whether the snapshot was taken while the SAMPLE dataset was loaded, so a
+  // restore keeps the SAMPLE banner in sync with the restored seed findings.
+  sampleDataActive?: boolean;
   // Added so a version captures the full picture and restore loses nothing:
   // the AI verdicts/log, the School Context briefing, the Additional-info
   // folder link, and per-agent memory. All optional for older snapshots.

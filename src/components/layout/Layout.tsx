@@ -38,6 +38,7 @@ export function Layout() {
       <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Header onMenuClick={() => setNavOpen((o) => !o)} />
+        <SampleDataBanner />
         <LocalSaveErrorBanner />
         <main className="px-3 sm:px-6" style={{ flex: 1, paddingTop: 18, paddingBottom: 60, maxWidth: 1180, width: "100%", margin: "0 auto" }}>
           <Outlet />
@@ -47,6 +48,28 @@ export function Layout() {
         <ChangeLogRecorder />
         <GitFooter />
       </div>
+    </div>
+  );
+}
+
+// App-wide banner shown whenever the loaded SAMPLE dataset is active, so the
+// simulated demo data — which is written into the same fields as real work —
+// can never be mistaken for a real audit or an official SSG/EduTrust result.
+// The only way to dismiss it is to clear the sample data (returns to blank).
+function SampleDataBanner() {
+  const active = useWorkspaceStore((s) => s.sampleDataActive);
+  const clearSampleData = useWorkspaceStore((s) => s.clearSampleData);
+  if (!active) return null;
+  return (
+    <div style={{ background: "#f5f3ff", borderBottom: "1px solid #ddd6fe", color: "#5b21b6", fontSize: 12.5, fontWeight: 600, padding: "7px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <span style={{ background: "#7c3aed", color: "#fff", borderRadius: 4, padding: "1px 7px", fontSize: 11, letterSpacing: 0.5, flexShrink: 0 }}>SAMPLE</span>
+      <span>Simulated example data for demonstration only — not a real audit, and not an official SSG / EduTrust result.</span>
+      <button
+        onClick={() => { if (confirm("Clear all sample data and return to a blank workspace? This removes the demo evidence, scores, findings, samples and interview prep.")) clearSampleData(); }}
+        style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", color: "#5b21b6", borderRadius: 6, fontSize: 11.5, fontWeight: 600, padding: "3px 10px", flexShrink: 0 }}
+      >
+        Clear sample data
+      </button>
     </div>
   );
 }

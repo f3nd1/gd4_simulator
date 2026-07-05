@@ -213,7 +213,7 @@ export function Dashboard() {
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <button
             onClick={() => {
-              if (confirm("Use demo data? This fills in evidence ratings, reviewer scores, closures, samples, interview prep and the management review pack with sample data, overwriting any existing entries in those fields.")) loadDemoDataset();
+              if (confirm("Load SAMPLE data? This fills in evidence ratings, reviewer scores, closures, samples and interview prep with simulated demo data so you can see the app end-to-end, overwriting any existing entries in those fields. A “SAMPLE” banner stays on screen until you clear it, and this is never a real audit or an official SSG/EduTrust result.")) loadDemoDataset();
             }}
             style={{ cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}
           >

@@ -403,6 +403,12 @@ export type WorkspaceState = {
   // brand-new workspace's Findings/AFI Closure modules start truly empty —
   // those 22 sample findings only appear once "Use demo data" is clicked.
   seedFindingsLoaded: boolean;
+  // True while the workspace holds the loaded SAMPLE dataset (set by
+  // loadDemoDataset, cleared by clearSampleData / createNewCycle). Drives the
+  // app-wide "SAMPLE — simulated, not an official result" banner so demo data
+  // — which is otherwise written into the same fields as real work — can never
+  // be mistaken for a real audit. See clearSampleData.
+  sampleDataActive: boolean;
   // PDCA memory: the previous cycle's full findings register, archived by
   // createNewCycle. New findings raised in the current cycle are matched
   // against it (item + normalized source ref) to derive repeatFinding and
@@ -549,6 +555,10 @@ export type WorkspaceState = {
   clearAuditProgress: () => void;
   runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) => void;
   loadDemoDataset: () => void;
+  // Clears the loaded SAMPLE dataset and returns the workspace to a blank
+  // state (evidence/scores/findings/samples/etc. reset), turning off the
+  // SAMPLE banner. Used from that banner's "Clear sample data" control.
+  clearSampleData: () => void;
   saveAsNewVersion: (name: string, note?: string) => void;
   restoreVersion: (versionId: string) => void;
   lockCycle: () => void;
@@ -809,6 +819,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       exportLog: [],
       customFindings: [],
       seedFindingsLoaded: false,
+      sampleDataActive: false,
       priorCycleFindings: null,
       busy: null,
       auditRunToken: 0,
@@ -1943,6 +1954,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // "Load preset auditors" button both land on "Panel ready".
             reviewPanelAuditorIds: DEFAULT_AUDITORS.map((a) => a.id).slice(0, MAX_PANEL),
             seedFindingsLoaded: true,
+            sampleDataActive: true,
             cycle: { ...s.cycle, ...DEMO_CYCLE_FIELDS },
             // Clear prior REAL audit state so demo data never mixes with it:
             // leftover custom findings, queued pending commits, AI verdicts and
@@ -1961,6 +1973,41 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         });
         // Grouped drafts reference findings/lines the demo wipe just replaced.
         useFindingDraftStore.getState().resetAllDrafts();
+      },
+
+      // Clear the loaded SAMPLE dataset: reset every field loadDemoDataset
+      // populated back to a blank workspace and drop the SAMPLE banner. Mirrors
+      // the demo load's own "clear prior state" wipe, in reverse.
+      clearSampleData: () => {
+        useChecklistModuleStore.getState().replaceAllEntries({});
+        useFindingDraftStore.getState().resetAllDrafts();
+        set((s) => ({
+          sampleDataActive: false,
+          seedFindingsLoaded: false,
+          evidence: blankEvidence(),
+          reviewer: {},
+          confirmed: {},
+          justify: {},
+          closures: {},
+          samples: [],
+          interviewQuestions: [],
+          exportLog: [],
+          customFindings: [],
+          auditors: [],
+          reviewPanelAuditorIds: [],
+          itemReviews: {},
+          ppdReviewResults: {},
+          evidenceAssessments: {},
+          analysisPath: {},
+          pendingCommits: {},
+          auditRunHistory: {},
+          lastAuditRuns: {},
+          evidenceAuditReport: null,
+          // Return the cycle metadata to a fresh blank (the demo overwrote it
+          // with DEMO_CYCLE_FIELDS), keeping the id/createdAt so history and
+          // any saved versions still resolve.
+          cycle: { ...DEFAULT_CYCLE, id: s.cycle.id, createdAt: s.cycle.createdAt, updatedAt: new Date().toISOString() },
+        }));
       },
 
       // Snapshot+restore versioning: every save captures a full copy of the
@@ -1983,6 +2030,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             checklistEntries: useChecklistModuleStore.getState().entries,
             customFindings: s.customFindings,
             seedFindingsLoaded: s.seedFindingsLoaded,
+            sampleDataActive: s.sampleDataActive,
             itemReviews: s.itemReviews,
             // aiReviewLog is deliberately NOT snapshotted any more: each entry
             // can carry a full prompt, and 50 versions × 200 entries was the
@@ -2068,6 +2116,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             interviewQuestions: snap.interviewQuestions ? snap.interviewQuestions.filter((x) => validItem.has(x.gd4ItemId)) : snap.interviewQuestions,
             customFindings: snap.customFindings ?? s.customFindings,
             seedFindingsLoaded: snap.seedFindingsLoaded ?? s.seedFindingsLoaded,
+            // Keep the SAMPLE banner in sync with restored seed findings; old
+            // snapshots (no field) fall back to whether seed findings loaded.
+            sampleDataActive: snap.sampleDataActive ?? snap.seedFindingsLoaded ?? s.sampleDataActive,
             // Restore the AI verdicts/log and context so nothing is silently
             // lost; fall back to current state for pre-existing snapshots.
             itemReviews: pruneRecordByKeys((snap.itemReviews as WorkspaceState["itemReviews"]) ?? s.itemReviews, validItem) ?? s.itemReviews,
@@ -2126,6 +2177,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             checklistEntries: useChecklistModuleStore.getState().entries,
             customFindings: s.customFindings,
             seedFindingsLoaded: s.seedFindingsLoaded,
+            sampleDataActive: s.sampleDataActive,
             itemReviews: s.itemReviews,
             // aiReviewLog is deliberately NOT snapshotted any more: each entry
             // can carry a full prompt, and 50 versions × 200 entries was the
@@ -2217,6 +2269,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           exportLog: [],
           customFindings: openFindings,
           seedFindingsLoaded: false,
+          sampleDataActive: false,
           priorCycleFindings: archive,
           evidenceAuditReport: null,
           ppdReviewResults: {},
