@@ -1935,14 +1935,12 @@ export function EvidenceFolder() {
   // Sub-criterion whose Option A (PPD + Evidence) review is open in the
   // near-fullscreen modal; null = closed. Running and re-opening both land here.
   const [optionAModal, setOptionAModal] = useState<string | null>(null);
-  // Folder pre-flight probe results, keyed by folder id (transient, not persisted).
-  // Pre-flight results now persist in the store (survive ✕ + reload). Local
-  // state only tracks per-folder VIEW: which run panel is hidden, and which tab
-  // (pre-flight vs audit result) is selected in the results carousel.
+  // Folder pre-flight probe results, keyed by folder id. Pre-flight results
+  // persist in the store (survive ✕ + reload). Local state only tracks which
+  // pre-flight panel is currently hidden from view.
   const folderProbes = useWorkspaceStore((s) => s.folderProbes);
   const setFolderProbe = useWorkspaceStore((s) => s.setFolderProbe);
   const [probeStripHidden, setProbeStripHidden] = useState<Set<string>>(new Set());
-  const [runViewTab, setRunViewTab] = useState<Record<string, "preflight" | "audit">>({});
   const hideRunStrip = (id: string) => setProbeStripHidden((s) => new Set(s).add(id));
   const showRunStrip = (id: string) => setProbeStripHidden((s) => { const n = new Set(s); n.delete(id); return n; });
 
@@ -2829,11 +2827,10 @@ export function EvidenceFolder() {
                             setOverflowOpen(null);
                             const tab: "policy" | "evidence" = f.policyLink && !f.folderLink ? "policy" : "evidence";
                             const res = await probeFolder(f.id, tab);
-                            // Persist the result (survives ✕ + reload), un-hide the
-                            // strip, and switch the carousel to the pre-flight tab.
+                            // Persist the result (survives ✕ + reload) and un-hide
+                            // the pre-flight pane so the fresh result is visible.
                             setFolderProbe(f.id, res);
                             showRunStrip(f.id);
-                            setRunViewTab((t) => ({ ...t, [f.id]: "preflight" }));
                           }, {
                             disabled: !!busy,
                             title: "Lists this folder's files, flags mis-named subfolders and unreadable files — NO AI call. Run this before auditing to avoid a silently wrong result.",
@@ -2847,10 +2844,15 @@ export function EvidenceFolder() {
               </div>
 
               </div>{/* /right column */}
-              {/* Results carousel (zero AI calls to render). Flip between the
-                  stored pre-flight check and the audit result; ✕ only HIDES the
-                  strip for this view — the stored pre-flight result is kept and
-                  can be reopened. While a probe runs, show a loading panel. */}
+              {/* Persistent pre-flight pane (zero AI calls to render). Shows the
+                  stored folder pre-flight check; ✕ only HIDES it for this view —
+                  the stored result is kept and can be reopened. While a probe
+                  runs, show a loading panel. The audit result is intentionally
+                  NOT surfaced here: it already has its own entry points — the
+                  "View results" button in the Action row and the expandable
+                  "Audit result" detail below — so a tab here would just be a
+                  duplicate way to reach the same modal. This pane is pre-flight
+                  only. */}
               {(() => {
                 const probing = busy?.startsWith("probe:") && busy.endsWith(f.id);
                 if (probing) {
@@ -2864,53 +2866,26 @@ export function EvidenceFolder() {
                   );
                 }
                 const stored = folderProbes[f.id];
-                const hasAudit = !!lastRun || !!f.lastAuditSummary;
-                if (!stored && !hasAudit) return null;
+                if (!stored) return null;
                 if (probeStripHidden.has(f.id)) {
                   return (
                     <div style={{ padding: "0 12px 6px 30px" }}>
                       <button onClick={() => showRunStrip(f.id)} style={{ cursor: "pointer", fontSize: 11, color: "#475569", border: "1px solid #cbd5e1", background: "#f8fafc", borderRadius: 6, padding: "3px 9px" }}>
-                        {stored ? "🔎 Show pre-flight / audit result" : "📋 Show audit result"}
+                        🔎 Show pre-flight check
                       </button>
                     </div>
                   );
                 }
-                let tab = runViewTab[f.id] ?? (stored ? "preflight" : "audit");
-                if (tab === "preflight" && !stored) tab = "audit";
-                if (tab === "audit" && !hasAudit) tab = "preflight";
-                const tabBtn = (key: "preflight" | "audit", label: string) => (
-                  <button
-                    onClick={() => setRunViewTab((t) => ({ ...t, [f.id]: key }))}
-                    style={{ cursor: "pointer", fontSize: 11, fontWeight: tab === key ? 700 : 500, padding: "3px 10px", borderRadius: 6, border: `1px solid ${tab === key ? "#8b5cf6" : "#e2e8f0"}`, background: tab === key ? "#f5f3ff" : "#fff", color: tab === key ? "#6d28d9" : "#64748b" }}
-                  >
-                    {label}
-                  </button>
-                );
                 return (
                   <div style={{ padding: "0 12px 8px 30px" }}>
                     <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff", maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 9px", borderBottom: "1px solid #f1f5f9", flexWrap: "wrap" }}>
-                        {stored && tabBtn("preflight", "🔎 Pre-flight check")}
-                        {hasAudit && tabBtn("audit", "📋 Audit result")}
-                        {stored && <span style={{ fontSize: 10, color: "#94a3b8" }}>checked {new Date(stored.probedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>}
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 6, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#6d28d9" }}>🔎 Pre-flight check</span>
+                        <span style={{ fontSize: 10, color: "#94a3b8" }}>checked {new Date(stored.probedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
                         <button onClick={() => hideRunStrip(f.id)} title="Hide this panel (the pre-flight result is kept — reopen anytime)" style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
                       </div>
                       <div style={{ padding: "8px 10px" }}>
-                        {tab === "preflight" && stored ? (
-                          <FolderProbePanel result={stored.result} onClose={() => hideRunStrip(f.id)} />
-                        ) : (
-                          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12, color: "#334155" }}>
-                            <span>✅ Audit result{f.lastAuditAt ? ` — ${new Date(f.lastAuditAt).toLocaleDateString()}` : ""}{lastRun ? ` · ${lastRun.linesAssessed} lines · ${lastRun.findingsDetected} finding${lastRun.findingsDetected === 1 ? "" : "s"}` : ""}</span>
-                            {(path === "A" || !!lastRun) && (
-                              <button
-                                onClick={() => (path === "A" ? setOptionAModal(f.subCriterionId) : setViewingRun(lastRun!))}
-                                style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 600, color: "#4338ca", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 6, padding: "4px 11px" }}
-                              >
-                                View full results →
-                              </button>
-                            )}
-                          </div>
-                        )}
+                        <FolderProbePanel result={stored.result} onClose={() => hideRunStrip(f.id)} />
                       </div>
                     </div>
                   </div>
