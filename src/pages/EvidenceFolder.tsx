@@ -9,7 +9,7 @@ import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, F
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "../data/gd4Requirements";
-import { PpdReviewContent, HybridGatePanel } from "./PPDReview";
+import { PpdReviewContent, HybridGatePanel, ResultNavLinks } from "./PPDReview";
 import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
 import { TONE } from "../lib/theme";
@@ -1385,7 +1385,10 @@ function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => v
           )}
         </div>
 
-        <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
+        {/* Jump straight to the Checklist or Findings for this sub-criterion. */}
+        <div style={{ marginTop: 14 }}><ResultNavLinks subCriterionId={run.subCriterionId} /></div>
+
+        <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
           <button
             onClick={handleExportFileLedger}
             style={{ cursor: "pointer", fontSize: 11, padding: "6px 12px", borderRadius: 7, border: "1px solid #cbd5e1", background: "#fff", color: "#374151" }}

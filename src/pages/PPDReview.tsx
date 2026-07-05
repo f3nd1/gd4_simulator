@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
@@ -106,6 +106,21 @@ export function PPDReview() {
   );
 }
 
+// Two jump-links shown on every "View result" surface (Option A modal / page
+// AND the Option B AuditRunModal) so an auditor can go straight from a run
+// result to either the Sub-Criterion Checklist or the Findings register,
+// filtered to the sub-criterion just reviewed. Reuses existing routes only.
+export function ResultNavLinks({ subCriterionId }: { subCriterionId: string }) {
+  const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === subCriterionId)?.id ?? "";
+  const linkStyle: CSSProperties = { fontSize: 12, fontWeight: 600, color: "#4338ca", textDecoration: "none", padding: "5px 11px", border: "1px solid #c7d2fe", borderRadius: 7, background: "#eef2ff", whiteSpace: "nowrap" };
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <Link to={firstItemId ? `/sub-checklist?item=${firstItemId}` : "/sub-checklist"} style={linkStyle}>Sub-Criterion Checklist →</Link>
+      <Link to={subCriterionId ? `/findings?subCrit=${subCriterionId}` : "/findings"} style={linkStyle}>Findings register →</Link>
+    </div>
+  );
+}
+
 // The full PPD + Evidence review body for ONE sub-criterion: saved-state
 // banner, next-step guidance, tab bar, and the PPD / Evidence tabs (each with
 // its own run button, live progress panel and results). Extracted from the
@@ -156,6 +171,9 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
       )}
 
       <PpdNextStep selectedId={selectedId} />
+
+      {/* Jump straight to the Checklist or Findings for this sub-criterion. */}
+      <div style={{ marginBottom: 10 }}><ResultNavLinks subCriterionId={selectedId} /></div>
 
       <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: -2, marginBottom: 10 }}>
         {sub.title} — {sub.description}
