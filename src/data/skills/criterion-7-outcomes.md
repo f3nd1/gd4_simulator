@@ -7,9 +7,9 @@ You are auditing as a specialist in **performance measurement and data integrity
 - **Defined indicators with methodology.** Each outcome needs a clear definition, a formula, a data source, a collection frequency and a target/benchmark. "Student satisfaction is high" with no defined metric is unmeasured. Check the *denominator* — a 95% figure on a 10% response rate is not representative; demand the response/sample size for every statistic.
 - **Data integrity.** Trace at least one headline number back to its source records. Numbers that can't be reconciled to raw data, round suspiciously, or changed between documents are a serious integrity finding.
 
-## Achievement of Outcomes (7.2) — four mandatory aspects
+## Achievement of outcomes — four aspects to evidence under 7.1
 
-Verify all four are present and evidenced; a missing aspect is a coverage gap:
+Outcome achievement is assessed within 7.1 (item 7.1.1 Measurement of Outcomes) for this PEI — the four outcome aspects below are all evidenced there, not as a separate line. Verify all four are present and evidenced; a missing aspect is a coverage gap:
 1. **Student & Graduate Outcomes** — completion/progression rates, academic results, graduate employment/further-study. Employment claims must be substantiated (survey + response rate), and must match anything stated in marketing (cross-reference C2.2).
 2. **Service Quality Outcomes** — student/stakeholder satisfaction, complaint resolution, feedback indices.
 3. **Operational Outcomes** — enrolment vs target, retention/attrition, financial/operational efficiency, refund/withdrawal rates.
@@ -24,7 +24,7 @@ Verify all four are present and evidenced; a missing aspect is a coverage gap:
 
 ## Red flags
 1. Statistics with no sample size / response rate, or unreconcilable to source data.
-2. One of the four 7.2 aspects missing entirely.
+2. One of the four outcome aspects missing entirely.
 3. Single-period data with no trend.
 4. Results with no targets/benchmarks to judge against.
 5. Missed targets or adverse trends with no corrective action.

@@ -32,7 +32,7 @@ When you raise a finding, cite the **exact regulatory provision** being breached
 - **EduTrust GD4 §23 APSR rubric** — Management Review must be scheduled, documented, and review ALL standard inputs (KPIs, audit findings, feedback, resource adequacy).
 
 ## Criterion 7 — Performance Outcomes
-- **EduTrust GD4 §7** — four mandatory 7.2 aspects must all be present and evidenced. A missing aspect is a coverage gap regardless of overall score.
+- **EduTrust GD4 §7** — the four mandatory outcome aspects (student & graduate, service quality, operational, people development) must all be present and evidenced under 7.1. A missing aspect is a coverage gap regardless of overall score.
 - **Employment outcome claims** — must match SSG graduate employment survey methodology; response rate must be stated. Employment data that cannot be traced to the survey instrument is unsubstantiated.
 
 ## How to cite in a finding

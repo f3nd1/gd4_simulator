@@ -555,7 +555,6 @@ export type WorkspaceState = {
   duplicateCycle: () => void;
   createNewCycle: () => void;
 
-  setEvidenceField: <K extends keyof ItemEvidence>(itemId: string, field: K, value: ItemEvidence[K]) => void;
   setReviewerScore: (itemId: string, value: number) => void;
   setJustify: (itemId: string, value: string) => void;
   confirmScore: (itemId: string) => void;
@@ -2219,9 +2218,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           lastAuditRuns: {},
         }));
       },
-
-      setEvidenceField: (itemId, field, value) =>
-        set((s) => ({ evidence: { ...s.evidence, [itemId]: { ...s.evidence[itemId], [field]: value } } })),
 
       // Editing the reviewer score after a confirm invalidates that
       // confirmation, so a stale "Confirmed" badge can never sit next to a
@@ -5257,6 +5253,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       //        screened the app. Ensure every current item id has an entry.
       //   v4 — collapse the four outcome-area items (7.1.2–7.1.5) into 7.1.1;
       //        drop any runtime state still keyed to those removed item ids.
+      //   v5 — prune the remaining item-keyed and finding-keyed slices that
+      //        earlier versions left untouched (reviewer/confirmed/justify by
+      //        current item id; samples/interviewQuestions by gd4ItemId; and
+      //        closures whose finding was dropped), so no parentless records
+      //        linger. All are read by current-item id anyway, so this is
+      //        cleanup, not a behaviour change.
       // Persisted workspaces still hold the old folders (and runtime state keyed
       // to removed sub-criterion ids), so reconcile them on rehydrate: drop
       // folders/state for sub-criteria that no longer exist (the user's chosen
@@ -5264,11 +5266,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
       // to a surviving item id) is untouched. The reconcile is idempotent, so a
       // workspace at an earlier version is safely brought up to the latest.
-      version: 4,
+      version: 5,
       migrate: (persisted, fromVersion) => {
         const s = persisted as WorkspaceState;
-        if (!s || fromVersion >= 4) return s;
+        if (!s || fromVersion >= 5) return s;
         const validSub = new Set(GD4_SUB_CRITERIA.map((sc) => sc.id));
+        const validItem = new Set(GD4_REQUIREMENTS.map((r) => r.id));
         // Ids removed by the sub-criterion re-align. The split coarse ids
         // (2.1, 2.3, 2.4, 5.1, 5.2) plus the 7.2 fold into 7.1 (its old item
         // ids 7.2.1–7.2.4 became 7.1.2–7.1.5). Anything keyed to these is
@@ -5284,6 +5287,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           rec ? Object.fromEntries(Object.entries(rec).filter(([k]) => validSub.has(k))) : rec;
         const pruneByFolderId = <V,>(rec: Record<string, V> | undefined) =>
           rec ? Object.fromEntries(Object.entries(rec).filter(([k]) => keptFolderIds.has(k))) : rec;
+        const pruneByItem = <V,>(rec: Record<string, V> | undefined) =>
+          rec ? Object.fromEntries(Object.entries(rec).filter(([k]) => validItem.has(k))) : rec;
+        // Findings dropped by the customFindings filter below — their closures
+        // are orphaned and pruned to match.
+        const droppedFindingIds = new Set((s.customFindings ?? []).filter((f) => removedSub.has(f.gd4ItemId)).map((f) => f.id));
         // Reconcile the evidence map to the current item ids: keep existing
         // ratings for surviving items, add a blank entry for any new/renamed
         // item id (so no consumer indexes an undefined entry), and drop stale
@@ -5313,6 +5321,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ? s.customFindings.filter((f) => !removedSub.has(f.gd4ItemId))
             : s.customFindings,
           lastPpdSubCriterionId: s.lastPpdSubCriterionId && validSub.has(s.lastPpdSubCriterionId) ? s.lastPpdSubCriterionId : null,
+          // Item-keyed reviewer/confirmed/justify scores for removed items are
+          // dropped; scores for surviving items are kept.
+          reviewer: pruneByItem(s.reviewer),
+          confirmed: pruneByItem(s.confirmed),
+          justify: pruneByItem(s.justify),
+          // Closures keyed to a dropped finding are pruned.
+          closures: s.closures ? Object.fromEntries(Object.entries(s.closures).filter(([k]) => !droppedFindingIds.has(k))) : s.closures,
+          // Samples / interview questions carrying a removed gd4ItemId are dropped.
+          samples: s.samples ? s.samples.filter((x) => validItem.has(x.gd4ItemId)) : s.samples,
+          interviewQuestions: s.interviewQuestions ? s.interviewQuestions.filter((x) => validItem.has(x.gd4ItemId)) : s.interviewQuestions,
         } as WorkspaceState;
       },
       partialize: (s) => {

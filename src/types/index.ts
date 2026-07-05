@@ -498,7 +498,7 @@ export type SpecificChecklistLine = {
   sourceRef?: string;
 };
 
-// Keyed by GD4 item id (the 35 testable requirements) rather than the 24
+// Keyed by GD4 item id (the testable requirements) rather than the
 // sub-criteria, so every checklist line can cite a single, unambiguous
 // clause. The sub-criterion/criterion grouping is reconstructed in the UI.
 export type SubCriterionChecklistEntry = {

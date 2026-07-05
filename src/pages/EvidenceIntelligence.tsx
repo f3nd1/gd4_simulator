@@ -136,7 +136,7 @@ export function EvidenceIntelligence() {
             </div>
           </Card>
           <Card>
-            <h4 style={{ marginTop: 0, fontSize: 13 }}>All checks across all 35 items</h4>
+            <h4 style={{ marginTop: 0, fontSize: 13 }}>All checks across all {scored.items.length} items</h4>
             <RollupTable items={scored.items} findings={findings} />
           </Card>
         </>

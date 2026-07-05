@@ -593,6 +593,21 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           },
         })))),
     }),
-    { name: "ucc-gd4-checklist:v2", storage: workspaceStorage }
+    {
+      name: "ucc-gd4-checklist:v2",
+      storage: workspaceStorage,
+      // v1: the GD4 sub-criterion re-align removed/renamed items (7.2.x →
+      // 7.1.2–7.1.5, then collapsed into 7.1.1). This store is keyed by
+      // gd4ItemId; entries for an item id that no longer exists are parentless
+      // dead storage (never rendered — the UI iterates GD4_REQUIREMENTS — but
+      // worth clearing). Drop any entry whose id is not a current item.
+      version: 1,
+      migrate: (persisted, fromVersion) => {
+        const s = persisted as ChecklistModuleState;
+        if (!s || fromVersion >= 1 || !s.entries) return s;
+        const validItem = new Set(GD4_REQUIREMENTS.map((r) => r.id));
+        return { ...s, entries: Object.fromEntries(Object.entries(s.entries).filter(([id]) => validItem.has(id))) };
+      },
+    }
   )
 );

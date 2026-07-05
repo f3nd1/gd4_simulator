@@ -138,7 +138,7 @@ export function Help() {
         <h3 style={{ marginTop: 0, fontSize: 16 }}>Help &amp; guide</h3>
         <p style={{ fontSize: 12.5, color: "#aeb8c7", margin: 0 }}>
           What every page is and how to use it. A typical run: <b style={{ color: GOLD }}>Profile of PEI → Audit Cycle → Evidence Folder (link &amp; run audit) →
-          PPD Review or Sub-Criterion Checklist → Scorecard → Findings &amp; closure → Re-audit → Final Report → Export</b>. The Sub-Criterion Checklist is the scoring source of truth.
+          PPD Review or Sub-Criterion Checklist → Scorecard → Findings &amp; closure → Final Report → Export</b>. The Sub-Criterion Checklist is the scoring source of truth.
         </p>
       </Card>
 
