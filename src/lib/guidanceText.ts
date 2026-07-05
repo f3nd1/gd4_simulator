@@ -28,7 +28,7 @@ export function nextStepText(page: GuidancePage, ctx: GuidanceContext): string {
 
     case "evidence-folder": {
       if ((ctx.pendingGates ?? 0) > 0) {
-        return `You have ${ctx.pendingGates} AI verdict${ctx.pendingGates === 1 ? "" : "s"} waiting for your approval in the panel below. Approve, edit or reject each one to continue.`;
+        return `You have ${ctx.pendingGates} AI verdict${ctx.pendingGates === 1 ? "" : "s"} waiting for your approval. Open the sub-criterion's review (its "View results" button) to approve, edit or reject each one beside the evidence that produced it.`;
       }
       if ((ctx.linkedFolders ?? 0) === 0) {
         return "Start by pasting a Google Drive link for each sub-criterion's Policy and Evidence folders, then check access.";

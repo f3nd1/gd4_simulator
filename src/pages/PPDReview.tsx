@@ -11,6 +11,7 @@ import { NextStepBanner } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 import { findingTypeForStatus, findingTypeTone } from "../lib/findingClassification";
 import { resolvePpdSelection, ppdResultSummary } from "../lib/ppdSelection";
+import { auditModeLabel } from "../lib/runModes";
 import { TONE } from "../lib/theme";
 import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress } from "../types";
 
@@ -116,6 +117,10 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const folders = useWorkspaceStore((s) => s.folders);
   const folder = folders.find((f) => f.subCriterionId === selectedId);
+  // Count of verdicts queued for this sub-criterion's hybrid approval gate —
+  // badged on the Evidence tab so the gate (which lives beside the evidence
+  // rows there) is discoverable even when the review opens on the PPD tab.
+  const pendingGateCount = useWorkspaceStore((s) => s.pendingCommits[selectedId]?.items.length ?? 0);
 
   const requirementItems = useMemo(
     () => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === selectedId),
@@ -171,6 +176,14 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
             }}
           >
             {label}
+            {id === "evidence" && pendingGateCount > 0 && (
+              <span
+                title={`${pendingGateCount} AI verdict(s) awaiting your approval — review each beside its evidence here`}
+                style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 800, color: "#92400e", background: "#fde68a", borderRadius: 999, padding: "1px 7px" }}
+              >
+                ⏸ {pendingGateCount}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -582,6 +595,97 @@ function EvidenceRunPanel({ progress, onCancel }: { progress: EvidenceAssessment
 }
 
 // ─── Evidence tab (PPD verdict + Actual Evidence, 4 columns) ────────────────
+// Hybrid per-verdict approval gate, scoped to ONE sub-criterion, rendered
+// inside the review modal/page beside the evidence rows that produced each
+// verdict. Wired directly to the shared pendingCommits / resolvePendingItem
+// store API — no parallel state. A verdict commits ONLY on an explicit
+// Accept/Reject; closing the modal touches nothing (the queued run stays in
+// pendingCommits and re-opens intact, so the Dashboard count stays accurate).
+export function HybridGatePanel({ subCriterionId }: { subCriterionId: string }) {
+  const run = useWorkspaceStore((s) => s.pendingCommits[subCriterionId]);
+  const resolvePendingItem = useWorkspaceStore((s) => s.resolvePendingItem);
+  const acceptAllPending = useWorkspaceStore((s) => s.acceptAllPending);
+  const discardPendingRun = useWorkspaceStore((s) => s.discardPendingRun);
+  const [edits, setEdits] = useState<Record<string, "Met" | "Partial" | "Not met">>({});
+
+  if (!run || run.items.length === 0) return null;
+
+  const statusTone = (s: string) => (s === "Met" ? "#15803d" : s === "Partial" ? "#b45309" : "#b91c1c");
+  // Hybrid stops at each gate: present one verdict at a time, beside its
+  // evidence. "Accept all remaining" stays as an explicit escape hatch.
+  const items = run.items.slice(0, 1);
+
+  return (
+    <div style={{ border: "1px solid #fbbf24", background: "#fffbeb", borderRadius: 10, padding: "10px 14px", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>
+          ⏸ Needs your review ({run.items.length}) — sub-criterion {run.subCriterionId}
+        </span>
+        <Pill s="medium">{auditModeLabel(run.runMode)}</Pill>
+        <Pill s="neutral">Option {run.path}</Pill>
+        <span style={{ fontSize: 11, color: "#a16207", fontFamily: "ui-monospace,monospace" }}>{run.runId}</span>
+        <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+          <button
+            onClick={() => { if (confirm(`Accept all ${run.items.length} remaining AI verdict(s) without reviewing each one?`)) acceptAllPending(run.subCriterionId); }}
+            title="Commits every remaining queued verdict at once instead of stepping through each gate"
+            style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "4px 12px", borderRadius: 6, border: "1px solid #15803d", background: "#15803d", color: "#fff" }}
+          >
+            Accept all remaining
+          </button>
+          <button
+            onClick={() => { if (confirm(`Discard all ${run.items.length} queued verdict(s) for ${run.subCriterionId}? Nothing will be committed.`)) discardPendingRun(run.subCriterionId); }}
+            style={{ cursor: "pointer", fontSize: 11.5, padding: "4px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
+          >
+            Discard run
+          </button>
+        </span>
+      </div>
+      <div style={{ fontSize: 11.5, color: "#a16207", marginBottom: 6 }}>
+        Approve, edit or reject each verdict in turn, beside its evidence below — {run.items.length} gate{run.items.length === 1 ? "" : "s"} remaining. Closing this review commits nothing and keeps them pending.
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {items.map((item) => {
+          const chosen = edits[item.id] ?? item.write.status;
+          return (
+            <div key={item.id} style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 11px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
+                <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5, fontWeight: 700, color: "#4338ca" }}>{item.write.gd4ItemId}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: statusTone(item.write.status) }}>AI: {item.write.status}</span>
+                {item.reason && <span style={{ fontSize: 11, color: "#a16207" }}>{item.reason}</span>}
+              </div>
+              <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.4, marginBottom: 6 }}>{item.lineText}</div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                <select
+                  value={chosen}
+                  onChange={(e) => setEdits((prev) => ({ ...prev, [item.id]: e.target.value as "Met" | "Partial" | "Not met" }))}
+                  style={{ ...inputStyle, width: 110, padding: "3px 5px", fontSize: 11.5 }}
+                  title="Edit the verdict before accepting"
+                >
+                  <option value="Met">Met</option>
+                  <option value="Partial">Partial</option>
+                  <option value="Not met">Not met</option>
+                </select>
+                <button
+                  onClick={() => resolvePendingItem(run.subCriterionId, item.id, "accept", chosen !== item.write.status ? chosen : undefined)}
+                  style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "4px 12px", borderRadius: 6, border: "1px solid #15803d", background: "#f0fdf4", color: "#15803d" }}
+                >
+                  {chosen !== item.write.status ? `Accept as ${chosen}` : "Accept"}
+                </button>
+                <button
+                  onClick={() => resolvePendingItem(run.subCriterionId, item.id, "reject")}
+                  style={{ cursor: "pointer", fontSize: 11.5, padding: "4px 12px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function EvidenceTab({ selectedId }: { selectedId: string }) {
   const busy = useWorkspaceStore((s) => s.busy);
   const runEvidenceAssessment = useWorkspaceStore((s) => s.runEvidenceAssessment);
@@ -694,6 +798,11 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
       {!assessment && !isRunning && (
         <p style={{ fontSize: 12.5, color: "#94a3b8", marginTop: 0 }}>No prior evidence result found for this sub-criterion. The PPD column below is carried over from the PPD Review tab; click "Run evidence assessment" to read the Actual Evidence folder and produce a combined verdict.</p>
       )}
+
+      {/* Hybrid per-verdict approval gate — sits directly above the evidence
+          rows so each Met/Partial/Not met is judged beside the cited files,
+          chunk quotes and contradictions that produced it. */}
+      <HybridGatePanel subCriterionId={selectedId} />
 
       <div style={{ display: "grid", gridTemplateColumns: EV_GRID, gap: 10, position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px 8px 0 0", padding: "6px 12px", marginBottom: -1 }}>
         <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>GD4 requirement</span>

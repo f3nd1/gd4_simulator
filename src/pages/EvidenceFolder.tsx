@@ -9,7 +9,7 @@ import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, F
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "../data/gd4Requirements";
-import { PpdReviewContent } from "./PPDReview";
+import { PpdReviewContent, HybridGatePanel } from "./PPDReview";
 import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
 import { TONE } from "../lib/theme";
@@ -1331,6 +1331,12 @@ function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => v
         )}
 
         <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          {/* Hybrid per-verdict approval gate for this Option B run — sits above
+              the AI summary (the per-line verdict rows that produced it), so the
+              staged-audit gate is judged here in the post-analysis review, not
+              inline on the Evidence Folder page. Closing commits nothing. */}
+          <HybridGatePanel subCriterionId={run.subCriterionId} />
+
           {/* File ledger */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>File ledger ({run.fileLedger.length} files)</div>
@@ -1686,99 +1692,10 @@ function CurrentSubCriterionDetail() {
   );
 }
 
-// Verdicts a hybrid run held back for human approval — one gate at a time
-// (approve / edit / reject, then the next appears).
-function PendingReviewPanel() {
-  const pendingCommits = useWorkspaceStore((s) => s.pendingCommits);
-  const resolvePendingItem = useWorkspaceStore((s) => s.resolvePendingItem);
-  const acceptAllPending = useWorkspaceStore((s) => s.acceptAllPending);
-  const discardPendingRun = useWorkspaceStore((s) => s.discardPendingRun);
-  const [edits, setEdits] = useState<Record<string, "Met" | "Partial" | "Not met">>({});
-
-  const runs = Object.values(pendingCommits).filter((r) => r.items.length > 0);
-  if (runs.length === 0) return null;
-
-  const statusTone = (s: string) => (s === "Met" ? "#15803d" : s === "Partial" ? "#b45309" : "#b91c1c");
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
-      {runs.map((run) => {
-        // Hybrid stops at each gate: present one verdict at a time. "Accept
-        // all remaining" stays as an explicit escape hatch.
-        const items = run.items.slice(0, 1);
-        return (
-          <div key={run.subCriterionId} style={{ border: "1px solid #fbbf24", background: "#fffbeb", borderRadius: 10, padding: "10px 14px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>
-                ⏸ Needs your review ({run.items.length}) — sub-criterion {run.subCriterionId}
-              </span>
-              <Pill s="medium">{auditModeLabel(run.runMode)}</Pill>
-              <Pill s="neutral">Option {run.path}</Pill>
-              <span style={{ fontSize: 11, color: "#a16207", fontFamily: "ui-monospace,monospace" }}>{run.runId}</span>
-              <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                <button
-                  onClick={() => { if (confirm(`Accept all ${run.items.length} remaining AI verdict(s) without reviewing each one?`)) acceptAllPending(run.subCriterionId); }}
-                  title="Commits every remaining queued verdict at once instead of stepping through each gate"
-                  style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "4px 12px", borderRadius: 6, border: "1px solid #15803d", background: "#15803d", color: "#fff" }}
-                >
-                  Accept all remaining
-                </button>
-                <button
-                  onClick={() => { if (confirm(`Discard all ${run.items.length} queued verdict(s) for ${run.subCriterionId}? Nothing will be committed.`)) discardPendingRun(run.subCriterionId); }}
-                  style={{ cursor: "pointer", fontSize: 11.5, padding: "4px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
-                >
-                  Discard run
-                </button>
-              </span>
-            </div>
-            <div style={{ fontSize: 11.5, color: "#a16207", marginBottom: 6 }}>
-              Approve, edit or reject each verdict in turn — {run.items.length} gate{run.items.length === 1 ? "" : "s"} remaining.
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {items.map((item) => {
-                const chosen = edits[item.id] ?? item.write.status;
-                return (
-                  <div key={item.id} style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 11px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
-                      <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5, fontWeight: 700, color: "#4338ca" }}>{item.write.gd4ItemId}</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: statusTone(item.write.status) }}>AI: {item.write.status}</span>
-                      {item.reason && <span style={{ fontSize: 11, color: "#a16207" }}>{item.reason}</span>}
-                    </div>
-                    <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.4, marginBottom: 6 }}>{item.lineText}</div>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                      <select
-                        value={chosen}
-                        onChange={(e) => setEdits((prev) => ({ ...prev, [item.id]: e.target.value as "Met" | "Partial" | "Not met" }))}
-                        style={{ ...inputStyle, width: 110, padding: "3px 5px", fontSize: 11.5 }}
-                        title="Edit the verdict before accepting"
-                      >
-                        <option value="Met">Met</option>
-                        <option value="Partial">Partial</option>
-                        <option value="Not met">Not met</option>
-                      </select>
-                      <button
-                        onClick={() => resolvePendingItem(run.subCriterionId, item.id, "accept", chosen !== item.write.status ? chosen : undefined)}
-                        style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "4px 12px", borderRadius: 6, border: "1px solid #15803d", background: "#f0fdf4", color: "#15803d" }}
-                      >
-                        {chosen !== item.write.status ? `Accept as ${chosen}` : "Accept"}
-                      </button>
-                      <button
-                        onClick={() => resolvePendingItem(run.subCriterionId, item.id, "reject")}
-                        style={{ cursor: "pointer", fontSize: 11.5, padding: "4px 12px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
-                      >
-                        Reject
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+// The hybrid per-verdict approval gate now lives inside the post-analysis
+// review modal (OptionAReviewModal → PpdReviewContent → HybridGatePanel),
+// beside the per-line evidence rows that produced each verdict — not inline on
+// this launch surface. See src/pages/PPDReview.tsx.
 
 // Guidance for the Analysis path column: which of Option A / Option B to
 // choose. One-line summary always visible; detail behind an expander.
@@ -2353,7 +2270,7 @@ export function EvidenceFolder() {
         ] : [
           { targetId: "wt-mode-chip", title: "Your audit mode", body: `You are in ${auditModeLabel(auditMode)} mode. This strip always shows the mode; use 'Change mode' to switch.` },
           { targetId: "wt-folders-table", title: "Link your folders", body: "Each sub-criterion has a Policy and an Evidence Drive link. Paste them here and check access before running." },
-          { targetId: "wt-path-guidance", title: "Pick the path, then run", body: auditMode === "full-auto" ? "Option A or B per row sets WHAT gets assessed. Then one click on 'Run full audit' at the top assesses everything." : "Option A or B per row sets WHAT gets assessed. Then click the row's run button; you approve each result before it commits." },
+          { targetId: "wt-path-guidance", title: "Pick the path, then run", body: auditMode === "full-auto" ? "Option A or B per row sets WHAT gets assessed. Then one click on 'Run full audit' at the top assesses everything." : "Option A or B per row sets WHAT gets assessed. Then click the row's run button; in Hybrid mode you approve each result inside its review, beside the evidence that produced it, before it commits." },
         ]}
       />
 
@@ -2385,7 +2302,6 @@ export function EvidenceFolder() {
       </div>
 
       <div id="wt-path-guidance"><PathGuidance /></div>
-      <PendingReviewPanel />
       {fullAuditProgress && <FullAuditOverlay />}
 
       {/* Card list — one self-contained card per sub-criterion. Everything
@@ -2647,7 +2563,7 @@ export function EvidenceFolder() {
                       <button
                         onClick={() => { runPPDReview(f.subCriterionId); setOptionAModal(f.subCriterionId); }}
                         disabled={noAuditors}
-                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option A (PPD + Evidence): starts the PPD review now and opens the full review over this page, where you continue with the evidence assessment and compile findings. You approve each result before it commits (Hybrid mode).")}
+                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option A (PPD + Evidence): starts the PPD review now and opens the full review, where you continue with the evidence assessment and compile findings. In Hybrid mode you approve, edit or reject each verdict inside that review — beside the evidence rows that produced it — before it commits.")}
                         style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >
                         Run review
@@ -2656,7 +2572,7 @@ export function EvidenceFolder() {
                       <button
                         onClick={() => auditFolderStaged(f.id, "all")}
                         disabled={noAuditors}
-                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option B (Staged audit): policy, evidence, then outcome and review passes produce APSR verdicts, each stopping for your approval before it commits (Hybrid mode).")}
+                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option B (Staged audit): policy, evidence, then outcome and review passes produce APSR verdicts. In Hybrid mode they are queued for your approval — open the review to approve, edit or reject each verdict beside its evidence before it commits.")}
                         style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >
                         Run audit →
