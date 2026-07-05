@@ -66,6 +66,7 @@ export function Findings() {
   const addCustomFinding = useWorkspaceStore((s) => s.addCustomFinding);
   const removeCustomFinding = useWorkspaceStore((s) => s.removeCustomFinding);
   const clearAllFindings = useWorkspaceStore((s) => s.clearAllFindings);
+  const clearFindingsForSubCriterion = useWorkspaceStore((s) => s.clearFindingsForSubCriterion);
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
   const raiseAllUnmetFindings = useChecklistModuleStore((s) => s.raiseAllUnmetFindings);
   const scored = useScored();
@@ -745,6 +746,23 @@ export function Findings() {
                   {highestNc && <Pill s={ncSeverityTone(highestNc)}>{highestNc} NC</Pill>}
                   <span style={{ fontSize: 11.5, fontWeight: 600, color: statusColor, whiteSpace: "nowrap" }}>{statusLabel}</span>
                   {earliestStr && <span style={{ fontSize: 10.5, color: "#94a3b8", whiteSpace: "nowrap" }}>from {earliestStr}</span>}
+                  {/* Per-sub-criterion "Delete all" — scoped to this group only,
+                      leaving every other sub-criterion untouched. stopPropagation
+                      so the click doesn't also expand/collapse the group. */}
+                  <span onClick={(e) => e.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Delete all ${grpFindings.length} finding${grpFindings.length !== 1 ? "s" : ""} for ${subCritId}?\n\nThis removes only ${subCritId}'s findings from both the Findings register AND the Quality Action / AFI module (they share the same data). Other sub-criteria are untouched. This cannot be undone.`)) {
+                          clearFindingsForSubCriterion(subCritId);
+                          if (detailFinding && (GD4_REQUIREMENTS.find((r) => r.id === detailFinding.gd4ItemId)?.subCriterionId ?? detailFinding.gd4ItemId) === subCritId) setDetailFinding(null);
+                        }
+                      }}
+                      title={`Delete all findings for ${subCritId} only`}
+                      style={{ fontSize: 11, color: "#b91c1c", background: "transparent", border: "1px solid #fca5a5", borderRadius: 4, padding: "2px 8px", cursor: "pointer" }}
+                    >
+                      Delete all
+                    </button>
+                  </span>
                 </div>
 
                 {/* Individual finding rows (compact) */}

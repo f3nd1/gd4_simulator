@@ -647,6 +647,9 @@ export type WorkspaceState = {
   updateCustomFinding: (id: string, patch: Partial<Finding>) => void;
   removeCustomFinding: (id: string) => void;
   clearAllFindings: () => void;
+  // Delete every finding for ONE sub-criterion, leaving all others intact.
+  // Reuses the same back-pointer sweep as clearAllFindings / removeCustomFinding.
+  clearFindingsForSubCriterion: (subCriterionId: string) => void;
   clearAllClosures: () => void;
 
   clearAIReviewLog: () => void;
@@ -5095,6 +5098,40 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // downgrade them back to editable drafts (keeping their bodies)
         // instead of leaving them dangling with dead savedFindingIds.
         useFindingDraftStore.getState().downgradeConfirmedDrafts();
+      },
+
+      clearFindingsForSubCriterion: (subCriterionId) => {
+        // Same delete + back-pointer sweep as clearAllFindings, but scoped to
+        // ONE sub-criterion. A finding's sub-criterion is its GD4 item's parent
+        // (falling back to the raw gd4ItemId), matching the Findings register's
+        // own grouping. Seed (demo) findings can't be removed individually
+        // while the seed flag stays on, so the KEPT set is materialised into
+        // customFindings and the flag turned off — leaving every other
+        // sub-criterion's findings exactly as they were.
+        const subCritOf = (f: Finding) =>
+          GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId)?.subCriterionId ?? f.gd4ItemId;
+        const s = get();
+        const seeds = s.seedFindingsLoaded ? FINDINGS : [];
+        const allNow: Finding[] = [...seeds, ...s.customFindings];
+        const deleteIds = new Set(allNow.filter((f) => subCritOf(f) === subCriterionId).map((f) => f.id));
+        if (deleteIds.size === 0) return;
+        const kept = allNow.filter((f) => !deleteIds.has(f.id));
+        set((st) => {
+          const closures = { ...st.closures };
+          deleteIds.forEach((id) => { delete closures[id]; });
+          return {
+            customFindings: kept,
+            seedFindingsLoaded: false,
+            closures,
+            evidenceAssessments: stripFindingBackPointers(st.evidenceAssessments, (fid) => deleteIds.has(fid)),
+            ppdReviewResults: stripContradictionBackPointers(st.ppdReviewResults, (fid) => deleteIds.has(fid)),
+          };
+        });
+        const cs = useChecklistModuleStore.getState();
+        const fds = useFindingDraftStore.getState();
+        // Per-id (scoped) so ONLY drafts pointing at the deleted findings are
+        // downgraded — other sub-criteria's confirmed drafts are untouched.
+        deleteIds.forEach((id) => { cs.clearSavedFindingId(id); fds.clearSavedFindingId(id); });
       },
 
       clearAllClosures: () => set({ closures: {} }),
