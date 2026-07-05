@@ -22,9 +22,10 @@ import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 // Import pure text utilities for use within this module, and re-export so
 // callers don't need to import from textUtils directly.
-import { extractSpreadsheetText as _extractSpreadsheetText } from "./textUtils";
-export { classifyPdfTextQuality, extractSpreadsheetText } from "./textUtils";
+import { extractSpreadsheetText as _extractSpreadsheetText, extractPptxText as _extractPptxText } from "./textUtils";
+export { classifyPdfTextQuality, extractSpreadsheetText, extractPptxText } from "./textUtils";
 const extractSpreadsheetText = _extractSpreadsheetText;
+const extractPptxText = _extractPptxText;
 
 pdfjsLib.GlobalWorkerOptions.workerPort = new PdfjsWorker();
 
@@ -35,6 +36,11 @@ const GSI_SRC = "https://accounts.google.com/gsi/client";
 // for the fileKind classifier without duplicating the string literals.
 export const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 export const XLS_MIME = "application/vnd.ms-excel";
+// Modern PowerPoint (.pptx). The old binary .ppt
+// (application/vnd.ms-powerpoint) is deliberately NOT handled here — it is an
+// OLE/CFB binary with no reliable pure-JS extractor, so it stays unreadable
+// until we decide whether to support it.
+export const PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
 declare global {
   interface Window {
@@ -264,6 +270,15 @@ export async function exportFileText(file: DriveFile, accessToken: string, signa
     const buffer = await res.arrayBuffer();
     const wb = XLSX.read(buffer, { type: "array" });
     return extractSpreadsheetText(wb, file.name);
+  }
+  // PowerPoint (.pptx): pull slide/table/text-box text and speaker notes. A
+  // deck with no extractable text (image-only slides) returns null — same as
+  // any unsupported file — so it is honestly flagged unreadable and skipped,
+  // never passed to the AI as blank evidence.
+  if (file.mimeType === PPTX_MIME) {
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
+    const text = await extractPptxText(await res.arrayBuffer(), file.name);
+    return text.trim().length > 0 ? text : null;
   }
   return null;
 }

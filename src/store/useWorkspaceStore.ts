@@ -3105,6 +3105,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             : mime === XLSX_MIME ? "Excel"
             : mime === XLS_MIME ? "Excel"
             : mime === "text/csv" ? "CSV"
+            : mime.includes("presentationml") ? "PowerPoint"
             : mime.includes("google-apps.presentation") ? "Google Slides"
             : mime.startsWith("image/") ? "image"
             : "text";
@@ -3192,6 +3193,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             file.mimeType.includes("wordprocessingml") ? "Extracting Word document" :
             file.mimeType.includes("google-apps.document") ? "Fetching Google Doc" :
             file.mimeType.includes("google-apps.spreadsheet") || file.mimeType === "text/csv" ? "Reading spreadsheet" :
+            file.mimeType.includes("presentationml") ? "Extracting PowerPoint text" :
             file.mimeType.includes("google-apps.presentation") ? "Reading presentation" :
             file.mimeType.startsWith("image/") ? "Describing image with AI" :
             "Reading document";
@@ -4222,7 +4224,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const fileKind = (mime: string) =>
           mime === "application/pdf" ? "PDF" : mime.includes("wordprocessingml") ? "Word" : mime.includes("google-apps.document") ? "Google Doc"
           : mime.includes("google-apps.spreadsheet") ? "Google Sheet" : mime === XLSX_MIME ? "Excel" : mime === XLS_MIME ? "Excel"
-          : mime === "text/csv" ? "CSV" : mime.includes("google-apps.presentation") ? "Google Slides"
+          : mime === "text/csv" ? "CSV" : mime.includes("presentationml") ? "PowerPoint" : mime.includes("google-apps.presentation") ? "Google Slides"
           : mime.startsWith("image/") ? "image" : "text";
 
         const evidenceChunks: EvidenceChunk[] = [];
