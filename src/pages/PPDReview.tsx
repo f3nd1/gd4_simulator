@@ -13,6 +13,7 @@ import { findingTypeForStatus, findingTypeTone } from "../lib/findingClassificat
 import { resolvePpdSelection, ppdResultSummary } from "../lib/ppdSelection";
 import { auditModeLabel } from "../lib/runModes";
 import { TONE } from "../lib/theme";
+import { exportOptionASummaryCsv, exportFileLedgerCsvFor, downloadCsv, auditCsvFilename } from "../lib/auditCsvExport";
 import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
@@ -121,6 +122,42 @@ export function ResultNavLinks({ subCriterionId }: { subCriterionId: string }) {
   );
 }
 
+// CSV export for troubleshooting an Option A run — the same two exports the
+// staged path offers: a per-line summary (PPD + evidence verdicts, reasoning,
+// citations) and a per-file ledger (matching the staged ledger columns). Shown
+// only once there is a saved PPD result or evidence assessment to export.
+export function OptionAExportButtons({ subCriterionId }: { subCriterionId: string }) {
+  const ppd = useWorkspaceStore((s) => s.ppdReviewResults[subCriterionId]);
+  const evidence = useWorkspaceStore((s) => s.evidenceAssessments[subCriterionId]);
+  if (!ppd && !evidence) return null;
+  const sub = GD4_SUB_CRITERIA.find((s) => s.id === subCriterionId);
+  const title = sub?.title ?? subCriterionId;
+  const runId = evidence?.runId;
+  const runAt = evidence?.runAt ?? ppd?.runAt ?? new Date().toISOString();
+  const hasLedger = !!evidence?.fileLedger?.length;
+  const btn: CSSProperties = { fontSize: 12, fontWeight: 600, color: "#0f766e", padding: "5px 11px", border: "1px solid #99f6e4", borderRadius: 7, background: "#f0fdfa", whiteSpace: "nowrap", cursor: "pointer" };
+  const exportSummary = () => {
+    if (!ppd) return;
+    downloadCsv(
+      exportOptionASummaryCsv({ runId, subCriterionId }, ppd.rows, evidence?.rows ?? []),
+      auditCsvFilename("gd4-audit-optionA-summary", { subCriterionId, scope: "A", startedAt: runAt })
+    );
+  };
+  const exportLedger = () => {
+    if (!evidence?.fileLedger?.length) return;
+    downloadCsv(
+      exportFileLedgerCsvFor(evidence.fileLedger, { runId: runId ?? "", startedAt: runAt, scope: "A", subCriterionId, subCriterionTitle: title }),
+      auditCsvFilename("gd4-audit-optionA-ledger", { subCriterionId, scope: "A", startedAt: runAt })
+    );
+  };
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <button type="button" onClick={exportSummary} disabled={!ppd} style={{ ...btn, opacity: ppd ? 1 : 0.5, cursor: ppd ? "pointer" : "not-allowed" }} title="Per-line CSV: PPD verdict + reasoning and evidence verdict + reasoning, with citations, for each requirement line">⬇ Line summary CSV</button>
+      <button type="button" onClick={exportLedger} disabled={!hasLedger} style={{ ...btn, opacity: hasLedger ? 1 : 0.5, cursor: hasLedger ? "pointer" : "not-allowed" }} title={hasLedger ? "Per-file CSV: read status, read method, char count, cited — same columns as the staged file ledger" : "Run the Evidence assessment to capture a file ledger"}>⬇ File ledger CSV</button>
+    </div>
+  );
+}
+
 // The full PPD + Evidence review body for ONE sub-criterion: saved-state
 // banner, next-step guidance, tab bar, and the PPD / Evidence tabs (each with
 // its own run button, live progress panel and results). Extracted from the
@@ -172,8 +209,12 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
 
       <PpdNextStep selectedId={selectedId} />
 
-      {/* Jump straight to the Checklist or Findings for this sub-criterion. */}
-      <div style={{ marginBottom: 10 }}><ResultNavLinks subCriterionId={selectedId} /></div>
+      {/* Jump straight to the Checklist or Findings for this sub-criterion,
+          plus CSV export for troubleshooting the PPD + evidence run. */}
+      <div style={{ marginBottom: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <ResultNavLinks subCriterionId={selectedId} />
+        <OptionAExportButtons subCriterionId={selectedId} />
+      </div>
 
       <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: -2, marginBottom: 10 }}>
         {sub.title} — {sub.description}

@@ -1,4 +1,4 @@
-import type { AuditRunRecord, AuditFileRecord, AuditAISummaryLine } from "../types";
+import type { AuditRunRecord, AuditFileRecord, AuditAISummaryLine, PPDReviewRow, EvidenceAssessmentRow } from "../types";
 
 // Escapes a single CSV cell: wraps in double-quotes when the value contains
 // commas, quotes or line breaks; escapes inner double-quotes by doubling them.
@@ -44,6 +44,19 @@ export function auditCsvFilename(
 
 // Exports the per-file evidence ledger from an audit run as a CSV string.
 export function exportFileLedgerCsv(run: AuditRunRecord): string {
+  return exportFileLedgerCsvFor(run.fileLedger, {
+    runId: run.runId, startedAt: run.startedAt, scope: run.scope,
+    subCriterionId: run.subCriterionId, subCriterionTitle: run.subCriterionTitle,
+  });
+}
+
+// Same file-ledger CSV, but built from a file-record list + run metadata rather
+// than a full AuditRunRecord — so the Option A (PPD + Evidence) path can export
+// the EXACT same columns as the staged path for direct A-vs-B comparison.
+export function exportFileLedgerCsvFor(
+  fileLedger: AuditFileRecord[],
+  run: { runId: string; startedAt: string; scope: string; subCriterionId: string; subCriterionTitle: string }
+): string {
   const headers = [
     "auditRunId", "auditDateTime", "auditScope",
     "subCriterionId", "subCriterionTitle",
@@ -57,7 +70,7 @@ export function exportFileLedgerCsv(run: AuditRunRecord): string {
     "skipReason", "failReason", "chunkIds",
   ];
 
-  const rows = run.fileLedger.map((f: AuditFileRecord) => [
+  const rows = fileLedger.map((f: AuditFileRecord) => [
     run.runId,
     run.startedAt,
     run.scope,
@@ -119,6 +132,51 @@ export function exportAISummaryCsv(run: AuditRunRecord): string {
     l.overallReason ?? "",
     l.warning ?? "",
   ]);
+
+  return toCsv(headers, rows);
+}
+
+// Exports the Option A (PPD + Evidence Review) per-line summary as a CSV string:
+// one row per requirement line joining the PPD review verdict/reasoning with the
+// evidence assessment verdict/reasoning and citations. The APSR-dimension columns
+// are kept (to line up with the staged AI-summary CSV) but left BLANK because
+// Option A does not produce an APSR breakdown — blank, never fabricated.
+export function exportOptionASummaryCsv(
+  meta: { runId?: string; subCriterionId: string },
+  ppdRows: PPDReviewRow[],
+  evidenceRows: EvidenceAssessmentRow[]
+): string {
+  const headers = [
+    "auditRunId", "auditScope", "subCriterionId",
+    "lineRef", "gd4ItemId", "requirementText",
+    "ppdVerdict", "ppdComment",
+    "evidenceVerdict", "evidenceSummary", "evidenceComment",
+    "approachStatus", "processesStatus", "systemsOutcomesStatus", "reviewStatus",
+    "citedChunkIds", "citedFileNames",
+    "warning",
+  ];
+
+  const evByRef = new Map(evidenceRows.map((r) => [r.gdRef, r]));
+  const rows = ppdRows.map((p) => {
+    const ev = evByRef.get(p.ref);
+    return [
+      meta.runId ?? "",
+      "A",
+      meta.subCriterionId,
+      p.ref,
+      p.gd4ItemId,
+      p.requirementText,
+      p.verdict,
+      p.shortComment || p.fullComment || "",
+      ev?.verdict ?? "",
+      ev?.evidenceSummary ?? "",
+      ev?.comment ?? "",
+      "", "", "", "", // APSR dimensions — not captured by Option A (blank, not fabricated)
+      (ev?.evidenceChunkIds ?? []).join("; "),
+      (ev?.evidenceFiles ?? []).map((f) => f.name).join("; "),
+      ev?.assessmentFailed ? "Assessment failed — retry" : "",
+    ];
+  });
 
   return toCsv(headers, rows);
 }

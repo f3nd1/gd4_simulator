@@ -3,10 +3,12 @@ import {
   csvCell,
   auditCsvFilename,
   exportFileLedgerCsv,
+  exportFileLedgerCsvFor,
   exportAISummaryCsv,
+  exportOptionASummaryCsv,
   progressToRunRecord,
 } from "../auditCsvExport";
-import type { AuditFileRecord, AuditAISummaryLine, AuditRunRecord } from "../../types";
+import type { AuditFileRecord, AuditAISummaryLine, AuditRunRecord, PPDReviewRow, EvidenceAssessmentRow } from "../../types";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -402,5 +404,71 @@ describe("progressToRunRecord", () => {
     expect(rec.aiSummary).toEqual([]);
     expect(rec.linesAssessed).toBe(0);
     expect(rec.findingsDetected).toBe(0);
+  });
+});
+
+// ── Option A (PPD + Evidence) exports ───────────────────────────────────────
+
+function makePpdRow(overrides: Partial<PPDReviewRow> = {}): PPDReviewRow {
+  return {
+    ref: "4.1.1.DS1", gd4ItemId: "4.1.1", requirementText: "Pre-course counselling is documented",
+    verdict: "Adequate", shortComment: "PPD covers counselling", fullComment: "full", chunkIds: [],
+    ...overrides,
+  };
+}
+function makeEvRow(overrides: Partial<EvidenceAssessmentRow> = {}): EvidenceAssessmentRow {
+  return {
+    gdRef: "4.1.1.DS1", gd4ItemId: "4.1.1", requirementText: "Pre-course counselling is documented",
+    ppdExtract: "x", ppdVerdict: "Adequate",
+    evidenceSummary: "Counselling records found", evidenceFiles: [{ name: "counselling.pdf", url: "u" }],
+    evidenceChunkIds: ["C003"], verdict: "Met", comment: "records present",
+    ...overrides,
+  };
+}
+
+describe("exportOptionASummaryCsv — per-line PPD + evidence summary", () => {
+  it("emits one row per PPD line joining the evidence verdict, reasoning and citations", () => {
+    const csv = exportOptionASummaryCsv({ runId: "AR-4.1-Z", subCriterionId: "4.1" }, [makePpdRow()], [makeEvRow()]);
+    const lines = csv.split("\r\n");
+    expect(lines).toHaveLength(2); // header + 1 line
+    const h = lines[0].split(",");
+    const d = lines[1].split(",");
+    const at = (col: string) => d[h.indexOf(col)];
+    expect(at("auditScope")).toBe("A");
+    expect(at("lineRef")).toBe("4.1.1.DS1");
+    expect(at("ppdVerdict")).toBe("Adequate");
+    expect(at("evidenceVerdict")).toBe("Met");
+    expect(at("citedChunkIds")).toBe("C003");
+    expect(at("citedFileNames")).toBe("counselling.pdf");
+  });
+
+  it("leaves APSR-dimension columns blank (Option A does not capture them — not fabricated)", () => {
+    const csv = exportOptionASummaryCsv({ runId: "r", subCriterionId: "4.1" }, [makePpdRow()], [makeEvRow()]);
+    const h = csv.split("\r\n")[0].split(",");
+    const d = csv.split("\r\n")[1].split(",");
+    for (const col of ["approachStatus", "processesStatus", "systemsOutcomesStatus", "reviewStatus"]) {
+      expect(d[h.indexOf(col)]).toBe("");
+    }
+  });
+
+  it("still emits a PPD line when no evidence assessment exists (evidence columns blank)", () => {
+    const csv = exportOptionASummaryCsv({ subCriterionId: "4.1" }, [makePpdRow()], []);
+    const h = csv.split("\r\n")[0].split(",");
+    const d = csv.split("\r\n")[1].split(",");
+    expect(d[h.indexOf("ppdVerdict")]).toBe("Adequate");
+    expect(d[h.indexOf("evidenceVerdict")]).toBe("");
+  });
+});
+
+describe("exportFileLedgerCsvFor — Option A ledger matches the staged ledger columns", () => {
+  it("produces the SAME header columns as exportFileLedgerCsv, so A and B compare directly", () => {
+    const ledger = [makeFile({ bucket: "evidence", readMethod: "vision" })];
+    const optionA = exportFileLedgerCsvFor(ledger, { runId: "AR-4.1-Z", startedAt: "2026-07-06T00:00:00Z", scope: "A", subCriterionId: "4.1", subCriterionTitle: "Counselling" });
+    const staged = exportFileLedgerCsv(makeRun({ fileLedger: ledger }));
+    expect(optionA.split("\r\n")[0]).toBe(staged.split("\r\n")[0]); // identical headers
+    const h = optionA.split("\r\n")[0].split(",");
+    const d = optionA.split("\r\n")[1].split(",");
+    expect(d[h.indexOf("readMethod")]).toBe("vision");
+    expect(d[h.indexOf("auditRunId")]).toBe("AR-4.1-Z");
   });
 });

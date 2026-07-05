@@ -1192,7 +1192,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const runAbort = new AbortController();
         _currentRunAbort = runAbort;
 
-        const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, coverageNote?: string) => {
+        const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, coverageNote?: string, fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           const notAssessedCount = rows ? rows.filter((r) => r.verdict === "Not assessed").length : 0;
           const summary = rows
@@ -1221,7 +1221,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
           set((st) => ({
             evidenceAssessments: rows
-              ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, derivedFromAudit: false } }
+              ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger } }
               : st.evidenceAssessments,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
             // Guarded — see runPPDReview's finish.
@@ -1321,6 +1321,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const chunkFileNames: Record<string, string> = {};
           const chunkFileRefs: Record<string, EvidenceFileRef> = {};
           let chunkCounter = 0;
+          // Per-file ledger for this Option A evidence run, in the same
+          // AuditFileRecord shape the staged path uses so the CSVs line up.
+          const fileLedger: AuditFileRecord[] = [];
+          const fileKindOf = (mime: string) =>
+            mime === "application/pdf" ? "PDF" : mime.includes("wordprocessingml") ? "Word" : mime.includes("google-apps.document") ? "Google Doc"
+            : mime.includes("google-apps.spreadsheet") ? "Google Sheet" : mime === XLSX_MIME ? "Excel" : mime === XLS_MIME ? "Excel"
+            : mime === "text/csv" ? "CSV" : mime.includes("presentationml") ? "PowerPoint" : mime.includes("google-apps.presentation") ? "Google Slides"
+            : mime.startsWith("image/") ? "image" : "text";
           patchEv({ filesTotal: evidenceFiles.length });
           let filesReadCount = 0;
           // Drive read ERRORS, kept separate from genuinely empty files, so the
@@ -1331,9 +1339,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             patchEv({ currentFile: readFileName, detail: `Reading ${readFileName}…`, pct: Math.min(24, 4 + Math.round((filesReadCount / Math.max(1, evidenceFiles.length)) * 20)) });
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
+            // Base ledger record — real read data only; assessment tagging (cited
+            // / not_used) is applied after the AI rows are known.
+            const rec: AuditFileRecord = {
+              path: file.path, name: readFileName, mimeType: file.mimeType, fileKind: fileKindOf(file.mimeType),
+              bucket: "evidence", readStatus: "found", auditStatus: "pending",
+              driveFileId: file.id, driveModifiedTime: file.modifiedTime,
+              processingMode: cached ? "reused" : "new",
+              chunkIds: [],
+            };
             let body: string | null;
             if (cached) {
               body = cached.text;
+              rec.readMethod = cached.readMethod;
+              if (cached.pdfQuality) { rec.suspectedScannedPdf = cached.pdfQuality.suspectedScannedPdf; rec.extractedTextQuality = cached.pdfQuality.extractedTextQuality; }
             } else {
               // Refresh the Drive token per uncached read and HARD-STOP when it
               // can't be refreshed — see auditFolderContents.
@@ -1341,6 +1360,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
                 body = await exportFileText(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
+                rec.readMethod = "text";
                 // Only cache genuine (non-empty) extractions — see runPPDReview.
                 if (body != null && body.trim().length > 0) {
                   const text = body;
@@ -1351,7 +1371,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 readFailedFiles.push(readFileName);
               }
             }
-            if (!body) { logEv(readFailedFiles.includes(readFileName) ? `FAILED to read ${readFileName} (Drive error) — not assessed` : `Skipped ${readFileName} (empty)`, readFailedFiles.includes(readFileName) ? "bad" : "warn"); continue; }
+            if (!body) {
+              const failed = readFailedFiles.includes(readFileName);
+              rec.readStatus = failed ? "failed" : "skipped";
+              rec.charCount = 0;
+              if (failed) rec.failReason = "Drive read error — file not assessed."; else rec.skipReason = "No extractable text (empty or unreadable).";
+              fileLedger.push(rec);
+              logEv(failed ? `FAILED to read ${readFileName} (Drive error) — not assessed` : `Skipped ${readFileName} (empty)`, failed ? "bad" : "warn");
+              continue;
+            }
             filesReadCount++;
             patchEv({ filesRead: [...(curEv().filesRead ?? []), readFileName], currentFile: undefined });
             logEv(`Read ${readFileName}${cached ? " (cached)" : ""}`, "good");
@@ -1365,7 +1393,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               docParts.push(`[CHUNK:${chunkId}] --- ${file.path}${partLabel} ---\n${chunkBody}`);
               chunkFileNames[chunkId] = fileName;
               chunkFileRefs[chunkId] = { name: fileName, url: fileUrl };
+              rec.chunkIds!.push(chunkId);
             }
+            rec.readStatus = "read";
+            rec.charCount = body.length;
+            fileLedger.push(rec);
           }
           const evidenceDocText = docParts.join("\n\n=== ACTUAL EVIDENCE ===\n\n");
           logEv(`Read ${filesReadCount} file${filesReadCount === 1 ? "" : "s"} — assessing ${lineRefs.length} requirement line${lineRefs.length === 1 ? "" : "s"}.`);
@@ -1441,10 +1473,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               promiseChecks: ev?.promiseChecks,
             };
           });
+          // Tag the ledger with citation status from the assessed rows: a file
+          // whose chunk was cited by any line → "cited" (with the citing lines);
+          // a read-but-uncited file → "not_used". Mirrors the staged path so the
+          // two file-ledger CSVs report "cited" the same way.
+          const chunkToLedgerIdx = new Map<string, number>();
+          fileLedger.forEach((rec, i) => { for (const cid of rec.chunkIds ?? []) if (!chunkToLedgerIdx.has(cid)) chunkToLedgerIdx.set(cid, i); });
+          for (const rec of fileLedger) { if (rec.readStatus === "read") rec.auditStatus = "not_used"; }
+          for (const row of rows) {
+            for (const cid of row.evidenceChunkIds) {
+              const idx = chunkToLedgerIdx.get(cid);
+              if (idx === undefined) continue;
+              const rec = fileLedger[idx];
+              rec.auditStatus = "cited";
+              rec.citedByLineIds = [...new Set([...(rec.citedByLineIds || []), row.gdRef])];
+            }
+          }
           const coverageNote = readFailedFiles.length
             ? `${readFailedFiles.length} of ${evidenceFiles.length} evidence file(s) could not be read (Drive errors) and were NOT assessed: ${readFailedFiles.slice(0, 5).join(", ")}${readFailedFiles.length > 5 ? ", …" : ""}. Results may be incomplete — fix access and re-run.`
             : undefined;
-          finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames, coverageNote);
+          finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames, coverageNote, fileLedger);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
         }
@@ -4847,6 +4895,42 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           truncationNotes.push(`[PARTIAL RUN] ${linesNotAssessed} checklist line(s) were NOT assessed (run stopped/skipped early, or their AI calls failed) — their previous status was left unchanged and no findings were raised for them.`);
         }
 
+        // Map staged APSR citations back to file records (mirrors the classic
+        // path): a file cited by any verdict dimension → "cited" with the
+        // dimensions it supported; a read-but-uncited file → "not_used". Without
+        // this the staged file-ledger CSV showed every file as uncited even when
+        // a line was Met/Deployed. Chunk→file index comes from the chunkIds each
+        // file record accumulated at read time.
+        const chunkToFileIndex = new Map<string, number>();
+        fileRecords.forEach((rec, i) => { for (const cid of rec.chunkIds ?? []) if (!chunkToFileIndex.has(cid)) chunkToFileIndex.set(cid, i); });
+        for (const rec of fileRecords) {
+          if (rec.readStatus === "read" || rec.readStatus === "condensed") rec.auditStatus = "not_used";
+        }
+        for (const v of stagedVerdicts) {
+          const dims: Array<["approach" | "processes" | "systemsOutcomes" | "review", { sourceChunkIds?: string[] }]> = [
+            ["approach", v.apsr.approach], ["processes", v.apsr.processes],
+            ["systemsOutcomes", v.apsr.systemsOutcomes], ["review", v.apsr.review],
+          ];
+          for (const [dimKey, dim] of dims) {
+            for (const chunkId of dim.sourceChunkIds ?? []) {
+              const fileIdx = chunkToFileIndex.get(chunkId);
+              if (fileIdx === undefined) continue;
+              const rec = fileRecords[fileIdx];
+              fileRecords[fileIdx] = {
+                ...rec,
+                auditStatus: "cited",
+                citedByLineIds: [...new Set([...(rec.citedByLineIds || []), v.lineId])],
+                usedForDimensions: {
+                  approach: (rec.usedForDimensions?.approach ?? false) || dimKey === "approach",
+                  processes: (rec.usedForDimensions?.processes ?? false) || dimKey === "processes",
+                  systemsOutcomes: (rec.usedForDimensions?.systemsOutcomes ?? false) || dimKey === "systemsOutcomes",
+                  review: (rec.usedForDimensions?.review ?? false) || dimKey === "review",
+                },
+              };
+            }
+          }
+        }
+
         // Stage 6: Write to Sub-Criterion Checklist — gated by the automation
         // mode. Every staged verdict becomes the same universal write shape
         // Option A uses (status + one audit evidence item), then the mode
@@ -5052,13 +5136,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           startedAt: new Date(auditStartedAt).toISOString(), endedAt: new Date().toISOString(),
           auditorName, auditLive: live, aiModel: auditUsage?.model,
           fileLedger: [...fileRecords],
-          aiSummary: stagedVerdicts.map((v) => ({
-            lineId: v.lineId, lineText: lines.find((l) => l.id === v.lineId)?.text ?? v.lineId,
-            result: v.status as "Met" | "Partial" | "Not met",
-            approachStatus: v.apsr.approach.status, processesStatus: v.apsr.processes.status,
-            systemsOutcomesStatus: v.apsr.systemsOutcomes.status, reviewStatus: v.apsr.review.status,
-            citedChunkIds: [], citedFileNames: [],
-          })),
+          aiSummary: stagedVerdicts.map((v) => {
+            // Real citation trail: union the chunk IDs each APSR dimension cited
+            // (incl. Review), dedupe, and resolve to file names — the same shape
+            // the classic path produces, so a Met/Deployed line carries its
+            // evidence trail instead of the previously hard-coded empty arrays.
+            const uniqueChunkIds = [...new Set([
+              ...(v.apsr.approach.sourceChunkIds ?? []),
+              ...(v.apsr.processes.sourceChunkIds ?? []),
+              ...(v.apsr.systemsOutcomes.sourceChunkIds ?? []),
+              ...(v.apsr.review.sourceChunkIds ?? []),
+            ])];
+            const citedFileNames = uniqueChunkIds.map((cid) => evidenceChunks.find((c) => c.chunkId === cid)?.fileName ?? cid);
+            return {
+              lineId: v.lineId, lineText: lines.find((l) => l.id === v.lineId)?.text ?? v.lineId,
+              result: v.status as "Met" | "Partial" | "Not met",
+              approachStatus: v.apsr.approach.status, processesStatus: v.apsr.processes.status,
+              systemsOutcomesStatus: v.apsr.systemsOutcomes.status, reviewStatus: v.apsr.review.status,
+              citedChunkIds: uniqueChunkIds, citedFileNames,
+            };
+          }),
           linesAssessed: stagedVerdicts.length, findingsDetected: counts["Not met"] as number,
           batchCount: 3, chunkCount: evidenceChunks.length,
         };

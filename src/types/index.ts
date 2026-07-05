@@ -895,6 +895,13 @@ export type EvidenceAssessmentResult = {
   // stored per-line results (no fresh AI calls); false/undefined for a
   // fresh evidence-tab assessment run.
   derivedFromAudit?: boolean;
+  // Short audit-run id, shared with the AI Review Log entry from this run.
+  runId?: string;
+  // Per-file ledger for this Option A evidence run, in the same AuditFileRecord
+  // shape the staged path uses, so the two paths' file-ledger CSVs line up.
+  // Undefined when the rows were derived from a prior staged audit (no fresh
+  // read happened here).
+  fileLedger?: AuditFileRecord[];
 };
 
 // Lightweight progress for the Evidence tab's fresh assessment run, so the
