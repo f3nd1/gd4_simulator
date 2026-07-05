@@ -162,7 +162,7 @@ export function Dashboard() {
     [checklistEntries, cycle.periodStart, cycle.periodEnd]
   );
 
-  // Mirrors the 5 numbered groups in nav.ts so the Dashboard guide and the
+  // Mirrors the 4 numbered groups in nav.ts so the Dashboard guide and the
   // sidebar always describe the same workflow stages — one source of truth.
   const totalItems = scored.items.length;
   const evidenceAttached = scored.items.filter((i) => i.ev.drive || i.checklistOverride).length;
@@ -174,22 +174,21 @@ export function Dashboard() {
     ? `${scored.gateFail.length === 0 ? "3/3" : `${3 - scored.gateFail.length}/3`} gate groups at Band 3+`
     : `${3 - scored.gateFail.length}/3 gate groups at Band 3+ — failing: ${scored.gateFail.map((g) => g.id).join(", ")}`;
 
-  // 5-step workflow (Batch 7 IA): 1 Setup · 2 Audit & Evidence · 3 Fieldwork ·
-  // 4 Findings & Review · 5 Close out (scoring now lives inside Close out).
+  // 4-step workflow (IA update): 1 Setup · 2 Audit & Evidence (Sampling and
+  // Interview now live here) · 3 Findings & Review · 4 Close out (scoring lives
+  // inside Close out).
   function stepProgress(step: number): { label: string; pct: number | null } {
     switch (step) {
       case 1:
         return { label: auditorsCount > 0 ? `${auditorsCount} auditor(s) added` : "No auditors added yet", pct: auditorsCount > 0 ? 100 : 0 };
       case 2:
         return {
-          label: `${evidenceAttached}/${totalItems} items have evidence · ${itemsScored}/${totalItems} scored`,
+          label: `${evidenceAttached}/${totalItems} items have evidence · ${itemsScored}/${totalItems} scored${samplesRecorded > 0 ? ` · ${samplesRecorded} sample(s)` : ""}`,
           pct: totalItems ? Math.round(((evidenceAttached + itemsScored) / (totalItems * 2)) * 100) : 0,
         };
       case 3:
-        return { label: samplesRecorded > 0 ? `${samplesRecorded} sample(s) recorded` : "Not started yet", pct: samplesRecorded > 0 ? 100 : 0 };
-      case 4:
         return { label: findings.length ? `${findingsClosed}/${findings.length} findings closed` : "No findings raised yet", pct: findings.length ? Math.round((findingsClosed / findings.length) * 100) : null };
-      case 5:
+      case 4:
         return { label: finalisationReady ? `Gate: ${gateGroupsSummary} · Ready to finalise` : `Gate: ${gateGroupsSummary} · Blocked on gate / open AFIs`, pct: finalisationReady ? 100 : 0 };
       default:
         return { label: "", pct: null };

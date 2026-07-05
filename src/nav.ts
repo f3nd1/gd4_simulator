@@ -1,9 +1,11 @@
 export type NavItem = { path: string; label: string; hint: string };
 export type NavGroup = { group: string; step?: number; hint?: string; items: NavItem[] };
 
-// IA overhaul (Batch 7): 5 numbered workflow stages that mirror the actual
-// audit journey (Setup → Audit & Evidence → Fieldwork → Findings & Review →
-// Close out), with diagnostic/log pages moved behind the developer-tools
+// IA overhaul (Batch 7): 4 numbered workflow stages that mirror the actual
+// audit journey (Setup → Audit & Evidence → Findings & Review → Close out).
+// Sampling and Interview (formerly a standalone "Fieldwork" stage) now live
+// inside Audit & Evidence, since they are how the evidence is tested.
+// Diagnostic/log pages are moved behind the developer-tools
 // toggle (see DEVELOPER_TOOL_PATHS). Every route still exists — nothing was
 // deleted — but a real user with dev tools off sees a ~19-item sidebar
 // instead of 34. Each numbered group matches the Dashboard's
@@ -40,20 +42,13 @@ export const NAV: NavGroup[] = [
       { path: "/sub-checklist", label: "Sub-Criterion Checklist", hint: "Source of truth for scoring — break each item into testable lines and attach evidence" },
       { path: "/ppd-review", label: "PPD Requirements Review", hint: "Advanced (Option A, PPD-first): does the PPD document each GD4 requirement line, then a combined PPD-plus-evidence verdict with a compile-to-findings action" },
       { path: "/evidence-matrix", label: "Evidence Matrix", hint: "Superseded quick-rating view — the Sub-Criterion Checklist is the real scoring surface" },
+      { path: "/sampling", label: "Sampling", hint: "Risk-based sample sizes per item — pick samples to test the evidence" },
+      { path: "/interview", label: "Interview", hint: "Interview question simulator — prepare questions to test the evidence" },
     ],
   },
   {
-    group: "3 · Fieldwork",
+    group: "3 · Findings & Review",
     step: 3,
-    hint: "Pick samples and prepare interview questions to test the evidence.",
-    items: [
-      { path: "/sampling", label: "Sampling", hint: "Risk-based sample sizes per item" },
-      { path: "/interview", label: "Interview", hint: "Interview question simulator" },
-    ],
-  },
-  {
-    group: "4 · Findings & Review",
-    step: 4,
     hint: "Raise findings, review them, and decide closures with evidence.",
     items: [
       { path: "/findings", label: "Findings", hint: "Raise and track AFIs / quality actions" },
@@ -66,8 +61,8 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
-    group: "5 · Close out",
-    step: 5,
+    group: "4 · Close out",
+    step: 4,
     hint: "Score, report, sign off, finalise and export — follow the stepper across these pages in order.",
     items: [
       { path: "/scorecard", label: "Criterion Scorecard", hint: "Official band per item, criterion and overall — closeout step 1" },
