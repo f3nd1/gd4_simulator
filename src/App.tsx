@@ -9,7 +9,6 @@ import { EvidenceFolder } from "./pages/EvidenceFolder";
 import { StartAudit } from "./pages/StartAudit";
 import { GD4ScoringSetup } from "./pages/GD4ScoringSetup";
 import { GD4Library } from "./pages/GD4Library";
-import { EvidenceMatrix } from "./pages/EvidenceMatrix";
 import { EvidenceIntelligence } from "./pages/EvidenceIntelligence";
 import { CriterionScorecard } from "./pages/CriterionScorecard";
 import { RubricBanding } from "./pages/RubricBanding";
@@ -22,7 +21,6 @@ import { PPDReview } from "./pages/PPDReview";
 import { AIReview } from "./pages/AIReview";
 import { HumanDecisionLog } from "./pages/HumanDecisionLog";
 import { AIDebugLog } from "./pages/AIDebugLog";
-import { HumanReview } from "./pages/HumanReview";
 import { ManagementReview } from "./pages/ManagementReview";
 import { Finalisation } from "./pages/Finalisation";
 import { ExportCentre } from "./pages/ExportCentre";
@@ -67,8 +65,6 @@ export default function App() {
             <Route path="/ai-review" element={<AIReview />} />
             <Route path="/human-decision-log" element={<HumanDecisionLog />} />
             <Route path="/ai-debug" element={<AIDebugLog />} />
-            <Route path="/human-review" element={<HumanReview />} />
-            <Route path="/evidence-matrix" element={<EvidenceMatrix />} />
             <Route path="/ai-calibration" element={<AICalibration />} />
           </Route>
           {/* Version History merged into Draft Workspace; keep the old path working. */}

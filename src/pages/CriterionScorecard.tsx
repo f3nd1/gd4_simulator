@@ -32,6 +32,7 @@ export function CriterionScorecard() {
   const setReviewerScore = useWorkspaceStore((s) => s.setReviewerScore);
   const setJustify = useWorkspaceStore((s) => s.setJustify);
   const confirmScore = useWorkspaceStore((s) => s.confirmScore);
+  const clearReviewerOverride = useWorkspaceStore((s) => s.clearReviewerOverride);
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
   const [feedbackTarget, setFeedbackTarget] = useState<{ id: string; aiOutput: string } | null>(null);
@@ -146,6 +147,15 @@ export function CriterionScorecard() {
                       onChange={(e) => setReviewerScore(it.id, Number(e.target.value))}
                       style={{ ...inputStyle, width: 64, padding: "4px 6px" }}
                     />
+                    {reviewer[it.id] != null && (
+                      <button
+                        onClick={() => clearReviewerOverride(it.id)}
+                        title="Reset reviewer score and justification back to the AI value"
+                        style={{ display: "block", marginTop: 4, fontSize: 10.5, color: "#94a3b8", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}
+                      >
+                        Reset override
+                      </button>
+                    )}
                   </td>
                   <td>{it.conf != null ? <b>{it.conf}</b> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
                   <td>

@@ -47,9 +47,9 @@ export function getBand(score: number): Band {
 }
 
 // Single source of truth for "does this reviewer override need a written
-// justification" — previously duplicated independently in CriterionScorecard
-// and HumanReview, and not enforced at all in the store's confirmScore
-// action, which let a score be confirmed with no justification text.
+// justification" — used by the Criterion Scorecard and enforced in the
+// store's confirmScore action so a score can't be confirmed without the
+// required justification text.
 export function needsJustification(ais: number, reviewerValue: number, gate: boolean): boolean {
   const diff = Math.abs(reviewerValue - ais);
   // Gate-sensitive items need a written reason for ANY override (up or down) —

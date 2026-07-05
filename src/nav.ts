@@ -41,7 +41,6 @@ export const NAV: NavGroup[] = [
       { path: "/evidence-folder", label: "Evidence Folder", hint: "Link folders and run audits per sub-criterion — the main audit surface" },
       { path: "/sub-checklist", label: "Sub-Criterion Checklist", hint: "Source of truth for scoring — break each item into testable lines and attach evidence" },
       { path: "/ppd-review", label: "PPD Requirements Review", hint: "Advanced (Option A, PPD-first): does the PPD document each GD4 requirement line, then a combined PPD-plus-evidence verdict with a compile-to-findings action" },
-      { path: "/evidence-matrix", label: "Evidence Matrix", hint: "Superseded quick-rating view — the Sub-Criterion Checklist is the real scoring surface" },
       { path: "/sampling", label: "Sampling", hint: "Risk-based sample sizes per item — pick samples to test the evidence" },
       { path: "/interview", label: "Interview", hint: "Interview question simulator — prepare questions to test the evidence" },
     ],
@@ -56,7 +55,6 @@ export const NAV: NavGroup[] = [
       { path: "/ai-review", label: "AI Review Log", hint: "Log of every AI review run, live or simulated" },
       { path: "/ai-debug", label: "AI Debug Log", hint: "Log of every buildSystemPrompt() call with module and the full prompt block (in-memory, cleared on reload)" },
       { path: "/human-decision-log", label: "Human Decision Log", hint: "Audit trail of every human override or acceptance of an AI output" },
-      { path: "/human-review", label: "Human Review / Override", hint: "Confirm or override a band, with justification" },
     ],
   },
   {
@@ -99,8 +97,6 @@ export const DEVELOPER_TOOL_PATHS = [
   "/ai-review",
   "/ai-debug",
   "/human-decision-log",
-  "/human-review",
-  "/evidence-matrix",
   // Measurement/benchmark tooling (Benchmark + Consistency + A vs B tabs) —
   // an advanced feature, gated with the other diagnostic surfaces.
   "/ai-calibration",

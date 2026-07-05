@@ -59,10 +59,6 @@ const DETAILS: Record<string, Detail> = {
     what: "The source of truth for scoring. Each item is broken into testable Layer 2 lines with evidence attached and a maturity (Layer 1) check.",
     how: "Generate lines (AI or manual), attach evidence, mark each Met / Partial / Not met. The coverage % and maturity ceiling produce the band that feeds the overall score.",
   },
-  "/evidence-matrix": {
-    what: "A quick first-draft four-limb rating per item (Approach / Processes / Systems & Outcomes / Review).",
-    how: "Use only for a rough early read. Without a Drive evidence link it is capped at Band 1 — the checklist is the real scoring path.",
-  },
   "/scorecard": {
     what: "The official band per item, per criterion and overall.",
     how: "Review the resulting bands; justify or override where needed.",
@@ -102,10 +98,6 @@ const DETAILS: Record<string, Detail> = {
   "/human-decision-log": {
     what: "An audit trail of every human override or acceptance of an AI output.",
     how: "Nothing to fill in — it records decisions automatically as you accept or edit AI results.",
-  },
-  "/human-review": {
-    what: "Confirm or override a band, with a written justification.",
-    how: "A human signs off the AI/auto result; large overrides require justification.",
   },
   "/final-report": {
     what: "The consolidated report: EduTrust attainment ladder, overall + per-item banding, strengths, gaps, how to reach a higher band, the findings register with root cause/closure, and charts.",
