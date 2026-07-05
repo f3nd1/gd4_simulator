@@ -35,7 +35,21 @@ const MODAL_KEYFRAMES = `
   0%   { background-position: -300% 0; }
   100% { background-position: 300% 0; }
 }
+@keyframes ef-spin {
+  to { transform: rotate(360deg); }
+}
 `;
+
+// Small inline spinner for lightweight "working…" states (e.g. the pre-flight
+// folder check), so an in-progress action never looks frozen.
+function Spinner({ size = 14, color = "#64748b" }: { size?: number; color?: string }) {
+  return (
+    <span
+      aria-hidden
+      style={{ display: "inline-block", width: size, height: size, flexShrink: 0, border: `2px solid ${color}33`, borderTopColor: color, borderRadius: "50%", animation: "ef-spin 0.7s linear infinite" }}
+    />
+  );
+}
 
 const VISUAL_STEPS = [
   { emoji: "🔌", label: "Connect" },
@@ -1082,6 +1096,7 @@ function AuditProgressModal({
   onSkipStage,
   onExportFileLedger,
   onExportAISummary,
+  onViewResults,
 }: {
   progress: AuditProgressState;
   onClose: () => void;
@@ -1090,6 +1105,10 @@ function AuditProgressModal({
   onSkipStage: () => void;
   onExportFileLedger: () => void;
   onExportAISummary: () => void;
+  // Opens the saved result in its review MODAL (Option A review modal / Option B
+  // audit-run modal) instead of navigating to a separate page. Optional — falls
+  // back to page navigation if a caller doesn't provide it.
+  onViewResults?: () => void;
 }) {
   const pct = stageProgress(progress);
   const isError = progress.stage === "error";
@@ -1315,12 +1334,21 @@ function AuditProgressModal({
         {(isDone || isError) && (
           <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
             {isDone && (
-              <Link
-                to={viewResultsHref}
-                style={{ flex: 1, cursor: "pointer", padding: "10px", borderRadius: 10, border: "none", background: "#dcfce7", color: "#15803d", fontWeight: 700, fontSize: 13, textAlign: "center", textDecoration: "none", display: "block" }}
-              >
-                View results →
-              </Link>
+              onViewResults ? (
+                <button
+                  onClick={onViewResults}
+                  style={{ flex: 1, cursor: "pointer", padding: "10px", borderRadius: 10, border: "none", background: "#dcfce7", color: "#15803d", fontWeight: 700, fontSize: 13, textAlign: "center" }}
+                >
+                  View results →
+                </button>
+              ) : (
+                <Link
+                  to={viewResultsHref}
+                  style={{ flex: 1, cursor: "pointer", padding: "10px", borderRadius: 10, border: "none", background: "#dcfce7", color: "#15803d", fontWeight: 700, fontSize: 13, textAlign: "center", textDecoration: "none", display: "block" }}
+                >
+                  View results →
+                </Link>
+              )
             )}
             {isError && (
               <button
@@ -1538,7 +1566,7 @@ function OptionAReviewModal({ subCriterionId, onClose }: { subCriterionId: strin
 // subfolders, unreadable files) that would otherwise silently corrupt a run.
 function FolderProbePanel({ result, onClose }: { result: FolderProbeResult; onClose: () => void }) {
   return (
-    <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "9px 12px", fontSize: 12 }}>
+    <div style={{ background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "9px 12px", fontSize: 12, maxWidth: "100%", minWidth: 0, boxSizing: "border-box", overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
         <span style={{ fontSize: 10.5, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.4 }}>🔎 Folder pre-flight — no AI used</span>
         {result.ok && <span style={{ color: "#64748b" }}>{result.files.length} file{result.files.length === 1 ? "" : "s"} · {result.policyCount} policy · {result.evidenceCount} evidence{result.unreadable.length ? ` · ${result.unreadable.length} unreadable` : ""}</span>}
@@ -1558,14 +1586,33 @@ function FolderProbePanel({ result, onClose }: { result: FolderProbeResult; onCl
             <div style={{ color: "#15803d", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, padding: "6px 10px", marginBottom: 8 }}>✓ No problems found — every file is readable and bucketed. Safe to audit.</div>
           ) : null}
           {result.files.length > 0 && (
-            <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6 }}>
-              {result.files.map((file, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 9px", borderTop: i ? "1px solid #f1f5f9" : "none", fontSize: 11.5 }}>
-                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: file.readable ? "#1e293b" : "#b91c1c" }} title={file.path}>{file.readable ? "" : "⚠ "}{file.path}</span>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: file.bucket === "policy" ? "#5b21b6" : "#b45309", background: file.bucket === "policy" ? "#faf5ff" : "#fffbeb", border: "1px solid", borderColor: file.bucket === "policy" ? "#ddd6fe" : "#fde68a", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>{file.bucket}</span>
-                  {!file.readable && <span title={file.readError} style={{ fontSize: 10, color: "#b91c1c", whiteSpace: "nowrap" }}>unreadable</span>}
-                </div>
-              ))}
+            <div style={{ maxHeight: 200, overflowY: "auto", overflowX: "hidden", border: "1px solid #e2e8f0", borderRadius: 6 }}>
+              {result.files.map((file, i) => {
+                const driveUrl = file.driveFileId ? `https://drive.google.com/file/d/${file.driveFileId}/view` : undefined;
+                // minWidth:0 lets the filename ellipsis actually engage inside the
+                // flex row instead of a long path forcing the whole panel wider.
+                const nameStyle: React.CSSProperties = { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: file.readable ? "#1e293b" : "#b91c1c" };
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 9px", borderTop: i ? "1px solid #f1f5f9" : "none", fontSize: 11.5, minWidth: 0 }}>
+                    {driveUrl ? (
+                      <a
+                        href={driveUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        title={`Open in Google Drive — ${file.path}${file.readable ? "" : ` (unreadable: ${file.readError ?? "no extractable text"})`}`}
+                        style={{ ...nameStyle, textDecoration: "none" }}
+                      >
+                        {file.readable ? "" : "⚠ "}{file.path} ↗
+                      </a>
+                    ) : (
+                      <span style={nameStyle} title={file.path}>{file.readable ? "" : "⚠ "}{file.path}</span>
+                    )}
+                    <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 700, color: file.bucket === "policy" ? "#5b21b6" : "#b45309", background: file.bucket === "policy" ? "#faf5ff" : "#fffbeb", border: "1px solid", borderColor: file.bucket === "policy" ? "#ddd6fe" : "#fde68a", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>{file.bucket}</span>
+                    {!file.readable && <span title={file.readError} style={{ flexShrink: 0, fontSize: 10, color: "#b91c1c", whiteSpace: "nowrap" }}>unreadable</span>}
+                  </div>
+                );
+              })}
             </div>
           )}
         </>
@@ -2128,6 +2175,16 @@ export function EvidenceFolder() {
         onSkipStage={skipCurrentAuditStage}
         onExportFileLedger={handleExportFileLedger}
         onExportAISummary={handleExportAISummary}
+        onViewResults={() => {
+          // Open the saved result in its review modal (Option A review modal /
+          // Option B audit-run modal) instead of navigating to a separate page.
+          const scid = auditProgress.subCriterionId ?? "";
+          const isA = resolveAnalysisPath(analysisPath, scid) === "A";
+          clearAuditProgress();
+          if (isA) { setOptionAModal(scid); return; }
+          const rec = lastAuditRuns[auditProgress.folderId];
+          if (rec) setViewingRun(rec);
+        }}
       />
     )}
     {viewingRun && (
@@ -2761,8 +2818,17 @@ export function EvidenceFolder() {
 
               </div>{/* /right column */}
               {/* Pre-flight probe results (zero AI calls) — shown whenever a
-                  probe has run for this row, regardless of expand state. */}
-              {probeResults[f.id] && (
+                  probe has run for this row, regardless of expand state. While
+                  the probe is still running (busy = "probe:*:<id>"), show a
+                  loading panel so the check never looks frozen. */}
+              {busy?.startsWith("probe:") && busy.endsWith(f.id) ? (
+                <div style={{ padding: "0 12px 8px 30px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#475569", maxWidth: "100%", boxSizing: "border-box" }}>
+                    <Spinner />
+                    <span>Checking folder… listing files and testing each is readable (no AI used).</span>
+                  </div>
+                </div>
+              ) : probeResults[f.id] && (
                 <div style={{ padding: "0 12px 8px 30px" }}>
                   <FolderProbePanel result={probeResults[f.id]} onClose={() => setProbeResults((m) => { const n = { ...m }; delete n[f.id]; return n; })} />
                 </div>
@@ -2835,16 +2901,27 @@ export function EvidenceFolder() {
                           {expanded[f.id] ? "Show less" : "Show full result"}
                         </button>
                       )}
-                      <Link
-                        to={
-                          path === "A"
-                            ? `/ppd-review?item=${f.subCriterionId}`
-                            : `/sub-checklist?item=${firstItemId ?? ""}`
-                        }
-                        style={{ fontSize: 11, color: "#2563eb", textDecoration: "none", whiteSpace: "nowrap" }}
-                      >
-                        View results →
-                      </Link>
+                      {/* Open the saved result in its review MODAL (A → review
+                          modal, B → audit-run modal) — the same modals the
+                          per-row "View results" button uses. Falls back to page
+                          navigation only if the modal's data isn't available. */}
+                      {(path === "A" || !!lastRun) ? (
+                        <button
+                          onClick={() => (path === "A" ? setOptionAModal(f.subCriterionId) : setViewingRun(lastRun!))}
+                          style={{ cursor: "pointer", border: "none", background: "transparent", fontSize: 11, color: "#2563eb", whiteSpace: "nowrap", padding: 0 }}
+                        >
+                          View results →
+                        </button>
+                      ) : (
+                        // Reached only for Option B with no stored run record — keep the
+                        // existing page navigation as a safe fallback.
+                        <Link
+                          to={`/sub-checklist?item=${firstItemId ?? ""}`}
+                          style={{ fontSize: 11, color: "#2563eb", textDecoration: "none", whiteSpace: "nowrap" }}
+                        >
+                          View results →
+                        </Link>
+                      )}
                     </div>
                   </div>
                 </div>

@@ -91,7 +91,7 @@ export function classifyFileBucket(path: string): "policy" | "evidence" {
   return /polic|procedure/.test(topSegment) ? "policy" : "evidence";
 }
 
-export type ProbeFile = { name: string; path: string; bucket: "policy" | "evidence"; readable: boolean; readError?: string };
+export type ProbeFile = { name: string; path: string; bucket: "policy" | "evidence"; readable: boolean; readError?: string; driveFileId?: string };
 
 export type FolderProbeResult = {
   ok: boolean;             // false when the folder itself could not be listed

@@ -2823,7 +2823,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }
           const probeFiles: ProbeFile[] = [];
           for (const f of listed) {
-            if (IMAGE_MIME_TYPES.has(f.mimeType)) { probeFiles.push({ name: f.path.split("/").pop() || f.path, path: f.path, bucket: classifyFileBucket(f.path), readable: true }); continue; }
+            if (IMAGE_MIME_TYPES.has(f.mimeType)) { probeFiles.push({ name: f.path.split("/").pop() || f.path, path: f.path, bucket: classifyFileBucket(f.path), readable: true, driveFileId: f.id }); continue; }
             const cacheKey = `${f.id}:${f.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
             let readable = true; let readError: string | undefined;
@@ -2848,7 +2848,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 readError = classifyDriveReadError(err instanceof Error ? err.message : String(err)).detail || (err instanceof Error ? err.message : String(err));
               }
             }
-            probeFiles.push({ name: f.path.split("/").pop() || f.path, path: f.path, bucket: classifyFileBucket(f.path), readable, readError });
+            probeFiles.push({ name: f.path.split("/").pop() || f.path, path: f.path, bucket: classifyFileBucket(f.path), readable, readError, driveFileId: f.id });
           }
           return analyzeFolderProbe(probeFiles, sharedFolder);
         } finally {
