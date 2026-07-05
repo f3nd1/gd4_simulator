@@ -1,5 +1,4 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import type { AIReviewLogEntry, AuditFileRecord } from "../types";
 import { Card, inputStyle } from "../components/ui/Card";
@@ -153,8 +152,8 @@ export function AIReview() {
 
   // File ledgers keyed by runId, from BOTH run types — Option B staged audits
   // (auditRunHistory / lastAuditRuns) and Option A evidence runs
-  // (evidenceAssessments). Used for the "View file ledger" link AND the per-run
-  // read-method/cache summary badge on each log entry.
+  // (evidenceAssessments). Drives the inline "Files read this run" table on the
+  // Output tab AND the per-run read-method/cache summary badge on each log entry.
   const auditRunHistory = useWorkspaceStore((s) => s.auditRunHistory);
   const lastAuditRuns = useWorkspaceStore((s) => s.lastAuditRuns);
   const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
@@ -165,7 +164,6 @@ export function AIReview() {
     for (const ev of Object.values(evidenceAssessments)) if (ev.runId && ev.fileLedger?.length && !m.has(ev.runId)) m.set(ev.runId, ev.fileLedger);
     return m;
   }, [auditRunHistory, lastAuditRuns, evidenceAssessments]);
-  const ledgerRunIds = ledgerByRunId;
 
   // Date-scoped log: the calculator AND the rows both work off this, so the
   // totals shown always match the selected period.
@@ -446,16 +444,10 @@ export function AIReview() {
                             </button>
                           );
                         })}
-                        {e.runId && ledgerRunIds.has(e.runId) && (
-                          <Link
-                            to={`/evidence-folder?run=${encodeURIComponent(e.runId)}`}
-                            onClick={(ev) => ev.stopPropagation()}
-                            title="Open this run's File Ledger to see exactly what text was read/transcribed from each evidence file"
-                            style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: "#4338ca", textDecoration: "none", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 5, padding: "3px 10px" }}
-                          >
-                            📄 View file ledger (what was read) →
-                          </Link>
-                        )}
+                        {/* The separate "View file ledger" deep-link was removed:
+                            the full per-file detail is rendered inline below on the
+                            Output tab ("Files read this run"), so the link was
+                            redundant. */}
                       </div>
                       <div style={{ whiteSpace: "pre-wrap", fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>
                         {(expandedTab[e.id] ?? "output") === "output"
