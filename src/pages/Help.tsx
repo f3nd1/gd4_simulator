@@ -107,10 +107,6 @@ const DETAILS: Record<string, Detail> = {
     what: "Confirm or override a band, with a written justification.",
     how: "A human signs off the AI/auto result; large overrides require justification.",
   },
-  "/re-audit": {
-    what: "Re-check items that were below band or had closed findings.",
-    how: "Run after rectification to confirm the band has moved.",
-  },
   "/final-report": {
     what: "The consolidated report: EduTrust attainment ladder, overall + per-item banding, strengths, gaps, how to reach a higher band, the findings register with root cause/closure, and charts.",
     how: "Review it, optionally 'Generate AI summary', then 'Print / Save as PDF' for a clean report-only document.",

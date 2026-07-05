@@ -23,7 +23,6 @@ import { AIReview } from "./pages/AIReview";
 import { HumanDecisionLog } from "./pages/HumanDecisionLog";
 import { AIDebugLog } from "./pages/AIDebugLog";
 import { HumanReview } from "./pages/HumanReview";
-import { ReAudit } from "./pages/ReAudit";
 import { ManagementReview } from "./pages/ManagementReview";
 import { Finalisation } from "./pages/Finalisation";
 import { ExportCentre } from "./pages/ExportCentre";
@@ -61,7 +60,6 @@ export default function App() {
           <Route path="/findings" element={<Findings />} />
           <Route path="/afi-closure" element={<AFIClosure />} />
           <Route path="/ppd-review" element={<PPDReview />} />
-          <Route path="/re-audit" element={<ReAudit />} />
           {/* Diagnostic / superseded surfaces — inaccessible when developer
               tools are hidden in Settings (see DEVELOPER_TOOL_PATHS). The
               ChangeLog page keeps its own in-page guard for back-compat. */}

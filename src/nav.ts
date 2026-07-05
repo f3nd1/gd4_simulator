@@ -53,7 +53,6 @@ export const NAV: NavGroup[] = [
     items: [
       { path: "/findings", label: "Findings", hint: "Raise and track AFIs / quality actions" },
       { path: "/afi-closure", label: "Quality Action / AFI", hint: "Decide whether a finding can be closed, then confirm its effectiveness" },
-      { path: "/re-audit", label: "Re-audit and Re-score", hint: "Re-check items that were below band or had closed findings" },
       { path: "/ai-review", label: "AI Review Log", hint: "Log of every AI review run, live or simulated" },
       { path: "/ai-debug", label: "AI Debug Log", hint: "Log of every buildSystemPrompt() call with module and the full prompt block (in-memory, cleared on reload)" },
       { path: "/human-decision-log", label: "Human Decision Log", hint: "Audit trail of every human override or acceptance of an AI output" },
