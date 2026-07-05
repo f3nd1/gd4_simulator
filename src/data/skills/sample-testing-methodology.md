@@ -27,8 +27,10 @@ An auditor who reviews all records finds no time to audit anything else. An audi
 
 ## Calling out insufficient coverage in evidence
 
-If the institution provides only 1–3 examples as evidence for a requirement covering hundreds of students or multiple years, name that as insufficient:
+If the institution provides only 1–3 examples as evidence for a **high-volume** requirement — one covering hundreds of students or the full multi-year cycle (student contracts, fee/FPS records, attendance, refunds, staff appraisals) — name that as insufficient:
 "The institution provided 2 sample counselling forms as evidence. With an intake of [N] students, a sample of 2 (< 1%) is not sufficient to conclude that the process was applied consistently across the cohort. A minimum of [recommended N] files should be reviewed."
+
+**Do not apply this to genuinely low-frequency or event-driven requirements.** Where the activity is rare and the SSG list asks for only 1–3 samples "where available" — external-communication/marketing vetting (2.2.1–2.2.2), transfers/deferments/withdrawals (4.3.1), appeals (5.5.1), agent appointments for a PEI with few agents (3.1.1) — a small set of genuine records covering the events that occurred is sufficient coverage, not a gap. Match the sample expectation to the real population size.
 
 ## Response rate sufficiency for surveys/outcome data
 

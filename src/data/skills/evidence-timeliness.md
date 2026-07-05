@@ -4,7 +4,7 @@ A document that exists is not the same as a document that was in place during th
 
 ## The review period
 
-GD4 EduTrust assessments cover the **certification cycle** (typically 4 years, or the Provisional period). Evidence must span the full cycle, not just the most recent semester. A policy dated 3 months before the audit that purports to have governed the institution for 4 years is a timeliness finding.
+GD4 EduTrust assessments cover the **certification cycle** (typically 4 years, or the Provisional period). Evidence must span the full cycle, not just the most recent semester — **for recurring and high-volume processes** (attendance, fee collection, contracts, feedback logs, management/academic review, appraisals). For inherently low-frequency or event-driven activities (a course transfer, a withdrawal, a marketing vetting, an appeal), "full cycle" means the evidence covers the events that actually occurred — a genuine record per event, not a record in every month. Do not treat a small number of event-driven records as a timeliness gap when few such events happened. A policy dated 3 months before the audit that purports to have governed the institution for 4 years is a timeliness finding.
 
 ## Red flags — document dating
 

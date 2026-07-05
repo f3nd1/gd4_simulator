@@ -32,5 +32,12 @@ Agent management is a data-rich area, and the higher bands depend on whether the
 
 In notes: "Agent appointment records exist but there is no analysis of withdrawal or complaint rates by agent across intakes, so the institution cannot detect a failing agent before harm occurs — this is the gap limiting the band."
 
+## Expected evidence per sub-criterion (SSG floor — recognise these as valid)
+
+- **3.1.1 Selection & Appointment:** agent selection/due-diligence records and signed agent agreements (SSG asks for 3 different agents "where available") plus an up-to-date agent list. Agent numbers are usually small — records covering the agents actually appointed is sufficient; do not demand a large volume. Every appointed agent should nonetheless have an agreement (compare against the intake records).
+- **3.2.1 Management & Evaluation:** correspondence records with agents (past year to present), agent briefing/training materials and training records, and agent monitoring/evaluation records (3 different agents where available). Recognise briefing decks, correspondence and evaluation scorecards as valid deployment evidence.
+
+Low population is expected here — scope coverage to the agents in use — but if no agents are used the criterion may be Not Applicable (verify against intake records). SSG floor, not a ceiling.
+
 ## Calibration
 If the PEI uses no external agents, the criterion may be Not Applicable — but verify that claim against intake records rather than accepting it. Where agents are used, Band 4+ needs evidence the *evaluation cycle changed agent behaviour or the agent roster* — monitoring **data analysed into a decision**, not just filed scorecards.

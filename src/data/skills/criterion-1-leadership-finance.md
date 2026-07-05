@@ -32,5 +32,13 @@ The single clearest separator between a Band 3 and a Band 4–5 institution here
 
 In the finding's note, where the data exists but isn't analysed, say so specifically: "Monthly accounts are filed but there is no trend or variance analysis presented to the board, so leadership cannot anticipate financial risk — this caps the Review dimension and the band."
 
+## Expected evidence per sub-criterion (SSG floor — recognise these as valid)
+
+Recognise the record types SSG asks for; they are the minimum that counts, not a closed list.
+- **1.1.1 Leadership & Corporate Governance:** management-meeting minutes (past year to present — these should be regular, not a single meeting); records of setting/reviewing vision, mission & values and communicating them to stakeholders; governance-structure, financial-control and community-involvement records; the current and preceding year's financial statements. Management-meeting minutes and financial monitoring are recurring — expect a run across the year, not one document dated near the audit.
+- **1.2.1 Strategic Planning:** the current and preceding year's strategic plan, unit/department work plans, risk-management plan, business-continuity plan, financial/budget plan and resource plans, plus strategic-planning meeting minutes. These are annual artifacts — the current + preceding set is the expected evidence, so do not down-rate strategic/risk/BCP/budget plans for being "only one or two documents"; judge their quality, linkage and review instead.
+
+SSG floor, not a ceiling — accept other genuine records too.
+
 ## Calibration
 Strong vision statements and glossy strategy decks are common and prove nothing. Band 4+ requires the governance/financial *cycle* to have produced a documented decision or correction driven by **analysis of the institution's own data** — a board that read a trend, drew an insight, decided, acted, and saw the result. Pure documentation, or data collected but never analysed, caps at Band 3.

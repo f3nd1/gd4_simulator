@@ -41,5 +41,18 @@ Academic quality is where **learning analytics** most clearly distinguishes the 
 
 In notes: "Module results are recorded but there is no grade-trend or item analysis presented to the Academic Board, so the institution is not using assessment data to improve teaching — this caps Systems & Outcomes and Review."
 
+## Expected evidence per sub-criterion (SSG floor — recognise these as valid)
+
+SSG asks for a full document set for 3 sample courses (start to end). Recognise these record types:
+- **5.1.1 Course Design & Development:** course design/development documents.
+- **5.1.2 Course Review:** course review records (periodic, data-informed).
+- **5.2.1 Course Planning:** course planning documents, transition plans for new/revised programmes, list of academic resources.
+- **5.2.2 Course Delivery:** course/module/lesson learning outcomes, and course delivery & monitoring records.
+- **5.3.1 Partnerships:** partnership contracts and partner selection/management/evaluation records (conditional — Not Applicable if there are no academic partners).
+- **5.4.1 Student Learning:** academic progress reports and academic intervention records (3 samples per key course; interventions "if applicable").
+- **5.5.1 Student Assessment:** assessment plan, assessment planning records, post-assessment analysis & review, and moderation & appeal records ("since last assessment, where applicable"). Recognise moderation records and appeal records as valid — appeals are event-driven, so a small number (or none, where none arose) is acceptable, but keep moderation and Examination-Board ratification strict.
+
+SSG floor, not a ceiling — accept other genuine records too.
+
 ## Calibration
 Band 4+ requires the academic *review cycle* to have changed a course, an assessment or a teaching approach based on **analysis of results, item-level data and feedback** — pedagogy that demonstrably improved, not just policies on file or marks on a sheet.

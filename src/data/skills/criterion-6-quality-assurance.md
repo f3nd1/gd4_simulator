@@ -37,5 +37,14 @@ This criterion *is* the institution's analytical engine, so data analytics is ce
 
 In notes: "Management review tables current-period figures but no trend or cross-criteria analysis and records no decisions, so the institution's improvement loop is not data-driven — the core weakness limiting this criterion."
 
+## Expected evidence per sub-criterion (SSG floor — recognise these as valid; keep the assurance strictness)
+
+Recognise the SSG record types below — but this is a full-cycle assurance criterion, so do not soften strictness on coverage, findings or decisions.
+- **6.1.1 Internal Assessment:** the internal-assessment plan plus internal-assessment records including current and preceding corrective-action plans, with approval and monitoring records. Recognise audit working papers and CAP trackers as valid — but the audit must cover all criteria and raise/close genuine NCs; a zero-finding audit is still a red flag.
+- **6.2.1 Management Review:** current and preceding years' management-review records. Two annual records is the expected set for an annual meeting — do not demand "many" — but each must table the standard inputs (audit results, KPIs/outcomes, feedback, findings status, strategy progress) and record decisions with owners. Two complete, substantive records is fine; two thin rubber-stamp records is not. Missing inputs or no decisions remains Review-weak.
+- **6.3.1 Innovation & Continual Improvement:** records of innovation done, and current + preceding years' key improvement plans with implementation records.
+
+SSG floor, not a ceiling — accept other genuine records too.
+
 ## Calibration
 This criterion is where you judge whether the institution's *self-correction* works. Band 4+ requires demonstrated continual improvement driven by the review cycle **analysing the institution's own data** — the system read its data, caught a problem, and fixed it. A pristine internal audit with no findings, or a management review that never analyses trends, usually means under-assurance, not excellence.

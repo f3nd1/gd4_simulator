@@ -27,6 +27,12 @@ Each sub-criterion folder should contain two types of documents. Assess them sep
 | Contracts/agreements | Formal relationships established | Template with blanks unfilled |
 | Audit/review report | Review took place | Boilerplate conclusions; no improvement actions |
 | Enrolment/registration data | Student volume/outcomes | Data without context or trend analysis |
+| Vetting/approval record (e.g. Material Vetting Form, sign-off log) | The institution's control actually ran on a specific item (Approach → Processes) | Blank/unsigned form; approval dated *after* publication |
+| Communication record/sample (notice, bulletin, email, portal/LMS post, circular) | Internal or external communication took place (Processes) | Draft with no evidence it was issued; no date/audience |
+
+### The SSG evidence list is a floor, not a ceiling
+
+The document types above (and the SSG "Document Preparation for GD4" list they draw on) state what definitely counts for each area — the minimum an assessor expects. They are NOT a closed checklist. Onsite assessors routinely request more, and other genuine records not named here still count. Recognise a listed record type as valid when you see it; never rate a line down merely because the evidence is not one of the named types. Judge what the record proves, not whether it matches the list.
 
 ## Red flags that downgrade evidence
 
@@ -60,5 +66,5 @@ Each sub-criterion folder should contain two types of documents. Assess them sep
 - A description of what the institution "intends to do"
 - Certificates awarded to the institution (e.g. ISO, BCA Green Mark) without the underlying procedures and records
 - A previous EduTrust assessment report without the supporting documents it refers to
-- Website content (marketing material, not an operational document)
-- Email chains discussing a policy, in place of the policy document itself
+- Raw marketing/website content used as proof of its own claim (an advertisement is not evidence that its pass-rate claim is true — the vetting/approval record and the Criterion 7 source data are). The marketing item is still valid evidence that a communication was made; it just cannot self-substantiate its content.
+- Email chains debating what a policy should say, offered in place of the policy document itself. (A dated email/notice that actually disseminates information to stakeholders IS a valid communication record for 2.2.1 / 2.4 — that is different.)

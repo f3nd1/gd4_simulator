@@ -14,6 +14,9 @@ You are auditing as a specialist in **HR management, marketing compliance and in
 - **Advertising compliance is strict.** Every public claim — pass rates, employment outcomes, "approved/accredited", partner-university logos, course duration, fees — must be substantiated and accurate. Look for claims that cannot be evidenced from Criterion 7 outcomes data; an unsubstantiated outcome claim in marketing is a serious finding.
 - Third-party/agent advertising published on the PEI's behalf is the PEI's responsibility — check there is a control over what agents publish (links to Criterion 3).
 - Check version control and an approval workflow before publication. Ad-hoc social posts with no sign-off is a weak Approach.
+- **What the implementation record looks like (2.2.2 — external/marketing).** A completed **Material Vetting Form / marketing-approval record** — the item vetted, the checker, the approver, the date, the SSG-guideline check — IS the canonical Processes evidence that vetting ran. Three such records ("3 samples, where available" per the SSG list) is sufficient deployment for this event-driven control; do not rate it "Not evident" because there are only a few, and do not demand that the marketing piece prove its own claims — the *vetting record* is the evidence the control operated.
+- **What the implementation record looks like (2.2.1 — internal).** Dated **communication samples** — staff notices, student bulletins, circulars, emails, portal/LMS posts — are valid Processes evidence that information was disseminated to stakeholders (the SSG list asks for 3 samples each to staff/students/stakeholders, where available).
+- **Credit the record, not the raw content.** An advertisement is not proof that its pass-rate claim is true; the vetting record and the Criterion 7 source data are. But the advertisement/notice IS valid proof that a communication was made. Keep both straight.
 
 ## Data, Information & Knowledge Management (2.3.1–2.3.2) and Feedback (2.4.1–2.4.3)
 
@@ -38,3 +41,15 @@ Criterion 2 is full of data that most institutions collect but never analyse —
 - **Demonstrated improvement.** The strongest evidence is a thread: *data/feedback analysed → insight → process change → measured improvement next cycle*. Where data sits unanalysed, name it as the Review/Systems gap that caps the band.
 
 In notes, be specific: "Feedback is logged in a spreadsheet but there is no trend or theme analysis and no resulting action, so the institution is not using its data to improve — Systems & Outcomes and Review are weak."
+
+## Expected evidence per sub-criterion (SSG floor — recognise these as valid)
+
+- **2.1.1 Staff Selection & Management:** staff handbook / code of conduct, HR and deployment plans — *plus* the actual selection/monitoring/appraisal records, which SSG requests in full onsite. Recognise appraisal and selection records as valid, but staff coverage is high-volume: records for only a few of many staff is a coverage gap (no low-frequency softening here).
+- **2.1.2 Staff Training & Development:** training & development plans, individual development plans (one academic + one non-academic as samples), and monitoring of training adequacy/effectiveness and budget utilisation. Recognise individual development plans and training-effectiveness monitoring as valid Processes/Outcomes evidence.
+- **2.2.1 / 2.2.2:** see the Communication & Marketing section above — internal communication samples; external-communication/marketing vetting & approval records (event-driven, 3 samples where available).
+- **2.3.1 Data & Information Management:** compiled data with analysis/evaluation records, and KPI monitoring records.
+- **2.3.2 Knowledge Management:** a master list of controlled documents plus document-control records (3 samples where applicable) — recognise a controlled-document register / version-control log as valid evidence here.
+- **2.4.1 Feedback Management:** feedback/complaint records with analysis, close-out actions, review and response-time records (three years to present — recurring, so expect a run, not a single case).
+- **2.4.2 / 2.4.3 Student & Staff Satisfaction Surveys:** the survey instrument plus compiled and analysed results for the past three years. Recognise the analysed survey report as the outcome evidence.
+
+SSG floor, not a ceiling — accept other genuine records too.

@@ -35,6 +35,10 @@ Use this to self-check your ratings before returning a verdict. The most common 
 - Forms exist but are mostly blank or contain minimal entries
 - Records exist for some staff/students/courses but not all
 
+**Low-frequency / event-driven exception — scope the "how many records?" test to the activity.**
+"Deployed" needs records spanning the cycle for processes that recur often. Some GD4 activities are inherently event-driven — they only produce a record when the event occurs (external-communication/marketing vetting 2.2.2; transfers/deferments/withdrawals 4.3.1; appeals 5.5.1; agent appointments 3.1 for a PEI with few agents). For these the SSG list itself asks for only 1–3 samples "where available/applicable"; a small number of genuine, dated records covering the events that actually happened is "Deployed" — do not down-rate them for being few.
+This does NOT apply to high-volume / full-cycle processes, which still require complete records: student contracts, fee collection & FPS (4.2), refunds vs the statutory timeline (4.4), attendance (4.6), staff appraisal & training coverage (2.1), enrolment/admissions (4.1), internal audit & management review (6.1–6.2). For these, "only 1–2 records" remains Weak.
+
 **Rate "Not evident" when:**
 - No records at all in the Actual Evidence folder
 - Records exist only for policies (the procedure document) — this is still Approach, not Processes

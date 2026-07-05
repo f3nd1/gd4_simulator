@@ -42,3 +42,16 @@ Compliance (the NCs above) gets the institution to a passing band; **data analyt
 - **Preventive analysis & demonstrated improvement.** Look for the thread: *withdrawal-reason data analysed → root cause found (e.g. a specific course or counselling gap) → process changed → withdrawals fell next intake*. Where the case records exist but are never aggregated and analysed, that is the Systems & Outcomes / Review gap that caps the band even when compliance is clean.
 
 In notes, separate the two clearly: compliance gaps are NCs; the absence of *analysis of student-protection data to anticipate and prevent harm* is what holds an otherwise-compliant institution at Band 3.
+
+## Expected evidence per sub-criterion (SSG floor — recognise these as valid; keep the high-volume strictness)
+
+Criterion 4 is high-volume and mandatory. Recognise the SSG record types below as valid evidence — but do NOT soften the completeness expectation for the high-volume items; SSG requests complete student records onsite.
+- **4.1.1 Counselling, Selection & Admission (high-volume):** pre-course counselling records, selection/admission records (document verification, interviews, entrance tests, management/partner approval), matriculation records, orientation records. At least 3 samples per key course at desktop, but complete coverage is expected — records for only a fraction of students is a gap.
+- **4.2.1 Student Contract (high-volume):** signed student contracts + addenda and the Advisory Note (Form 12).
+- **4.2.2 Fee Collection & FPS (high-volume, zero-tolerance):** payment receipts, FPS insurance certificates, FPS provider certificate, FPS monitoring records. Any uncovered fee remains a serious finding — no softening.
+- **4.3.1 Transfer, Deferment & Withdrawal (event-driven):** transfer, withdrawal and/or deferment records — the SSG list asks for "at least 1 sample of each, where applicable". These are rare events: a genuine record for each event that occurred is sufficient deployment; do not down-rate for being few. (The withdrawal → refund linkage is still checked strictly.)
+- **4.4.1 Refund (case-based, but timeline-strict):** refund records (3 samples where available). Refunds are event-driven, so a small set is acceptable coverage — but every refund must meet the statutory %/timeline; a late or under-calculated refund is a finding regardless of volume.
+- **4.5.1 Student Support Services (case-based):** the list of services plus records of services rendered (3 samples where available).
+- **4.6.1 Conduct & Attendance (high-volume, full-cycle):** attendance taking/monitoring records spanning the full period, and intervention records for students below threshold or with conduct issues. Attendance must span the cycle — no low-frequency softening.
+
+SSG floor, not a ceiling — accept other genuine records too.

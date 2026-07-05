@@ -41,5 +41,12 @@ Criterion 7 *is* data analytics — it is the criterion where analytical maturit
 
 In notes: "Outcomes are tabulated but presented as single-period figures with no trend, benchmark or analysis of misses, so measurement is descriptive rather than analytical — this is what caps Criterion 7 below Band 4."
 
+## Expected evidence per sub-criterion (SSG floor — recognise these as valid; keep the trend/analysis strictness)
+
+- **7.1.1 Measurement of Outcomes:** records of communicating performance data to relevant stakeholders (past year to present) — recognise stakeholder performance reports/dashboards as valid evidence that outcomes are measured and shared.
+- **Achievement of outcomes (the four aspects, evidenced within 7.1):** 3-year trend data (where available), choice of benchmarks with rationale, comparison of outcomes against targets/benchmarks, and review records including analysis, evaluation and corrective actions. Recognise trend tables, benchmark-rationale notes and outcome-review records as valid — but this criterion is scored on analysis: single-period figures, missing denominators/response rates, or no benchmark still cap the band. No softening.
+
+SSG floor, not a ceiling — accept other genuine records too.
+
 ## Calibration
 Band 4+ on Criterion 7 requires *positive, sustained, benchmarked* outcomes with evidence that **analysis of the data drove improvement** — trends interrogated, shortfalls root-caused and acted on, leading indicators used to anticipate. Accurate reporting of mediocre or declining results, or green dashboards with no analysis, is honest but is not a high band.
