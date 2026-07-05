@@ -174,9 +174,9 @@ export function Dashboard() {
     ? `${scored.gateFail.length === 0 ? "3/3" : `${3 - scored.gateFail.length}/3`} gate groups at Band 3+`
     : `${3 - scored.gateFail.length}/3 gate groups at Band 3+ — failing: ${scored.gateFail.map((g) => g.id).join(", ")}`;
 
-  // 4-step workflow (IA update): 1 Setup · 2 Audit & Evidence (Sampling and
-  // Interview now live here) · 3 Findings & Review · 4 Close out (scoring lives
-  // inside Close out).
+  // 4-step workflow (journey IA): 1 Set up · 2 Audit & evidence · 3 Findings &
+  // review · 4 Close out (scoring lives inside Close out). Optional tools sit
+  // in each stage's demoted "Tools & reference" tail in the sidebar.
   function stepProgress(step: number): { label: string; pct: number | null } {
     switch (step) {
       case 1:

@@ -147,7 +147,9 @@ export function Help() {
       </Card>
 
       {NAV.map((g) => {
-        const items = g.items.filter((it) => it.path !== "/help");
+        // Core steps first, then the demoted tools/reference tail — so every
+        // reachable page is documented, in the same order the sidebar shows.
+        const items = [...g.items, ...(g.tools ?? [])].filter((it) => it.path !== "/help");
         if (items.length === 0) return null;
         return (
           <Card key={g.group}>
