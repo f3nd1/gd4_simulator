@@ -4,6 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import type { AIReviewLogEntry, AuditFileRecord } from "../types";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
+import { FileLedger } from "./EvidenceFolder";
 
 function verdictTone(v: string) {
   return v === "Acceptable" ? "good" : v === "Partial" || v === "At risk" ? "medium" : v === "Pass" ? "good" : "critical";
@@ -35,8 +36,8 @@ function ReadSummaryBadge({ ledger }: { ledger: AuditFileRecord[] }) {
   ];
   return (
     <span
-      title="How this run's evidence was read — fresh vs cached, and text-extracted vs vision-transcribed. Open the File Ledger for the full per-file detail."
-      style={{ fontSize: 10, color: "#475569", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}
+      title="How this run's evidence was read — fresh vs cached, and text-extracted vs vision-transcribed. See 'Files read this run' under the Output tab for the full per-file detail."
+      style={{ display: "inline-block", maxWidth: "100%", fontSize: 10, color: "#475569", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 4, padding: "1px 6px", whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.4 }}
     >
       📄 {parts.join(" · ")}
     </span>
@@ -373,7 +374,17 @@ export function AIReview() {
         </div>
       )}
 
-      <table>
+      <div style={{ overflowX: "auto", maxWidth: "100%" }}>
+      <table style={{ tableLayout: "fixed", width: "100%", minWidth: 780 }}>
+        <colgroup>
+          <col style={{ width: "11%" }} />
+          <col style={{ width: "12%" }} />
+          <col style={{ width: "18%" }} />
+          <col style={{ width: "23%" }} />
+          <col style={{ width: "12%" }} />
+          <col style={{ width: "12%" }} />
+          <col style={{ width: "12%" }} />
+        </colgroup>
         <thead>
           <tr><th>Agent</th><th>Module</th><th>Subject</th><th>Summary</th><th>Model</th><th>Tokens</th><th>When</th></tr>
         </thead>
@@ -388,19 +399,19 @@ export function AIReview() {
                     {!e.live && <div style={{ fontSize: 10, color: e.liveError ? "#b23121" : "#9ca3af" }}>{e.liveError ? "live call failed — simulated" : "simulated"}</div>}
                   </td>
                   <td style={{ fontSize: 12 }}>{moduleLabel(e.reviewType)}</td>
-                  <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>
-                    {e.subjectId}
-                    {e.runId && <div style={{ fontSize: 10, color: "#64748b" }} title="Audit run id — matches the Evidence Folder result, checklist evidence and journal entry from this run.">{e.runId}</div>}
+                  <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5, overflow: "hidden", wordBreak: "break-word" }}>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis" }} title={e.subjectId}>{e.subjectId}</div>
+                    {e.runId && <div style={{ fontSize: 10, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis" }} title="Audit run id — matches the Evidence Folder result, checklist evidence and journal entry from this run.">{e.runId}</div>}
                     {e.runId && ledgerByRunId.has(e.runId) && (
                       <div style={{ marginTop: 3 }}><ReadSummaryBadge ledger={ledgerByRunId.get(e.runId)!} /></div>
                     )}
                   </td>
-                  <td title={e.verdict}><Pill s={verdictTone(e.verdict)}>{e.verdict.length > 40 ? e.verdict.slice(0, 40) + "…" : e.verdict}</Pill></td>
-                  <td style={{ fontSize: 11, color: e.model ? "#334155" : "#9ca3af", whiteSpace: "nowrap" }}>{e.model || (e.live ? "live" : "offline")}</td>
-                  <td style={{ fontSize: 11, color: "#334155", whiteSpace: "nowrap" }} title={e.totalTokens ? (e.auxTotalTokens ? `Analysis (${e.model || "?"}): ${(e.promptTokens || 0) + (e.completionTokens || 0) || "?"} tok\nUtility (${e.auxModel || "?"}): ${e.auxTotalTokens} tok\nTotal: ${e.totalTokens} tok ≈ ${fmtUSD(costOf(e))}` : `${e.promptTokens ?? "?"} prompt + ${e.completionTokens ?? "?"} completion ≈ ${fmtUSD(costOf(e))}`) : undefined}>
+                  <td style={{ overflow: "hidden" }} title={e.verdict}><Pill s={verdictTone(e.verdict)}>{e.verdict.length > 34 ? e.verdict.slice(0, 34) + "…" : e.verdict}</Pill></td>
+                  <td style={{ fontSize: 11, color: e.model ? "#334155" : "#9ca3af", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={e.model || (e.live ? "live" : "offline")}>{e.model || (e.live ? "live" : "offline")}</td>
+                  <td style={{ fontSize: 11, color: "#334155", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={e.totalTokens ? (e.auxTotalTokens ? `Analysis (${e.model || "?"}): ${(e.promptTokens || 0) + (e.completionTokens || 0) || "?"} tok\nUtility (${e.auxModel || "?"}): ${e.auxTotalTokens} tok\nTotal: ${e.totalTokens} tok ≈ ${fmtUSD(costOf(e))}` : `${e.promptTokens ?? "?"} prompt + ${e.completionTokens ?? "?"} completion ≈ ${fmtUSD(costOf(e))}`) : undefined}>
                     {e.totalTokens ? `${e.totalTokens.toLocaleString()}${costOf(e) ? ` · ${fmtUSD(costOf(e))}` : ""}` : "—"}
                   </td>
-                  <td style={{ fontSize: 11.5, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                  <td style={{ fontSize: 11.5, color: "#9ca3af", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {new Date(e.createdAt).toLocaleString()}
                     <span style={{ marginLeft: 6 }}>
                       <button onClick={(ev) => { ev.stopPropagation(); logHumanDecision({ module: "AI Review Log Feedback", subjectId: e.subjectId || e.id, aiOutput: e.verdict, humanDecision: "Accepted", changed: false, decisionType: "Accepted", reason: "" }); }} style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: 12, padding: "0 1px" }} title="Mark AI output as correct">👍</button>
@@ -448,6 +459,15 @@ export function AIReview() {
                           ? (e.generatedContent || e.keyConcerns.join("\n"))
                           : (e.promptSent || "(prompt not captured for this run)")}
                       </div>
+                      {/* Per-file read detail for this run, inline on the Output
+                          tab — the full ledger (read method, cached, char count,
+                          cited, expandable extracted text) without leaving the log. */}
+                      {(expandedTab[e.id] ?? "output") === "output" && e.runId && ledgerByRunId.has(e.runId) && (
+                        <div style={{ marginTop: 12, borderTop: "1px solid #e2e8f0", paddingTop: 10 }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 6 }}>📄 Files read this run</div>
+                          <FileLedger files={ledgerByRunId.get(e.runId)!} />
+                        </div>
+                      )}
                     </td>
                   </tr>
                 )}
@@ -456,6 +476,7 @@ export function AIReview() {
           })}
         </tbody>
       </table>
+      </div>
 
       <FeedbackModal
         open={!!reviewFeedback}

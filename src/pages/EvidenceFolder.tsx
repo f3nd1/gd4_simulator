@@ -15,7 +15,7 @@ import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
 import { TONE } from "../lib/theme";
 import type { FullAuditEntry } from "../lib/fullAudit";
 import { resolveAnalysisPath } from "../lib/fullAudit";
-import { NextStepBanner, Walkthrough, WalkthroughLink, useTip } from "../components/ui/Guidance";
+import { NextStepBanner, Walkthrough, WalkthroughLink, useTip, DismissX } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 import { runAuditorDisplay, panelUnderMinNotice, MSG_NO_AUDITORS_EXIST, AUDITOR_CREATION_PATH } from "../lib/auditorGuard";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
@@ -284,9 +284,10 @@ function FileRow({ file, isReading, onSkipFile, resolveText }: { file: AuditFile
   );
 }
 
-// Expandable file ledger with filter tabs, search and sort — used in both the
-// live audit progress modal and the read-only "View last run" modal.
-function FileLedger({
+// Expandable file ledger with filter tabs, search and sort — used in the live
+// audit progress modal, the read-only "View last run" modal, and (exported) the
+// AI Review Log entry's Output tab for the run's per-file read detail.
+export function FileLedger({
   files,
   isActive,
   progress,
@@ -1956,16 +1957,21 @@ export function EvidenceFolder() {
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const openedRunParamRef = useRef<string | null>(null);
 
-  // Deep link from the AI Review Log: ?run=<runId> opens that run's File Ledger
-  // (the "what was actually read" view) directly, searching every folder's run
-  // history and last-run records for the matching run.
+  // Deep link from the AI Review Log: ?run=<runId> opens that run's result
+  // directly. Option B staged runs live in auditRunHistory/lastAuditRuns (open
+  // the audit-run modal, which shows the file ledger); Option A evidence runs
+  // live in evidenceAssessments (open the Option A review modal, which carries
+  // the ledger CSV export). Previously only Option B was handled, so an Option A
+  // run id landed on the page with nothing open — the "empty page" bug.
   useEffect(() => {
     if (!focusRun || openedRunParamRef.current === focusRun) return;
     let match: AuditRunRecord | undefined;
     for (const runs of Object.values(auditRunHistory)) { const r = runs.find((x) => x.runId === focusRun); if (r) { match = r; break; } }
     if (!match) match = Object.values(lastAuditRuns).find((r) => r.runId === focusRun);
-    if (match) { openedRunParamRef.current = focusRun; setViewingRun(match); }
-  }, [focusRun, auditRunHistory, lastAuditRuns]);
+    if (match) { openedRunParamRef.current = focusRun; setViewingRun(match); return; }
+    const evMatch = Object.values(evidenceAssessments).find((ev) => ev.runId === focusRun);
+    if (evMatch) { openedRunParamRef.current = focusRun; setOptionAModal(evMatch.subCriterionId); }
+  }, [focusRun, auditRunHistory, lastAuditRuns, evidenceAssessments]);
 
   // Once a Drive token arrives, clear any "not connected" block so the banner
   // and per-row status flip to Connected without a reload (Fix 1).
@@ -2092,6 +2098,7 @@ export function EvidenceFolder() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showHelp, setShowHelp] = useState(false);
   const [showCacheList, setShowCacheList] = useState(false);
+  const [modeChipHidden, setModeChipHidden] = useState(false);
   const [overflowOpen, setOverflowOpen] = useState<string | null>(null);
   const [dismissedAccessNotes, setDismissedAccessNotes] = useState<Set<string>>(new Set());
   const [dismissedAuditResults, setDismissedAuditResults] = useState<Set<string>>(new Set());
@@ -2223,15 +2230,16 @@ export function EvidenceFolder() {
             <div style={{ marginBottom: 8, background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 7, overflow: "hidden" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px" }}>
                 <span style={{ fontSize: 12, color: "#6d28d9" }}>♻ {fileTextCacheSize} file{fileTextCacheSize !== 1 ? "s" : ""} cached from previous audits</span>
+                {/* Both controls right-aligned: View/Hide files sits beside Clear cache. */}
                 <button
                   onClick={() => setShowCacheList((v) => !v)}
-                  style={{ cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", borderRadius: 5, fontSize: 11, padding: "2px 8px", color: "#7c3aed" }}
+                  style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", borderRadius: 5, fontSize: 11, padding: "2px 8px", color: "#7c3aed" }}
                 >
                   {showCacheList ? "Hide files" : "View files"}
                 </button>
                 <button
-                  onClick={() => { if (confirm("Clear the file text cache? The next audit will re-download all files from Drive.")) { clearFileTextCache(); setShowCacheList(false); } }}
-                  style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", borderRadius: 5, fontSize: 11, padding: "2px 8px", color: "#7c3aed" }}
+                  onClick={() => { if (confirm("Are you sure you want to clear the cache? Files will need to be re-read next time.")) { clearFileTextCache(); setShowCacheList(false); } }}
+                  style={{ cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", borderRadius: 5, fontSize: 11, padding: "2px 8px", color: "#7c3aed" }}
                 >
                   Clear cache
                 </button>
@@ -2449,7 +2457,13 @@ export function EvidenceFolder() {
           so an offline run never begins silently. */}
       <div style={{ marginBottom: 10 }}><RunModeBanner /></div>
 
-      {/* Cycle mode chip + Full-auto master action */}
+      {/* Cycle mode chip + Full-auto master action. The chip is instructional
+          (it just states the current mode), so its ✕ dismiss is EPHEMERAL —
+          local state, reappears on reload — matching the other instructional
+          tips. In Full-auto the SAME chip hosts the "Run full audit" action, so
+          the ✕ is not offered there (hiding it would hide the run control);
+          full-auto therefore never hides. */}
+      {!(modeChipHidden && auditMode !== "full-auto") && (
       <div id="wt-mode-chip" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10, padding: "8px 12px", border: "1px solid #ddd6fe", background: "#faf5ff", borderRadius: 8 }}>
         <span style={{ fontSize: 12.5, fontWeight: 700, color: "#5b21b6" }}>
           Audit mode: {auditModeLabel(auditMode)}
@@ -2458,7 +2472,7 @@ export function EvidenceFolder() {
           Change mode →
         </Link>
         <WalkthroughLink pageId="evidence-folder" />
-        {auditMode === "full-auto" && (
+        {auditMode === "full-auto" ? (
           <button
             id="wt-run-full-audit"
             onClick={() => runFullAudit()}
@@ -2468,8 +2482,11 @@ export function EvidenceFolder() {
           >
             ⚡ Run full audit
           </button>
+        ) : (
+          <DismissX onClick={() => setModeChipHidden(true)} title="Hide for now (reappears on reload)" color="#7c3aed" />
         )}
       </div>
+      )}
 
       <div id="wt-path-guidance"><PathGuidance /></div>
       {fullAuditProgress && <FullAuditOverlay />}
