@@ -42,6 +42,27 @@ describe("levelValue / aiScore", () => {
   });
 });
 
+describe("buildScored tolerates a partial evidence map (persisted-state drift)", () => {
+  // Regression: a persisted workspace whose evidence map predates an item id
+  // (the GD4 re-align renamed items, e.g. 7.2.1 -> 7.1.2) left the new id
+  // absent. buildScored indexed it without a guard, so aiScore read
+  // `undefined.approach` and white-screened the whole app.
+  it("does not throw when an item's evidence entry is missing", () => {
+    const evidence = fullEvidence("good", true);
+    delete evidence["7.1.2"];       // simulate a renamed/added item with no entry
+    delete evidence["2.1.1"];       // and a split item
+    expect(() => buildScored(input(evidence))).not.toThrow();
+  });
+  it("treats a missing evidence entry as an unstarted item (all limbs missing)", () => {
+    const evidence = fullEvidence("good", true);
+    delete evidence["7.1.2"];
+    const scored = buildScored(input(evidence));
+    const item = scored.items.find((i) => i.id === "7.1.2")!;
+    expect(item.ais).toBe(0);
+    expect(item.started).toBe(false);
+  });
+});
+
 describe("needsJustification", () => {
   it("requires justification for a big gap (>=5)", () => {
     expect(needsJustification(60, 70, false)).toBe(true);
