@@ -214,7 +214,13 @@ function PpdNextStep({ selectedId }: { selectedId: string }) {
 function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: number }) {
   const busy = useWorkspaceStore((s) => s.busy);
   const runPPDReview = useWorkspaceStore((s) => s.runPPDReview);
+  const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
+  // Transient "you stopped this" flag, shown until the next run starts. Cancel
+  // reuses cancelBusy() — the same abort path the full-audit sweep uses — which
+  // aborts the in-flight AI call and stops the run; runPPDReview writes no
+  // checklist verdicts and no pendingCommits, so a cancel strands nothing.
+  const [cancelled, setCancelled] = useState(false);
 
   const result = ppdReviewResults[selectedId];
   const isRunning = busy === "ppdreview" + selectedId;
@@ -253,13 +259,24 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
 
   return (
     <>
-      <button
-        disabled={isRunning}
-        onClick={() => runPPDReview(selectedId)}
-        style={{ cursor: isRunning ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #4a5a8a", background: "#eaeef6", color: "#4a5a8a", marginBottom: 12 }}
-      >
-        {isRunning ? "Reviewing…" : result ? "Re-run PPD review" : "Run PPD review"}
-      </button>
+      <span style={{ display: "inline-flex", gap: 8, marginBottom: 12 }}>
+        <button
+          disabled={isRunning}
+          onClick={() => { setCancelled(false); runPPDReview(selectedId); }}
+          style={{ cursor: isRunning ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #4a5a8a", background: "#eaeef6", color: "#4a5a8a" }}
+        >
+          {isRunning ? "Reviewing…" : result ? "Re-run PPD review" : "Run PPD review"}
+        </button>
+        {isRunning && (
+          <button
+            onClick={() => { setCancelled(true); cancelBusy(); }}
+            title="Stops the review: the in-flight AI call is aborted. No verdicts are committed."
+            style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #fca5a5", background: "#fff5f5", color: "#b23121" }}
+          >
+            Cancel
+          </button>
+        )}
+      </span>
 
       {/* Show a Connect affordance whenever Drive isn't connected (so the
           button is always reachable), or when a run was explicitly blocked. */}
@@ -295,7 +312,13 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
         </div>
       )}
 
-      {!result && !isRunning && (
+      {cancelled && !isRunning && (
+        <div style={{ fontSize: 12.5, color: "#b23121", background: "#fff5f5", border: "1px solid #fca5a5", borderRadius: 8, padding: "8px 11px", marginBottom: 8 }}>
+          <b>Review cancelled.</b> The in-flight AI call was aborted, so this run stopped rather than finished. No verdicts were committed. Click "Re-run PPD review" to start again.
+        </div>
+      )}
+
+      {!result && !isRunning && !cancelled && (
         <p style={{ fontSize: 12.5, color: "#94a3b8" }}>No review run yet for this sub-criterion. Click "Run PPD review" above.</p>
       )}
 
