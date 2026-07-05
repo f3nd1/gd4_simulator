@@ -23,10 +23,19 @@ export const GD4_SUB_CRITERIA: GD4SubCriterion[] = [
   { id: "1.1", criterionId: "1", title: "Leadership & Corporate Governance", description: "This sub-criterion examines the leadership's commitment in driving the PEI towards excellence, and how you manage your corporate governance and financial resources to ensure operational sustainability and good financial health." },
   { id: "1.2", criterionId: "1", title: "Strategic Planning", description: "This sub-criterion examines how you conduct your strategic planning to provide educational services that are aligned with your vision and mission. It also examines the alignment of your strategic plan with your plans on risk management, business continuity, resources and finance budgeting." },
 
-  { id: "2.1", criterionId: "2", title: "Human Resource", description: "This sub-criterion examines your human resource management system in the areas of staff selection, recruitment, management, training and development." },
+  // 2.1 Human Resource is split into the GD4 Library's two sub-criteria
+  // (2.1.1 / 2.1.2) so each carries its own Evidence Folder row and band.
+  { id: "2.1.1", criterionId: "2", title: "Staff Selection and Management", description: "This sub-criterion examines your human resource management system for all staff — selection and recruitment, manpower planning and deployment, code of conduct, appraisal and performance monitoring, rewards and recognition, and talent management and retention — and how you review it for continual improvement." },
+  { id: "2.1.2", criterionId: "2", title: "Staff Training and Development", description: "This sub-criterion examines how you determine, deliver and evaluate the training and development needs of all staff to build competencies, and how you review the training and development processes for continual improvement." },
   { id: "2.2", criterionId: "2", title: "Communication", description: "This sub-criterion examines how you communicate with internal and external stakeholders to ensure that relevant information is provided in an accurate and timely manner. It further examines your marketing and external communications such as advertisements of any permitted course accessible by or published to the public, and advertisements published by third parties on your behalf." },
-  { id: "2.3", criterionId: "2", title: "Data, Information and Knowledge Management", description: "This sub-criterion examines how you establish systems to harness data and information effectively for organisational learning, planning and to support decision-making." },
-  { id: "2.4", criterionId: "2", title: "Feedback Management", description: "This sub-criterion examines your system in collecting, responding to and analysing feedback in a timely manner." },
+  // 2.3 is split into the GD4 Library's 2.3.1 (Data & Information) and
+  // 2.3.2 (Knowledge Management) sub-criteria.
+  { id: "2.3.1", criterionId: "2", title: "Data and Information Management", description: "This sub-criterion examines how you collect, manage and secure data and information to measure achievement of your strategic KPIs and support decision-making, ensuring accuracy, reliability, accessibility, confidentiality and timely availability." },
+  { id: "2.3.2", criterionId: "2", title: "Knowledge Management", description: "This sub-criterion examines how you collect, organise and share organisational knowledge, maintain up-to-date policy and operations manuals, and implement document control over revisions." },
+  // 2.4 is split into the GD4 Library's three sub-criteria.
+  { id: "2.4.1", criterionId: "2", title: "Feedback Management", description: "This sub-criterion examines your system for collecting, responding to and analysing feedback in a timely manner, including dispute resolution aligned with the Private Education Regulations." },
+  { id: "2.4.2", criterionId: "2", title: "Student Satisfaction Survey", description: "This sub-criterion examines how you conduct student satisfaction surveys and use the findings in the review of academic and administrative processes." },
+  { id: "2.4.3", criterionId: "2", title: "Staff Satisfaction Survey", description: "This sub-criterion examines how you conduct staff satisfaction surveys and use the findings to improve overall staff satisfaction and retention." },
 
   { id: "3.1", criterionId: "3", title: "Selection and Appointment of External Recruitment Agents", description: "This sub-criterion examines how you select and appoint external recruitment agents to ensure that only reliable and credible agents are engaged to recruit students for the PEI." },
   { id: "3.2", criterionId: "3", title: "Management and Evaluation of External Recruitment Agents", description: "This sub-criterion examines how you manage and evaluate external recruitment agents to ensure that the appointed agents are consistently providing quality services to the PEI's prospective students." },
@@ -38,8 +47,14 @@ export const GD4_SUB_CRITERIA: GD4SubCriterion[] = [
   { id: "4.5", criterionId: "4", title: "Student Support Services", description: "This sub-criterion examines student support services that you provide to meet students' needs." },
   { id: "4.6", criterionId: "4", title: "Student Conduct and Attendance", description: "This sub-criterion examines how you monitor students' conduct and attendance and examines how you take appropriate and timely intervention actions for students with poor conduct or attendance." },
 
-  { id: "5.1", criterionId: "5", title: "Course Design, Development and Review", description: "This sub-criterion examines how you design, develop and review the courses offered. It also examines how you engage the Academic Board or any external academic partners in these processes." },
-  { id: "5.2", criterionId: "5", title: "Course Planning and Delivery", description: "This sub-criterion examines how you plan the course delivery to ensure that the course outcomes are achieved, and how you plan, manage and monitor the use of academic resources." },
+  // 5.1 is split into the GD4 Library's 5.1.1 / 5.1.2 sub-criteria (both
+  // gate-sensitive, being under Criterion 5).
+  { id: "5.1.1", criterionId: "5", title: "Course Design and Development", description: "This sub-criterion examines how you design and develop courses and modules, involve stakeholders and the Academic Board, and review the course design and development process for continual improvement." },
+  { id: "5.1.2", criterionId: "5", title: "Course Review", description: "This sub-criterion examines how you review the curriculum of each course using assessment results, feedback, trend data and benchmarks, involve the Academic Board, and review the course and module review processes for continual improvement." },
+  // 5.2 is split into the GD4 Library's 5.2.1 / 5.2.2 sub-criteria (both
+  // gate-sensitive, being under Criterion 5).
+  { id: "5.2.1", criterionId: "5", title: "Course Planning", description: "This sub-criterion examines how you plan each course — logistics and academic preparation, qualified staff, adequate resources and transition planning — and review the course planning process for continual improvement." },
+  { id: "5.2.2", criterionId: "5", title: "Course Delivery", description: "This sub-criterion examines how you deliver courses against approved learning outcomes and delivery plans, monitor teaching quality, evaluate academic staff and review the course delivery and monitoring processes for continual improvement." },
   { id: "5.3", criterionId: "5", title: "Partnerships", description: "This sub-criterion examines how you manage your external academic partners to ensure that the partnerships add value to your organisation and your students." },
   { id: "5.4", criterionId: "5", title: "Student Learning", description: "This sub-criterion examines how you monitor student learning and take appropriate and timely intervention actions for students who have not met the required standards of achievement." },
   { id: "5.5", criterionId: "5", title: "Student Assessment", description: "This sub-criterion examines how you assess the learning outcomes of the students through various modes of assessments, including online assessment, if applicable. It also examines how you engage the Examination Board to develop and implement assessment policies and procedures, including the management of assessment results and appeals." },
@@ -97,7 +112,7 @@ const RAW_ITEMS: RawItem[] = [
 
   {
     id: "2.1.1",
-    subCriterionId: "2.1",
+    subCriterionId: "2.1.1",
     title: "Staff Selection and Management",
     describeShow: [
       "Your human resource management system for all staff which is aligned to strategic goals and organisational values. The system shall include: selection and recruitment; manpower planning and deployment; staff code of conduct; appraisal and performance monitoring; rewards and recognition; talent management and retention",
@@ -113,7 +128,7 @@ const RAW_ITEMS: RawItem[] = [
   },
   {
     id: "2.1.2",
-    subCriterionId: "2.1",
+    subCriterionId: "2.1.2",
     title: "Staff Training and Development",
     describeShow: [
       "Determine the training and development needs to build up competencies of all staff",
@@ -148,7 +163,7 @@ const RAW_ITEMS: RawItem[] = [
   },
   {
     id: "2.3.1",
-    subCriterionId: "2.3",
+    subCriterionId: "2.3.1",
     title: "Data and Information Management",
     describeShow: [
       "Collect data and manage information to measure and evaluate the achievement of all key performance indicators and related targets in the strategic plan for decision-making",
@@ -167,7 +182,7 @@ const RAW_ITEMS: RawItem[] = [
   },
   {
     id: "2.3.2",
-    subCriterionId: "2.3",
+    subCriterionId: "2.3.2",
     title: "Knowledge Management",
     describeShow: [
       "Collect, organise, share and systematically enable the use of organisational knowledge to create value and learning",
@@ -179,7 +194,7 @@ const RAW_ITEMS: RawItem[] = [
   },
   {
     id: "2.4.1",
-    subCriterionId: "2.4",
+    subCriterionId: "2.4.1",
     title: "Feedback Management",
     describeShow: [
       "Ensure an effective feedback management system",
@@ -194,7 +209,7 @@ const RAW_ITEMS: RawItem[] = [
   },
   {
     id: "2.4.2",
-    subCriterionId: "2.4",
+    subCriterionId: "2.4.2",
     title: "Student Satisfaction Survey",
     describeShow: [
       "Conduct student satisfaction survey(s) for services rendered. The student satisfaction survey(s) shall cover the following: overall student satisfaction level; quality of student support services; physical facilities and infrastructure to support learning; effectiveness of communication; course counselling, if applicable; adequacy, accessibility and quality of teaching-learning resources and the school environment; academic staff performance i.e. quality of teaching; pre-course counselling experience of students; assessment methods and frequency",
@@ -206,7 +221,7 @@ const RAW_ITEMS: RawItem[] = [
   },
   {
     id: "2.4.3",
-    subCriterionId: "2.4",
+    subCriterionId: "2.4.3",
     title: "Staff Satisfaction Survey",
     describeShow: [
       "Conduct staff satisfaction survey for all staff. The staff satisfaction survey shall cover the following: overall staff satisfaction level; human resource policy and practices; physical facilities and infrastructure; training and development opportunities provided; effectiveness of communication; teaching-learning resources and support, for academic staff; assessment methods and frequency, for academic staff",
@@ -346,7 +361,7 @@ const RAW_ITEMS: RawItem[] = [
 
   {
     id: "5.1.1",
-    subCriterionId: "5.1",
+    subCriterionId: "5.1.1",
     title: "Course Design and Development",
     describeShow: [
       "Establish processes for determining the following: relevance of courses and modules, including industrial attachments, if applicable; admission requirements; learning objectives, outcomes and delivery plans, including modes of learning; assessment plans and objectives which include assessment modes, frequency, weighting, grading and award criteria",
@@ -358,7 +373,7 @@ const RAW_ITEMS: RawItem[] = [
   },
   {
     id: "5.1.2",
-    subCriterionId: "5.1",
+    subCriterionId: "5.1.2",
     title: "Course Review",
     describeShow: [
       "Establish processes to review the curriculum of each course, including industrial attachments, if applicable, including: gathering inputs from stakeholders; analysing module assessment results and student and academic staff feedback; using trend data and benchmarks on the performance of students and graduates; reviewing in a timely manner course/module relevance, content, duration and admission requirements, if relevant; reviewing course delivery and adequacy and effectiveness of academic resources for teaching and learning; refining student learning outcomes",
@@ -370,7 +385,7 @@ const RAW_ITEMS: RawItem[] = [
   },
   {
     id: "5.2.1",
-    subCriterionId: "5.2",
+    subCriterionId: "5.2.1",
     title: "Course Planning",
     describeShow: [
       "Course planning process for each course which shall include the following: logistics preparation including planning course schedule, physical venues or online platforms; academic preparation, course content, lesson plans and appropriate teacher-student ratio; providing qualified academic and support staff; dissemination of relevant information to students prior to course commencement",
@@ -383,7 +398,7 @@ const RAW_ITEMS: RawItem[] = [
   },
   {
     id: "5.2.2",
-    subCriterionId: "5.2",
+    subCriterionId: "5.2.2",
     title: "Course Delivery",
     describeShow: [
       "Ensure that course delivery is based on the approved learning outcomes and delivery plans",

@@ -10,6 +10,7 @@ import { Pill } from "../components/ui/Pill";
 import { bandTone, BLUE } from "../lib/theme";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { buildProvenance, provenanceLine } from "../lib/provenance";
+import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 
 export function CriterionScorecard() {
   const scored = useScored();
@@ -22,7 +23,11 @@ export function CriterionScorecard() {
   // its item was last audited instead of presenting an unqualified band.
   const folderBySubCrit = new Map(folders.map((f) => [f.subCriterionId, f]));
   const stampFor = (itemId: string) => {
-    const sub = itemId.split(".").slice(0, 2).join(".");
+    // Resolve the item's sub-criterion via the requirement, not a fixed
+    // two-segment string slice: split sub-criteria (e.g. 2.1.1) carry a
+    // three-segment id equal to the item id, so slicing to two segments
+    // ("2.1") would miss their folder.
+    const sub = GD4_REQUIREMENTS.find((r) => r.id === itemId)?.subCriterionId ?? itemId.split(".").slice(0, 2).join(".");
     const f = folderBySubCrit.get(sub);
     if (!f?.lastAuditAt) return null;
     const when = new Date(f.lastAuditAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });

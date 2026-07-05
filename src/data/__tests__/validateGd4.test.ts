@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import { GD4_REQUIREMENTS, GD4_CRITERIA, GD4_SUB_CRITERIA } from "../gd4Requirements";
 
 const EXPECTED_ITEM_COUNT = 35;
-const EXPECTED_SUB_CRITERION_COUNT = 24;
+// 30 = the 24 official sub-criteria minus the 5 that were split to align the
+// Evidence Folder to the GD4 Library's finer breakdown (2.1, 2.3, 2.4, 5.1,
+// 5.2), plus the 11 finer sub-criteria they were replaced with.
+const EXPECTED_SUB_CRITERION_COUNT = 30;
 const EXPECTED_CRITERION_COUNT = 7;
 const VALID_SOURCE_TYPES = new Set(["describeShow", "note", "expectedEvidence"]);
 
@@ -11,7 +14,7 @@ describe("GD4 requirement data integrity", () => {
     expect(GD4_CRITERIA).toHaveLength(EXPECTED_CRITERION_COUNT);
   });
 
-  it("has exactly 24 sub-criteria", () => {
+  it("has exactly the expected number of sub-criteria", () => {
     expect(GD4_SUB_CRITERIA).toHaveLength(EXPECTED_SUB_CRITERION_COUNT);
   });
 
@@ -51,7 +54,12 @@ describe("GD4 requirement data integrity", () => {
 
   it("all item IDs match their sub-criterion prefix", () => {
     GD4_REQUIREMENTS.forEach((r) => {
-      expect(r.id.startsWith(r.subCriterionId + "."), `${r.id} does not start with its sub-criterion id ${r.subCriterionId}`).toBe(true);
+      // Most items sit one level below their sub-criterion (item "1.1.1" under
+      // sub-criterion "1.1"). Sub-criteria that were split to match the GD4
+      // Library's finer breakdown (e.g. 2.1.1) carry an id equal to their
+      // single item, so item id === sub-criterion id for those.
+      const ok = r.id === r.subCriterionId || r.id.startsWith(r.subCriterionId + ".");
+      expect(ok, `${r.id} does not match its sub-criterion id ${r.subCriterionId}`).toBe(true);
     });
   });
 

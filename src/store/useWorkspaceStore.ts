@@ -31,12 +31,12 @@ import type {
   ChangeLogEntry,
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
-import { seedFolders } from "../data/folders";
+import { seedFolders, reconcileFolders } from "../data/folders";
 import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
 import { buildScored, aiScore, needsJustification } from "../lib/scoring";
 import type { EvidenceAuditFlag } from "../lib/evidenceAudit";
-import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { simulateItemReview, simulateClosure, simulateFolderAudit, deriveApsrStatus, type FolderAuditLineVerdict } from "../lib/ai/simulateAI";
 import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP, runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr, simulateStagedPolicyAudit, simulateStagedEvidenceAudit, simulateStagedOutcomeReview, runPPDRequirementsReview, runEvidenceAssessment, runAuditorPanel, type PPDRequirementInput, type EvidenceAssessmentInput } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
@@ -5245,6 +5245,51 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     {
       name: "ucc-gd4-workspace:v3",
       storage: workspaceStorage,
+      // Schema version 1: the Evidence Folder sub-criteria were split to match
+      // the GD4 Library's finer breakdown (2.1 → 2.1.1/2.1.2, 2.3, 2.4, 5.1,
+      // 5.2). Persisted workspaces still hold the old coarse folders (and any
+      // runtime state keyed to the removed sub-criterion ids), so reconcile
+      // them on rehydrate: drop folders/state for sub-criteria that no longer
+      // exist (the user's chosen "discard & re-audit" for those areas) and add
+      // fresh empty folders for the new finer sub-criteria. Everything keyed to
+      // an unchanged sub-criterion (or to an item id like 2.1.1, which survives
+      // the split) is untouched.
+      version: 1,
+      migrate: (persisted, fromVersion) => {
+        const s = persisted as WorkspaceState;
+        if (!s || fromVersion >= 1) return s;
+        const validSub = new Set(GD4_SUB_CRITERIA.map((sc) => sc.id));
+        // The coarse sub-criterion ids removed by the split. Anything keyed to
+        // these is discarded; item ids beneath them (2.1.1, 2.3.2, …) survive.
+        const removedSub = new Set(["2.1", "2.3", "2.4", "5.1", "5.2"]);
+        const reconciled = s.folders ? reconcileFolders(s.folders) : s.folders;
+        const keptFolderIds = new Set((reconciled ?? []).map((f) => f.id));
+        const pruneBySubCrit = <V,>(rec: Record<string, V> | undefined) =>
+          rec ? Object.fromEntries(Object.entries(rec).filter(([k]) => validSub.has(k))) : rec;
+        const pruneByFolderId = <V,>(rec: Record<string, V> | undefined) =>
+          rec ? Object.fromEntries(Object.entries(rec).filter(([k]) => keptFolderIds.has(k))) : rec;
+        return {
+          ...s,
+          folders: reconciled,
+          // Sub-criterion-keyed Option A / analysis state for removed
+          // sub-criteria is dropped so nothing renders under a bare "2.1".
+          ppdReviewResults: pruneBySubCrit(s.ppdReviewResults),
+          evidenceAssessments: pruneBySubCrit(s.evidenceAssessments),
+          analysisPath: pruneBySubCrit(s.analysisPath),
+          pendingCommits: pruneBySubCrit(s.pendingCommits),
+          // Folder-id-keyed audit run history for dropped folders is discarded.
+          auditRunHistory: pruneByFolderId(s.auditRunHistory),
+          lastAuditRuns: pruneByFolderId(s.lastAuditRuns),
+          // Findings tagged with a removed COARSE sub-criterion id (e.g. a
+          // finding whose gd4ItemId is literally "2.1") are discarded — item-
+          // level findings (gd4ItemId "2.1.1"/"2.1.2") survive and re-home to
+          // their new sub-criterion automatically.
+          customFindings: s.customFindings
+            ? s.customFindings.filter((f) => !removedSub.has(f.gd4ItemId))
+            : s.customFindings,
+          lastPpdSubCriterionId: s.lastPpdSubCriterionId && validSub.has(s.lastPpdSubCriterionId) ? s.lastPpdSubCriterionId : null,
+        } as WorkspaceState;
+      },
       partialize: (s) => {
         const capLog = (entries: AIReviewLogEntry[]) =>
           entries.map((e) => ({ ...e, promptSent: capPersistedText(e.promptSent), generatedContent: capPersistedText(e.generatedContent) }));
