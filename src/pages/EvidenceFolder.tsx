@@ -2844,53 +2844,6 @@ export function EvidenceFolder() {
               </div>
 
               </div>{/* /right column */}
-              {/* Persistent pre-flight pane (zero AI calls to render). Shows the
-                  stored folder pre-flight check; ✕ only HIDES it for this view —
-                  the stored result is kept and can be reopened. While a probe
-                  runs, show a loading panel. The audit result is intentionally
-                  NOT surfaced here: it already has its own entry points — the
-                  "View results" button in the Action row and the expandable
-                  "Audit result" detail below — so a tab here would just be a
-                  duplicate way to reach the same modal. This pane is pre-flight
-                  only. */}
-              {(() => {
-                const probing = busy?.startsWith("probe:") && busy.endsWith(f.id);
-                if (probing) {
-                  return (
-                    <div style={{ padding: "0 12px 8px 30px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#475569", maxWidth: "100%", boxSizing: "border-box" }}>
-                        <Spinner />
-                        <span>Checking folder… listing files and testing each is readable (no AI used).</span>
-                      </div>
-                    </div>
-                  );
-                }
-                const stored = folderProbes[f.id];
-                if (!stored) return null;
-                if (probeStripHidden.has(f.id)) {
-                  return (
-                    <div style={{ padding: "0 12px 6px 30px" }}>
-                      <button onClick={() => showRunStrip(f.id)} style={{ cursor: "pointer", fontSize: 11, color: "#475569", border: "1px solid #cbd5e1", background: "#f8fafc", borderRadius: 6, padding: "3px 9px" }}>
-                        🔎 Show pre-flight check
-                      </button>
-                    </div>
-                  );
-                }
-                return (
-                  <div style={{ padding: "0 12px 8px 30px" }}>
-                    <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff", maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 9px", borderBottom: "1px solid #f1f5f9", flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 6, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#6d28d9" }}>🔎 Pre-flight check</span>
-                        <span style={{ fontSize: 10, color: "#94a3b8" }}>checked {new Date(stored.probedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
-                        <button onClick={() => hideRunStrip(f.id)} title="Hide this panel (the pre-flight result is kept — reopen anytime)" style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
-                      </div>
-                      <div style={{ padding: "8px 10px" }}>
-                        <FolderProbePanel result={stored.result} onClose={() => hideRunStrip(f.id)} />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
               </div>{/* /ef-card-cols */}
 
               {/* Expandable detail: same-folder warning + access notes + audit result */}
@@ -2984,6 +2937,54 @@ export function EvidenceFolder() {
                   </div>
                 </div>
               )}
+              {/* Persistent pre-flight pane (zero AI calls to render). Positioned
+                  LAST — after the Audit Result section — as supporting/diagnostic
+                  detail. Shows the stored folder pre-flight check; ✕ only HIDES it
+                  for this view (the stored result is kept and can be reopened),
+                  and it survives a page reload. NOT gated on rowExpanded: running
+                  a probe from the ⋯ menu un-hides it directly, so it must render
+                  regardless of the row's expand state. The audit result is NOT
+                  surfaced here — it already has its own entry points (the "View
+                  results" button in the Action row and the Audit result detail
+                  above), so a tab here would just duplicate the same modal. */}
+              {(() => {
+                const probing = busy?.startsWith("probe:") && busy.endsWith(f.id);
+                if (probing) {
+                  return (
+                    <div style={{ padding: "0 12px 8px 30px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#475569", maxWidth: "100%", boxSizing: "border-box" }}>
+                        <Spinner />
+                        <span>Checking folder… listing files and testing each is readable (no AI used).</span>
+                      </div>
+                    </div>
+                  );
+                }
+                const stored = folderProbes[f.id];
+                if (!stored) return null;
+                if (probeStripHidden.has(f.id)) {
+                  return (
+                    <div style={{ padding: "0 12px 6px 30px" }}>
+                      <button onClick={() => showRunStrip(f.id)} style={{ cursor: "pointer", fontSize: 11, color: "#475569", border: "1px solid #cbd5e1", background: "#f8fafc", borderRadius: 6, padding: "3px 9px" }}>
+                        🔎 Show pre-flight check
+                      </button>
+                    </div>
+                  );
+                }
+                return (
+                  <div style={{ padding: "0 12px 8px 30px" }}>
+                    <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff", maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 9px", borderBottom: "1px solid #f1f5f9", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 6, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#6d28d9" }}>🔎 Pre-flight check</span>
+                        <span style={{ fontSize: 10, color: "#94a3b8" }}>checked {new Date(stored.probedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                        <button onClick={() => hideRunStrip(f.id)} title="Hide this panel (the pre-flight result is kept — reopen anytime)" style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#94a3b8", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>✕</button>
+                      </div>
+                      <div style={{ padding: "8px 10px" }}>
+                        <FolderProbePanel result={stored.result} onClose={() => hideRunStrip(f.id)} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           );
         })}
