@@ -4,6 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { DRIVE_CONNECT_PATH } from "../lib/driveGuard";
 import { Card, inputStyle } from "../components/ui/Card";
+import { RunModeBanner } from "../components/ui/RunModeBanner";
 import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { NextStepBanner } from "../components/ui/Guidance";
@@ -131,6 +132,11 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
   if (!sub) return null;
   return (
     <>
+      {/* Pre-run mode banner — Option A runs (PPD review / evidence assessment)
+          are triggered from this content, so the offline/live state is shown
+          before the run begins here too (page + Evidence Folder modal). */}
+      <div style={{ marginBottom: 8 }}><RunModeBanner compact /></div>
+
       {/* Saved-state banner: proves the results are saved and current, and
           points at where the same verdicts also live (checklist + scoring). */}
       {savedResult && (

@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card, inputStyle } from "../components/ui/Card";
+import { RunModeBanner } from "../components/ui/RunModeBanner";
 import { Pill } from "../components/ui/Pill";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
@@ -2310,6 +2311,11 @@ export function EvidenceFolder() {
           { targetId: "wt-path-guidance", title: "Pick the path, then run", body: auditMode === "full-auto" ? "Option A or B per row sets WHAT gets assessed. Then one click on 'Run full audit' at the top assesses everything." : "Option A or B per row sets WHAT gets assessed. Then click the row's run button; you approve each result before it commits." },
         ]}
       />
+
+      {/* Pre-run mode banner — shown before any run entry point on this page
+          (Option A "Run review", Option B "Run audit", and "Run full audit")
+          so an offline run never begins silently. */}
+      <div style={{ marginBottom: 10 }}><RunModeBanner /></div>
 
       {/* Cycle mode chip + Full-auto master action */}
       <div id="wt-mode-chip" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10, padding: "8px 12px", border: "1px solid #ddd6fe", background: "#faf5ff", borderRadius: 8 }}>
