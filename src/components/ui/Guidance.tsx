@@ -13,14 +13,42 @@ export function useTip(): (text: string) => string | undefined {
   return (text: string) => (enabled ? text : undefined);
 }
 
+// Small ✕ dismiss control shared by the app's informational banners. `title`
+// clarifies the dismissal scope (permanent for tips, this-view for disclaimers).
+export function DismissX({ onClick, title, color = "#64748b" }: { onClick: () => void; title: string; color?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      title={title}
+      aria-label={title}
+      style={{ marginLeft: "auto", flexShrink: 0, cursor: "pointer", border: "none", background: "transparent", color, fontSize: 14, lineHeight: 1, padding: "0 2px", fontWeight: 700 }}
+    >
+      ✕
+    </button>
+  );
+}
+
+// Turns a tip's text into a stable dismissal key (so the SAME instruction stays
+// dismissed, but a genuinely different next-step instruction reappears).
+function tipSlug(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
+}
+
 // Slim, friendly "what to do now" strip. One per page, top of the content.
-export function NextStepBanner({ text }: { text: string }) {
+// Instructional only (no compliance/trust content), so its ✕ dismissal PERSISTS
+// (keyed by the tip text) — a different next-step instruction still appears.
+export function NextStepBanner({ text, dismissKey }: { text: string; dismissKey?: string }) {
   const enabled = useGuidanceStore((s) => s.enabled);
-  if (!enabled || !text) return null;
+  const key = dismissKey ?? tipSlug(text);
+  const dismissed = useGuidanceStore((s) => !!s.dismissedTips[key]);
+  const dismissTip = useGuidanceStore((s) => s.dismissTip);
+  if (!enabled || !text || dismissed) return null;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#eef6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "7px 12px", marginBottom: 10 }}>
       <span aria-hidden style={{ fontSize: 13 }}>👉</span>
       <span style={{ fontSize: 12.5, color: "#1e40af", lineHeight: 1.45 }}>{text}</span>
+      <DismissX onClick={() => dismissTip(key)} title="Hide this tip (it won't show again)" color="#3b6fb5" />
     </div>
   );
 }

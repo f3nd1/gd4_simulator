@@ -59,7 +59,12 @@ export function Layout() {
 function SampleDataBanner() {
   const active = useWorkspaceStore((s) => s.sampleDataActive);
   const clearSampleData = useWorkspaceStore((s) => s.clearSampleData);
-  if (!active) return null;
+  // Disclaimer — ✕ hides it for THIS view only (local state, never persisted):
+  // it reappears on the next reload while sample data is still loaded, so the
+  // "not a real audit" caveat can't be permanently silenced. "Clear sample
+  // data" remains the real off-switch.
+  const [hidden, setHidden] = useState(false);
+  if (!active || hidden) return null;
   return (
     <div style={{ background: "#f5f3ff", borderBottom: "1px solid #ddd6fe", color: "#5b21b6", fontSize: 12.5, fontWeight: 600, padding: "7px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
       <span style={{ background: "#7c3aed", color: "#fff", borderRadius: 4, padding: "1px 7px", fontSize: 11, letterSpacing: 0.5, flexShrink: 0 }}>SAMPLE</span>
@@ -69,6 +74,15 @@ function SampleDataBanner() {
         style={{ marginLeft: "auto", cursor: "pointer", border: "1px solid #c4b5fd", background: "#fff", color: "#5b21b6", borderRadius: 6, fontSize: 11.5, fontWeight: 600, padding: "3px 10px", flexShrink: 0 }}
       >
         Clear sample data
+      </button>
+      <button
+        type="button"
+        onClick={() => setHidden(true)}
+        title="Hide for now (reappears on the next reload)"
+        aria-label="Hide the sample-data notice for now"
+        style={{ flexShrink: 0, cursor: "pointer", border: "none", background: "transparent", color: "#7c3aed", fontSize: 14, lineHeight: 1, padding: "0 2px", fontWeight: 700 }}
+      >
+        ✕
       </button>
     </div>
   );

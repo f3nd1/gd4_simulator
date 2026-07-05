@@ -19,6 +19,17 @@ describe("guidance master toggle (useGuidanceStore)", () => {
     useGuidanceStore.getState().resetWalkthrough("start-audit");
     expect(useGuidanceStore.getState().seenWalkthroughs["start-audit"]).toBeUndefined();
   });
+
+  it("instructional tips persist dismissed per key, and can be reset", () => {
+    const s = useGuidanceStore.getState();
+    expect(s.dismissedTips["tip-a"]).toBeUndefined();
+    s.dismissTip("tip-a");
+    expect(useGuidanceStore.getState().dismissedTips["tip-a"]).toBe(true);
+    // A different tip is unaffected — only the dismissed key is hidden.
+    expect(useGuidanceStore.getState().dismissedTips["tip-b"]).toBeUndefined();
+    useGuidanceStore.getState().resetDismissedTips();
+    expect(useGuidanceStore.getState().dismissedTips["tip-a"]).toBeUndefined();
+  });
 });
 
 describe("nextStepText — state-aware and mode-aware banner copy", () => {

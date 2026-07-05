@@ -15,6 +15,13 @@ type GuidanceState = {
   seenWalkthroughs: Record<string, boolean>;
   markWalkthroughSeen: (pageId: string) => void;
   resetWalkthrough: (pageId: string) => void;
+  // Instructional 👉 tips the user has dismissed, keyed by tip text/slug. Only
+  // NON-compliance tips are persisted here — trust/disclaimer banners (live-AI,
+  // simulated-data, internal-estimate-only) are NEVER stored, so they can only
+  // be hidden for the current view and always reappear on the next run/reload.
+  dismissedTips: Record<string, boolean>;
+  dismissTip: (key: string) => void;
+  resetDismissedTips: () => void;
 };
 
 export const useGuidanceStore = create<GuidanceState>()(
@@ -29,6 +36,9 @@ export const useGuidanceStore = create<GuidanceState>()(
           const { [pageId]: _r, ...rest } = s.seenWalkthroughs;
           return { seenWalkthroughs: rest };
         }),
+      dismissedTips: {},
+      dismissTip: (key) => set((s) => ({ dismissedTips: { ...s.dismissedTips, [key]: true } })),
+      resetDismissedTips: () => set({ dismissedTips: {} }),
     }),
     { name: "ucc-gd4-guidance:v1", storage: createJSONStorage(() => localStorage) }
   )

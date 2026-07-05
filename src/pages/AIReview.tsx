@@ -1,12 +1,46 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
-import type { AIReviewLogEntry } from "../types";
+import type { AIReviewLogEntry, AuditFileRecord } from "../types";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 
 function verdictTone(v: string) {
   return v === "Acceptable" ? "good" : v === "Partial" || v === "At risk" ? "medium" : v === "Pass" ? "good" : "critical";
+}
+
+// Summarises how a run's evidence was read, for the badge on each log entry.
+// Counts only files actually read; fresh = new/changed, cached = reused.
+function summarizeLedger(ledger: AuditFileRecord[]): { read: number; fresh: number; cached: number; text: number; vision: number } | null {
+  const read = ledger.filter((f) => f.readStatus === "read" || f.readStatus === "condensed");
+  if (read.length === 0) return null;
+  return {
+    read: read.length,
+    cached: read.filter((f) => f.processingMode === "reused").length,
+    fresh: read.filter((f) => f.processingMode !== "reused").length,
+    text: read.filter((f) => f.readMethod === "text").length,
+    vision: read.filter((f) => f.readMethod === "vision").length,
+  };
+}
+
+// Compact read-method/cache summary shown on a log entry (both Option A and B).
+// The full per-file detail stays one click away via the File Ledger link.
+function ReadSummaryBadge({ ledger }: { ledger: AuditFileRecord[] }) {
+  const s = summarizeLedger(ledger);
+  if (!s) return null;
+  const parts = [
+    `${s.read} file${s.read === 1 ? "" : "s"} read`,
+    `${s.fresh} fresh · ${s.cached} cached`,
+    ...(s.vision > 0 ? [`${s.text} text · ${s.vision} vision`] : []),
+  ];
+  return (
+    <span
+      title="How this run's evidence was read — fresh vs cached, and text-extracted vs vision-transcribed. Open the File Ledger for the full per-file detail."
+      style={{ fontSize: 10, color: "#475569", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}
+    >
+      📄 {parts.join(" · ")}
+    </span>
+  );
 }
 
 // Maps the internal review type to the app module/page the AI was used from,
@@ -113,17 +147,21 @@ export function AIReview() {
   const agentOptions = useMemo(() => [...new Set(log.map((e) => e.agent))].sort(), [log]);
   const typeOptions = useMemo(() => [...new Set(log.map((e) => e.reviewType))].sort(), [log]);
 
-  // Run ids that have a stored File Ledger (folder audits) — so a log entry from
-  // such a run can link straight to "what was actually read from each file".
-  // Only these runIds get the link; other runs (e.g. closure drafts) have no ledger.
+  // File ledgers keyed by runId, from BOTH run types — Option B staged audits
+  // (auditRunHistory / lastAuditRuns) and Option A evidence runs
+  // (evidenceAssessments). Used for the "View file ledger" link AND the per-run
+  // read-method/cache summary badge on each log entry.
   const auditRunHistory = useWorkspaceStore((s) => s.auditRunHistory);
   const lastAuditRuns = useWorkspaceStore((s) => s.lastAuditRuns);
-  const ledgerRunIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const runs of Object.values(auditRunHistory)) for (const r of runs) ids.add(r.runId);
-    for (const r of Object.values(lastAuditRuns)) ids.add(r.runId);
-    return ids;
-  }, [auditRunHistory, lastAuditRuns]);
+  const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
+  const ledgerByRunId = useMemo(() => {
+    const m = new Map<string, AuditFileRecord[]>();
+    for (const runs of Object.values(auditRunHistory)) for (const r of runs) if (r.runId && r.fileLedger?.length) m.set(r.runId, r.fileLedger);
+    for (const r of Object.values(lastAuditRuns)) if (r.runId && r.fileLedger?.length && !m.has(r.runId)) m.set(r.runId, r.fileLedger);
+    for (const ev of Object.values(evidenceAssessments)) if (ev.runId && ev.fileLedger?.length && !m.has(ev.runId)) m.set(ev.runId, ev.fileLedger);
+    return m;
+  }, [auditRunHistory, lastAuditRuns, evidenceAssessments]);
+  const ledgerRunIds = ledgerByRunId;
 
   // Date-scoped log: the calculator AND the rows both work off this, so the
   // totals shown always match the selected period.
@@ -353,6 +391,9 @@ export function AIReview() {
                   <td style={{ fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>
                     {e.subjectId}
                     {e.runId && <div style={{ fontSize: 10, color: "#64748b" }} title="Audit run id — matches the Evidence Folder result, checklist evidence and journal entry from this run.">{e.runId}</div>}
+                    {e.runId && ledgerByRunId.has(e.runId) && (
+                      <div style={{ marginTop: 3 }}><ReadSummaryBadge ledger={ledgerByRunId.get(e.runId)!} /></div>
+                    )}
                   </td>
                   <td title={e.verdict}><Pill s={verdictTone(e.verdict)}>{e.verdict.length > 40 ? e.verdict.slice(0, 40) + "…" : e.verdict}</Pill></td>
                   <td style={{ fontSize: 11, color: e.model ? "#334155" : "#9ca3af", whiteSpace: "nowrap" }}>{e.model || (e.live ? "live" : "offline")}</td>
