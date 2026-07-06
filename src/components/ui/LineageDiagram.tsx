@@ -2,7 +2,8 @@ import { useCallback, useState } from "react";
 import { normalizeAuditRef } from "../../lib/gd4Refs";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
-import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, AuditFileRecord } from "../../types";
+import { excerptAround } from "./quoteMatch";
+import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, AuditFileRecord, PPDSubClause, PromiseCheck } from "../../types";
 
 // Requirement → PPD-clause → Evidence lineage diagram.
 //
@@ -14,14 +15,33 @@ import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, AuditFile
 // A node with no real backing (PPD not documented, or no evidence cited) shows
 // as a visually distinct dashed "gap" node so misses are obvious at a glance.
 //
-// Clicking a row expands it INLINE (no modal) to reveal the actual extracted
-// text of the cited PPD/evidence passage — via the SAME shared ExtractedTextPanel
-// used everywhere else — with the exact supporting quote highlighted when one was
-// identified and verified as a real substring. Gap rows expand to an honest
-// empty state. Highlights are never fabricated or approximated.
+// Clicking a row expands it INLINE (no modal). Many GD4 requirement lines have
+// several sub-parts (A/B/C/D — the PPD review's STEP 1 sub-clause decomposition
+// on the PPD side; the per-promise checks on the Evidence side), and each
+// sub-part is checked INDEPENDENTLY, with its own verdict and its own exact
+// verbatim quote. The expanded view shows exactly that: one small block PER
+// sub-part, each labelled and showing only the short excerpt around its own
+// quote — never the whole document, and never one quote standing in for the
+// whole line. A sub-part with no located quote is shown as an explicit gap for
+// THAT sub-part, not silently folded into the line's overall verdict. Lines
+// with no sub-part decomposition fall back to the single line-level quote,
+// same excerpt-only treatment. The full extracted document is still reachable
+// via an explicit "View full text" toggle, but it is never the default view.
 
 type NodeState = "documented" | "gap";
-type NodeData = { state: NodeState; label: string; sub: string; file?: AuditFileRecord; quote?: string; url?: string };
+// One independently-checked sub-part of a requirement line (a PPD sub-clause,
+// or an evidence-side promise check) — label is assigned by array order
+// (A, B, C, …) since neither source carries an explicit letter.
+type LinePart = {
+  label: string;
+  text: string;
+  positive: boolean;
+  // "contradicted" gets its own (amber, ⚠) styling — it's a hard fail, not a
+  // plain absence, and its quote (when present) is the CONTRADICTING passage.
+  negativeKind?: "not-documented" | "not-evidenced" | "contradicted";
+  quote?: string;
+};
+type NodeData = { state: NodeState; label: string; sub: string; file?: AuditFileRecord; quote?: string; url?: string; parts?: LinePart[] };
 type LineageLine = {
   ref: string;
   reqLabel: string;
@@ -32,6 +52,32 @@ type LineageLine = {
 function shorten(s: string, n = 84): string {
   const t = s.replace(/\s+/g, " ").trim();
   return t.length > n ? `${t.slice(0, n).trimEnd()}…` : t;
+}
+
+// PPD-side sub-parts: the STEP 1 sub-clause decomposition, each already
+// carrying its own documented/not-documented verdict and (now) its own quote.
+function subClauseParts(subClauses?: PPDSubClause[]): LinePart[] | undefined {
+  if (!subClauses || subClauses.length === 0) return undefined;
+  return subClauses.map((c, i) => ({
+    label: String.fromCharCode(65 + i),
+    text: c.text,
+    positive: c.verdict === "documented",
+    negativeKind: c.verdict === "not documented" ? "not-documented" : undefined,
+    quote: c.quote,
+  }));
+}
+
+// Evidence-side sub-parts: each PPD promise's individual verification against
+// the Actual Evidence — the evidence-to-policy equivalent of subClauses.
+function promiseCheckParts(checks?: PromiseCheck[]): LinePart[] | undefined {
+  if (!checks || checks.length === 0) return undefined;
+  return checks.map((c, i) => ({
+    label: String.fromCharCode(65 + i),
+    text: c.promiseText,
+    positive: c.verdict === "evidenced",
+    negativeKind: c.verdict === "contradicted" ? "contradicted" : c.verdict === "not evidenced" ? "not-evidenced" : undefined,
+    quote: c.quote,
+  }));
 }
 
 // A PPD clause counts as "documented" only when the row's verdict is a positive
@@ -62,6 +108,7 @@ function ppdLineage(ppd: PPDReviewResult): LineageLine[] {
         sub: documented ? (fileLabel ?? "documented") : "Not documented",
         file: documented ? fileForChunk(r.chunkIds[0], ppd.chunkFileNames, ppd.fileLedger) : undefined,
         quote: documented ? r.supportQuote : undefined,
+        parts: subClauseParts(r.subClauses),
       },
     };
   });
@@ -87,6 +134,7 @@ function evidenceLineage(ev: EvidenceAssessmentResult, ppd?: PPDReviewResult): L
         sub: documented ? (ppdFile ?? "documented") : "Not documented",
         file: documented && pr ? fileForChunk(pr.chunkIds[0], ppd?.chunkFileNames, ppd?.fileLedger) : undefined,
         quote: documented ? pr?.supportQuote : undefined,
+        parts: subClauseParts(pr?.subClauses),
       },
       evidence: {
         state: evCited ? "documented" : "gap",
@@ -95,6 +143,7 @@ function evidenceLineage(ev: EvidenceAssessmentResult, ppd?: PPDReviewResult): L
         file: evCited ? fileForChunk(r.evidenceChunkIds[0], ev.chunkFileNames, ev.fileLedger) : undefined,
         quote: evCited ? r.evidenceQuote : undefined,
         url: evFile?.url,
+        parts: promiseCheckParts(r.promiseChecks),
       },
     };
   });
@@ -124,9 +173,65 @@ function Node({ data, kind }: { data: NodeData; kind: "ppd" | "evidence" }) {
   );
 }
 
-// One node's expanded passage: the cited file's extracted text with the exact
-// supporting quote highlighted (when identified + locatable). Gap → honest empty
-// state. Missing ledger/text → an honest "not available" note, never a guess.
+// Renders EITHER the short excerpt around a located quote, OR an explicit gap
+// message — never the whole document, never a fabricated location. `text` is
+// the resolved extracted text (undefined when the cache doesn't have it, in
+// which case a verified-at-write-time quote still shows as plain text with a
+// "context unavailable" note, rather than being silently dropped).
+function QuoteOrGap({ quote, text, gapMessage }: { quote?: string; text?: string; gapMessage: string }) {
+  if (!quote) {
+    return (
+      <div style={{ fontSize: 11, color: "#b91c1c", background: "#fff", border: "1px dashed #fca5a5", borderRadius: 5, padding: "4px 8px", fontStyle: "italic" }}>
+        {gapMessage}
+      </div>
+    );
+  }
+  const excerpt = text ? excerptAround(text, quote) : null;
+  if (!excerpt) {
+    return (
+      <div style={{ fontSize: 11, color: "#713f12", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 5, padding: "4px 8px" }}>
+        <span style={{ fontWeight: 700 }}>🔦</span> “{shorten(quote, 220)}” <span style={{ color: "#94a3b8", fontStyle: "italic" }}>(context unavailable — re-run to refresh the cache)</span>
+      </div>
+    );
+  }
+  return (
+    <div style={{ fontSize: 11, color: "#713f12", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 5, padding: "4px 8px" }}>
+      {excerpt.clippedStart && "… "}{excerpt.before}<mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 1px" }}>{excerpt.match}</mark>{excerpt.after}{excerpt.clippedEnd && " …"}
+    </div>
+  );
+}
+
+// One independently-checked sub-part — its own label, its own verdict icon,
+// and its own excerpt-or-gap. A negative sub-part shows a gap EVEN IF other
+// sub-parts (or the line overall) are positive — the point is that a genuine
+// per-part miss must stay visible, not get absorbed into the line's verdict.
+function PartExcerpt({ part, text }: { part: LinePart; text?: string }) {
+  const icon = part.positive ? "✓" : part.negativeKind === "contradicted" ? "⚠" : "✗";
+  const tone = part.positive ? "#15803d" : part.negativeKind === "contradicted" ? "#b45309" : "#b91c1c";
+  const gapMessage = part.positive
+    ? "Documented, but no single exact quote could be located for this sub-part — see \"View full text\" for context."
+    : part.negativeKind === "contradicted"
+      ? `Sub-part ${part.label} was flagged as contradicted, but no supporting passage could be located.`
+      : `No supporting passage found for Sub-part ${part.label} — this specific sub-part is not addressed.`;
+  return (
+    <div style={{ border: `1px solid ${part.positive ? "#bbf7d0" : "#fecaca"}`, borderRadius: 6, padding: "6px 9px", background: part.positive ? "#f6fefa" : "#fffafa" }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "baseline", flexWrap: "wrap", marginBottom: 4 }}>
+        <span style={{ fontWeight: 700, fontSize: 10.5, color: tone, whiteSpace: "nowrap" }}>{icon} Sub-part {part.label}</span>
+        <span style={{ fontSize: 11, color: "#475569" }}>{shorten(part.text, 140)}</span>
+      </div>
+      <QuoteOrGap quote={part.quote} text={text} gapMessage={gapMessage} />
+    </div>
+  );
+}
+
+const linkButtonStyle: React.CSSProperties = { cursor: "pointer", fontSize: 10.5, fontWeight: 600, color: "#4338ca", border: "none", background: "transparent", padding: 0, textDecoration: "underline" };
+
+// One node's expanded view. Default is EXCERPT-ONLY: per sub-part when the
+// decomposition is available (each its own labelled block via PartExcerpt),
+// else the single line-level quote's excerpt as a fallback. Gap → honest
+// empty state. Missing ledger/text → an honest "not available" note. The full
+// extracted document is available ONLY via the explicit "View full text"
+// toggle below — never shown by default.
 function PassageBlock({
   title, node, resolveText, emptyText,
 }: {
@@ -135,6 +240,11 @@ function PassageBlock({
   resolveText: (f: AuditFileRecord) => string | null | undefined;
   emptyText: string;
 }) {
+  const [showFull, setShowFull] = useState(false);
+  const resolved = node.file ? resolveText(node.file) : undefined;
+  const text = typeof resolved === "string" ? resolved : undefined;
+  const hasParts = !!node.parts && node.parts.length > 0;
+
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
@@ -144,22 +254,29 @@ function PassageBlock({
           <a href={node.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ fontSize: 11, color: "#4338ca", textDecoration: "none" }}>Open in Drive ↗</a>
         )}
       </div>
-      {node.state === "gap" ? (
+      {hasParts ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          {node.parts!.map((p) => <PartExcerpt key={p.label} part={p} text={text} />)}
+        </div>
+      ) : node.state === "gap" ? (
         <div style={{ fontSize: 11.5, color: "#b91c1c", background: "#fff", border: "1px dashed #fca5a5", borderRadius: 6, padding: "8px 10px" }}>{emptyText}</div>
       ) : node.file ? (
-        <>
-          {node.quote ? (
-            <div style={{ fontSize: 11, color: "#713f12", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "5px 9px", marginBottom: 4 }}>
-              <span style={{ fontWeight: 700 }}>🔦 Supporting quote:</span> “{shorten(node.quote, 220)}”
-            </div>
-          ) : (
-            <div style={{ fontSize: 10.5, color: "#94a3b8", fontStyle: "italic", marginBottom: 4 }}>No single exact quote was identified — showing the full cited passage.</div>
-          )}
-          <ExtractedTextPanel file={node.file} resolveText={resolveText} highlight={node.quote} />
-        </>
+        <QuoteOrGap quote={node.quote} text={text} gapMessage='No single exact quote was identified for this line — see "View full text" for the full cited passage.' />
       ) : (
         <div style={{ fontSize: 11.5, color: "#64748b", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "8px 10px" }}>
           The extracted text for this cited passage isn’t available (it predates per-file capture, or the cache was cleared). Re-run to capture it.
+        </div>
+      )}
+      {node.file && (
+        <div style={{ marginTop: 6 }}>
+          <button type="button" onClick={(e) => { e.stopPropagation(); setShowFull((v) => !v); }} style={linkButtonStyle}>
+            {showFull ? "Hide full text" : "View full text →"}
+          </button>
+          {showFull && (
+            <div style={{ marginTop: 4 }}>
+              <ExtractedTextPanel file={node.file} resolveText={resolveText} highlight={node.quote} />
+            </div>
+          )}
         </div>
       )}
     </div>

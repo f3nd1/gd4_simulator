@@ -26,3 +26,25 @@ export function findQuoteSpan(text: string, quote: string): [number, number] | n
   if (m && typeof m.index === "number") return [m.index, m.index + m[0].length];
   return null;
 }
+
+// A short, located excerpt around a quote — the "relevant passage", not the
+// whole document. Returns null when the quote can't be located in `text`
+// (never fabricates a position/context). `radius` bounds how much
+// surrounding text is included on each side, so the caller can render a
+// tight, scannable snippet instead of dumping the full source.
+export type QuoteExcerpt = { before: string; match: string; after: string; clippedStart: boolean; clippedEnd: boolean };
+
+export function excerptAround(text: string, quote: string, radius = 220): QuoteExcerpt | null {
+  const span = findQuoteSpan(text, quote);
+  if (!span) return null;
+  const [s, e] = span;
+  const start = Math.max(0, s - radius);
+  const end = Math.min(text.length, e + radius);
+  return {
+    before: text.slice(start, s),
+    match: text.slice(s, e),
+    after: text.slice(e, end),
+    clippedStart: start > 0,
+    clippedEnd: end < text.length,
+  };
+}

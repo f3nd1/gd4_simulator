@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { findQuoteSpan } from "../../components/ui/quoteMatch";
+import { findQuoteSpan, excerptAround } from "../../components/ui/quoteMatch";
 
 const SOURCE = `--- Slide 2 ---
 Governance Framework v1.3
@@ -44,5 +44,32 @@ describe("findQuoteSpan — highlight only a real, verbatim occurrence", () => {
     const span = findQuoteSpan(SOURCE, "…risk register and academic quality reports…");
     expect(span).not.toBeNull();
     expect(SOURCE.slice(span![0], span![1])).toContain("risk register");
+  });
+});
+
+describe("excerptAround — a short, located excerpt, never the whole document", () => {
+  it("returns the match plus bounded context on each side, not the whole source", () => {
+    const long = `${"x".repeat(2000)}\nAll auditors must be independent of the area they audit.\n${"y".repeat(2000)}`;
+    const ex = excerptAround(long, "All auditors must be independent of the area they audit.", 50);
+    expect(ex).not.toBeNull();
+    expect(ex!.match).toBe("All auditors must be independent of the area they audit.");
+    // Context is bounded — nowhere near the full 4000+ char document.
+    expect(ex!.before.length).toBeLessThanOrEqual(50);
+    expect(ex!.after.length).toBeLessThanOrEqual(50);
+    expect(ex!.clippedStart).toBe(true);
+    expect(ex!.clippedEnd).toBe(true);
+  });
+
+  it("does not mark clipped when the match sits at the very start/end of the source", () => {
+    const ex = excerptAround("All auditors must be independent.", "All auditors must be independent.", 50);
+    expect(ex).not.toBeNull();
+    expect(ex!.before).toBe("");
+    expect(ex!.after).toBe("");
+    expect(ex!.clippedStart).toBe(false);
+    expect(ex!.clippedEnd).toBe(false);
+  });
+
+  it("returns null for a quote that cannot be located — never fabricates a position", () => {
+    expect(excerptAround(SOURCE, "A conflict-of-interest policy applies to all directors.")).toBeNull();
   });
 });

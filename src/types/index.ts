@@ -772,7 +772,17 @@ export type PPDOverallVerdict = "PPD Adequate" | "PPD Partial" | "PPD Gaps";
 // conduct; (b) non-collection of monies" parts a real SSG assessor checks
 // individually. The line verdict is DERIVED from these: all documented →
 // Adequate, some → Partial, none → Not documented.
-export type PPDSubClause = { text: string; verdict: "documented" | "not documented" };
+export type PPDSubClause = {
+  text: string;
+  verdict: "documented" | "not documented";
+  // Exact verbatim excerpt from the PPD that documents THIS specific
+  // sub-clause — stored only when it verifies as a real substring of the
+  // source; absent means "no single exact quote identified for this
+  // sub-part" (never a fabricated one, and never the whole line's quote).
+  // Undefined for "not documented" sub-clauses. Used to highlight the
+  // relevant excerpt per sub-part in the lineage diagram's expanded view.
+  quote?: string;
+};
 
 // A specific, verifiable commitment the PPD makes for a requirement line
 // (named mechanism, frequency, scope, role, record). Extracted during the
@@ -800,6 +810,13 @@ export type PromiseCheck = {
   verdict: "evidenced" | "not evidenced" | "contradicted";
   evidence: string;
   chunkIds: string[];
+  // Exact verbatim excerpt from the cited evidence that proves/contradicts
+  // THIS specific promise — stored only when it verifies as a real substring
+  // of the evidence text; absent means "no single exact quote identified for
+  // this sub-part". Distinct from `evidence` above, which may be a citation
+  // label/description rather than a verified verbatim excerpt. Used to
+  // highlight the relevant excerpt per sub-part in the lineage diagram.
+  quote?: string;
 };
 
 export type PPDReviewRow = {
