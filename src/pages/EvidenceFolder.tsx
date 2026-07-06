@@ -284,6 +284,60 @@ function FileRow({ file, isReading, onSkipFile, resolveText }: { file: AuditFile
   );
 }
 
+// AI-status badge for a file at the "Ask AI" step — mirrors the auditStatus
+// wording used across that step (Pending / Analysed / Cited / Not used).
+function aiFileBadge(file: AuditFileRecord): { label: string; color: string; bg: string } {
+  switch (file.auditStatus) {
+    case "cited":    return { label: "📎 Cited",    color: "#0369a1", bg: "#e0f2fe" };
+    case "not_used": return { label: "— Not used",  color: "#6b7280", bg: "#f3f4f6" };
+    case "audited":  return { label: "🤖 Analysed", color: "#1e40af", bg: "#eff6ff" };
+    default:         return { label: "⏳ Pending",   color: "#b45309", bg: "#fffbeb" };
+  }
+}
+
+// Clickable file row for the "Ask AI" step: same AI-status/chunk info as before,
+// but expandable to the SAME ExtractedTextPanel used at the "Read files" step —
+// so the user can inspect exactly what evidence text the AI is working from at
+// the moment of analysis. `resolveText` is the shared fileTextCache lookup.
+function AiFileRow({ file, resolveText, borderColor = "#eff6ff" }: { file: AuditFileRecord; resolveText: (f: AuditFileRecord) => string | null | undefined; borderColor?: string }) {
+  const [open, setOpen] = useState(false);
+  const badge = aiFileBadge(file);
+  // Expandable when we can look up its extracted text (read via Drive → cached).
+  const canExpand = !!file.driveFileId;
+  const chunkCount = file.chunkIds?.length ?? 0;
+  return (
+    <>
+      <div
+        onClick={canExpand ? () => setOpen((o) => !o) : undefined}
+        style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", borderBottom: open ? "none" : `1px solid ${borderColor}`, fontSize: 10, cursor: canExpand ? "pointer" : "default", background: open ? "#fbfcfe" : undefined }}
+      >
+        <span style={{ width: 9, flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{canExpand ? (open ? "▾" : "▸") : ""}</span>
+        <span style={{ flexShrink: 0, fontSize: 9, padding: "1px 4px", borderRadius: 3, background: badge.bg, color: badge.color, fontWeight: 600 }}>{badge.label}</span>
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#1e40af" }} title={file.path}>{file.name}</span>
+        {chunkCount > 0 && (
+          <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", color: "#7c3aed", fontSize: 9 }} title={`Sent to the AI as chunk${chunkCount !== 1 ? "s" : ""}: ${file.chunkIds!.join(", ")}`}>
+            {chunkCount} chunk{chunkCount !== 1 ? "s" : ""}
+          </span>
+        )}
+        <span style={{ flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{file.fileKind?.toUpperCase()}</span>
+        {file.charCount != null && file.charCount > 0 && (
+          <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", color: "#6b7280", fontSize: 9 }}>{file.charCount.toLocaleString()} ch</span>
+        )}
+      </div>
+      {open && canExpand && (
+        <div style={{ borderBottom: `1px solid ${borderColor}` }}>
+          {chunkCount > 0 && (
+            <div style={{ fontSize: 9.5, color: "#7c3aed", padding: "4px 10px 0 26px" }}>
+              This file's text is sent to the AI as chunk{chunkCount !== 1 ? "s" : ""} <b>{file.chunkIds!.join(", ")}</b>.
+            </div>
+          )}
+          <ExtractedTextPanel file={file} resolveText={resolveText} />
+        </div>
+      )}
+    </>
+  );
+}
+
 // Expandable file ledger with filter tabs, search and sort — used in the live
 // audit progress modal, the read-only "View last run" modal, and (exported) the
 // AI Review Log entry's Output tab for the run's per-file read detail.
@@ -554,6 +608,14 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
   const isStrict = p.stageDetail?.includes("strict") || p.stageDetail?.includes("challenge");
   const [aiFileSearch, setAiFileSearch] = useState("");
   const [aiFileSort, setAiFileSort] = useState<"name" | "status" | "size">("name");
+  // Same extracted-text lookup the "Read files" step uses, so a file at the
+  // "Ask AI" step can be expanded to inspect exactly what the AI is analysing.
+  const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
+  const resolveText = useCallback(
+    (f: AuditFileRecord): string | null | undefined =>
+      f.driveFileId ? fileTextCache[`${f.driveFileId}:${f.driveModifiedTime ?? ""}`]?.text : undefined,
+    [fileTextCache]
+  );
 
   const files = p.filesFound ?? [];
   const totalNew     = files.filter((f) => f.processingMode === "new").length;
@@ -676,22 +738,9 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
                       if (aiFileSort === "size") return (b.charCount ?? 0) - (a.charCount ?? 0);
                       return a.name.localeCompare(b.name);
                     })
-                    .map((file, fi) => {
-                      const badge = file.auditStatus === "cited" ? { label: "📎 Cited", color: "#0369a1", bg: "#e0f2fe" }
-                        : file.auditStatus === "not_used" ? { label: "— Not used", color: "#6b7280", bg: "#f3f4f6" }
-                        : file.auditStatus === "audited" ? { label: "🤖 Audited", color: "#1e40af", bg: "#eff6ff" }
-                        : { label: "⏳ Pending", color: "#b45309", bg: "#fffbeb" };
-                      return (
-                        <div key={file.path + fi} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", borderBottom: "1px solid #eff6ff", fontSize: 10 }}>
-                          <span style={{ flexShrink: 0, fontSize: 9, padding: "1px 4px", borderRadius: 3, background: badge.bg, color: badge.color, fontWeight: 600 }}>{badge.label}</span>
-                          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#1e40af" }}>{file.name}</span>
-                          <span style={{ flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{file.fileKind?.toUpperCase()}</span>
-                          {file.charCount != null && file.charCount > 0 && (
-                            <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", color: "#6b7280", fontSize: 9 }}>{file.charCount.toLocaleString()} ch</span>
-                          )}
-                        </div>
-                      );
-                    })
+                    .map((file, fi) => (
+                      <AiFileRow key={file.path + fi} file={file} resolveText={resolveText} />
+                    ))
                   }
                 </div>
               </div>
@@ -723,19 +772,9 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
               {pendingCount > 0 && <span style={{ color: "#94a3b8" }}>⏳ <b>{pendingCount}</b> pending</span>}
             </div>
             <div style={{ maxHeight: 150, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6, background: "#fff" }}>
-              {analyzedFiles.map((file) => {
-                const isCited = file.auditStatus === "cited";
-                const isNotUsed = file.auditStatus === "not_used";
-                return (
-                  <div key={file.path} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", borderBottom: "1px solid #f1f5f9", fontSize: 10.5 }}>
-                    <span style={{ flexShrink: 0, fontSize: 9, padding: "1px 4px", borderRadius: 3, background: isCited ? "#e0f2fe" : "#f3f4f6", color: isCited ? "#0369a1" : "#6b7280", fontWeight: 600 }}>
-                      {isCited ? "📎 Cited" : isNotUsed ? "— Not used" : "✓ Done"}
-                    </span>
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#374151" }}>{file.name}</span>
-                    <span style={{ flexShrink: 0, color: "#94a3b8", fontSize: 9.5 }}>{file.fileKind}</span>
-                  </div>
-                );
-              })}
+              {analyzedFiles.map((file) => (
+                <AiFileRow key={file.path} file={file} resolveText={resolveText} borderColor="#f1f5f9" />
+              ))}
             </div>
           </div>
         )}
@@ -775,23 +814,10 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
             📤 Files sent to AI
             {p.chunksCount != null && <> · <b>{p.chunksCount}</b> chunks</>}
           </div>
-          <div style={{ maxHeight: 110, overflowY: "auto", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>
-            {files.map((file, fi) => {
-              const isCited = file.auditStatus === "cited";
-              const isNotUsed = file.auditStatus === "not_used";
-              return (
-                <div key={file.path + fi} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px", borderBottom: "1px solid #dcfce7", fontSize: 10 }}>
-                  <span style={{ flexShrink: 0, fontSize: 9, padding: "1px 4px", borderRadius: 3, background: isCited ? "#dcfce7" : isNotUsed ? "#f3f4f6" : "#e0f2fe", color: isCited ? "#15803d" : isNotUsed ? "#6b7280" : "#0369a1", fontWeight: 600 }}>
-                    {isCited ? "📎 cited" : isNotUsed ? "— skipped" : "✓"}
-                  </span>
-                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#166534" }}>{file.name}</span>
-                  <span style={{ flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{file.fileKind?.toUpperCase()}</span>
-                  {file.charCount != null && file.charCount > 0 && (
-                    <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", color: "#6b7280", fontSize: 9 }}>{file.charCount.toLocaleString()} ch</span>
-                  )}
-                </div>
-              );
-            })}
+          <div style={{ maxHeight: 140, overflowY: "auto", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>
+            {files.map((file, fi) => (
+              <AiFileRow key={file.path + fi} file={file} resolveText={resolveText} borderColor="#dcfce7" />
+            ))}
           </div>
         </div>
       )}
