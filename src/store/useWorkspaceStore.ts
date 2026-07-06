@@ -558,6 +558,13 @@ export type WorkspaceState = {
   // device. Hiding the UI never stops change-log entries being recorded.
   showDeveloperTools: boolean;
   setShowDeveloperTools: (show: boolean) => void;
+  // Display theme — "default" is the original look; "bold" is a slightly
+  // larger, less saturated, heavier-weight look for readability (see
+  // ThemeScope in Layout.tsx, which applies it via a wrapping data-theme
+  // attribute rather than touching every page's inline styles). Synced with
+  // the workspace so the choice follows the user across devices.
+  uiTheme: "default" | "bold";
+  setUiTheme: (theme: "default" | "bold") => void;
 
   updateCycle: (patch: Partial<AuditCycle>) => void;
   // Clears a stranded busy/bulk state so a button stuck on "Auditing…" can be
@@ -877,6 +884,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       changeLog: [],
       showDeveloperTools: DEFAULT_SHOW_DEVELOPER_TOOLS,
       setShowDeveloperTools: (show) => set({ showDeveloperTools: show }),
+      uiTheme: "default",
+      setUiTheme: (theme) => set({ uiTheme: theme }),
       auditJournal: "",
       restoreLog: [],
       activeAuditorId: null,

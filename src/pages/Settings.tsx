@@ -527,6 +527,11 @@ create policy "anon read/write" on public.workspace_state
       </Card>
 
       <Card>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Display</h3>
+        <DisplayThemeSettings />
+      </Card>
+
+      <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Developer</h3>
         <DeveloperToolsSettings />
       </Card>
@@ -600,6 +605,42 @@ function ModelPicker({ value, onSelect, suggestions, placeholder, testId }: {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Whole-app display theme — "Default" is the original look; "Bold" is a
+// larger, less saturated, heavier-weight look meant to be easier to read at
+// a glance (bigger text, warmer/duller card and pill colours, a touch more
+// font-weight on plain text). See the "Bold" theme block in index.css and
+// TONE_BOLD in lib/theme.ts. Synced with the workspace so the choice
+// follows the user across devices.
+function DisplayThemeSettings() {
+  const uiTheme = useWorkspaceStore((s) => s.uiTheme);
+  const setUiTheme = useWorkspaceStore((s) => s.setUiTheme);
+  return (
+    <div>
+      <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
+        Switch the whole app's look. <b>Bold</b> is bigger text, calmer/less bright colours, and a touch heavier
+        weight — meant to be easier to read at a glance without looking like a formal redesign. Takes effect
+        immediately everywhere, and follows you to other devices.
+      </p>
+      <div style={{ display: "flex", gap: 8 }}>
+        {(["default", "bold"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setUiTheme(t)}
+            style={{
+              cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 16px", borderRadius: 8, textTransform: "capitalize",
+              border: `1px solid ${uiTheme === t ? "#7c3aed" : "#cbd5e1"}`,
+              background: uiTheme === t ? "#7c3aed" : "#fff",
+              color: uiTheme === t ? "#fff" : "#374151",
+            }}
+          >
+            {t}{uiTheme === t ? "  ✓" : ""}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

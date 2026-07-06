@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
-import { TONE, toneFor, type Tone } from "../../lib/theme";
+import { TONE, TONE_BOLD, toneFor, type Tone } from "../../lib/theme";
+import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 
 export function Pill({ s, children }: { s: string; children?: ReactNode }) {
+  const bold = useWorkspaceStore((st) => st.uiTheme) === "bold";
   const tone: Tone = (TONE as Record<string, unknown>)[s] ? (s as Tone) : toneFor(s);
-  const t = TONE[tone];
+  const t = (bold ? TONE_BOLD : TONE)[tone];
   return (
     <span
       style={{

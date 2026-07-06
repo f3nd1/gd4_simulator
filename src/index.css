@@ -109,6 +109,52 @@ textarea:focus {
   }
 }
 
+/* ---- "Bold" display theme (Settings → Display theme) ----
+   Every page in this app sets its own inline px font-size and hex colour
+   literals, so a normal stylesheet rule can't reach most of them — a CSS
+   rule only wins over an inline style if it's !important, and even then it
+   can't scale an already-declared px value relative to itself. `zoom` is
+   the one property that genuinely re-renders everything (text, icons,
+   spacing) proportionally larger without touching every file, which is
+   what "text too small" needs; font-weight is inherited, so bumping it
+   here DOES reach every element that doesn't set its own explicit inline
+   weight (most plain captions/labels), while buttons/badges that already
+   set a heavier inline weight are untouched.
+   `filter` (the obvious way to dim "too bright" colours) is deliberately
+   NOT used anywhere in this scope: a filter on an app-wide ancestor makes
+   it the containing block for every position:fixed descendant (the
+   Guidance tour overlay, FeedbackModal), so those full-screen modals would
+   centre inside the whole scrollable page instead of the viewport —
+   invisible until scrolled all the way down on any page taller than one
+   screen. The "less bright" side of this theme instead comes from Card.tsx
+   and Pill.tsx reading uiTheme directly (see TONE_BOLD in lib/theme.ts) —
+   those two shared components cover most of what's on screen — plus the
+   plain-CSS table/scrollbar overrides below, which have no inline
+   equivalent to conflict with. */
+.app-theme-scope[data-theme="bold"] {
+  zoom: 1.12;
+  font-weight: 500;
+}
+.app-theme-scope[data-theme="bold"] th {
+  background: #efe9dc;
+  color: #55503f;
+}
+.app-theme-scope[data-theme="bold"] td {
+  border-bottom-color: #ece6d8;
+}
+.app-theme-scope[data-theme="bold"] tbody tr:nth-child(even) {
+  background: #f7f4ec;
+}
+.app-theme-scope[data-theme="bold"] .rowh:hover {
+  background: #efe9da;
+}
+.app-theme-scope[data-theme="bold"] a {
+  color: #5b5230;
+}
+.app-theme-scope[data-theme="bold"] *::-webkit-scrollbar-thumb {
+  background: #d8cfb8;
+}
+
 /* Evidence Folder card: two internal columns (Links+Path | Progress+Action)
    side by side on desktop, stacking to a single column on narrow widths so
    nothing is cramped and the card is about half the previous height. */

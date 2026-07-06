@@ -33,8 +33,10 @@ export function Layout() {
     return () => window.removeEventListener("beforeunload", onUnload);
   }, []);
 
+  const uiTheme = useWorkspaceStore((s) => s.uiTheme);
+
   return (
-    <div style={{ minHeight: "100vh", display: "flex", background: "#eef1f5" }}>
+    <div data-theme={uiTheme} className="app-theme-scope" style={{ minHeight: "100vh", display: "flex", background: uiTheme === "bold" ? "#eae6db" : "#eef1f5" }}>
       <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Header onMenuClick={() => setNavOpen((o) => !o)} />
