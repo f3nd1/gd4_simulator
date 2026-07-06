@@ -22,10 +22,78 @@ import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 // Import pure text utilities for use within this module, and re-export so
 // callers don't need to import from textUtils directly.
-import { extractSpreadsheetText as _extractSpreadsheetText, extractPptxText as _extractPptxText } from "./textUtils";
+import {
+  extractSpreadsheetText as _extractSpreadsheetText,
+  extractPptxText as _extractPptxText,
+  extractPptxEmbeddedImages,
+  extractDocxEmbeddedImages,
+  extractXlsxEmbeddedImages,
+  type EmbeddedImageRef,
+} from "./textUtils";
 export { classifyPdfTextQuality, extractSpreadsheetText, extractPptxText } from "./textUtils";
 const extractSpreadsheetText = _extractSpreadsheetText;
 const extractPptxText = _extractPptxText;
+
+// Embedded-image vision hook. Office files (PPTX/DOCX/XLSX) can hide their real
+// content inside pasted pictures that the text extractors never see. When a
+// caller supplies this hook, exportFileText pulls those pictures out of the
+// file and hands the supported (raster) ones here to be transcribed through the
+// SAME vision path used for standalone images and scanned PDFs. The hook owns
+// the cost controls — it enforces the run's MAX_IMAGES budget and returns how
+// many it skipped for the cap so exportFileText can flag them, never silently
+// drop them. Typed text is always kept; the transcription is merged, not
+// substituted.
+export type EmbeddedVisionImage = { location: string; dataUrl: string };
+export type EmbeddedVisionResult = {
+  transcripts: { location: string; text: string }[];
+  skippedForCapCount: number;
+};
+export type EmbeddedImageHook = (images: EmbeddedVisionImage[]) => Promise<EmbeddedVisionResult>;
+
+// Merge embedded-image transcriptions into a file's typed text. Preserves the
+// typed text verbatim, appends per-image transcriptions labelled by location
+// (slide number etc.) in order, and appends visible notes for any images that
+// could NOT be transcribed (no vision available, cap reached, or an unsupported
+// vector format) so a partially-read document never looks fully read.
+async function mergeEmbeddedImages(
+  refs: EmbeddedImageRef[],
+  baseText: string,
+  hook: EmbeddedImageHook | undefined,
+): Promise<string> {
+  if (refs.length === 0) return baseText;
+
+  const supported = refs.filter((r) => r.supported && r.dataUrl);
+  const unsupportedCount = refs.length - supported.length;
+
+  let transcripts: { location: string; text: string }[] = [];
+  let skippedForCapCount = 0;
+  if (hook && supported.length > 0) {
+    const res = await hook(supported.map((r) => ({ location: r.location, dataUrl: r.dataUrl! })));
+    transcripts = res.transcripts;
+    skippedForCapCount = res.skippedForCapCount;
+  }
+
+  const sections: string[] = [];
+  if (baseText.trim()) sections.push(baseText.trimEnd());
+  if (transcripts.length > 0) {
+    sections.push("[Embedded images transcribed via vision:]");
+    for (const t of transcripts) sections.push(`--- ${t.location} (embedded image) ---\n${t.text}`);
+  }
+
+  const notes: string[] = [];
+  if (!hook && supported.length > 0) {
+    notes.push(`[${supported.length} embedded image(s) present but NOT transcribed — no vision model available (enable AI and add an API key in Settings).]`);
+  }
+  if (skippedForCapCount > 0) {
+    notes.push(`[${skippedForCapCount} embedded image(s) NOT transcribed — the per-run vision budget was reached.]`);
+  }
+  if (unsupportedCount > 0) {
+    notes.push(`[${unsupportedCount} embedded image(s) in an unsupported vector/unknown format were NOT transcribed.]`);
+  }
+  if (notes.length) sections.push(notes.join("\n"));
+
+  return sections.join("\n\n");
+}
 
 pdfjsLib.GlobalWorkerOptions.workerPort = new PdfjsWorker();
 
@@ -291,7 +359,12 @@ const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingm
 
 export const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/tiff"]);
 
-export async function exportFileText(file: DriveFile, accessToken: string, signal?: AbortSignal): Promise<string | null> {
+export async function exportFileText(
+  file: DriveFile,
+  accessToken: string,
+  signal?: AbortSignal,
+  embeddedImageHook?: EmbeddedImageHook,
+): Promise<string | null> {
   if (file.mimeType in GOOGLE_EXPORT_MIME) {
     const mime = encodeURIComponent(GOOGLE_EXPORT_MIME[file.mimeType]);
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${mime}&supportsAllDrives=true`, accessToken, signal);
@@ -307,8 +380,11 @@ export async function exportFileText(file: DriveFile, accessToken: string, signa
   }
   if (file.mimeType === DOCX_MIME) {
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
-    const { value } = await mammoth.extractRawText({ arrayBuffer: await res.arrayBuffer() });
-    return value;
+    const buffer = await res.arrayBuffer();
+    const { value } = await mammoth.extractRawText({ arrayBuffer: buffer });
+    // .docx is an OpenXML zip — pull any embedded pictures (mammoth drops them)
+    // and transcribe them through vision, merged with the typed text.
+    return mergeEmbeddedImages(await extractDocxEmbeddedImages(buffer), value, embeddedImageHook);
   }
   // Excel/XLSX support — reads raw bytes and extracts structured spreadsheet text
   // so the AI auditor can see column headers, row data, and sheet names rather
@@ -317,16 +393,24 @@ export async function exportFileText(file: DriveFile, accessToken: string, signa
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
     const buffer = await res.arrayBuffer();
     const wb = XLSX.read(buffer, { type: "array" });
-    return extractSpreadsheetText(wb, file.name);
+    const text = extractSpreadsheetText(wb, file.name);
+    // Only the modern .xlsx is an OpenXML zip we can unpack for embedded images;
+    // the legacy binary .xls is a non-zip OLE container, so skip it there.
+    if (file.mimeType === XLSX_MIME) {
+      return mergeEmbeddedImages(await extractXlsxEmbeddedImages(buffer), text, embeddedImageHook);
+    }
+    return text;
   }
-  // PowerPoint (.pptx): pull slide/table/text-box text and speaker notes. A
-  // deck with no extractable text (image-only slides) returns null — same as
-  // any unsupported file — so it is honestly flagged unreadable and skipped,
-  // never passed to the AI as blank evidence.
+  // PowerPoint (.pptx): pull slide/table/text-box text and speaker notes, plus
+  // any embedded pictures (screenshots of emails, scans) transcribed via vision
+  // and merged in. A deck with neither extractable text nor readable images
+  // returns null — honestly flagged unreadable, never passed as blank evidence.
   if (file.mimeType === PPTX_MIME) {
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
-    const text = await extractPptxText(await res.arrayBuffer(), file.name);
-    return text.trim().length > 0 ? text : null;
+    const buffer = await res.arrayBuffer();
+    const text = await extractPptxText(buffer, file.name);
+    const merged = await mergeEmbeddedImages(await extractPptxEmbeddedImages(buffer), text, embeddedImageHook);
+    return merged.trim().length > 0 ? merged : null;
   }
   return null;
 }

@@ -3334,7 +3334,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Per-file abort: allows skipCurrentFile() and cancelBusy() to break
           // out of the current Drive download or AI description call immediately.
           const fileAbort = new AbortController();
-          const fileTimeoutMs = isImage ? FILE_IMAGE_TIMEOUT_MS : FILE_TEXT_TIMEOUT_MS;
+          // Office files (.pptx/.docx/.xlsx) can carry embedded pictures that are
+          // now transcribed via vision, so they get the longer image timeout —
+          // one text read plus a few vision calls won't fit the 30s text budget.
+          const officeMayEmbed = file.mimeType.includes("presentationml") || file.mimeType.includes("wordprocessingml") || file.mimeType === XLSX_MIME;
+          const fileTimeoutMs = isImage || officeMayEmbed ? FILE_IMAGE_TIMEOUT_MS : FILE_TEXT_TIMEOUT_MS;
           let fileTimeoutTimer: ReturnType<typeof setTimeout>;
           const timeoutPromise = new Promise<never>((_, reject) => {
             fileTimeoutTimer = setTimeout(() => {
@@ -3345,15 +3349,37 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           _currentFileAbort = () => { clearTimeout(fileTimeoutTimer); fileAbort.abort(); };
 
           type FileReadResult =
-            | { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality> }
+            | { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality>; visionModel?: string }
             | { kind: "image"; description: string }
             | { kind: "pdfVision"; text: string }
             | { kind: "unreadable"; reason: string }
             | { kind: "capped"; reason: string }
             | { kind: "skip" };
 
+          // Embedded-image vision hook for office files. Transcribes pasted
+          // pictures through the SAME vision path as standalone images, honouring
+          // the run's MAX_IMAGES budget plus a per-file cap (mirroring the
+          // scanned-PDF page cap) so one image-heavy file can't drain the budget
+          // or blow the file timeout. Reports images skipped for the cap so they
+          // are flagged, never silently dropped.
+          let embeddedVisionModel: string | undefined;
+          const embeddedImageHook = canDescribeImages
+            ? async (images: { location: string; dataUrl: string }[]) => {
+                const transcripts: { location: string; text: string }[] = [];
+                let skippedForCapCount = 0;
+                let usedThisFile = 0;
+                for (const img of images) {
+                  if (usedThisFile >= MAX_PDF_VISION_PAGES || imagesDescribed >= MAX_IMAGES) { skippedForCapCount++; continue; }
+                  imagesDescribed++; usedThisFile++;
+                  const d = await describeImage(img.dataUrl, visionSettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
+                  if (d.trim()) { transcripts.push({ location: img.location, text: d.trim() }); embeddedVisionModel = visionModelId; }
+                }
+                return { transcripts, skippedForCapCount };
+              }
+            : undefined;
+
           const readPromise = (async (): Promise<FileReadResult> => {
-            const text = await exportFileText(file, readToken, fileAbort.signal);
+            const text = await exportFileText(file, readToken, fileAbort.signal, embeddedImageHook);
             if (text !== null) {
               if (file.mimeType === "application/pdf") {
                 const pdfQuality = classifyPdfTextQuality(text);
@@ -3365,7 +3391,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 }
                 return { kind: "text", text, pdfQuality };
               }
-              return { kind: "text", text };
+              // Office file whose embedded pictures were transcribed via vision
+              // carries the vision model so the cache is stamped correctly (and
+              // re-read when the user switches vision model).
+              return { kind: "text", text, visionModel: embeddedVisionModel };
             }
             if (isImage && canDescribeImages && imagesDescribed < MAX_IMAGES) {
               imagesDescribed++;
@@ -3436,12 +3465,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             case "text": {
               scanned.push(file.path);
               pushPart(file.path, fileResult.text, file.bucket, fileKind(file.mimeType), fi);
+              // An office file whose embedded pictures were transcribed via
+              // vision is recorded as a vision read (and stamped with the model)
+              // so the ledger reflects it and a vision-model switch re-reads it.
+              const textUsedVision = !!fileResult.visionModel;
               fileRecords[fi] = {
                 ...fileRecords[fi],
                 readStatus: "read",
                 charCount: fileResult.text.length,
                 processingMode: "new",
-                readMethod: "text",
+                readMethod: textUsedVision ? "vision" : "text",
                 ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}),
               };
               // Cache the extracted text so repeat audits can skip re-downloading
@@ -3459,7 +3492,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                       fileName: file.path.split("/").pop() || file.path,
                       filePath: file.path,
                       cachedAt: Date.now(),
-                      readMethod: "text",
+                      readMethod: textUsedVision ? "vision" : "text",
+                      ...(textUsedVision ? { visionModel: fileResult.visionModel } : {}),
                       ...(fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}),
                     },
                   },
@@ -4486,12 +4520,33 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }
 
           const fileAbort = new AbortController();
-          const fileTimeoutMs = isImage ? FILE_IMAGE_TIMEOUT_MS : FILE_TEXT_TIMEOUT_MS;
+          // Office files (.pptx/.docx/.xlsx) may run embedded-image vision, so
+          // give them the longer image timeout. See auditFolderContents.
+          const officeMayEmbed = file.mimeType.includes("presentationml") || file.mimeType.includes("wordprocessingml") || file.mimeType === XLSX_MIME;
+          const fileTimeoutMs = isImage || officeMayEmbed ? FILE_IMAGE_TIMEOUT_MS : FILE_TEXT_TIMEOUT_MS;
           let fileTimeoutTimer: ReturnType<typeof setTimeout>;
           const timeoutPromise = new Promise<never>((_, reject) => { fileTimeoutTimer = setTimeout(() => { fileAbort.abort(); reject(new Error("FILE_TIMEOUT")); }, fileTimeoutMs); });
           _currentFileAbort = () => { clearTimeout(fileTimeoutTimer); fileAbort.abort(); };
 
-          type FileReadResult = { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality> } | { kind: "image"; description: string } | { kind: "pdfVision"; text: string } | { kind: "unreadable"; reason: string } | { kind: "capped"; reason: string } | { kind: "skip" };
+          type FileReadResult = { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality>; visionModel?: string } | { kind: "image"; description: string } | { kind: "pdfVision"; text: string } | { kind: "unreadable"; reason: string } | { kind: "capped"; reason: string } | { kind: "skip" };
+          // Embedded-image vision hook for office files — see auditFolderContents.
+          // Honours the run MAX_IMAGES budget plus a per-file cap; reports images
+          // skipped for the cap so they are flagged rather than silently dropped.
+          let embeddedVisionModel: string | undefined;
+          const embeddedImageHook = canDescribeImages
+            ? async (images: { location: string; dataUrl: string }[]) => {
+                const transcripts: { location: string; text: string }[] = [];
+                let skippedForCapCount = 0;
+                let usedThisFile = 0;
+                for (const img of images) {
+                  if (usedThisFile >= MAX_PDF_VISION_PAGES || imagesDescribed >= MAX_IMAGES) { skippedForCapCount++; continue; }
+                  imagesDescribed++; usedThisFile++;
+                  const d = await describeImage(img.dataUrl, visionSettings, { signal: fileAbort.signal, onUsage: (u) => { auxUsage = addUsage(auxUsage, u); } });
+                  if (d.trim()) { transcripts.push({ location: img.location, text: d.trim() }); embeddedVisionModel = visionModelId; }
+                }
+                return { transcripts, skippedForCapCount };
+              }
+            : undefined;
           // Scanned/image-only PDF → vision fallback. See auditFolderContents.
           const readScannedPdfViaVision = async (token: string): Promise<FileReadResult> => {
             if (!canDescribeImages) return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
@@ -4510,14 +4565,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             return { kind: "pdfVision", text: parts.join("\n\n") + capNote };
           };
           const readPromise = (async (): Promise<FileReadResult> => {
-            const text = await exportFileText(file, readToken, fileAbort.signal);
+            const text = await exportFileText(file, readToken, fileAbort.signal, embeddedImageHook);
             if (text !== null) {
               if (file.mimeType === "application/pdf") {
                 const pdfQuality = classifyPdfTextQuality(text);
                 if (pdfQuality.extractedTextQuality === "none") return await readScannedPdfViaVision(readToken);
                 return { kind: "text", text, pdfQuality };
               }
-              return { kind: "text", text };
+              return { kind: "text", text, visionModel: embeddedVisionModel };
             }
             if (isImage && canDescribeImages && imagesDescribed < MAX_IMAGES) {
               imagesDescribed++;
@@ -4555,12 +4610,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const body = fileResult.text;
               scanned.push(file.path);
               const kind = fileKind(file.mimeType);
+              // Office file whose embedded pictures were transcribed via vision is
+              // recorded as a vision read + stamped model (see auditFolderContents).
+              const textUsedVision = !!fileResult.visionModel;
               // Only cache a genuine (non-empty) read — a 0-char extraction is a
               // failed read and must be re-attempted next run, not locked in.
               if (body.trim().length > 0) {
-                set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: kind, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: "text", ...(fileResult.kind === "text" && fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}) } } }));
+                set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text: body, charCount: body.length, fileKind: kind, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: textUsedVision ? "vision" : "text", ...(textUsedVision ? { visionModel: fileResult.visionModel } : {}), ...(fileResult.kind === "text" && fileResult.pdfQuality ? { pdfQuality: { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } } : {}) } } }));
               }
-              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", readMethod: "text", ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}) };
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", readMethod: textUsedVision ? "vision" : "text", ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}) };
               const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
               for (let pi = 0; pi < totalParts; pi++) {
                 const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
