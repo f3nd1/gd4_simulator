@@ -445,6 +445,10 @@ export type WorkspaceState = {
   // Live per-file progress while a pre-flight probe reads each file, so the UI
   // can show "Checking file N of TOTAL" instead of a static line. Transient.
   probeProgress: { folderId: string; current: number; total: number } | null;
+  // Optional user tick-marks on pre-analysis checklist items, keyed
+  // "folderId::checkItemId" — purely for the user's own tracking, never required.
+  preAnalysisChecks: Record<string, boolean>;
+  togglePreAnalysisCheck: (key: string) => void;
   // Extracted-text cache keyed by "fileId:modifiedTime". Allows unchanged Drive
   // files to skip the download step on repeat audits.
   // readMethod records HOW the content was extracted ("text" = direct text
@@ -843,6 +847,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       folderProbes: {},
       setFolderProbe: (folderId, result) => set((s) => ({ folderProbes: { ...s.folderProbes, [folderId]: { result, probedAt: new Date().toISOString() } } })),
       probeProgress: null,
+      preAnalysisChecks: {},
+      togglePreAnalysisCheck: (key) => set((s) => ({ preAnalysisChecks: { ...s.preAnalysisChecks, [key]: !s.preAnalysisChecks[key] } })),
       fileTextCache: {},
       bulkAuditStatus: null,
       additionalInfo: { link: "" },

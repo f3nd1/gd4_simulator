@@ -6,6 +6,7 @@ import { RunModeBanner } from "../components/ui/RunModeBanner";
 import type { FolderProbeResult } from "../lib/driveGuard";
 import { Pill } from "../components/ui/Pill";
 import { ExtractedTextPanel } from "../components/ui/ExtractedTextPanel";
+import { PreAnalysisChecklistPanel } from "../components/ui/PreAnalysisChecklistPanel";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -3029,6 +3030,28 @@ export function EvidenceFolder() {
                       </div>
                     </div>
                   </div>
+                );
+              })()}
+              {/* Pre-analysis checklist — sits after the pre-flight (read) pane
+                  and before "Ask AI". Renders nothing for sub-criteria without a
+                  defined checklist. Non-blocking; its "Continue to Ask AI" runs
+                  the audit for the folder's path. */}
+              {rowExpanded && (() => {
+                const itemIds = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === f.subCriterionId).map((r) => r.id);
+                const subTitle = GD4_SUB_CRITERIA.find((s) => s.id === f.subCriterionId)?.title ?? "";
+                const onContinue = path === "A"
+                  ? () => { runPPDReview(f.subCriterionId); setOptionAModal(f.subCriterionId); }
+                  : () => auditFolderStaged(f.id, "all");
+                return (
+                  <PreAnalysisChecklistPanel
+                    folderId={f.id}
+                    subCriterionId={f.subCriterionId}
+                    subCriterionTitle={subTitle}
+                    itemIds={itemIds}
+                    probeFiles={folderProbes[f.id]?.result.files}
+                    onContinue={onContinue}
+                    continueLabel="Continue to Ask AI"
+                  />
                 );
               })()}
             </div>
