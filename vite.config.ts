@@ -15,6 +15,41 @@ function gitInfo() {
   }
 }
 
+// The full commit history, embedded at build time, so the Change Log can show
+// every change straight from git — subject, full description body AND the list
+// of files each commit touched — without depending on how many times the app
+// happened to be deployed/loaded. Records are separated by \x1e and fields by
+// \x1f (chars that never appear in commit text); --name-only appends the file
+// list, which lands in the field after %b. Merges are skipped for a clean
+// authoring history. Rebuilding after a `git pull` refreshes this automatically.
+function gitLog() {
+  const RS = '\x1e', US = '\x1f'
+  try {
+    const raw = execSync(
+      `git log -n 500 --no-merges --pretty=format:'${RS}%H${US}%h${US}%an${US}%cI${US}%s${US}%b${US}' --name-only`,
+      { maxBuffer: 64 * 1024 * 1024 }
+    ).toString()
+    return raw
+      .split(RS)
+      .filter((rec) => rec.includes(US))
+      .map((rec) => {
+        const parts = rec.split(US)
+        const files = (parts[6] ?? '').split('\n').map((f) => f.trim()).filter(Boolean)
+        return {
+          hash:      (parts[0] ?? '').trim(),
+          shortHash: (parts[1] ?? '').trim(),
+          author:    (parts[2] ?? '').trim(),
+          isoTime:   (parts[3] ?? '').trim(),
+          subject:   (parts[4] ?? '').trim(),
+          body:      (parts[5] ?? '').trim(),
+          files,
+        }
+      })
+  } catch {
+    return []
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -25,6 +60,7 @@ export default defineConfig({
   base: './',
   define: {
     __GIT_INFO__: JSON.stringify(gitInfo()),
+    __GIT_LOG__: JSON.stringify(gitLog()),
   },
   server: {
     host: '0.0.0.0',
