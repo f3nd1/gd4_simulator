@@ -49,6 +49,8 @@ import { useAgentMemoryStore } from "./useAgentMemoryStore";
 import { useFindingDraftStore } from "./useFindingDraftStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
+import { usePreCheckChecklistStore } from "./usePreCheckChecklistStore";
+import { runPreAnalysisChecklist, type DetectFile } from "../lib/preAnalysisChecklist";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
@@ -1453,6 +1455,33 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, aiOfflineReason(aiSettings) ?? "AI is disabled or no API key is configured in Settings."); return; }
           const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
 
+          // Pre-check flags → AI context (Part 3 of the pre-check module): for
+          // each GD4 item this run covers, re-run the pre-analysis checklist
+          // over the files actually read (PPD's policy files + this run's
+          // evidence files) and collect only the FLAGGED items — an auto
+          // detection that returned "flag", or a manual item the user ticked
+          // via the Pre-check step's checkbox (same key scheme as
+          // PreCheckTab: `${subCriterionId}::${item.id}`). Clean/unticked
+          // items are omitted so they add no prompt noise; flagged ones are
+          // passed as advisory context only (see runEvidenceAssessment's
+          // "Pre-check flags" prompt wording) — never a verdict override.
+          const checklistData = usePreCheckChecklistStore.getState().checklists;
+          const detectFiles: DetectFile[] = [...(ppd.fileLedger ?? []), ...fileLedger].map((rec) => {
+            const cacheKey = rec.driveFileId ? Object.entries(get().fileTextCache).find(([k]) => k.startsWith(`${rec.driveFileId}:`))?.[1] : undefined;
+            return { name: rec.name, path: rec.path, bucket: rec.bucket, driveFileId: rec.driveFileId, text: cacheKey?.text ?? null };
+          });
+          const preChecks = get().preAnalysisChecks;
+          const flagsByItemId: Record<string, string[]> = {};
+          for (const itemId of new Set(ppd.rows.map((r) => r.gd4ItemId))) {
+            const results = runPreAnalysisChecklist(checklistData, [itemId], detectFiles);
+            const flagged = results.filter((item) =>
+              item.mode === "auto" ? item.outcome?.status === "flag" : !!preChecks[`${subCriterionId}::${item.id}`]
+            );
+            if (flagged.length > 0) {
+              flagsByItemId[itemId] = flagged.map((f) => `${f.title}: ${f.mode === "auto" ? (f.outcome?.message ?? f.description) : f.description}`);
+            }
+          }
+
           const inputs: EvidenceAssessmentInput[] = ppd.rows.map((r) => ({
             ref: r.ref,
             requirementText: r.requirementText,
@@ -1461,6 +1490,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // Technique 3: the promises the PPD review extracted become named
             // checks the evidence assessment must verify one by one.
             promises: r.promises,
+            preCheckFlags: flagsByItemId[r.gd4ItemId],
           }));
           const result = await runEvidenceAssessment(inputs, evidenceDocText, analysisSettings, {
             criterionId: subCriterionId,

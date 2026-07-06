@@ -2147,7 +2147,20 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
 // division of responsibility as every other function here — the store does
 // the folder reading/logging, this makes the AI call(s).
 
-export type EvidenceAssessmentInput = { ref: string; requirementText: string; ppdVerdict: PPDVerdict; ppdExtract: string; promises?: PPDPromise[] };
+export type EvidenceAssessmentInput = {
+  ref: string;
+  requirementText: string;
+  ppdVerdict: PPDVerdict;
+  ppdExtract: string;
+  promises?: PPDPromise[];
+  // Flagged pre-analysis checklist items for this line — either an auto
+  // detection that returned "flag", or a manual item the user ticked as a
+  // confirmed concern. Advisory context ONLY: the assessor forms its own
+  // independent judgement (see the prompt wording below); this is never an
+  // instruction and never overrides the verdict logic. Clean/unflagged items
+  // are omitted entirely so they add no prompt noise.
+  preCheckFlags?: string[];
+};
 
 export type EvidenceAssessmentLineResult = {
   ref: string;
@@ -2214,6 +2227,8 @@ COMBINED LINE VERDICT — apply this decision procedure IN ORDER and stop at the
    a. If there were extractable promises: let E = number "evidenced", T = total promises. Then "Met" if E === T (every promise evidenced); "Partial" if 0 < E < T (some but not all); "Not met" if E === 0 (none evidenced).
    b. If there were NO extractable promises for this line: "Met" if at least one actual implementation record supports the requirement; "Partial" if the approach is documented but no implementation record is present.
 Ties/borderline cases resolve DOWN, never up: if you are unsure between two adjacent verdicts, choose the lower one. "Met" requires every applicable promise evidenced with a cited record — it is never awarded on partial or ambiguous evidence.
+
+PRE-CHECK FLAGS: some lines carry a "Pre-check flags" note — a concern the app's own pattern-scan (or the reviewer) noted before your assessment (e.g. a possible date-sequencing issue, a record-count shortfall). Treat it as a prompt to look closer at that specific concern in the evidence, nothing more — it is NOT a verdict, and it must never override what you actually find in the documents. Confirm, refute or find it moot from the evidence itself; do not defer to it.
 
 EVIDENCE RULES:
 - A policy/SOP/procedure filed in the evidence folder does NOT count as implementation evidence — only actual records of doing something count.
@@ -2296,7 +2311,12 @@ Respond with JSON only:
         const promisesBlock = (r.promises ?? []).length > 0
           ? `\n  PPD promises to verify:${(r.promises ?? []).map((p, pi) => `\n    (${pi + 1}) ${p.promiseText}`).join("")}`
           : "";
-        return `[${r.ref}] (${i + 1}) ${r.requirementText} [PPD verdict: ${r.ppdVerdict}${r.ppdExtract ? ` — "${r.ppdExtract.slice(0, 100)}"` : ""}]${promisesBlock}`;
+        // Advisory only — a flag is a prompt to look closer, not a verdict to
+        // adopt; form your own independent judgement from the evidence.
+        const preCheckBlock = (r.preCheckFlags ?? []).length > 0
+          ? `\n  Pre-check flags (for your consideration, not a directive — form your own independent judgement from the evidence):${(r.preCheckFlags ?? []).map((f, fi) => `\n    (${fi + 1}) ${f}`).join("")}`
+          : "";
+        return `[${r.ref}] (${i + 1}) ${r.requirementText} [PPD verdict: ${r.ppdVerdict}${r.ppdExtract ? ` — "${r.ppdExtract.slice(0, 100)}"` : ""}]${promisesBlock}${preCheckBlock}`;
       }).join("\n");
       const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each requirement line: verify each listed PPD promise against the records, then give the COMBINED PPD-plus-evidence verdict:\n${pointsBlock}`;
       const system = buildSystem(windows.length > 1 ? `runEvidenceAssessment (window ${win.index + 1}/${win.total})` : "runEvidenceAssessment");

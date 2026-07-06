@@ -9,6 +9,7 @@ import { EvidenceFolder } from "./pages/EvidenceFolder";
 import { StartAudit } from "./pages/StartAudit";
 import { GD4ScoringSetup } from "./pages/GD4ScoringSetup";
 import { GD4Library } from "./pages/GD4Library";
+import { PreCheckChecklistSetup } from "./pages/PreCheckChecklistSetup";
 import { EvidenceIntelligence } from "./pages/EvidenceIntelligence";
 import { CriterionScorecard } from "./pages/CriterionScorecard";
 import { RubricBanding } from "./pages/RubricBanding";
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="/evidence-folder" element={<EvidenceFolder />} />
           <Route path="/gd4-scoring-setup" element={<GD4ScoringSetup />} />
           <Route path="/gd4-library" element={<GD4Library />} />
+          <Route path="/pre-check-setup" element={<PreCheckChecklistSetup />} />
           <Route path="/evidence-intelligence" element={<EvidenceIntelligence />} />
           <Route path="/scorecard" element={<CriterionScorecard />} />
           <Route path="/rubric-banding" element={<RubricBanding />} />

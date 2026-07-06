@@ -36,6 +36,7 @@ export const NAV: NavGroup[] = [
     ],
     tools: [
       { path: "/gd4-library", label: "GD4 Library", hint: "Reference: the full GD4 requirement text" },
+      { path: "/pre-check-setup", label: "Pre-check Checklist Setup", hint: "Add/edit/remove the pre-analysis checklist items shown during a run's Pre-check step, per GD4 item" },
     ],
   },
   {

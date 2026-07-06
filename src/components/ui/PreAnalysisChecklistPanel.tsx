@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
+import { usePreCheckChecklistStore } from "../../store/usePreCheckChecklistStore";
 import { runPreAnalysisChecklist, hasChecklist, type DetectFile, type DetectStatus, type ChecklistItemResult } from "../../lib/preAnalysisChecklist";
 
 // Non-blocking, per-sub-criterion pre-analysis checklist. Renders as the
@@ -61,6 +62,15 @@ function ChecklistRow({ item, folderId, scanned }: { item: ChecklistItemResult; 
             <span style={{ fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: item.mode === "auto" ? "#eef2ff" : "#f1f5f9", color: item.mode === "auto" ? "#4338ca" : "#64748b" }} title={item.mode === "auto" ? "The app scanned the extracted text (pattern match — no AI call)." : "Needs human judgement."}>
               {item.mode === "auto" ? "Auto-detected" : "Manual check"}
             </span>
+            {/* Grounded vs draft tag — unmissable, never the same visual weight as a verified item */}
+            {!item.verified && (
+              <span
+                style={{ fontSize: 9.5, fontWeight: 800, padding: "1px 6px", borderRadius: 4, background: "#fef2f2", color: "#b91c1c", border: "1px dashed #fca5a5" }}
+                title="Drafted from the official GD4 evidence list / a skill file, but NOT yet human-reviewed against a real audit finding. Treat as a suggestion, not an authoritative check."
+              >
+                ⚠ Draft — not yet reviewed
+              </span>
+            )}
             {/* Status chip */}
             <span style={{ fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 4, color: chip.fg, background: chip.bg, border: `1px solid ${chip.bd}` }}>{chip.label}</span>
           </div>
@@ -90,6 +100,7 @@ export function PreAnalysisChecklistPanel({
   continueLabel: string;
 }) {
   const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
+  const checklists = usePreCheckChecklistStore((s) => s.checklists);
 
   // Resolve each file's extracted text from the cache. Callers only reliably
   // have a driveFileId (not the modifiedTime half of the cache key), so
@@ -102,11 +113,11 @@ export function PreAnalysisChecklistPanel({
     });
   }, [files, fileTextCache]);
 
-  const results = useMemo(() => runPreAnalysisChecklist(itemIds, detectFiles), [itemIds, detectFiles]);
+  const results = useMemo(() => runPreAnalysisChecklist(checklists, itemIds, detectFiles), [checklists, itemIds, detectFiles]);
   const scanned = !!files && files.length > 0;
 
   // No definition for this sub-criterion's items yet → render nothing at all.
-  if (!hasChecklist(itemIds) || results.length === 0) return null;
+  if (!hasChecklist(checklists, itemIds) || results.length === 0) return null;
 
   const flags = scanned ? results.filter((r) => r.mode === "auto" && r.outcome?.status === "flag").length : 0;
 

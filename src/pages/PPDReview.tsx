@@ -20,6 +20,7 @@ import { FileLedger } from "./EvidenceFolder";
 import { normalizeAuditRef } from "../lib/gd4Refs";
 import { PreAnalysisChecklistPanel } from "../components/ui/PreAnalysisChecklistPanel";
 import { hasChecklist } from "../lib/preAnalysisChecklist";
+import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
@@ -222,9 +223,10 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
 function PreCheckTab({ selectedId, onContinue }: { selectedId: string; onContinue: () => void }) {
   const ppd = useWorkspaceStore((s) => s.ppdReviewResults[selectedId]);
   const assessment = useWorkspaceStore((s) => s.evidenceAssessments[selectedId]);
+  const checklists = usePreCheckChecklistStore((s) => s.checklists);
   const itemIds = useMemo(() => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === selectedId).map((r) => r.id), [selectedId]);
 
-  if (!hasChecklist(itemIds)) {
+  if (!hasChecklist(checklists, itemIds)) {
     return (
       <div>
         <p style={{ fontSize: 12.5, color: "#64748b", marginTop: 0 }}>No pre-analysis checks are defined yet for this sub-criterion — continue whenever you're ready.</p>

@@ -8,6 +8,7 @@ import { Pill } from "../components/ui/Pill";
 import { ExtractedTextPanel } from "../components/ui/ExtractedTextPanel";
 import { PreAnalysisChecklistPanel } from "../components/ui/PreAnalysisChecklistPanel";
 import { hasChecklist } from "../lib/preAnalysisChecklist";
+import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -1101,8 +1102,9 @@ function PreCheckStepDetail({ p, onAdvanceToAskAI }: { p: AuditProgressState; on
   const subCriterionId = p.subCriterionId ?? "";
   const itemIds = useMemo(() => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId).map((r) => r.id), [subCriterionId]);
   const readingInProgress = p.stage === "reading" || p.stage === "condensing";
+  const checklists = usePreCheckChecklistStore((s) => s.checklists);
 
-  if (!hasChecklist(itemIds)) {
+  if (!hasChecklist(checklists, itemIds)) {
     return (
       <div>
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>📝 Pre-check</div>

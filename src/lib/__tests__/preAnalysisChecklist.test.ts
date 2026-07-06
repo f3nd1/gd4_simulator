@@ -1,23 +1,31 @@
 import { describe, it, expect } from "vitest";
-import { runPreAnalysisChecklist, checklistForItems, hasChecklist, extractDates, type DetectFile } from "../preAnalysisChecklist";
+import { runPreAnalysisChecklist, checklistForItems, hasChecklist, extractDates, DEFAULT_CHECKLISTS, type DetectFile } from "../preAnalysisChecklist";
 
 const f = (name: string, text: string | null, bucket: "policy" | "evidence" = "evidence", driveFileId = name): DetectFile => ({ name, path: `2. Actual Evidence/${name}`, bucket, driveFileId, text });
 
 function outcome(itemIds: string[], files: DetectFile[], id: string) {
-  return runPreAnalysisChecklist(itemIds, files).find((r) => r.id === id)?.outcome;
+  return runPreAnalysisChecklist(DEFAULT_CHECKLISTS, itemIds, files).find((r) => r.id === id)?.outcome;
 }
 
 describe("preAnalysisChecklist — definitions", () => {
   it("4.2.2 has its 3 items (NRIC, contract-seq, FPS); 6.2.1 has its 2 (count, timeline)", () => {
-    expect(checklistForItems(["4.2.2"]).map((i) => i.id)).toEqual(["4.2.2-nric", "4.2.2-contract-seq", "4.2.2-fps-coverage"]);
-    expect(checklistForItems(["6.2.1"]).map((i) => i.id)).toEqual(["6.2.1-record-count", "6.2.1-action-timeline"]);
+    expect(checklistForItems(DEFAULT_CHECKLISTS, ["4.2.2"]).map((i) => i.id)).toEqual(["4.2.2-nric", "4.2.2-contract-seq", "4.2.2-fps-coverage"]);
+    expect(checklistForItems(DEFAULT_CHECKLISTS, ["6.2.1"]).map((i) => i.id)).toEqual(["6.2.1-record-count", "6.2.1-action-timeline"]);
+  });
+  it("4.2.2 and 6.2.1 items are all verified; drafted items elsewhere are not", () => {
+    expect(checklistForItems(DEFAULT_CHECKLISTS, ["4.2.2"]).every((i) => i.verified)).toBe(true);
+    expect(checklistForItems(DEFAULT_CHECKLISTS, ["6.2.1"]).every((i) => i.verified)).toBe(true);
+    expect(checklistForItems(DEFAULT_CHECKLISTS, ["1.1.1"]).every((i) => i.verified === false)).toBe(true);
+  });
+  it("5.3.1 (Partnerships) deliberately has no draft item — no adequate grounding was found", () => {
+    expect(checklistForItems(DEFAULT_CHECKLISTS, ["5.3.1"])).toEqual([]);
   });
   it("undefined sub-criteria have no checklist (no placeholder)", () => {
-    expect(hasChecklist(["1.1.1", "3.4.1"])).toBe(false);
-    expect(checklistForItems(["1.1.1"])).toEqual([]);
+    expect(hasChecklist(DEFAULT_CHECKLISTS, ["9.9.9"])).toBe(false);
+    expect(checklistForItems(DEFAULT_CHECKLISTS, ["9.9.9"])).toEqual([]);
   });
   it("manual items carry no detect fn and produce no auto outcome", () => {
-    const fps = runPreAnalysisChecklist(["4.2.2"], []).find((r) => r.id === "4.2.2-fps-coverage");
+    const fps = runPreAnalysisChecklist(DEFAULT_CHECKLISTS, ["4.2.2"], []).find((r) => r.id === "4.2.2-fps-coverage");
     expect(fps?.mode).toBe("manual");
     expect(fps?.outcome).toBeUndefined();
   });
