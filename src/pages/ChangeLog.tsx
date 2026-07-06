@@ -177,24 +177,37 @@ export function ChangeLog() {
                         </div>
                       )}
 
-                      {hasBody && descOpen && (
-                        <pre
+                      {((hasBody && descOpen) || (fileCount > 0 && filesOpen)) && (
+                        <div
                           style={{
-                            margin: "8px 0 0", padding: "10px 12px", background: "#f8fafc", border: "1px solid #e8edf3", borderRadius: 8,
-                            fontSize: 12, lineHeight: 1.5, color: "#334155", whiteSpace: "pre-wrap", wordBreak: "break-word",
-                            fontFamily: "inherit",
+                            display: "grid",
+                            gridTemplateColumns: hasBody && descOpen && fileCount > 0 && filesOpen ? "1fr 1fr" : "1fr",
+                            gap: 12,
+                            marginTop: 8,
                           }}
                         >
-                          {c.body}
-                        </pre>
-                      )}
+                          {hasBody && descOpen && (
+                            <pre
+                              style={{
+                                margin: 0, padding: "10px 12px", background: "#f8fafc", border: "1px solid #e8edf3", borderRadius: 8,
+                                fontSize: 12, lineHeight: 1.5, color: "#334155", whiteSpace: "pre-wrap", wordBreak: "break-word",
+                                fontFamily: "inherit", minWidth: 0,
+                              }}
+                            >
+                              {c.body}
+                            </pre>
+                          )}
 
-                      {fileCount > 0 && filesOpen && (
-                        <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
-                          {c.files.map((f) => (
-                            <li key={f} style={{ fontSize: 11.5, color: "#374151", fontFamily: "monospace", lineHeight: 1.6 }}>{f}</li>
-                          ))}
-                        </ul>
+                          {fileCount > 0 && filesOpen && (
+                            <div style={{ padding: "10px 12px", background: "#f8fafc", border: "1px solid #e8edf3", borderRadius: 8, minWidth: 0 }}>
+                              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                                {c.files.map((f) => (
+                                  <li key={f} style={{ fontSize: 11.5, color: "#374151", fontFamily: "monospace", lineHeight: 1.6, wordBreak: "break-all" }}>{f}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   );
