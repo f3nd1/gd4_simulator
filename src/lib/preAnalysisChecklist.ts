@@ -291,6 +291,38 @@ export function runPreAnalysisChecklist(checklists: ChecklistData, itemIds: stri
   });
 }
 
+// Which of this sub-criterion's items are currently "flagged" — an auto
+// detection that returned "flag", or a manual item the auditor ticked via
+// the Pre-check step's checkbox (PreAnalysisChecklistPanel's markKey scheme:
+// `${subCriterionId}::${item.id}`). This is the SAME rule
+// runEvidenceAssessment uses to decide what becomes a "Pre-check flags"
+// prompt hint (advisory context, never a verdict override) — factored out
+// here so any other caller (e.g. the Evidence tab's arrival action panel)
+// reuses this single definition of "flagged" instead of re-deriving its own.
+export type PreCheckFlagSummary = { flagsByItemId: Record<string, string[]>; totalCount: number };
+
+export function computeFlaggedPreCheckItems(
+  checklists: ChecklistData,
+  preChecks: Record<string, boolean>,
+  subCriterionId: string,
+  itemIds: string[],
+  files: DetectFile[]
+): PreCheckFlagSummary {
+  const flagsByItemId: Record<string, string[]> = {};
+  let totalCount = 0;
+  for (const itemId of new Set(itemIds)) {
+    const results = runPreAnalysisChecklist(checklists, [itemId], files);
+    const flagged = results.filter((item) =>
+      item.mode === "auto" ? item.outcome?.status === "flag" : !!preChecks[`${subCriterionId}::${item.id}`]
+    );
+    if (flagged.length > 0) {
+      flagsByItemId[itemId] = flagged.map((f) => `${f.title}: ${f.mode === "auto" ? (f.outcome?.message ?? f.description) : f.description}`);
+      totalCount += flagged.length;
+    }
+  }
+  return { flagsByItemId, totalCount };
+}
+
 // ── Universal checks — a SEPARATE layer from DEFAULT_CHECKLISTS/ChecklistData,
 // applied to every sub-criterion regardless of whether it has any per-item
 // entries (see runPreAnalysisChecklist/hasChecklist above). All items here are

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runPreAnalysisChecklist, checklistForItems, hasChecklist, extractDates, findDocumentDate, detectDateTimeDiscrepancy, UNIVERSAL_CHECKLIST, DEFAULT_CHECKLISTS, type DetectFile } from "../preAnalysisChecklist";
+import { runPreAnalysisChecklist, checklistForItems, hasChecklist, extractDates, findDocumentDate, detectDateTimeDiscrepancy, computeFlaggedPreCheckItems, UNIVERSAL_CHECKLIST, DEFAULT_CHECKLISTS, type DetectFile } from "../preAnalysisChecklist";
 
 const f = (name: string, text: string | null, bucket: "policy" | "evidence" = "evidence", driveFileId = name): DetectFile => ({ name, path: `2. Actual Evidence/${name}`, bucket, driveFileId, text });
 
@@ -166,5 +166,32 @@ describe("extractDates", () => {
     expect(extractDates("05/01/2026")[0].getMonth()).toBe(0);   // Jan (day-first)
     expect(extractDates("2026-03-14")[0].getMonth()).toBe(2);   // Mar
     expect(extractDates("no dates here")).toHaveLength(0);
+  });
+});
+
+describe("computeFlaggedPreCheckItems — the single definition of 'flagged' shared by runEvidenceAssessment's prompt injection and the Evidence tab's arrival panel", () => {
+  it("counts an auto item's 'flag' outcome, regardless of any manual tick", () => {
+    const files = [f("Management Review 2026.pdf", null)]; // triggers 6.2.1-record-count's flag (only 1 record found)
+    const { totalCount, flagsByItemId } = computeFlaggedPreCheckItems(DEFAULT_CHECKLISTS, {}, "6.2", ["6.2.1"], files);
+    expect(totalCount).toBeGreaterThan(0);
+    expect(flagsByItemId["6.2.1"]?.[0]).toContain("Current + preceding year's review records present");
+  });
+
+  it("counts a manual item ONLY when the auditor has ticked it (preAnalysisChecks[subCriterionId::itemId] === true)", () => {
+    const files: DetectFile[] = [];
+    const untouched = computeFlaggedPreCheckItems(DEFAULT_CHECKLISTS, {}, "4.2", ["4.2.2"], files);
+    // 4.2.2-fps-coverage is manual — untouched (no tick) contributes nothing.
+    expect(untouched.flagsByItemId["4.2.2"]?.some((m) => m.includes("FPS certificate"))).toBeFalsy();
+
+    const ticked = computeFlaggedPreCheckItems(DEFAULT_CHECKLISTS, { "4.2::4.2.2-fps-coverage": true }, "4.2", ["4.2.2"], files);
+    expect(ticked.flagsByItemId["4.2.2"]?.some((m) => m.includes("FPS certificate"))).toBe(true);
+    expect(ticked.totalCount).toBeGreaterThan(untouched.totalCount);
+  });
+
+  it("zero flags when nothing is flagged (empty checklist scope, no ticks)", () => {
+    const { totalCount, flagsByItemId } = computeFlaggedPreCheckItems(DEFAULT_CHECKLISTS, {}, "9.9", ["9.9.9"], []);
+    // The universal date-discrepancy check itself returns "unknown" with no files — not a flag.
+    expect(totalCount).toBe(0);
+    expect(flagsByItemId).toEqual({});
   });
 });

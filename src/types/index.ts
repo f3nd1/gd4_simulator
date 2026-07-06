@@ -934,6 +934,21 @@ export type EvidenceAssessmentResult = {
   fileLedger?: AuditFileRecord[];
 };
 
+// Result of comparing the Actual Evidence folder's CURRENT Drive listing
+// (file id + modifiedTime) against a stored EvidenceAssessmentResult's
+// fileLedger — lets the Evidence tab tell the user their existing result may
+// be stale before they act on it. "error" covers every case where the
+// comparison itself couldn't be made (no ledger to compare against, no
+// folder linked, Drive not connected, the listing call failed/timed out) —
+// deliberately distinct from "unchanged", never asserted as a false negative.
+export type EvidenceDriftCheck = {
+  status: "unchanged" | "changed" | "error";
+  added: string[];
+  removed: string[];
+  modified: string[];
+  errorMessage?: string;
+};
+
 // Lightweight progress for the Evidence tab's fresh assessment run, so the
 // user sees a bar + heartbeat instead of a static "Assessing…" button.
 // Per-line live state during an evidence assessment run.

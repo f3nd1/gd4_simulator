@@ -19,9 +19,9 @@ import { RunStepper, ppdRunStep, evidenceRunStep } from "../components/ui/RunSte
 import { FileLedger } from "./EvidenceFolder";
 import { normalizeAuditRef } from "../lib/gd4Refs";
 import { PreAnalysisChecklistPanel } from "../components/ui/PreAnalysisChecklistPanel";
-import { hasChecklist } from "../lib/preAnalysisChecklist";
+import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
-import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress } from "../types";
+import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
 //   • PPD Review — policy only, one row per GD4 requirement line (3 columns).
@@ -212,7 +212,14 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
 
       {tab === "ppd" ? <PpdTab selectedId={selectedId} totalLines={totalLines} />
         : tab === "precheck" ? <PreCheckTab selectedId={selectedId} onContinue={() => { setJustContinued(true); setTab("evidence"); }} />
-        : <EvidenceTab selectedId={selectedId} justArrived={justContinued} onDismissJustArrived={() => setJustContinued(false)} />}
+        : (
+          <EvidenceTab
+            selectedId={selectedId}
+            justArrived={justContinued}
+            onDismissJustArrived={() => setJustContinued(false)}
+            onGoToPrecheck={() => { setTab("precheck"); setJustContinued(false); }}
+          />
+        )}
     </>
   );
 }
@@ -809,37 +816,130 @@ export function HybridGatePanel({ subCriterionId }: { subCriterionId: string }) 
   );
 }
 
-// One-shot confirmation banner shown ONLY right after "Continue to Evidence"
-// (never on a manual tab click) — makes the Pre-check → Evidence transition
-// visually unambiguous: it confirms the tab actually changed and states
-// exactly what (if anything) happened automatically, so the user is never
-// left wondering whether their click did something. Dismissible; also
-// cleared automatically by any subsequent tab click (see PpdReviewContent).
-function ArrivedFromPrecheckBanner({ text, onDismiss }: { text: string; onDismiss?: () => void }) {
+// One-shot state-aware action panel shown ONLY right after "Continue to
+// Evidence" (never on a manual tab click) — the Pre-check → Evidence
+// transition is never silent/passive: this branches on the REAL current
+// situation (no assessment yet / unresolved Pre-check flags / an existing
+// result that's fresh or stale / a result reused from a staged Option B
+// audit) and proposes the one or two actions that actually make sense for
+// it, rather than just reporting a status. Every action reuses an existing
+// handler (runEvidenceAssessment, jump-to-Pre-check, dismiss-to-reveal-the-
+// table-below) — nothing here is a parallel/duplicate code path. Flags and
+// "evidence changed" are surfaced honestly but never block proceeding.
+// Dismissible; also cleared automatically by any subsequent tab click (see
+// PpdReviewContent).
+type EvidenceArrivalState =
+  | { kind: "not-ready" }
+  | { kind: "checking" }
+  | { kind: "ready-no-flags" }
+  | { kind: "ready-flags"; count: number }
+  | { kind: "staged"; runAt: string }
+  | { kind: "existing"; met: number; partial: number; notMet: number; runAt: string; caveat?: string }
+  | { kind: "changed"; added: number; removed: number; modified: number };
+
+const arrivalPrimaryBtn: CSSProperties = { cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 13px", borderRadius: 7, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff" };
+const arrivalSecondaryBtn: CSSProperties = { cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 13px", borderRadius: 7, border: "1px solid #4a5a8a", background: "#fff", color: "#4a5a8a" };
+const arrivalMutedBtn: CSSProperties = { cursor: "pointer", fontSize: 11.5, fontWeight: 600, padding: "6px 10px", borderRadius: 7, border: "1px solid #d1d5db", background: "#fff", color: "#6b7280" };
+const arrivalEmphasizedBtn: CSSProperties = { cursor: "pointer", fontSize: 12.5, fontWeight: 800, padding: "7px 15px", borderRadius: 7, border: "1px solid #b45309", background: "#f59e0b", color: "#fff" };
+
+function fmtRunAt(iso: string): string {
+  return new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function EvidenceArrivalPanel({
+  state, onRun, onReviewPrecheck, onDismiss,
+}: {
+  state: EvidenceArrivalState;
+  onRun: () => void;
+  onReviewPrecheck: () => void;
+  onDismiss?: () => void;
+}) {
+  const changedState = state.kind === "changed";
+  const tone = changedState
+    ? { bg: "#fffbeb", border: "#fde68a", fg: "#92400e" }
+    : { bg: "#f0fdf4", border: "#bbf7d0", fg: "#166534" };
+
+  let message: React.ReactNode;
+  let actions: React.ReactNode = null;
+
+  if (state.kind === "not-ready") {
+    message = "You're on the Evidence step now, but the PPD Review hasn't been completed yet — run it on the other tab first.";
+  } else if (state.kind === "checking") {
+    message = "Checking whether the evidence folder has changed since the last run…";
+  } else if (state.kind === "ready-no-flags") {
+    message = "No evidence assessment exists yet, and Pre-check found no unresolved flags. Ready to run.";
+    actions = <button type="button" onClick={onRun} style={arrivalPrimaryBtn}>Run evidence assessment →</button>;
+  } else if (state.kind === "ready-flags") {
+    message = `No evidence assessment exists yet. Pre-check has ${state.count} unresolved flagged item${state.count === 1 ? "" : "s"} — advisory, never a gate, but worth a look before you run.`;
+    actions = (
+      <>
+        <button type="button" onClick={onReviewPrecheck} style={arrivalSecondaryBtn}>Review Pre-check ({state.count}) →</button>
+        <button type="button" onClick={onRun} style={arrivalPrimaryBtn}>Run anyway →</button>
+      </>
+    );
+  } else if (state.kind === "staged") {
+    message = <>This result was <b>reused from the Evidence Folder's staged audit</b> (Option B), run {fmtRunAt(state.runAt)} — not a fresh Option A pass.</>;
+    actions = (
+      <>
+        <button type="button" onClick={onDismiss} style={arrivalSecondaryBtn}>View those results</button>
+        <button type="button" onClick={onRun} style={arrivalPrimaryBtn}>Run Option A assessment directly →</button>
+      </>
+    );
+  } else if (state.kind === "existing") {
+    message = (
+      <>
+        An evidence assessment already exists: <b>{state.met} Met, {state.partial} Partial, {state.notMet} Not met</b> (run {fmtRunAt(state.runAt)}).
+        {state.caveat && <span style={{ display: "block", marginTop: 3, fontStyle: "italic", color: "#92400e" }}>⚠ {state.caveat}</span>}
+      </>
+    );
+    actions = (
+      <>
+        <button type="button" onClick={onDismiss} style={arrivalSecondaryBtn}>View results</button>
+        <button type="button" onClick={onRun} style={arrivalMutedBtn}>Re-run assessment</button>
+      </>
+    );
+  } else if (state.kind === "changed") {
+    const parts = [state.added ? `${state.added} added` : null, state.removed ? `${state.removed} removed` : null, state.modified ? `${state.modified} modified` : null].filter(Boolean);
+    message = <>⚠ The evidence folder has <b>changed since this assessment was run</b>{parts.length ? ` (${parts.join(", ")})` : ""} — this result may be outdated.</>;
+    actions = (
+      <>
+        <button type="button" onClick={onRun} style={arrivalEmphasizedBtn}>Re-run assessment (recommended) →</button>
+        <button type="button" onClick={onDismiss} style={arrivalMutedBtn}>View outdated results anyway</button>
+      </>
+    );
+  }
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#166534", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>
-      <span>✅ <b>Pre-check reviewed — now on the Evidence step.</b> {text}</span>
-      <button
-        type="button"
-        onClick={onDismiss}
-        title="Dismiss"
-        style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#166534", fontSize: 14, lineHeight: 1, padding: "0 2px" }}
-      >
-        ×
-      </button>
+    <div style={{ fontSize: 12, color: tone.fg, background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 8, padding: "9px 12px", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+        <span style={{ flex: 1 }}>{changedState ? "⚠" : "✅"} <b>Pre-check reviewed — now on the Evidence step.</b> {message}</span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          title="Dismiss"
+          style={{ cursor: "pointer", border: "none", background: "transparent", color: tone.fg, fontSize: 14, lineHeight: 1, padding: "0 2px", flexShrink: 0 }}
+        >
+          ×
+        </button>
+      </div>
+      {actions && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>{actions}</div>}
     </div>
   );
 }
 
-function EvidenceTab({ selectedId, justArrived, onDismissJustArrived }: { selectedId: string; justArrived?: boolean; onDismissJustArrived?: () => void }) {
+function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrecheck }: { selectedId: string; justArrived?: boolean; onDismissJustArrived?: () => void; onGoToPrecheck?: () => void }) {
   const busy = useWorkspaceStore((s) => s.busy);
   const runEvidenceAssessment = useWorkspaceStore((s) => s.runEvidenceAssessment);
   const deriveEvidenceAssessmentFromAudit = useWorkspaceStore((s) => s.deriveEvidenceAssessmentFromAudit);
+  const checkEvidenceDrift = useWorkspaceStore((s) => s.checkEvidenceDrift);
   const compileEvidenceFindings = useWorkspaceStore((s) => s.compileEvidenceFindings);
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
   const progress = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
+  const checklistData = usePreCheckChecklistStore((s) => s.checklists);
+  const preChecks = useWorkspaceStore((s) => s.preAnalysisChecks);
+  const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
 
   const ppd = ppdReviewResults[selectedId];
   const ppdReady = !!ppd && ppd.rows.length > 0 && !ppd.rows.some((r) => !r.ref);
@@ -854,6 +954,48 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived }: { select
   useEffect(() => {
     if (ppdReady && !assessment) deriveEvidenceAssessmentFromAudit(selectedId);
   }, [ppdReady, assessment, selectedId, deriveEvidenceAssessmentFromAudit]);
+
+  // Arrival-panel state (see EvidenceArrivalPanel) — computed only while the
+  // panel would actually be shown, since the drift check is a real (if
+  // cheap, metadata-only) Drive API call. Flag count reuses the EXACT same
+  // "flagged" definition runEvidenceAssessment's prompt injection uses.
+  const itemIds = useMemo(() => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === selectedId).map((r) => r.id), [selectedId]);
+  const flagCount = useMemo(() => {
+    if (!justArrived || assessment) return 0;
+    const files: DetectFile[] = [...(ppd?.fileLedger ?? [])].map((rec) => {
+      const cacheKey = rec.driveFileId ? Object.entries(fileTextCache).find(([k]) => k.startsWith(`${rec.driveFileId}:`))?.[1] : undefined;
+      return { name: rec.name, path: rec.path, bucket: rec.bucket, driveFileId: rec.driveFileId, text: cacheKey?.text ?? null };
+    });
+    return computeFlaggedPreCheckItems(checklistData, preChecks, selectedId, itemIds, files).totalCount;
+  }, [justArrived, assessment, ppd, checklistData, preChecks, selectedId, itemIds, fileTextCache]);
+
+  const [drift, setDrift] = useState<EvidenceDriftCheck | null>(null);
+  useEffect(() => {
+    setDrift(null);
+    // Only a fresh, non-derived assessment carries a fileLedger to diff
+    // against — derivedFromAudit results and assessments with no ledger at
+    // all have nothing to compare, so no check is attempted for them.
+    if (!justArrived || !assessment || assessment.derivedFromAudit || !assessment.fileLedger?.length) return;
+    let cancelled = false;
+    checkEvidenceDrift(selectedId).then((r) => { if (!cancelled) setDrift(r); });
+    return () => { cancelled = true; };
+  }, [justArrived, assessment, selectedId, checkEvidenceDrift]);
+
+  const arrivalState: EvidenceArrivalState = !ppdReady
+    ? { kind: "not-ready" }
+    : !assessment
+      ? (flagCount > 0 ? { kind: "ready-flags", count: flagCount } : { kind: "ready-no-flags" })
+      : assessment.derivedFromAudit
+        ? { kind: "staged", runAt: assessment.runAt }
+        : (() => {
+            const met = assessment.rows.filter((r) => r.verdict === "Met").length;
+            const partial = assessment.rows.filter((r) => r.verdict === "Partial").length;
+            const notMet = assessment.rows.filter((r) => r.verdict === "Not met").length;
+            if (drift === null) return { kind: "checking" };
+            if (drift.status === "changed") return { kind: "changed", added: drift.added.length, removed: drift.removed.length, modified: drift.modified.length };
+            const caveat = drift.status === "error" ? `Couldn't confirm whether the evidence folder has changed since this run (${drift.errorMessage ?? "check failed"}).` : undefined;
+            return { kind: "existing", met, partial, notMet, runAt: assessment.runAt, caveat };
+          })();
 
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [compileMsg, setCompileMsg] = useState<string | null>(null);
@@ -883,7 +1025,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived }: { select
     return (
       <>
         {justArrived && (
-          <ArrivedFromPrecheckBanner text="You're on the Evidence step now, but the PPD Review hasn't been completed yet." onDismiss={onDismissJustArrived} />
+          <EvidenceArrivalPanel state={{ kind: "not-ready" }} onRun={() => runEvidenceAssessment(selectedId)} onReviewPrecheck={() => onGoToPrecheck?.()} onDismiss={onDismissJustArrived} />
         )}
         <div style={{ fontSize: 12.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px" }}>
           Run the <b>PPD Review</b> first (the other tab) — the Evidence assessment reuses each requirement line's PPD verdict and doesn't re-read the policy.
@@ -907,13 +1049,11 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived }: { select
 
   return (
     <>
-      {justArrived && (
-        <ArrivedFromPrecheckBanner
-          text={
-            assessment
-              ? `${assessment.derivedFromAudit ? "Evidence results were reused from the Evidence Folder's staged audit" : "An evidence assessment already exists for this line"} — see the table below.`
-              : "No evidence assessment exists yet — click \"Run evidence assessment\" below when you're ready (this is a separate AI call, not triggered automatically)."
-          }
+      {justArrived && !isRunning && (
+        <EvidenceArrivalPanel
+          state={arrivalState}
+          onRun={() => { setCompileMsg(null); runEvidenceAssessment(selectedId); }}
+          onReviewPrecheck={() => onGoToPrecheck?.()}
           onDismiss={onDismissJustArrived}
         />
       )}

@@ -50,9 +50,10 @@ import { useFindingDraftStore } from "./useFindingDraftStore";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { usePreCheckChecklistStore } from "./usePreCheckChecklistStore";
-import { runPreAnalysisChecklist, type DetectFile } from "../lib/preAnalysisChecklist";
+import { computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
+import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine, EvidenceDriftCheck } from "../types";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
 import { computePanelConclusion } from "../lib/panelConclusion";
@@ -483,6 +484,11 @@ export type WorkspaceState = {
   // ref) — no AI calls. Returns true if any audited line was found.
   deriveEvidenceAssessmentFromAudit: (subCriterionId: string) => boolean;
   runEvidenceAssessment: (subCriterionId: string) => Promise<void>;
+  // Metadata-only Drive listing (no file content read, no AI) compared
+  // against the stored assessment's fileLedger — lets the Evidence tab warn
+  // "evidence has changed since this result" before the user acts on a
+  // possibly-stale assessment. See EvidenceDriftCheck.
+  checkEvidenceDrift: (subCriterionId: string) => Promise<EvidenceDriftCheck>;
   compileEvidenceFindings: (subCriterionId: string) => number;
   // Live progress for a fresh runEvidenceAssessment (bar + heartbeat on the
   // Evidence tab); null when no assessment is running.
@@ -1470,17 +1476,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const cacheKey = rec.driveFileId ? Object.entries(get().fileTextCache).find(([k]) => k.startsWith(`${rec.driveFileId}:`))?.[1] : undefined;
             return { name: rec.name, path: rec.path, bucket: rec.bucket, driveFileId: rec.driveFileId, text: cacheKey?.text ?? null };
           });
-          const preChecks = get().preAnalysisChecks;
-          const flagsByItemId: Record<string, string[]> = {};
-          for (const itemId of new Set(ppd.rows.map((r) => r.gd4ItemId))) {
-            const results = runPreAnalysisChecklist(checklistData, [itemId], detectFiles);
-            const flagged = results.filter((item) =>
-              item.mode === "auto" ? item.outcome?.status === "flag" : !!preChecks[`${subCriterionId}::${item.id}`]
-            );
-            if (flagged.length > 0) {
-              flagsByItemId[itemId] = flagged.map((f) => `${f.title}: ${f.mode === "auto" ? (f.outcome?.message ?? f.description) : f.description}`);
-            }
-          }
+          const { flagsByItemId } = computeFlaggedPreCheckItems(
+            checklistData, get().preAnalysisChecks, subCriterionId, ppd.rows.map((r) => r.gd4ItemId), detectFiles
+          );
 
           const inputs: EvidenceAssessmentInput[] = ppd.rows.map((r) => ({
             ref: r.ref,
@@ -1572,6 +1570,37 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames, coverageNote, fileLedger);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
+        }
+      },
+
+      // Metadata-only check (Drive files.list — no content read, no AI call)
+      // for whether the Actual Evidence folder has changed since the stored
+      // assessment's fileLedger was built. "error" (not "unchanged") whenever
+      // the comparison can't genuinely be made — no ledger to compare against
+      // (e.g. derivedFromAudit results never carry one), no folder linked, no
+      // Drive connection, or the listing call itself failed/timed out — so a
+      // missing answer is never presented as a false "nothing changed".
+      checkEvidenceDrift: async (subCriterionId) => {
+        const s = get();
+        const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
+        const assessment = s.evidenceAssessments[subCriterionId];
+        const ledger = assessment?.fileLedger?.filter((r) => r.bucket === "evidence" && r.driveFileId);
+        if (!folder || !ledger || ledger.length === 0) {
+          return { status: "error", added: [], removed: [], modified: [], errorMessage: "No prior file ledger to compare against." };
+        }
+        const evidenceId = parseFolderId(folder.folderLink) || parseFolderId(folder.policyLink);
+        if (!evidenceId) return { status: "error", added: [], removed: [], modified: [], errorMessage: "No evidence folder linked." };
+        const token = await useGoogleDriveStore.getState().getFreshToken();
+        if (!token) return { status: "error", added: [], removed: [], modified: [], errorMessage: "Google Drive isn't connected." };
+        try {
+          const allFiles = await listFolderFilesRecursive(evidenceId, token, "", 0, timeoutSignal(undefined, DRIVE_LIST_TIMEOUT_MS));
+          const evidenceFiles = parseFolderId(folder.folderLink)
+            ? allFiles
+            : allFiles.filter((f) => classifyFileBucket(f.path) === "evidence");
+          const current = evidenceFiles.map((f) => ({ id: f.id, name: f.path.split("/").pop() || f.path, modifiedTime: f.modifiedTime }));
+          return diffEvidenceFiles(current, ledger);
+        } catch (err) {
+          return { status: "error", added: [], removed: [], modified: [], errorMessage: err instanceof Error ? err.message : String(err) };
         }
       },
 
