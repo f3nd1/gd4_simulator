@@ -40,3 +40,43 @@ describe("usePreCheckChecklistStore — setVerified (Setup page's Approve / Reve
     expect(usePreCheckChecklistStore.getState().checklists["1.1.1"]).toEqual(before);
   });
 });
+
+describe("usePreCheckChecklistStore — batch actions (Setup page's 'All items' bulk bar)", () => {
+  it("setVerifiedBatch approves a selection spanning multiple different GD4 items in one call", () => {
+    const s = usePreCheckChecklistStore.getState();
+    const a = s.checklists["1.1.1"]?.[0];
+    const b = s.checklists["4.2.2"]?.[0];
+    expect(a?.verified).toBe(false);
+
+    s.setVerifiedBatch([{ itemId: "1.1.1", defId: a!.id }, { itemId: "4.2.2", defId: b!.id }], true);
+    const after = usePreCheckChecklistStore.getState().checklists;
+    expect(after["1.1.1"]?.find((d) => d.id === a!.id)?.verified).toBe(true);
+    expect(after["4.2.2"]?.find((d) => d.id === b!.id)?.verified).toBe(true);
+
+    usePreCheckChecklistStore.getState().resetToDefaults();
+  });
+
+  it("removeItemsBatch deletes only the selected pairs, leaving siblings and other items untouched", () => {
+    const s = usePreCheckChecklistStore.getState();
+    const items4_2_2 = s.checklists["4.2.2"] ?? [];
+    expect(items4_2_2.length).toBeGreaterThan(1);
+    const [toRemove, toKeep] = items4_2_2;
+    const item1_1_1Before = s.checklists["1.1.1"];
+
+    s.removeItemsBatch([{ itemId: "4.2.2", defId: toRemove.id }]);
+    const after = usePreCheckChecklistStore.getState().checklists;
+    expect(after["4.2.2"]?.find((d) => d.id === toRemove.id)).toBeUndefined();
+    expect(after["4.2.2"]?.find((d) => d.id === toKeep.id)).toBeDefined();
+    expect(after["1.1.1"]).toEqual(item1_1_1Before);
+
+    usePreCheckChecklistStore.getState().resetToDefaults();
+  });
+
+  it("both batch methods are no-ops on an empty pairs array", () => {
+    const s = usePreCheckChecklistStore.getState();
+    const before = s.checklists;
+    s.setVerifiedBatch([], true);
+    s.removeItemsBatch([]);
+    expect(usePreCheckChecklistStore.getState().checklists).toEqual(before);
+  });
+});

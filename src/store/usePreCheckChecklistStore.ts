@@ -23,6 +23,11 @@ export type PreCheckChecklistState = {
   // flipping `verified` is always intentional and visible, editable at any
   // time in either direction.
   setVerified: (itemId: string, defId: string, verified: boolean) => void;
+  // Bulk variants for the Setup page's "All items" view, where a filtered
+  // selection can span many different GD4 items at once. Each is a single
+  // atomic update rather than N separate set() calls.
+  removeItemsBatch: (pairs: { itemId: string; defId: string }[]) => void;
+  setVerifiedBatch: (pairs: { itemId: string; defId: string }[], verified: boolean) => void;
   resetToDefaults: () => void;
 };
 
@@ -81,6 +86,34 @@ export const usePreCheckChecklistStore = create<PreCheckChecklistState>()(
               [itemId]: existing.map((d) => (d.id === defId ? { ...d, verified } : d)),
             },
           };
+        }),
+
+      removeItemsBatch: (pairs) =>
+        set((s) => {
+          const byItem = new Map<string, Set<string>>();
+          for (const { itemId, defId } of pairs) {
+            if (!byItem.has(itemId)) byItem.set(itemId, new Set());
+            byItem.get(itemId)!.add(defId);
+          }
+          const checklists = { ...s.checklists };
+          for (const [itemId, defIds] of byItem) {
+            checklists[itemId] = (checklists[itemId] ?? []).filter((d) => !defIds.has(d.id));
+          }
+          return { checklists };
+        }),
+
+      setVerifiedBatch: (pairs, verified) =>
+        set((s) => {
+          const byItem = new Map<string, Set<string>>();
+          for (const { itemId, defId } of pairs) {
+            if (!byItem.has(itemId)) byItem.set(itemId, new Set());
+            byItem.get(itemId)!.add(defId);
+          }
+          const checklists = { ...s.checklists };
+          for (const [itemId, defIds] of byItem) {
+            checklists[itemId] = (checklists[itemId] ?? []).map((d) => (defIds.has(d.id) ? { ...d, verified } : d));
+          }
+          return { checklists };
         }),
 
       resetToDefaults: () => set({ checklists: DEFAULT_CHECKLISTS }),
