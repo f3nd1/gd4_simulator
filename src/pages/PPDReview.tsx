@@ -124,6 +124,11 @@ export function OptionAExportButtons({ subCriterionId }: { subCriterionId: strin
 export function PpdReviewContent({ selectedId }: { selectedId: string }) {
   const sub = GD4_SUB_CRITERIA.find((s) => s.id === selectedId);
   const [tab, setTab] = useState<"ppd" | "precheck" | "evidence">("ppd");
+  // Set only by "Continue to Evidence" (below) — gives EvidenceTab a one-shot
+  // signal to show a clear "you just arrived here" confirmation banner, so
+  // the Pre-check → Evidence transition is never silent/ambiguous. Cleared on
+  // any manual tab click (including re-clicking "Evidence" itself).
+  const [justContinued, setJustContinued] = useState(false);
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const folders = useWorkspaceStore((s) => s.folders);
   const folder = folders.find((f) => f.subCriterionId === selectedId);
@@ -185,7 +190,7 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
         {([["ppd", "PPD Review"], ["precheck", "Pre-check"], ["evidence", "Evidence"]] as const).map(([id, label]) => (
           <button
             key={id}
-            onClick={() => setTab(id)}
+            onClick={() => { setTab(id); setJustContinued(false); }}
             style={{
               cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", border: "none",
               borderBottom: `2px solid ${tab === id ? "#4338ca" : "transparent"}`,
@@ -206,8 +211,8 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
       </div>
 
       {tab === "ppd" ? <PpdTab selectedId={selectedId} totalLines={totalLines} />
-        : tab === "precheck" ? <PreCheckTab selectedId={selectedId} onContinue={() => setTab("evidence")} />
-        : <EvidenceTab selectedId={selectedId} />}
+        : tab === "precheck" ? <PreCheckTab selectedId={selectedId} onContinue={() => { setJustContinued(true); setTab("evidence"); }} />
+        : <EvidenceTab selectedId={selectedId} justArrived={justContinued} onDismissJustArrived={() => setJustContinued(false)} />}
     </>
   );
 }
@@ -219,7 +224,10 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
 // Sub-criteria with no defined checklist show an honest "no checks" state
 // instead of PreAnalysisChecklistPanel's silent null, so a clicked tab never
 // appears blank. Non-blocking: "Continue to Evidence" just switches tabs —
-// it never triggers a run.
+// it never triggers an AI run (that still needs its own explicit "Run
+// evidence assessment" click, preserving per-stage AI-cost consent). The
+// transition itself is made unambiguous on arrival — see EvidenceTab's
+// `justArrived` banner.
 function PreCheckTab({ selectedId, onContinue }: { selectedId: string; onContinue: () => void }) {
   const ppd = useWorkspaceStore((s) => s.ppdReviewResults[selectedId]);
   const assessment = useWorkspaceStore((s) => s.evidenceAssessments[selectedId]);
@@ -801,7 +809,29 @@ export function HybridGatePanel({ subCriterionId }: { subCriterionId: string }) 
   );
 }
 
-function EvidenceTab({ selectedId }: { selectedId: string }) {
+// One-shot confirmation banner shown ONLY right after "Continue to Evidence"
+// (never on a manual tab click) — makes the Pre-check → Evidence transition
+// visually unambiguous: it confirms the tab actually changed and states
+// exactly what (if anything) happened automatically, so the user is never
+// left wondering whether their click did something. Dismissible; also
+// cleared automatically by any subsequent tab click (see PpdReviewContent).
+function ArrivedFromPrecheckBanner({ text, onDismiss }: { text: string; onDismiss?: () => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#166534", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>
+      <span>✅ <b>Pre-check reviewed — now on the Evidence step.</b> {text}</span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        title="Dismiss"
+        style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", color: "#166534", fontSize: 14, lineHeight: 1, padding: "0 2px" }}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function EvidenceTab({ selectedId, justArrived, onDismissJustArrived }: { selectedId: string; justArrived?: boolean; onDismissJustArrived?: () => void }) {
   const busy = useWorkspaceStore((s) => s.busy);
   const runEvidenceAssessment = useWorkspaceStore((s) => s.runEvidenceAssessment);
   const deriveEvidenceAssessmentFromAudit = useWorkspaceStore((s) => s.deriveEvidenceAssessmentFromAudit);
@@ -851,9 +881,14 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
 
   if (!ppdReady) {
     return (
-      <div style={{ fontSize: 12.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px" }}>
-        Run the <b>PPD Review</b> first (the other tab) — the Evidence assessment reuses each requirement line's PPD verdict and doesn't re-read the policy.
-      </div>
+      <>
+        {justArrived && (
+          <ArrivedFromPrecheckBanner text="You're on the Evidence step now, but the PPD Review hasn't been completed yet." onDismiss={onDismissJustArrived} />
+        )}
+        <div style={{ fontSize: 12.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px" }}>
+          Run the <b>PPD Review</b> first (the other tab) — the Evidence assessment reuses each requirement line's PPD verdict and doesn't re-read the policy.
+        </div>
+      </>
     );
   }
 
@@ -872,6 +907,16 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
 
   return (
     <>
+      {justArrived && (
+        <ArrivedFromPrecheckBanner
+          text={
+            assessment
+              ? `${assessment.derivedFromAudit ? "Evidence results were reused from the Evidence Folder's staged audit" : "An evidence assessment already exists for this line"} — see the table below.`
+              : "No evidence assessment exists yet — click \"Run evidence assessment\" below when you're ready (this is a separate AI call, not triggered automatically)."
+          }
+          onDismiss={onDismissJustArrived}
+        />
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
         <button
           disabled={isRunning}

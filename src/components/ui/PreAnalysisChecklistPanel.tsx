@@ -58,6 +58,15 @@ function ChecklistRow({ item, folderId, scanned }: { item: ChecklistItemResult; 
         <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1e293b" }}>{item.title}</span>
+            {/* Universal (applies to every sub-criterion) vs per-item tag */}
+            {item.scope === "universal" && (
+              <span
+                style={{ fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: "#ecfeff", color: "#0e7490", border: "1px solid #a5f3fc" }}
+                title="Runs for every sub-criterion, not just this one — see the Pre-check Checklist Setup page."
+              >
+                🌐 Universal
+              </span>
+            )}
             {/* Auto vs manual tag */}
             <span style={{ fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: item.mode === "auto" ? "#eef2ff" : "#f1f5f9", color: item.mode === "auto" ? "#4338ca" : "#64748b" }} title={item.mode === "auto" ? "The app scanned the extracted text (pattern match — no AI call)." : "Needs human judgement."}>
               {item.mode === "auto" ? "Auto-detected" : "Manual check"}
@@ -129,7 +138,7 @@ export function PreAnalysisChecklistPanel({
       </div>
       <div style={{ padding: "2px 11px 9px" }}>
         <div style={{ fontSize: 10.5, color: "#94a3b8", padding: "6px 0 2px" }}>
-          Quality checks specific to this sub-criterion, grounded in the SSG evidence list, regulatory rules and this PEI's real finding patterns. Non-blocking — you can continue at any time.
+          Universal checks (🌐, run on every sub-criterion) plus quality checks specific to this sub-criterion, grounded in the SSG evidence list, regulatory rules and this PEI's real finding patterns. Non-blocking — you can continue at any time.
         </div>
         {results.map((item) => (
           <ChecklistRow key={item.id} item={item} folderId={folderId} scanned={scanned} />

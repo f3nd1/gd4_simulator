@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runPreAnalysisChecklist, checklistForItems, hasChecklist, extractDates, DEFAULT_CHECKLISTS, type DetectFile } from "../preAnalysisChecklist";
+import { runPreAnalysisChecklist, checklistForItems, hasChecklist, extractDates, findDocumentDate, detectDateTimeDiscrepancy, UNIVERSAL_CHECKLIST, DEFAULT_CHECKLISTS, type DetectFile } from "../preAnalysisChecklist";
 
 const f = (name: string, text: string | null, bucket: "policy" | "evidence" = "evidence", driveFileId = name): DetectFile => ({ name, path: `2. Actual Evidence/${name}`, bucket, driveFileId, text });
 
@@ -20,9 +20,9 @@ describe("preAnalysisChecklist — definitions", () => {
   it("5.3.1 (Partnerships) deliberately has no draft item — no adequate grounding was found", () => {
     expect(checklistForItems(DEFAULT_CHECKLISTS, ["5.3.1"])).toEqual([]);
   });
-  it("undefined sub-criteria have no checklist (no placeholder)", () => {
-    expect(hasChecklist(DEFAULT_CHECKLISTS, ["9.9.9"])).toBe(false);
+  it("an undefined sub-criterion has no PER-ITEM checklist (no placeholder) — but hasChecklist is still true because of the universal layer", () => {
     expect(checklistForItems(DEFAULT_CHECKLISTS, ["9.9.9"])).toEqual([]);
+    expect(hasChecklist(DEFAULT_CHECKLISTS, ["9.9.9"])).toBe(true);
   });
   it("manual items carry no detect fn and produce no auto outcome", () => {
     const fps = runPreAnalysisChecklist(DEFAULT_CHECKLISTS, ["4.2.2"], []).find((r) => r.id === "4.2.2-fps-coverage");
@@ -84,6 +84,79 @@ describe("management-review record count (auto, name-based)", () => {
     const o = outcome(["6.2.1"], [f("Board_Notes.pdf", null)], "6.2.1-record-count");
     expect(o?.status).toBe("flag");
     expect(o?.message).toMatch(/recognised as management-review/i);
+  });
+});
+
+describe("universal checklist layer — runs for every sub-criterion, additive to any specific items", () => {
+  it("a sub-criterion with NO specific items still gets the universal date-discrepancy item", () => {
+    const results = runPreAnalysisChecklist(DEFAULT_CHECKLISTS, ["9.9.9"], []);
+    expect(results.map((r) => r.id)).toContain("universal-date-discrepancy");
+    expect(results.find((r) => r.id === "universal-date-discrepancy")?.scope).toBe("universal");
+  });
+  it("a sub-criterion WITH specific items (4.2.2) gets universal + specific together, universal first", () => {
+    const results = runPreAnalysisChecklist(DEFAULT_CHECKLISTS, ["4.2.2"], []);
+    expect(results[0].id).toBe("universal-date-discrepancy");
+    expect(results.map((r) => r.id)).toEqual(expect.arrayContaining(["4.2.2-nric", "4.2.2-contract-seq", "4.2.2-fps-coverage"]));
+  });
+  it("the universal check is verified (genuine detection logic, not a per-sub-criterion draft guess)", () => {
+    expect(UNIVERSAL_CHECKLIST.every((i) => i.verified)).toBe(true);
+  });
+});
+
+describe("universal date/time discrepancy detector (auto)", () => {
+  const NOW = new Date(2026, 5, 1); // 1 June 2026 — fixed "now" so tests are deterministic
+
+  it("flags a policy dated AFTER an evidence record it would logically govern", () => {
+    const files: DetectFile[] = [
+      { name: "Refund_Policy.pdf", path: "1. Policy & Procedure/Refund_Policy.pdf", bucket: "policy", driveFileId: "p1", text: "Refund Policy. Version dated 10 March 2026." },
+      { name: "Refund_Register.xlsx", path: "2. Actual Evidence/Refund_Register.xlsx", bucket: "evidence", driveFileId: "e1", text: "Refund processed. Approved on 1 January 2026." },
+    ];
+    const o = detectDateTimeDiscrepancy(files, NOW);
+    expect(o.status).toBe("flag");
+    expect(o.message).toContain("postdates");
+    expect(o.fileRefs?.map((r) => r.name)).toEqual(expect.arrayContaining(["Refund_Policy.pdf", "Refund_Register.xlsx"]));
+  });
+
+  it("flags a document dated suspiciously close to the review date (within 4 weeks)", () => {
+    const files: DetectFile[] = [
+      { name: "Management_Review.pdf", path: "2. Actual Evidence/Management_Review.pdf", bucket: "evidence", driveFileId: "e2", text: "Management review minutes, approved on 20 May 2026." },
+    ];
+    const o = detectDateTimeDiscrepancy(files, NOW);
+    expect(o.status).toBe("flag");
+    expect(o.message).toMatch(/prepared in anticipation/);
+  });
+
+  it("clears when dates are consistent and nothing is close to the review date", () => {
+    const files: DetectFile[] = [
+      { name: "Refund_Policy.pdf", path: "1. Policy & Procedure/Refund_Policy.pdf", bucket: "policy", driveFileId: "p2", text: "Refund Policy. Version dated 5 January 2025." },
+      { name: "Refund_Register.xlsx", path: "2. Actual Evidence/Refund_Register.xlsx", bucket: "evidence", driveFileId: "e3", text: "Refund processed. Approved on 10 March 2025." },
+    ];
+    const o = detectDateTimeDiscrepancy(files, NOW);
+    expect(o.status).toBe("clear");
+  });
+
+  it("is honest ('unknown') when no file has any identifiable version/signature date", () => {
+    const files: DetectFile[] = [
+      { name: "Notes.pdf", path: "2. Actual Evidence/Notes.pdf", bucket: "evidence", driveFileId: "e4", text: "General notes with no dating keyword nearby, though the year 2025 appears in passing." },
+    ];
+    const o = detectDateTimeDiscrepancy(files, NOW);
+    expect(o.status).toBe("unknown");
+  });
+
+  it("is honest ('unknown') when no text has been read yet", () => {
+    const files: DetectFile[] = [{ name: "Scan.pdf", path: "2. Actual Evidence/Scan.pdf", bucket: "evidence", driveFileId: "e5", text: null }];
+    expect(detectDateTimeDiscrepancy(files, NOW).status).toBe("unknown");
+  });
+});
+
+describe("findDocumentDate", () => {
+  it("finds a date next to a broad set of dating/versioning keywords (not just contract-signing ones)", () => {
+    expect(findDocumentDate("This policy was last revised on 3 February 2026.")?.getFullYear()).toBe(2026);
+    expect(findDocumentDate("Version dated 14 March 2026.")?.getMonth()).toBe(2);
+    expect(findDocumentDate("Approved on 2026-01-05.")).not.toBeNull();
+  });
+  it("never guesses from a random date with no dating keyword nearby", () => {
+    expect(findDocumentDate("The previous policy from 2020 was superseded. No further dates mentioned here at all in 2026.")).toBeNull();
   });
 });
 

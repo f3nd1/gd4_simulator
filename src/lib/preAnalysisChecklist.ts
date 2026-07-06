@@ -17,6 +17,15 @@
 // are pure and take the checklist data as a parameter so both the store and
 // unit tests can exercise them without a Zustand dependency.
 //
+// UNIVERSAL vs PER-ITEM: most items are `scope` undefined — specific to the
+// GD4 item(s) they're keyed under in ChecklistData/DEFAULT_CHECKLISTS, and
+// only shown when that item has an entry. UNIVERSAL_CHECKLIST (below) is a
+// SEPARATE, small array of `scope: "universal"` items that run for EVERY
+// sub-criterion regardless of whether it has any per-item entries — see
+// runPreAnalysisChecklist/hasChecklist, which always fold these in. Add a new
+// universal check the same way as a per-item one: a detection function +
+// DETECTION_REGISTRY entry + a ChecklistItemDef pushed onto the array.
+//
 // DETECTION REGISTRY: an item cannot persist a raw function reference (not
 // serialisable), so auto items store a `detectionKey` naming one of a small,
 // fixed set of detection functions; "none" means manual-only (no detection —
@@ -27,7 +36,7 @@
 
 export type ChecklistSourceKind = "regulatory" | "fps" | "contract" | "gd4" | "finding-pattern";
 export type ChecklistMode = "auto" | "manual";
-export type DetectionKey = "nric" | "date-sequencing" | "record-count" | "none";
+export type DetectionKey = "nric" | "date-sequencing" | "record-count" | "date-discrepancy" | "none";
 
 // A file as seen by the checklist: identity + whatever extracted text the
 // pre-flight warmed into the cache (null when not yet read / image / scanned).
@@ -44,10 +53,15 @@ export type ChecklistItemDef = {
   sourceKind: ChecklistSourceKind;
   mode: ChecklistMode;       // "auto" = the app scanned; "manual" = human judgement
   detectionKey: DetectionKey; // which registered detector to run; "none" for manual items
-  // true = a human verified the exact source citation (4.2.2/6.2.1 only).
+  // true = a human verified the exact source citation (4.2.2/6.2.1 only) OR
+  // the Setup page's "Approve" action has since confirmed a drafted item.
   // false = a drafted starter item, not yet reviewed — must render as a
   // visibly distinct "Draft" badge everywhere, never with verified's confidence.
   verified: boolean;
+  // "universal" = one of UNIVERSAL_CHECKLIST's items, applied to every
+  // sub-criterion regardless of ChecklistData's per-item entries. Undefined
+  // (the default) = a normal per-sub-criterion-item check.
+  scope?: "universal";
 };
 
 export type ChecklistItemResult = ChecklistItemDef & { outcome?: DetectOutcome };
@@ -89,6 +103,23 @@ export function extractDates(text: string): Date[] {
 // "couldn't determine" instead of guessing off an arbitrary date in the doc.
 export function findContractSignatureDate(text: string): Date | null {
   const label = /(sign(?:ed|ature)?|executed|dated|date of (?:the )?(?:agreement|contract)|agreement date|contract date)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = label.exec(text))) {
+    const ds = extractDates(text.slice(m.index, m.index + 60));
+    if (ds.length) return ds[0];
+  }
+  return null;
+}
+
+// A document's OWN date — the date next to a dating/versioning/signing
+// keyword, broader than findContractSignatureDate's contract-specific label
+// set (adds version/effective/revised/reviewed/approved/published). Returns
+// null when no such labelled date is found — never guesses from a random
+// date mentioned in the body text (which could belong to something else the
+// document merely refers to), so a caller can honestly say "couldn't
+// determine" instead of comparing against a wrong date.
+export function findDocumentDate(text: string): Date | null {
+  const label = /(sign(?:ed|ature)?|executed|dated|date of (?:the )?(?:agreement|contract|issue)|agreement date|contract date|version(?:ed)?|effective(?:\s+from| date)?|revis(?:ed|ion)|review(?:ed)?(?:\s+on)?|approv(?:ed|al)(?:\s+on)?|publish(?:ed)?)/gi;
   let m: RegExpExecArray | null;
   while ((m = label.exec(text))) {
     const ds = extractDates(text.slice(m.index, m.index + 60));
@@ -156,6 +187,73 @@ function detectRecordCount(files: DetectFile[]): DetectOutcome {
   };
 }
 
+// How close to "now" (whenever this check actually runs) counts as
+// suspicious — evidence-timeliness.md's "created within 4 weeks of the audit
+// submission deadline" red flag, applied at Pre-check time.
+const AUDIT_PROXIMITY_DAYS = 28;
+
+// Universal date/time discrepancy check — see UNIVERSAL_CHECKLIST below for
+// why this runs for every sub-criterion. Two honest, independently-checkable
+// red flags straight from evidence-timeliness.md:
+//   1. A policy/procedure document dated AFTER an evidence-bucket document it
+//      would logically govern (the policy may not have been in place yet).
+//   2. Any document dated within AUDIT_PROXIMITY_DAYS of "now" — a sign it may
+//      have been prepared for this review rather than reflecting ongoing
+//      practice (on its own, neither proves nor disproves anything — it's a
+//      prompt to look closer, same register as every other auto check here).
+// `now` is injectable (defaults to the real clock) so this stays unit-testable
+// without mocking global Date. A file whose own date can't be reliably
+// identified (no dating/versioning keyword found near a date) is simply
+// excluded from the comparison rather than guessed; if NONE can be
+// identified, the whole check is honestly "unknown", never a false "clear".
+export function detectDateTimeDiscrepancy(files: DetectFile[], now: Date = new Date()): DetectOutcome {
+  const scannable = withText(files);
+  if (scannable.length === 0) return { status: "unknown", message: NO_TEXT_MSG };
+
+  const dated = scannable
+    .map((f) => ({ file: f, date: findDocumentDate(f.text as string) }))
+    .filter((d): d is { file: DetectFile; date: Date } => d.date !== null);
+
+  if (dated.length === 0) {
+    return { status: "unknown", message: "Couldn't reliably identify a version/signature date in any file's text — check dates manually." };
+  }
+
+  const flagMessages: string[] = [];
+  const flaggedFiles: DetectFile[] = [];
+  const addFlag = (msg: string, ...fs: DetectFile[]) => {
+    flagMessages.push(msg);
+    for (const f of fs) if (!flaggedFiles.includes(f)) flaggedFiles.push(f);
+  };
+
+  // Flag 1 — policy postdates evidence it would logically govern.
+  const policyDated = dated.filter((d) => d.file.bucket === "policy");
+  const evidenceDated = dated.filter((d) => d.file.bucket === "evidence");
+  for (const p of policyDated) {
+    for (const e of evidenceDated) {
+      if (p.date.getTime() > e.date.getTime()) {
+        addFlag(`"${p.file.name}" (dated ${fmt(p.date)}) postdates "${e.file.name}" (dated ${fmt(e.date)}) — the policy may not have been in place when this evidence was created.`, p.file, e.file);
+      }
+    }
+  }
+
+  // Flag 2 — a document dated suspiciously close to "now".
+  for (const { file, date } of dated) {
+    const diffDays = (now.getTime() - date.getTime()) / 86_400_000;
+    if (diffDays >= 0 && diffDays <= AUDIT_PROXIMITY_DAYS) {
+      addFlag(`"${file.name}" is dated ${fmt(date)}, only ${Math.round(diffDays)} day(s) before this check — it may have been prepared in anticipation of the review rather than reflecting ongoing practice.`, file);
+    }
+  }
+
+  if (flagMessages.length > 0) {
+    return {
+      status: "flag",
+      message: flagMessages.slice(0, 3).join(" ") + (flagMessages.length > 3 ? ` …and ${flagMessages.length - 3} more.` : ""),
+      fileRefs: flaggedFiles.map((f) => ({ name: f.name, driveFileId: f.driveFileId })),
+    };
+  }
+  return { status: "clear", message: `Checked ${dated.length} dated file(s) — no postdating or audit-proximity discrepancy found.` };
+}
+
 // Named registry so a persisted item can reference a detector by a stable
 // string key instead of an unserialisable function reference. Add a new
 // detector here (and a new DetectionKey) rather than inline in an item.
@@ -163,6 +261,7 @@ const DETECTION_REGISTRY: Partial<Record<DetectionKey, (files: DetectFile[]) => 
   "nric": detectNric,
   "date-sequencing": detectDateSequencing,
   "record-count": detectRecordCount,
+  "date-discrepancy": (files) => detectDateTimeDiscrepancy(files),
 };
 
 // ── Pure query helpers — take the (store-held) checklist data as a parameter ──
@@ -173,17 +272,45 @@ export function checklistForItems(checklists: ChecklistData, itemIds: string[]):
   return itemIds.flatMap((id) => checklists[id] ?? []);
 }
 
+// Always true while UNIVERSAL_CHECKLIST is non-empty — the universal layer
+// applies to every sub-criterion regardless of per-item entries. Kept as a
+// real check (not a hardcoded `true`) so an empty UNIVERSAL_CHECKLIST falls
+// back to the old per-item-only behaviour instead of silently lying.
 export function hasChecklist(checklists: ChecklistData, itemIds: string[]): boolean {
-  return itemIds.some((id) => (checklists[id]?.length ?? 0) > 0);
+  return UNIVERSAL_CHECKLIST.length > 0 || itemIds.some((id) => (checklists[id]?.length ?? 0) > 0);
 }
 
-// Run the checklist for a folder's items over its (already-read) files.
+// Run the checklist for a folder's items over its (already-read) files —
+// UNIVERSAL_CHECKLIST's items ALWAYS run first, followed by whatever
+// per-item entries this folder's GD4 items have defined (if any).
 export function runPreAnalysisChecklist(checklists: ChecklistData, itemIds: string[], files: DetectFile[]): ChecklistItemResult[] {
-  return checklistForItems(checklists, itemIds).map((d) => {
+  const all = [...UNIVERSAL_CHECKLIST, ...checklistForItems(checklists, itemIds)];
+  return all.map((d) => {
     const detect = d.mode === "auto" ? DETECTION_REGISTRY[d.detectionKey] : undefined;
     return { ...d, outcome: detect ? detect(files) : undefined };
   });
 }
+
+// ── Universal checks — a SEPARATE layer from DEFAULT_CHECKLISTS/ChecklistData,
+// applied to every sub-criterion regardless of whether it has any per-item
+// entries (see runPreAnalysisChecklist/hasChecklist above). All items here are
+// genuinely tested, general-purpose detection logic — not a per-sub-criterion
+// draft guess — so they start `verified: true`. Add a new universal check the
+// same way as a per-item one: a detection function + DETECTION_REGISTRY entry
+// + a ChecklistItemDef pushed onto this array.
+export const UNIVERSAL_CHECKLIST: ChecklistItemDef[] = [
+  {
+    id: "universal-date-discrepancy",
+    title: "Date/time discrepancy check",
+    description: "Scans this sub-criterion's files for two honest red flags: (1) a policy/procedure document dated AFTER evidence it would logically govern, and (2) any document dated suspiciously close to this review (within 4 weeks) — a sign it may have been prepared for the audit rather than reflecting ongoing practice. Runs on every sub-criterion, whether or not it has its own specific checks.",
+    source: "evidence-timeliness.md — document-dating red flags (applied universally)",
+    sourceKind: "finding-pattern",
+    mode: "auto",
+    detectionKey: "date-discrepancy",
+    verified: true,
+    scope: "universal",
+  },
+];
 
 // ── Seed content — stage 1 (4.2.2, 6.2.1) verified; stage 2 drafts elsewhere ──
 // Every item is grounded in something the app already knows (the GD4 expected-

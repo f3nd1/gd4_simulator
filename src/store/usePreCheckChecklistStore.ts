@@ -6,9 +6,11 @@ import { DEFAULT_CHECKLISTS, type ChecklistData, type ChecklistItemDef } from ".
 // The live, editable copy of the pre-analysis checklist — seeded from
 // DEFAULT_CHECKLISTS. This is the ONE source of truth: both the Setup page's
 // CRUD and the run-flow's Pre-check step read `checklists` from here. New
-// items added via the Setup page always start `verified: false` — only the
-// original 4.2.2/6.2.1 seed items may ever carry `verified: true`, and that
-// happens in preAnalysisChecklist.ts, not through this store.
+// items added via the Setup page always start `verified: false`. The only
+// way `verified` changes after that is the Setup page's explicit "Approve" /
+// "Revert to draft" action (setVerified below) — never as a side effect of
+// an unrelated field edit via updateItem, whose type deliberately omits
+// `verified` for exactly that reason.
 
 export type PreCheckChecklistState = {
   checklists: ChecklistData;
@@ -16,6 +18,11 @@ export type PreCheckChecklistState = {
   updateItem: (itemId: string, defId: string, updates: Partial<Omit<ChecklistItemDef, "id" | "verified">>) => void;
   removeItem: (itemId: string, defId: string) => void;
   reorderItem: (itemId: string, defId: string, direction: "up" | "down") => void;
+  // Approve a draft item (false → true) or revert an approved one back to
+  // draft (true → false) — a deliberately separate, one-click action so
+  // flipping `verified` is always intentional and visible, editable at any
+  // time in either direction.
+  setVerified: (itemId: string, defId: string, verified: boolean) => void;
   resetToDefaults: () => void;
 };
 
@@ -63,6 +70,17 @@ export const usePreCheckChecklistStore = create<PreCheckChecklistState>()(
           if (idx < 0 || swapWith < 0 || swapWith >= existing.length) return s;
           [existing[idx], existing[swapWith]] = [existing[swapWith], existing[idx]];
           return { checklists: { ...s.checklists, [itemId]: existing } };
+        }),
+
+      setVerified: (itemId, defId, verified) =>
+        set((s) => {
+          const existing = s.checklists[itemId] ?? [];
+          return {
+            checklists: {
+              ...s.checklists,
+              [itemId]: existing.map((d) => (d.id === defId ? { ...d, verified } : d)),
+            },
+          };
         }),
 
       resetToDefaults: () => set({ checklists: DEFAULT_CHECKLISTS }),

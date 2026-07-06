@@ -27,6 +27,7 @@ const DETECTION_LABEL: Record<DetectionKey, string> = {
   "nric": "NRIC/FIN pattern scan",
   "date-sequencing": "Contract-vs-receipt date sequencing",
   "record-count": "Management-review record count (by file name)",
+  "date-discrepancy": "Date/time discrepancy scan (policy-vs-evidence, audit-proximity)",
   "none": "No automated detection — manual only",
 };
 
@@ -47,6 +48,7 @@ export function PreCheckChecklistSetup() {
   const updateItem = usePreCheckChecklistStore((s) => s.updateItem);
   const removeItem = usePreCheckChecklistStore((s) => s.removeItem);
   const reorderItem = usePreCheckChecklistStore((s) => s.reorderItem);
+  const setVerified = usePreCheckChecklistStore((s) => s.setVerified);
 
   const [selectedItemId, setSelectedItemId] = useState<string>(GD4_REQUIREMENTS[0]?.id ?? "");
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -94,7 +96,12 @@ export function PreCheckChecklistSetup() {
         <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
           Manage the pre-analysis checklist shown during a run's "Pre-check" step, per GD4 item. This is the same data
           the run flow reads — changes here take effect on the next run immediately. Items you add here always start as
-          an unverified <b>draft</b> (see the badge in the checklist panel) until a human reviews them.
+          an unverified <b>draft</b> (see the badge in the checklist panel) until approved below.
+        </p>
+        <p style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 4 }}>
+          Note: this page manages per-item checks only. A separate <b>🌐 universal</b> layer (currently: the date/time
+          discrepancy scan) always runs on every sub-criterion in addition to whatever's listed here — see
+          preAnalysisChecklist.ts's <code>UNIVERSAL_CHECKLIST</code>.
         </p>
 
         <label style={{ display: "block", marginBottom: 10 }}>
@@ -148,6 +155,23 @@ export function PreCheckChecklistSetup() {
                     <button onClick={() => reorderItem(selectedItemId, d.id, "up")} disabled={i === 0} title="Move up" style={{ cursor: i === 0 ? "default" : "pointer", fontSize: 11, padding: "4px 7px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", marginRight: 3, opacity: i === 0 ? 0.4 : 1 }}>↑</button>
                     <button onClick={() => reorderItem(selectedItemId, d.id, "down")} disabled={i === rows.length - 1} title="Move down" style={{ cursor: i === rows.length - 1 ? "default" : "pointer", fontSize: 11, padding: "4px 7px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", marginRight: 6, opacity: i === rows.length - 1 ? 0.4 : 1 }}>↓</button>
                     <button onClick={() => startEdit(d)} style={{ cursor: "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", marginRight: 6 }}>Edit</button>
+                    {d.verified ? (
+                      <button
+                        onClick={() => setVerified(selectedItemId, d.id, false)}
+                        title="Revert to draft — re-flag this item for review; it will show the 'Draft — not yet reviewed' badge again."
+                        style={{ cursor: "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "1px solid #fde68a", background: "#fff", color: "#b45309", marginRight: 6 }}
+                      >
+                        Revert to draft
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setVerified(selectedItemId, d.id, true)}
+                        title="Approve — confirms you've reviewed this item against a real source/finding; it will display the same as the grounded 4.2.2/6.2.1 items, no more draft badge."
+                        style={{ cursor: "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "1px solid #86efac", background: "#fff", color: "#15803d", marginRight: 6 }}
+                      >
+                        Approve
+                      </button>
+                    )}
                     <button onClick={() => { if (editingDefId === d.id) cancelEdit(); removeItem(selectedItemId, d.id); }} style={{ cursor: "pointer", fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}>Remove</button>
                   </td>
                 </tr>
@@ -170,7 +194,7 @@ export function PreCheckChecklistSetup() {
           </select>
           {form.mode === "auto" && (
             <select value={form.detectionKey} onChange={(e) => setForm({ ...form, detectionKey: e.target.value as DetectionKey })} style={inputStyle}>
-              {(["nric", "date-sequencing", "record-count"] as DetectionKey[]).map((k) => <option key={k} value={k}>{DETECTION_LABEL[k]}</option>)}
+              {(["nric", "date-sequencing", "record-count", "date-discrepancy"] as DetectionKey[]).map((k) => <option key={k} value={k}>{DETECTION_LABEL[k]}</option>)}
             </select>
           )}
         </div>
@@ -189,8 +213,9 @@ export function PreCheckChecklistSetup() {
         />
         <p style={{ fontSize: 11, color: "#94a3b8", margin: "6px 0 0" }}>
           Auto-detected items reuse one of the app's existing detection functions (no code needed) — pick "Manual check"
-          for anything else; a human ticks it during the run instead. New/edited items here are never marked "Verified" —
-          only the original, human-reviewed 4.2.2/6.2.1 seed items carry that status.
+          for anything else; a human ticks it during the run instead. New/edited items here always start as an unverified
+          <b> draft</b> — use the <b>Approve</b> button in the table above once you've reviewed one against a real source or
+          finding, which removes its draft badge everywhere. Approving is reversible at any time via <b>Revert to draft</b>.
         </p>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <button onClick={submit} style={{ cursor: "pointer", border: "none", background: "#7c3aed", color: "#fff", fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}>
