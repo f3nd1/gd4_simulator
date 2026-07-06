@@ -843,6 +843,10 @@ export type PPDReviewResult = {
   // values/timelines/procedures for the same thing) — flagged sub-criterion-
   // wide and compiled into findings alongside the per-line gaps.
   contradictions?: PPDContradiction[];
+  // Per-file read ledger for the policy files this run read, so the PPD Review
+  // tab can show the same clickable/inspectable file list (extracted text) the
+  // staged audit shows. Metadata only — the extracted text lives in fileTextCache.
+  fileLedger?: AuditFileRecord[];
 };
 
 // ─── Evidence Assessment (Option A, Evidence tab) ───────────────────────────

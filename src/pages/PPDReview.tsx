@@ -15,6 +15,8 @@ import { auditModeLabel } from "../lib/runModes";
 import { TONE } from "../lib/theme";
 import { exportOptionASummaryCsv, exportFileLedgerCsvFor, downloadCsv, auditCsvFilename } from "../lib/auditCsvExport";
 import { LineageDiagram } from "../components/ui/LineageDiagram";
+import { RunStepper, ppdRunStep, evidenceRunStep } from "../components/ui/RunStepper";
+import { FileLedger } from "./EvidenceFolder";
 import { normalizeAuditRef } from "../lib/gd4Refs";
 import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress } from "../types";
 
@@ -314,21 +316,19 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
           </button>
         </div>
       )}
-      {isRunning && (
-        <div style={{ marginBottom: 12, padding: "8px 12px", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: "#3730a3" }}>PPD review running</span>
-            <span style={{ fontSize: 11, color: "#6366f1" }}>live</span>
+      {isRunning && (() => {
+        const detail = liveProgress?.subCriterionId === selectedId ? liveProgress.detail : "Working…";
+        return (
+          <div style={{ marginBottom: 12, padding: "10px 12px", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#3730a3" }}>PPD review running</span>
+              <span style={{ fontSize: 11, color: "#6366f1" }}>live</span>
+            </div>
+            {/* Same step-by-step view as the staged audit modal. */}
+            <RunStepper current={ppdRunStep(detail, true, false)} running detail={detail} />
           </div>
-          <div style={{ height: 6, borderRadius: 3, background: "#dbeafe", overflow: "hidden", marginBottom: 6 }}>
-            <div style={{ width: "40%", height: "100%", background: "#6366f1", borderRadius: 3, animation: "ppd-indeterminate 1.4s ease-in-out infinite alternate" }} />
-          </div>
-          <style>{`@keyframes ppd-indeterminate { from { margin-left: 0; } to { margin-left: 60%; } }`}</style>
-          <div style={{ fontSize: 11.5, color: "#475569" }}>
-            {liveProgress?.subCriterionId === selectedId ? liveProgress.detail : "Working…"}
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {cancelled && !isRunning && (
         <div style={{ fontSize: 12.5, color: "#b23121", background: "#fff5f5", border: "1px solid #fca5a5", borderRadius: 8, padding: "8px 11px", marginBottom: 8 }}>
@@ -349,6 +349,22 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
 
       {liveResult && (
         <>
+          {/* When a re-run is in flight the panel below is the PREVIOUS run's
+              result — say so, so the "Overall PPD assessment" isn't mistaken for
+              a summary of a run that hasn't finished. */}
+          {isRunning && (
+            <div style={{ fontSize: 12, color: "#3730a3", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 8, padding: "6px 11px", marginBottom: 8 }}>
+              Showing your <b>previous</b> PPD review while the new run finishes — it will refresh when the run completes.
+            </div>
+          )}
+          {/* Files read this run — same clickable/inspectable ledger the staged
+              audit shows; each file expands to its extracted text. */}
+          {liveResult.fileLedger && liveResult.fileLedger.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 5 }}>📂 Policy files read this run</div>
+              <FileLedger files={liveResult.fileLedger} />
+            </div>
+          )}
           {liveResult.runWarnings && liveResult.runWarnings.length > 0 && (
             <div style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 11px", marginBottom: 8 }}>
               <b>⚠ This run had problems — results may be incomplete:</b>
@@ -831,10 +847,28 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
         </Link>
       </div>
 
+      {/* Step-by-step view (consistent with the staged audit modal) sits above
+          the detailed live-activity panel below, which keeps the full blow-by-
+          blow log / per-line status / files-read view. */}
+      {isRunning && (
+        <div style={{ marginBottom: 10, padding: "10px 12px", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 8 }}>
+          <RunStepper current={evidenceRunStep(runProgress?.stage, true, false)} running detail={runProgress?.detail} />
+        </div>
+      )}
       {/* Detailed live-activity panel while a fresh assessment runs (collapsible
           to a compact summary). Surfaces the backend activity the run already
           performs: stage, window, per-line status, files read, live log, AI usage. */}
       {isRunning && <EvidenceRunPanel progress={runProgress} onCancel={cancelBusy} />}
+
+      {/* Files read this run — same clickable/inspectable ledger the staged audit
+          shows; each file expands to its extracted text. (Fresh runs only; the
+          derived-from-audit path carries no per-file ledger.) */}
+      {assessment?.fileLedger && assessment.fileLedger.length > 0 && !isRunning && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 5 }}>📂 Evidence files read this run</div>
+          <FileLedger files={assessment.fileLedger} />
+        </div>
+      )}
 
       {assessment?.derivedFromAudit && !isRunning && (
         <div style={{ fontSize: 12, color: "#166534", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "6px 11px", marginBottom: 8 }}>

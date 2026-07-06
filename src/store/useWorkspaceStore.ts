@@ -930,7 +930,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const runAbort = new AbortController();
         _currentRunAbort = runAbort;
 
-        const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[], contradictions?: PPDContradiction[]) => {
+        const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[], contradictions?: PPDContradiction[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           // Sub-criterion roll-up, derived deterministically from the rows.
           // "Not assessed" lines (stopped/failed before review) are counted
@@ -973,7 +973,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
           set((st) => ({
             ppdReviewResults: rows
-              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions } }
+              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger } }
               : st.ppdReviewResults,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
             // Guarded: a timed-out run's late finish must not clear the NEXT
@@ -1024,10 +1024,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // separate from genuinely empty files so the run summary can say
           // "results may be incomplete" instead of silently assessing without them.
           const readFailedFiles: string[] = [];
+          // Per-file read ledger, so the PPD Review tab can show the same
+          // clickable/inspectable file list (extracted text via fileTextCache)
+          // that the staged audit shows. Metadata only — no text stored here.
+          const ppdFileKind = (mime: string) =>
+            mime === "application/pdf" ? "PDF"
+              : mime.includes("wordprocessingml") ? "Word"
+              : mime.includes("google-apps.document") ? "Google Doc"
+              : mime.includes("google-apps.spreadsheet") ? "Google Sheet"
+              : mime === XLSX_MIME || mime === XLS_MIME ? "Excel"
+              : mime === "text/csv" ? "CSV"
+              : mime.includes("presentationml") ? "PowerPoint"
+              : mime.includes("google-apps.presentation") ? "Google Slides"
+              : mime.startsWith("image/") ? "image"
+              : "text";
+          const fileLedger: AuditFileRecord[] = [];
           for (const file of policyFiles) {
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
             let body: string | null;
+            let readErrored = false;
             if (cached) {
               body = cached.text;
             } else {
@@ -1048,19 +1064,32 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 }
               } catch {
                 body = null;
+                readErrored = true;
                 readFailedFiles.push(file.path.split("/").pop() || file.path);
               }
             }
-            if (!body) continue;
             const fileName = file.path.split("/").pop() || file.path;
+            const ledgerBase: AuditFileRecord = {
+              path: file.path, name: fileName, mimeType: file.mimeType, fileKind: ppdFileKind(file.mimeType),
+              bucket: "policy", readStatus: "found", auditStatus: "audited",
+              driveFileId: file.id, driveModifiedTime: file.modifiedTime,
+              readMethod: cached?.readMethod ?? "text",
+            };
+            if (!body) {
+              fileLedger.push({ ...ledgerBase, readStatus: readErrored ? "failed" : "skipped", auditStatus: "pending", charCount: 0, ...(readErrored ? { failReason: "Drive read error" } : { skipReason: "No extractable text" }) });
+              continue;
+            }
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
+            const fileChunkIds: string[] = [];
             for (let pi = 0; pi < totalParts; pi++) {
               const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
               const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
               const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
               docParts.push(`[CHUNK:${chunkId}] --- ${file.path}${partLabel} ---\n${chunkBody}`);
               chunkFileNames[chunkId] = fileName;
+              fileChunkIds.push(chunkId);
             }
+            fileLedger.push({ ...ledgerBase, readStatus: "read", charCount: body.length, chunkIds: fileChunkIds });
           }
           if (docParts.length === 0) { finish(null, false, "No readable text could be extracted from the Policy & Procedure files."); return; }
           const policyDocText = docParts.join("\n\n=== POLICY & PROCEDURE ===\n\n");
@@ -1089,7 +1118,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const liveError = result.windowErrors?.length
             ? `${result.windowErrors.length} AI call(s) failed during the review — results may be incomplete. First error: ${result.windowErrors[0]}`
             : undefined;
-          finish(result.rows, true, liveError, result.promptSent, result.usage, chunkFileNames, result.overallNarrative, runWarnings.length > 0 ? runWarnings : undefined, result.contradictions);
+          finish(result.rows, true, liveError, result.promptSent, result.usage, chunkFileNames, result.overallNarrative, runWarnings.length > 0 ? runWarnings : undefined, result.contradictions, fileLedger);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
         }
