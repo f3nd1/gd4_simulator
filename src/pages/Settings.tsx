@@ -189,10 +189,11 @@ export function Settings() {
       <Card style={{ background: "#fff7e6", border: "1px solid #f0c36d" }}>
         <h3 style={{ marginTop: 0, fontSize: 14, color: "#92620a" }}>Not production safe — prototype/internal testing only</h3>
         <p style={{ fontSize: 12.5, color: "#7a5208", marginTop: 0, marginBottom: 0 }}>
-          Every credential on this page is stored in plaintext — in this browser's local storage, and in the Supabase
-          database below if you connect one, since every other store on this page syncs through it. Do not use
-          production or shared credentials here. AI output is always advisory — it never sets the official GD4 score or
-          band, which is always computed by the deterministic scoring engine.
+          Every credential on this page is stored in plaintext — in this browser's local storage, and (with one
+          exception — the Supabase URL/key pair itself, see below) in the Supabase database if you connect one, since
+          every other store on this page syncs through it. Do not use production or shared credentials here. AI output
+          is always advisory — it never sets the official GD4 score or band, which is always computed by the
+          deterministic scoring engine.
         </p>
       </Card>
 
@@ -236,6 +237,16 @@ alter table public.workspace_state enable row level security;
 create policy "anon read/write" on public.workspace_state
   for all using (true) with check (true);`}
         </pre>
+
+        <div style={{ fontSize: 12, color: "#9a3412", background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 8, padding: "8px 11px", marginBottom: 10 }}>
+          ⚠ <b>These two fields never sync anywhere — not even to Supabase.</b> They're what the app needs in order to
+          reach Supabase in the first place, so they can't be stored inside it (that would be circular). Whatever you
+          type below is saved only to this browser's local storage on this one device. Set them up on another
+          machine/browser and they'll be blank there too — you'll need to re-enter them, or (better, for anything you
+          use regularly) add them once to a <code>.env.local</code> file as <code>VITE_SUPABASE_URL</code> /{" "}
+          <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> so every device/session picks them up automatically with nothing
+          to re-enter here.
+        </div>
 
         <label style={{ display: "block", marginBottom: 8 }}>
           <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Project URL</span>
