@@ -818,6 +818,11 @@ export type PPDReviewRow = {
   subClauses?: PPDSubClause[];
   // Specific commitments the PPD makes for this line, verified downstream.
   promises?: PPDPromise[];
+  // Exact verbatim excerpt from the cited PPD text that documents this line —
+  // stored only when it verifies as a real substring of the source; absent
+  // means "no single exact quote identified" (never a fabricated one). Used to
+  // highlight the supporting sentence in the lineage diagram's expanded view.
+  supportQuote?: string;
 };
 
 export type PPDReviewResult = {
@@ -886,6 +891,10 @@ export type EvidenceAssessmentRow = {
   // Named checks: each PPD promise for this line, verified against the
   // Actual Evidence (evidenced / not evidenced / contradicted).
   promiseChecks?: PromiseCheck[];
+  // Exact verbatim excerpt from the cited evidence that proves implementation —
+  // stored only when it verifies as a real substring; absent means "no exact
+  // quote identified". Highlights the supporting sentence in the lineage view.
+  evidenceQuote?: string;
 };
 
 export type EvidenceAssessmentResult = {

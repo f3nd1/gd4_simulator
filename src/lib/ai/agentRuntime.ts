@@ -1866,9 +1866,10 @@ For each requirement return:
 - promises: [{promiseText: string, sourceQuote: string, chunkId: string}] — the STEP 3 extraction. Empty array if the PPD makes no specific commitment for this line.
 - suggestedRewrite: for Partial or Not documented ONLY — a concrete, institution-ready PPD paragraph closing the gap (responsible role, frequency, record). Empty string for Adequate.
 - chunkIds: exact chunk ID(s) (e.g. "C001") supporting the verdict. Empty if none — never invent a chunk ID.
+- supportQuote: for Adequate/Partial ONLY, the ONE exact sentence (or short clause) copied VERBATIM from the cited chunk text that most directly documents this requirement — character-for-character, so it can be located in the source. If no single sentence captures it (support is spread across the passage) or the verdict is Not documented, return an empty string "" — never paraphrase, summarise, or invent a quote.
 
 Respond with JSON only:
-{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented"}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}], "suggestedRewrite": string, "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
+{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented"}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}], "suggestedRewrite": string, "chunkIds": string[], "supportQuote": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   // Technique 2 — internal contradiction hunt. Run as its OWN pass per
   // window (not folded into the per-requirement prompt) so the requirement
@@ -1885,7 +1886,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
 
   const windows = buildDocWindows(policyDocText);
 
-  type BestPPD = { verdict: PPDVerdict; shortComment: string; fullComment: string; suggestedRewrite?: string; chunkIds: string[]; subClauses?: PPDSubClause[]; promises?: PPDPromise[] };
+  type BestPPD = { verdict: PPDVerdict; shortComment: string; fullComment: string; suggestedRewrite?: string; chunkIds: string[]; subClauses?: PPDSubClause[]; promises?: PPDPromise[]; supportQuote?: string };
   const bestByRef = new Map<string, BestPPD>();
   // Contradictions merged across windows, deduped on the two quotes.
   const contradictions: PPDContradiction[] = [];
@@ -1951,6 +1952,12 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           const fullComment = typeof res?.fullComment === "string" ? res.fullComment : "";
           const suggestedRewrite = typeof res?.suggestedRewrite === "string" && res.suggestedRewrite.trim() ? res.suggestedRewrite : undefined;
           const chunkIds = Array.isArray(res?.chunkIds) ? (res!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+          // Exact supporting quote — stored ONLY when it verifies as a real
+          // verbatim excerpt of the policy text (same anti-hallucination check as
+          // the fullComment/promise quotes). A paraphrase or invention is dropped
+          // to undefined ("no exact quote identified"), never stored as a match.
+          const rawSupportQuote = typeof res?.supportQuote === "string" ? res.supportQuote.trim() : "";
+          const supportQuote = rawSupportQuote && quoteExistsInSource(rawSupportQuote, policyDocText) ? rawSupportQuote : undefined;
           const subClauses: PPDSubClause[] = Array.isArray(res?.subClauses)
             ? (res!.subClauses as Array<Record<string, unknown>>)
                 .filter((c) => typeof c?.text === "string" && (c?.verdict === "documented" || c?.verdict === "not documented"))
@@ -1980,12 +1987,14 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
               // Union promises across windows (different windows see
               // different PPD sections), deduped on promiseText.
               promises: [...(prev?.promises ?? []), ...promises.filter((p) => !(prev?.promises ?? []).some((q) => q.promiseText === p.promiseText))],
+              supportQuote: supportQuote ?? prev?.supportQuote,
             });
           } else {
             bestByRef.set(r.ref, {
               ...prev,
               chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])],
               promises: [...(prev.promises ?? []), ...promises.filter((p) => !(prev.promises ?? []).some((q) => q.promiseText === p.promiseText))],
+              supportQuote: prev.supportQuote ?? supportQuote,
             });
           }
         }
@@ -2079,6 +2088,9 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       chunkIds: best?.chunkIds ?? [],
       subClauses: best?.subClauses,
       promises: best?.promises?.length ? best.promises : undefined,
+      // Only carry the exact quote for a positive, cited verdict — a downgraded
+      // or Not-documented line shows the passage without a (stale) highlight.
+      supportQuote: (verdict === "Adequate" || verdict === "Partial") ? best?.supportQuote : undefined,
     };
   });
 
@@ -2147,6 +2159,9 @@ export type EvidenceAssessmentLineResult = {
   // Per-PPD-promise verification (Technique 3 — "not implemented in
   // accordance with its documented PPD").
   promiseChecks?: PromiseCheck[];
+  // Exact verbatim excerpt from the cited evidence proving implementation —
+  // verified real substring, or absent ("no exact quote identified").
+  evidenceQuote?: string;
 };
 
 export type EvidenceAssessmentRunResult = {
@@ -2213,9 +2228,10 @@ For each line return:
 - comment: justification referencing the PPD state, the promise checks and the named example(s), in the register above.
 - promiseChecks: [{promiseText: string, verdict: "evidenced"|"not evidenced"|"contradicted", evidence: string, chunkIds: string[]}] — one entry PER promise given for the line, promiseText copied exactly. evidence = the citation or "No record found in the evidence documents." Empty array only when the line has no promises.
 - chunkIds: exact chunk ID(s) (e.g. "C001") from evidence document headers supporting the line verdict. Empty if none.
+- evidenceQuote: for Met/Partial ONLY, the ONE exact sentence (or short clause) copied VERBATIM from the cited evidence chunk that most directly proves implementation for this line — character-for-character, so it can be located in the source. If no single sentence captures it, or the verdict is Not met, return an empty string "" — never paraphrase, summarise, or invent a quote.
 
 Respond with JSON only:
-{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[]}], "chunkIds": string[]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
+{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[]}], "chunkIds": string[], "evidenceQuote": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   const windows = noEvidence ? [] : buildDocWindows(evidenceDocText);
 
@@ -2223,7 +2239,7 @@ Respond with JSON only:
   // evidence: verified promises that carry a citation dominate, then the number
   // of chunks cited. Used ONLY to break verdict TIES between windows — see the
   // merge below (F1). It is not a verdict input.
-  type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[]; groundScore: number };
+  type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[]; groundScore: number; evidenceQuote?: string };
   const groundScoreOf = (cids: string[], checks: PromiseCheck[]): number => {
     const citedPromises = checks.filter((p) => p.verdict === "evidenced" && p.chunkIds.length > 0).length;
     return citedPromises * 1000 + cids.length;
@@ -2302,6 +2318,11 @@ Respond with JSON only:
           const evidenceSummary = typeof res?.evidenceSummary === "string" ? res.evidenceSummary : "";
           const comment = typeof res?.comment === "string" ? res.comment : "";
           const chunkIds = Array.isArray(res?.chunkIds) ? (res!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+          // Exact evidence quote — stored ONLY when it verifies as a real verbatim
+          // excerpt of this window's evidence text; a paraphrase/invention is
+          // dropped to undefined ("no exact quote identified"), never a false match.
+          const rawEvidenceQuote = typeof res?.evidenceQuote === "string" ? res.evidenceQuote.trim() : "";
+          const evidenceQuote = rawEvidenceQuote && quoteExistsInSource(rawEvidenceQuote, win.text) ? rawEvidenceQuote : undefined;
           const promiseChecks: PromiseCheck[] = Array.isArray(res?.promiseChecks)
             ? (res!.promiseChecks as Array<Record<string, unknown>>)
                 .filter((p) => typeof p?.promiseText === "string" && ["evidenced", "not evidenced", "contradicted"].includes(p?.verdict as string))
@@ -2317,7 +2338,7 @@ Respond with JSON only:
           const thisGround = groundScoreOf(chunkIds, promiseChecks);
           if (!prev || EVIDENCE_VERDICT_ORDER[verdict] > EVIDENCE_VERDICT_ORDER[prev.verdict]) {
             // Strictly higher verdict wins outright — adopt its summary/comment.
-            bestByRef.set(inp.ref, { evidenceSummary, verdict, comment, groundScore: thisGround, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])], promiseChecks: mergePromiseChecks(prev?.promiseChecks, promiseChecks) });
+            bestByRef.set(inp.ref, { evidenceSummary, verdict, comment, groundScore: thisGround, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])], promiseChecks: mergePromiseChecks(prev?.promiseChecks, promiseChecks), evidenceQuote: evidenceQuote ?? prev?.evidenceQuote });
           } else if (EVIDENCE_VERDICT_ORDER[verdict] === EVIDENCE_VERDICT_ORDER[prev.verdict]) {
             // F1 — verdict TIE. Reading order must NOT decide which justification
             // survives: keep the summary/comment from the better-grounded window
@@ -2329,14 +2350,14 @@ Respond with JSON only:
             const better = thisGround > prev.groundScore;
             bestByRef.set(inp.ref, {
               ...prev,
-              ...(better ? { evidenceSummary, comment, groundScore: thisGround } : {}),
+              ...(better ? { evidenceSummary, comment, groundScore: thisGround, evidenceQuote: evidenceQuote ?? prev.evidenceQuote } : { evidenceQuote: prev.evidenceQuote ?? evidenceQuote }),
               chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])],
               promiseChecks: mergePromiseChecks(prev.promiseChecks, promiseChecks),
             });
           } else {
             // Strictly lower verdict — keep prev's verdict/summary/comment; only
             // accumulate this window's citations and promise checks.
-            bestByRef.set(inp.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])], promiseChecks: mergePromiseChecks(prev.promiseChecks, promiseChecks) });
+            bestByRef.set(inp.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])], promiseChecks: mergePromiseChecks(prev.promiseChecks, promiseChecks), evidenceQuote: prev.evidenceQuote ?? evidenceQuote });
           }
           failedRefs.delete(inp.ref); // a later window recovered this line
           batchVerdicts.push({ ref: inp.ref, verdict });
@@ -2372,6 +2393,7 @@ Respond with JSON only:
           comment: `${verifiedComment ? `${verifiedComment}\n\n` : ""}[Capped at Partial: the PPD verdict for this line is "${inp.ppdVerdict}" — under the APSR Approach hard-gate a line cannot be Met until the documented approach is Adequate, regardless of implementation evidence.]`,
           chunkIds: best.chunkIds,
           promiseChecks: best.promiseChecks,
+          evidenceQuote: best.evidenceQuote,
         };
       }
       // A "Met" verdict that cannot cite any evidence chunk is downgraded to
@@ -2398,9 +2420,10 @@ Respond with JSON only:
           comment: `${verifiedComment ? `${verifiedComment}\n\n` : ""}[Capped at Partial: ${unmetPromises.length} PPD promise${unmetPromises.length === 1 ? "" : "s"} not evidenced — ${unmetPromises.map((p) => `"${p.promiseText}"`).join("; ")}. It was not evident that the PEI had implemented ${unmetPromises.length === 1 ? "this commitment" : "these commitments"} in accordance with its documented PPD.]`,
           chunkIds: best.chunkIds,
           promiseChecks: best.promiseChecks,
+          evidenceQuote: best.evidenceQuote,
         };
       }
-      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks };
+      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks, evidenceQuote: best.evidenceQuote };
     }
     if (failedRefs.has(inp.ref)) {
       return { ref: inp.ref, evidenceSummary: "Assessment failed — retry.", verdict: "Not met", comment: "The AI call for this line failed or timed out. Re-run the evidence assessment to retry.", chunkIds: [], failed: true };

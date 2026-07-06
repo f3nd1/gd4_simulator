@@ -5,6 +5,7 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { RunModeBanner } from "../components/ui/RunModeBanner";
 import type { FolderProbeResult } from "../lib/driveGuard";
 import { Pill } from "../components/ui/Pill";
+import { ExtractedTextPanel } from "../components/ui/ExtractedTextPanel";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -199,44 +200,6 @@ function DimIcons({ file }: { file: AuditFileRecord }) {
 
 type FileFilter = "all" | "read" | "cited" | "not_used" | "skipped" | "failed" | "new" | "changed" | "reused";
 type FileSort = "name" | "status" | "type";
-
-// Max chars of extracted text to render inline (the full text can be huge; a
-// generous window is enough to judge a good read from a bad one).
-const EXTRACTED_TEXT_VIEW_CAP = 40_000;
-
-function ExtractedTextPanel({ file, resolveText }: { file: AuditFileRecord; resolveText?: (f: AuditFileRecord) => string | null | undefined }) {
-  const text = resolveText?.(file);
-  let body: React.ReactNode;
-  if (file.readStatus === "skipped") {
-    body = <span style={{ color: "#9ca3af" }}>Not read — {file.skipReason || "skipped"}. Nothing was extracted, so this file contributed no evidence.</span>;
-  } else if (file.readStatus === "failed") {
-    body = <span style={{ color: "#b91c1c" }}>Read failed — {file.failReason || "unknown error"}. Nothing was extracted.</span>;
-  } else if ((file.charCount ?? 0) === 0 || (typeof text === "string" && text.trim().length === 0)) {
-    body = <span style={{ color: "#b45309" }}>0 characters — nothing readable was extracted from this file (image-only/blank). It was not cached and will be re-attempted next run.</span>;
-  } else if (typeof text === "string") {
-    const shown = text.length > EXTRACTED_TEXT_VIEW_CAP ? text.slice(0, EXTRACTED_TEXT_VIEW_CAP) : text;
-    body = (
-      <>
-        <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#1f2733", lineHeight: 1.45 }}>{shown}</div>
-        {text.length > EXTRACTED_TEXT_VIEW_CAP && (
-          <div style={{ marginTop: 4, color: "#94a3b8", fontStyle: "italic" }}>… showing first {EXTRACTED_TEXT_VIEW_CAP.toLocaleString()} of {text.length.toLocaleString()} characters.</div>
-        )}
-      </>
-    );
-  } else {
-    body = <span style={{ color: "#94a3b8" }}>Extracted text isn't in the cache (it may have been cleared). Re-run the audit to view what was read.</span>;
-  }
-  return (
-    <div style={{ padding: "6px 10px 9px 26px", borderBottom: "1px solid #f1f5f9", background: "#fbfcfe" }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4, fontSize: 10, color: "#64748b" }}>
-        <span>Read via <b>{file.readMethod === "vision" ? "vision transcription" : file.readMethod === "text" ? "text extraction" : "—"}</b></span>
-        <span>· {(file.charCount ?? 0).toLocaleString()} characters</span>
-        {file.suspectedScannedPdf && <span style={{ color: "#92400e" }}>· suspected scanned PDF</span>}
-      </div>
-      <div style={{ maxHeight: 260, overflowY: "auto", padding: "6px 8px", border: "1px solid #e2e8f0", borderRadius: 5, background: "#fff", fontSize: 10.5 }}>{body}</div>
-    </div>
-  );
-}
 
 function FileRow({ file, isReading, onSkipFile, resolveText }: { file: AuditFileRecord; isReading?: boolean; onSkipFile?: () => void; resolveText?: (f: AuditFileRecord) => string | null | undefined }) {
   const bucketLabel = file.bucket === "policy" ? "Policy" : file.bucket === "evidence" ? "Evid" : "Auto";

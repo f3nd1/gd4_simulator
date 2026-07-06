@@ -1511,6 +1511,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               comment: ev?.comment || "",
               assessmentFailed: ev?.failed,
               promiseChecks: ev?.promiseChecks,
+              evidenceQuote: ev?.evidenceQuote,
             };
           });
           // Tag the ledger with citation status from the assessed rows: a file
