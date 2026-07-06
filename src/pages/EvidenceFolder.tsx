@@ -7,6 +7,7 @@ import type { FolderProbeResult } from "../lib/driveGuard";
 import { Pill } from "../components/ui/Pill";
 import { ExtractedTextPanel } from "../components/ui/ExtractedTextPanel";
 import { PreAnalysisChecklistPanel } from "../components/ui/PreAnalysisChecklistPanel";
+import { hasChecklist } from "../lib/preAnalysisChecklist";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -53,12 +54,22 @@ function Spinner({ size = 14, color = "#64748b" }: { size?: number; color?: stri
   );
 }
 
+// "Pre-check" has no backing AuditProgressStage of its own — the staged audit
+// runs reading straight into the AI passes with no real pause, and this step
+// must stay non-blocking (never gate the real pipeline). It is a purely
+// presentational slot: `alwaysViewable` keeps it clickable at ANY point in the
+// run (even mid-"Read files") so the checklist can be reviewed whenever, and
+// stageToVisualStep below simply never targets index 2 as "active" — the dot
+// shows pending while reading is in progress and flips straight to done once
+// the real engine has moved into the AI stage, same as a skipped-but-available
+// step. See PreCheckStepDetail.
 const VISUAL_STEPS = [
-  { emoji: "🔌", label: "Connect" },
-  { emoji: "📂", label: "Read files" },
-  { emoji: "🤖", label: "Ask AI" },
-  { emoji: "💾", label: "Save" },
-  { emoji: "✅", label: "Complete" },
+  { emoji: "🔌", label: "Connect", alwaysViewable: false },
+  { emoji: "📂", label: "Read files", alwaysViewable: false },
+  { emoji: "📝", label: "Pre-check", alwaysViewable: true },
+  { emoji: "🤖", label: "Ask AI", alwaysViewable: false },
+  { emoji: "💾", label: "Save", alwaysViewable: false },
+  { emoji: "✅", label: "Complete", alwaysViewable: false },
 ] as const;
 
 function stageToVisualStep(stage: AuditProgressState["stage"]): number {
@@ -70,10 +81,10 @@ function stageToVisualStep(stage: AuditProgressState["stage"]): number {
     case "policy_audit":
     case "evidence_audit":
     case "outcome_review":
-    case "apsr_build":   return 2;
+    case "apsr_build":   return 3;
     case "findings_summary":
-    case "saving":       return 3;
-    case "complete":     return 4;
+    case "saving":       return 4;
+    case "complete":     return 5;
     case "error":        return -1;
   }
 }
@@ -1078,14 +1089,66 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
   );
 }
 
+// "Pre-check" step detail — the per-sub-criterion pre-analysis checklist,
+// reusing whatever files THIS run has already read (p.filesFound) rather than
+// a separate probe. Always viewable (see VISUAL_STEPS' alwaysViewable), so it
+// can be reviewed while reading is still in progress, mid-run, or afterward —
+// it never gates the real pipeline, which keeps running underneath regardless.
+// Sub-criteria with no defined checklist show an honest "no checks" state
+// instead of PreAnalysisChecklistPanel's silent null, so a step the user
+// clicked never appears blank.
+function PreCheckStepDetail({ p, onAdvanceToAskAI }: { p: AuditProgressState; onAdvanceToAskAI?: () => void }) {
+  const subCriterionId = p.subCriterionId ?? "";
+  const itemIds = useMemo(() => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId).map((r) => r.id), [subCriterionId]);
+  const readingInProgress = p.stage === "reading" || p.stage === "condensing";
+
+  if (!hasChecklist(itemIds)) {
+    return (
+      <div>
+        <div style={{ fontSize: 13, color: "#374151", marginBottom: 6 }}>📝 Pre-check</div>
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>No pre-analysis checks are defined yet for this sub-criterion — continuing automatically.</div>
+        <button
+          type="button"
+          onClick={onAdvanceToAskAI}
+          disabled={!onAdvanceToAskAI}
+          style={{ cursor: onAdvanceToAskAI ? "pointer" : "default", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", opacity: onAdvanceToAskAI ? 1 : 0.5 }}
+        >
+          Continue to Ask AI →
+        </button>
+      </div>
+    );
+  }
+
+  const subTitle = GD4_SUB_CRITERIA.find((s) => s.id === subCriterionId)?.title ?? "";
+  return (
+    <div>
+      {readingInProgress && (
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8, fontStyle: "italic" }}>
+          Files are still being read — showing checks against what's been read so far. This updates automatically.
+        </div>
+      )}
+      <PreAnalysisChecklistPanel
+        folderId={p.folderId}
+        subCriterionId={subCriterionId}
+        subCriterionTitle={subTitle}
+        itemIds={itemIds}
+        files={p.filesFound}
+        onContinue={onAdvanceToAskAI ?? (() => {})}
+        continueLabel="Continue to Ask AI"
+      />
+    </div>
+  );
+}
+
 function StepDetail({
-  step, p, onSkipFile, onExportFileLedger, onExportAISummary,
+  step, p, onSkipFile, onExportFileLedger, onExportAISummary, onAdvanceToAskAI,
 }: {
   step: number;
   p: AuditProgressState;
   onSkipFile?: () => void;
   onExportFileLedger?: () => void;
   onExportAISummary?: () => void;
+  onAdvanceToAskAI?: () => void;
 }) {
   const currentStep = stageToVisualStep(p.stage);
   const isActive = step === currentStep;
@@ -1094,9 +1157,10 @@ function StepDetail({
   switch (step) {
     case 0: return <ConnectDetail p={p} isActive={isActive} />;
     case 1: return <ReadFilesDetail p={p} isActive={isActive} onSkipFile={onSkipFile} onExportCsv={onExportFileLedger} />;
-    case 2: return <AuditStepDetail p={p} isActive={isActive} onExportAISummary={onExportAISummary} />;
-    case 3: return <SaveStepDetail p={p} isActive={isActive} />;
-    case 4: return <CompleteDetail p={p} onExportFileLedger={onExportFileLedger} onExportAISummary={onExportAISummary} />;
+    case 2: return <PreCheckStepDetail p={p} onAdvanceToAskAI={onAdvanceToAskAI} />;
+    case 3: return <AuditStepDetail p={p} isActive={isActive} onExportAISummary={onExportAISummary} />;
+    case 4: return <SaveStepDetail p={p} isActive={isActive} />;
+    case 5: return <CompleteDetail p={p} onExportFileLedger={onExportFileLedger} onExportAISummary={onExportAISummary} />;
     default: return null;
   }
 }
@@ -1220,7 +1284,7 @@ function AuditProgressModal({
           </div>
           {isRunning ? (
             <div style={{ display: "flex", gap: 6, marginLeft: 8, flexShrink: 0 }}>
-              {currentStep === 2 && (
+              {currentStep === 3 && (
                 <button
                   onClick={onSkipStage}
                   title="Stop the current AI pass early and move to the next pass using results collected so far. Files are processed as bundled text windows — there is no per-file cancel in this stage."
@@ -1268,7 +1332,10 @@ function AuditProgressModal({
               isDone ? "done" :
               i < currentStep ? "done" :
               i === currentStep ? "active" : "future";
-            const isClickable = status !== "future";
+            // Pre-check is always viewable (even while "future"/not yet reached)
+            // since it never gates the real pipeline — the user can peek at the
+            // checklist at any point in the run.
+            const isClickable = status !== "future" || step.alwaysViewable;
             const isSelected = i === displayStep;
             return (
               <Fragment key={i}>
@@ -1319,7 +1386,7 @@ function AuditProgressModal({
             if (currentStep === 1 && progress.filesTotal && progress.filesTotal > 1) {
               subPct = Math.round(100 * (progress.filesRead ?? 0) / progress.filesTotal);
               subLabel = `File ${progress.filesRead ?? 0} / ${progress.filesTotal}`;
-            } else if (currentStep === 2 && progress.windowTotal && progress.windowTotal > 1) {
+            } else if (currentStep === 3 && progress.windowTotal && progress.windowTotal > 1) {
               subPct = Math.round(100 * ((progress.windowCurrent ?? 1) - 1) / progress.windowTotal);
               subLabel = `AI window ${progress.windowCurrent ?? 1} / ${progress.windowTotal}`;
             }
@@ -1327,7 +1394,7 @@ function AuditProgressModal({
             return (
               <div style={{ marginTop: 3, display: "flex", alignItems: "center", gap: 6 }}>
                 <div style={{ flex: 1, background: "#e2e8f0", borderRadius: 4, height: 4, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${subPct}%`, borderRadius: 4, background: currentStep === 2 ? "#6366f1" : "#38bdf8", transition: "width 0.3s ease" }} />
+                  <div style={{ height: "100%", width: `${subPct}%`, borderRadius: 4, background: currentStep === 3 ? "#6366f1" : "#38bdf8", transition: "width 0.3s ease" }} />
                 </div>
                 <span style={{ fontSize: 10, color: "#64748b", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{subLabel}</span>
               </div>
@@ -1349,6 +1416,7 @@ function AuditProgressModal({
             onSkipFile={progress.canSkipCurrentFile ? onSkipFile : undefined}
             onExportFileLedger={onExportFileLedger}
             onExportAISummary={onExportAISummary}
+            onAdvanceToAskAI={() => setSelectedStep(3)}
           />
         </div>
 
@@ -3030,28 +3098,6 @@ export function EvidenceFolder() {
                       </div>
                     </div>
                   </div>
-                );
-              })()}
-              {/* Pre-analysis checklist — sits after the pre-flight (read) pane
-                  and before "Ask AI". Renders nothing for sub-criteria without a
-                  defined checklist. Non-blocking; its "Continue to Ask AI" runs
-                  the audit for the folder's path. */}
-              {rowExpanded && (() => {
-                const itemIds = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === f.subCriterionId).map((r) => r.id);
-                const subTitle = GD4_SUB_CRITERIA.find((s) => s.id === f.subCriterionId)?.title ?? "";
-                const onContinue = path === "A"
-                  ? () => { runPPDReview(f.subCriterionId); setOptionAModal(f.subCriterionId); }
-                  : () => auditFolderStaged(f.id, "all");
-                return (
-                  <PreAnalysisChecklistPanel
-                    folderId={f.id}
-                    subCriterionId={f.subCriterionId}
-                    subCriterionTitle={subTitle}
-                    itemIds={itemIds}
-                    probeFiles={folderProbes[f.id]?.result.files}
-                    onContinue={onContinue}
-                    continueLabel="Continue to Ask AI"
-                  />
                 );
               })()}
             </div>

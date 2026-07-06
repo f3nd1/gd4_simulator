@@ -20,7 +20,7 @@ export type ChecklistMode = "auto" | "manual";
 
 // A file as seen by the checklist: identity + whatever extracted text the
 // pre-flight warmed into the cache (null when not yet read / image / scanned).
-export type DetectFile = { name: string; path: string; bucket: "policy" | "evidence"; driveFileId?: string; text: string | null };
+export type DetectFile = { name: string; path: string; bucket: "policy" | "evidence" | "auto"; driveFileId?: string; text: string | null };
 
 export type DetectStatus = "flag" | "clear" | "unknown";
 export type DetectOutcome = { status: DetectStatus; message: string; fileRefs?: { name: string; driveFileId?: string }[] };

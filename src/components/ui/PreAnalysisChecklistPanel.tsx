@@ -1,12 +1,19 @@
 import { useMemo } from "react";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
-import type { ProbeFile } from "../../lib/driveGuard";
 import { runPreAnalysisChecklist, hasChecklist, type DetectFile, type DetectStatus, type ChecklistItemResult } from "../../lib/preAnalysisChecklist";
 
-// Non-blocking, per-sub-criterion pre-analysis checklist. Renders in the
-// expanded folder row, after the pre-flight pane (the read step) and before the
-// AI audit ("Ask AI"). Sub-criteria with no definition render NOTHING (returns
-// null) — no placeholder. A "Continue to Ask AI" action is ALWAYS available.
+// Non-blocking, per-sub-criterion pre-analysis checklist. Renders as the
+// "Pre-check" step of the run stepper — Option B's AuditProgressModal (between
+// Read files and Ask AI) and Option A's PPD+Evidence flow (between PPD Review
+// and Evidence) — reusing whatever files that run has already read (no separate
+// probe needed). Sub-criteria with no definition render NOTHING (returns null)
+// — the caller shows a "no checks defined" state instead. A "Continue" action
+// is ALWAYS available.
+
+// Minimal shared shape both AuditFileRecord[] (a live run's file list) and
+// ProbeFile[] (the pre-flight list) structurally satisfy — this component only
+// ever needs identity + bucket to resolve extracted text and file links.
+export type PreCheckSourceFile = { name: string; path: string; bucket: "policy" | "evidence" | "auto"; driveFileId?: string };
 
 function DriveLink({ driveFileId, name }: { driveFileId?: string; name: string }) {
   if (!driveFileId) return <span style={{ color: "#94a3b8" }}>{name}</span>;
@@ -39,7 +46,7 @@ function ChecklistRow({ item, folderId, scanned }: { item: ChecklistItemResult; 
   const message = item.mode === "manual"
     ? "Needs human judgement — the app can't verify this itself."
     : !scanned
-      ? "Run the folder pre-flight check (⋯ menu) so this can scan the extracted text."
+      ? "Waiting for files to be read — this will scan automatically once they are."
       : item.outcome?.message ?? "";
   const fileRefs = item.mode === "auto" && scanned ? item.outcome?.fileRefs ?? [] : [];
 
@@ -72,31 +79,31 @@ function ChecklistRow({ item, folderId, scanned }: { item: ChecklistItemResult; 
 }
 
 export function PreAnalysisChecklistPanel({
-  folderId, subCriterionId, subCriterionTitle, itemIds, probeFiles, onContinue, continueLabel,
+  folderId, subCriterionId, subCriterionTitle, itemIds, files, onContinue, continueLabel,
 }: {
   folderId: string;
   subCriterionId: string;
   subCriterionTitle: string;
   itemIds: string[];
-  probeFiles?: ProbeFile[];
+  files?: PreCheckSourceFile[];
   onContinue: () => void;
   continueLabel: string;
 }) {
   const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
 
-  // Resolve each pre-flight file's extracted text from the cache. ProbeFile has
-  // only a driveFileId, and the cache key is `driveFileId:modifiedTime`, so
-  // prefix-scan by driveFileId. Image / scanned files have no text → null.
+  // Resolve each file's extracted text from the cache. Callers only reliably
+  // have a driveFileId (not the modifiedTime half of the cache key), so
+  // prefix-scan by driveFileId. Image / not-yet-read files have no text → null.
   const detectFiles: DetectFile[] = useMemo(() => {
-    if (!probeFiles) return [];
-    return probeFiles.map((pf) => {
-      const entry = pf.driveFileId ? Object.entries(fileTextCache).find(([k]) => k.startsWith(`${pf.driveFileId}:`))?.[1] : undefined;
-      return { name: pf.name, path: pf.path, bucket: pf.bucket, driveFileId: pf.driveFileId, text: entry?.text ?? null };
+    if (!files) return [];
+    return files.map((f) => {
+      const entry = f.driveFileId ? Object.entries(fileTextCache).find(([k]) => k.startsWith(`${f.driveFileId}:`))?.[1] : undefined;
+      return { name: f.name, path: f.path, bucket: f.bucket, driveFileId: f.driveFileId, text: entry?.text ?? null };
     });
-  }, [probeFiles, fileTextCache]);
+  }, [files, fileTextCache]);
 
   const results = useMemo(() => runPreAnalysisChecklist(itemIds, detectFiles), [itemIds, detectFiles]);
-  const scanned = !!probeFiles && probeFiles.length > 0;
+  const scanned = !!files && files.length > 0;
 
   // No definition for this sub-criterion's items yet → render nothing at all.
   if (!hasChecklist(itemIds) || results.length === 0) return null;
@@ -104,30 +111,28 @@ export function PreAnalysisChecklistPanel({
   const flags = scanned ? results.filter((r) => r.mode === "auto" && r.outcome?.status === "flag").length : 0;
 
   return (
-    <div style={{ padding: "0 12px 8px 30px" }}>
-      <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff", maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 11px", borderBottom: "1px solid #f1f5f9", flexWrap: "wrap", background: "#fbfcfe" }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.3 }}>✅ Pre-analysis checks — {subCriterionId} {subCriterionTitle}</span>
-          <span style={{ fontSize: 11, color: "#94a3b8" }}>{results.length} item{results.length !== 1 ? "s" : ""}{flags > 0 ? ` · ${flags} flagged` : ""}</span>
+    <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff", maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 11px", borderBottom: "1px solid #f1f5f9", flexWrap: "wrap", background: "#fbfcfe" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.3 }}>✅ Pre-analysis checks — {subCriterionId} {subCriterionTitle}</span>
+        <span style={{ fontSize: 11, color: "#94a3b8" }}>{results.length} item{results.length !== 1 ? "s" : ""}{flags > 0 ? ` · ${flags} flagged` : ""}</span>
+      </div>
+      <div style={{ padding: "2px 11px 9px" }}>
+        <div style={{ fontSize: 10.5, color: "#94a3b8", padding: "6px 0 2px" }}>
+          Quality checks specific to this sub-criterion, grounded in the SSG evidence list, regulatory rules and this PEI's real finding patterns. Non-blocking — you can continue at any time.
         </div>
-        <div style={{ padding: "2px 11px 9px" }}>
-          <div style={{ fontSize: 10.5, color: "#94a3b8", padding: "6px 0 2px" }}>
-            Quality checks specific to this sub-criterion, grounded in the SSG evidence list, regulatory rules and this PEI's real finding patterns. Non-blocking — you can continue at any time.
-          </div>
-          {results.map((item) => (
-            <ChecklistRow key={item.id} item={item} folderId={folderId} scanned={scanned} />
-          ))}
-          <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: 9, marginTop: 2 }}>
-            {/* Always available — checklist flags NEVER block continuing. */}
-            <button
-              type="button"
-              onClick={onContinue}
-              style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 14px", borderRadius: 8, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff" }}
-            >
-              {continueLabel} →
-            </button>
-            <span style={{ fontSize: 10.5, color: "#94a3b8", marginLeft: 10 }}>These checks are advisory — nothing here has to be ticked or cleared first.</span>
-          </div>
+        {results.map((item) => (
+          <ChecklistRow key={item.id} item={item} folderId={folderId} scanned={scanned} />
+        ))}
+        <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: 9, marginTop: 2 }}>
+          {/* Always available — checklist flags NEVER block continuing. */}
+          <button
+            type="button"
+            onClick={onContinue}
+            style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 14px", borderRadius: 8, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff" }}
+          >
+            {continueLabel} →
+          </button>
+          <span style={{ fontSize: 10.5, color: "#94a3b8", marginLeft: 10 }}>These checks are advisory — nothing here has to be ticked or cleared first.</span>
         </div>
       </div>
     </div>

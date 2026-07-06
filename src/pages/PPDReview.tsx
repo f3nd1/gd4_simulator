@@ -18,6 +18,8 @@ import { LineageDiagram } from "../components/ui/LineageDiagram";
 import { RunStepper, ppdRunStep, evidenceRunStep } from "../components/ui/RunStepper";
 import { FileLedger } from "./EvidenceFolder";
 import { normalizeAuditRef } from "../lib/gd4Refs";
+import { PreAnalysisChecklistPanel } from "../components/ui/PreAnalysisChecklistPanel";
+import { hasChecklist } from "../lib/preAnalysisChecklist";
 import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
@@ -120,7 +122,7 @@ export function OptionAExportButtons({ subCriterionId }: { subCriterionId: strin
 // EXACT same content — one component, two surfaces, zero drift.
 export function PpdReviewContent({ selectedId }: { selectedId: string }) {
   const sub = GD4_SUB_CRITERIA.find((s) => s.id === selectedId);
-  const [tab, setTab] = useState<"ppd" | "evidence">("ppd");
+  const [tab, setTab] = useState<"ppd" | "precheck" | "evidence">("ppd");
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const folders = useWorkspaceStore((s) => s.folders);
   const folder = folders.find((f) => f.subCriterionId === selectedId);
@@ -179,7 +181,7 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
 
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "1px solid #e2e8f0" }}>
-        {([["ppd", "PPD Review"], ["evidence", "Evidence"]] as const).map(([id, label]) => (
+        {([["ppd", "PPD Review"], ["precheck", "Pre-check"], ["evidence", "Evidence"]] as const).map(([id, label]) => (
           <button
             key={id}
             onClick={() => setTab(id)}
@@ -202,8 +204,53 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
         ))}
       </div>
 
-      {tab === "ppd" ? <PpdTab selectedId={selectedId} totalLines={totalLines} /> : <EvidenceTab selectedId={selectedId} />}
+      {tab === "ppd" ? <PpdTab selectedId={selectedId} totalLines={totalLines} />
+        : tab === "precheck" ? <PreCheckTab selectedId={selectedId} onContinue={() => setTab("evidence")} />
+        : <EvidenceTab selectedId={selectedId} />}
     </>
+  );
+}
+
+// "Pre-check" tab — the per-sub-criterion pre-analysis checklist, sitting
+// between PPD Review and Evidence. Reuses whichever runs have already
+// happened: the PPD review's fileLedger (policy files) plus, once it exists,
+// the evidence assessment's fileLedger (evidence files) — no separate probe.
+// Sub-criteria with no defined checklist show an honest "no checks" state
+// instead of PreAnalysisChecklistPanel's silent null, so a clicked tab never
+// appears blank. Non-blocking: "Continue to Evidence" just switches tabs —
+// it never triggers a run.
+function PreCheckTab({ selectedId, onContinue }: { selectedId: string; onContinue: () => void }) {
+  const ppd = useWorkspaceStore((s) => s.ppdReviewResults[selectedId]);
+  const assessment = useWorkspaceStore((s) => s.evidenceAssessments[selectedId]);
+  const itemIds = useMemo(() => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === selectedId).map((r) => r.id), [selectedId]);
+
+  if (!hasChecklist(itemIds)) {
+    return (
+      <div>
+        <p style={{ fontSize: 12.5, color: "#64748b", marginTop: 0 }}>No pre-analysis checks are defined yet for this sub-criterion — continue whenever you're ready.</p>
+        <button
+          type="button"
+          onClick={onContinue}
+          style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #4a5a8a", background: "#eaeef6", color: "#4a5a8a" }}
+        >
+          Continue to Evidence →
+        </button>
+      </div>
+    );
+  }
+
+  const subTitle = GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? "";
+  const files = [...(ppd?.fileLedger ?? []), ...(assessment?.fileLedger ?? [])];
+  return (
+    <PreAnalysisChecklistPanel
+      folderId={selectedId}
+      subCriterionId={selectedId}
+      subCriterionTitle={subTitle}
+      itemIds={itemIds}
+      files={files}
+      onContinue={onContinue}
+      continueLabel="Continue to Evidence"
+    />
   );
 }
 
