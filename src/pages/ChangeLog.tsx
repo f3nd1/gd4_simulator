@@ -146,11 +146,14 @@ export function ChangeLog() {
                       <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13.5, fontWeight: 700, color: "#111827" }}>{c.subject}</div>
-                          <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2 }}>
-                            {c.author || "—"}{formatTime(c.isoTime) ? ` · ${formatTime(c.isoTime)}` : ""}
-                          </div>
+                          <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2 }}>{c.author || "—"}</div>
                         </div>
-                        <span style={{ fontFamily: "monospace", fontSize: 11.5, color: "#94a3b8", flexShrink: 0 }}>{c.shortHash}</span>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
+                          {formatTime(c.isoTime) && (
+                            <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>🕑 {formatTime(c.isoTime)}</span>
+                          )}
+                          <span style={{ fontFamily: "monospace", fontSize: 11.5, color: "#94a3b8" }}>{c.shortHash}</span>
+                        </div>
                       </div>
 
                       {(hasBody || fileCount > 0) && (
