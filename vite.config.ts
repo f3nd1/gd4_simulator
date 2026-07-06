@@ -18,6 +18,11 @@ function gitInfo() {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // Relative base so the same build works whether it's served from the
+  // domain root or a subpath (e.g. nginx alias /gd4_simulator/) with zero
+  // config per deployment. Safe because HashRouter keeps all routing in the
+  // #/ fragment — the actual document path never changes depth.
+  base: './',
   define: {
     __GIT_INFO__: JSON.stringify(gitInfo()),
   },
