@@ -937,7 +937,9 @@ export type EvidenceAssessmentProgress = {
   heartbeatAt?: number;    // Date.now() bumped on every event — freeze detection
   window?: { current: number; total: number };
   filesTotal?: number;
-  filesRead?: string[];    // names read so far, in order
+  // Files read so far, in order — name + Drive id so the live list can link
+  // each row out to the exact file in Google Drive (same as the ledger rows).
+  filesRead?: { name: string; driveFileId?: string }[];
   currentFile?: string;    // file being read right now
   lineRefs?: string[];     // all requirement-line refs, in order
   lineStatus?: Record<string, EvidenceLineRunStatus>;

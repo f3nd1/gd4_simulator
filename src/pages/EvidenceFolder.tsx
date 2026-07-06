@@ -241,6 +241,22 @@ function FileRow({ file, isReading, onSkipFile, resolveText }: { file: AuditFile
             Skip
           </button>
         )}
+        {/* Open the exact file in Google Drive — same link pattern as the
+            pre-flight list. Shown on every row regardless of status (most useful
+            on Skipped / unreadable rows). stopPropagation so it never toggles
+            the extracted-text expand. */}
+        {file.driveFileId && (
+          <a
+            href={`https://drive.google.com/file/d/${file.driveFileId}/view`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            title={`Open "${file.name}" in Google Drive`}
+            style={{ flexShrink: 0, color: "#2563eb", textDecoration: "none", fontSize: 11, padding: "0 2px", lineHeight: 1 }}
+          >
+            ↗
+          </a>
+        )}
       </div>
       {open && canExpand && <ExtractedTextPanel file={file} resolveText={resolveText} />}
     </>
@@ -285,6 +301,20 @@ function AiFileRow({ file, resolveText, borderColor = "#eff6ff" }: { file: Audit
         <span style={{ flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{file.fileKind?.toUpperCase()}</span>
         {file.charCount != null && file.charCount > 0 && (
           <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", color: "#6b7280", fontSize: 9 }}>{file.charCount.toLocaleString()} ch</span>
+        )}
+        {/* Open the exact file in Google Drive — same pattern as the pre-flight
+            list and the file ledger. stopPropagation so it never toggles expand. */}
+        {file.driveFileId && (
+          <a
+            href={`https://drive.google.com/file/d/${file.driveFileId}/view`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            title={`Open "${file.name}" in Google Drive`}
+            style={{ flexShrink: 0, color: "#2563eb", textDecoration: "none", fontSize: 10.5, padding: "0 2px", lineHeight: 1 }}
+          >
+            ↗
+          </a>
         )}
       </div>
       {open && canExpand && (

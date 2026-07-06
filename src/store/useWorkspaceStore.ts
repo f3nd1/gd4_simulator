@@ -1421,7 +1421,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               continue;
             }
             filesReadCount++;
-            patchEv({ filesRead: [...(curEv().filesRead ?? []), readFileName], currentFile: undefined });
+            patchEv({ filesRead: [...(curEv().filesRead ?? []), { name: readFileName, driveFileId: file.id }], currentFile: undefined });
             logEv(`Read ${readFileName}${cached ? " (cached)" : ""}`, "good");
             const fileName = file.path.split("/").pop() || file.path;
             const fileUrl = `https://drive.google.com/file/d/${file.id}/view`;

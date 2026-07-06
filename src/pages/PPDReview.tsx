@@ -633,7 +633,13 @@ function EvidenceRunPanel({ progress, onCancel }: { progress: EvidenceAssessment
               <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
                 {p?.currentFile && <div style={{ fontSize: 11.5, color: TONE.progress.fg, fontWeight: 600 }}>▸ {p.currentFile} …</div>}
                 {filesRead.length === 0 && !p?.currentFile ? <div style={{ fontSize: 12, color: "#94a3b8" }}>None yet</div> : filesRead.slice().reverse().map((f, i) => (
-                  <div key={i} style={{ fontSize: 11.5, color: "#166534", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>✓ {f}</div>
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#166534", minWidth: 0 }}>
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>✓ {f.name}</span>
+                    {/* Open the exact file in Drive — same link pattern as the pre-flight list. */}
+                    {f.driveFileId && (
+                      <a href={`https://drive.google.com/file/d/${f.driveFileId}/view`} target="_blank" rel="noopener noreferrer" title={`Open "${f.name}" in Google Drive`} style={{ flexShrink: 0, color: "#2563eb", textDecoration: "none", padding: "0 2px", lineHeight: 1 }}>↗</a>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>
