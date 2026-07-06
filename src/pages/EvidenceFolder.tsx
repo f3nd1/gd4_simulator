@@ -1637,6 +1637,9 @@ function FolderProbePanel({ result, onClose }: { result: FolderProbeResult; onCl
                       <span style={nameStyle} title={file.path}>{file.readable ? "" : "⚠ "}{file.path}</span>
                     )}
                     <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 700, color: file.bucket === "policy" ? "#5b21b6" : "#b45309", background: file.bucket === "policy" ? "#faf5ff" : "#fffbeb", border: "1px solid", borderColor: file.bucket === "policy" ? "#ddd6fe" : "#fde68a", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>{file.bucket}</span>
+                    {file.readVia === "vision" && (
+                      <span title="Image-based/scanned PDF — the audit will read it via vision (OCR)." style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, color: "#7c3aed", background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>via vision</span>
+                    )}
                     {!file.readable && <span title={file.readError} style={{ flexShrink: 0, fontSize: 10, color: "#b91c1c", whiteSpace: "nowrap" }}>unreadable</span>}
                   </div>
                 );
@@ -1965,6 +1968,7 @@ export function EvidenceFolder() {
   // persist in the store (survive ✕ + reload). Local state only tracks which
   // pre-flight panel is currently hidden from view.
   const folderProbes = useWorkspaceStore((s) => s.folderProbes);
+  const probeProgress = useWorkspaceStore((s) => s.probeProgress);
   const setFolderProbe = useWorkspaceStore((s) => s.setFolderProbe);
   const [probeStripHidden, setProbeStripHidden] = useState<Set<string>>(new Set());
   const hideRunStrip = (id: string) => setProbeStripHidden((s) => new Set(s).add(id));
@@ -2051,6 +2055,10 @@ export function EvidenceFolder() {
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  // Ensure a row is expanded (never collapses it) — used when an action needs
+  // its result to be visible inside the row's expanded detail, e.g. running the
+  // pre-flight check from the ⋯ menu on a currently-collapsed row.
+  const expandSubCritRow = (id: string) => setExpandedSubCritRows((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   useEffect(() => {
     if (!focusSub) return;
     setExpandedSubCritRows((prev) => new Set(prev).add(focusSub));
@@ -2851,12 +2859,17 @@ export function EvidenceFolder() {
                           })}
                           {overflowItem(busy?.startsWith(`probe:`) && busy.endsWith(f.id) ? "Checking files…" : "🔎 Check folder before auditing", async () => {
                             setOverflowOpen(null);
+                            // Auto-expand the row so the pre-flight result (and its
+                            // live progress) appears in its proper position inside
+                            // the expanded detail — the panel is only ever shown as
+                            // part of the expanded row, never floating on a
+                            // collapsed one.
+                            expandSubCritRow(f.id);
+                            showRunStrip(f.id);
                             const tab: "policy" | "evidence" = f.policyLink && !f.folderLink ? "policy" : "evidence";
                             const res = await probeFolder(f.id, tab);
-                            // Persist the result (survives ✕ + reload) and un-hide
-                            // the pre-flight pane so the fresh result is visible.
+                            // Persist the result (survives ✕ + reload).
                             setFolderProbe(f.id, res);
-                            showRunStrip(f.id);
                           }, {
                             disabled: !!busy,
                             title: "Lists this folder's files, flags mis-named subfolders and unreadable files — NO AI call. Run this before auditing to avoid a silently wrong result.",
@@ -2963,24 +2976,38 @@ export function EvidenceFolder() {
                   </div>
                 </div>
               )}
-              {/* Persistent pre-flight pane (zero AI calls to render). Positioned
-                  LAST — after the Audit Result section — as supporting/diagnostic
-                  detail. Shows the stored folder pre-flight check; ✕ only HIDES it
-                  for this view (the stored result is kept and can be reopened),
-                  and it survives a page reload. NOT gated on rowExpanded: running
-                  a probe from the ⋯ menu un-hides it directly, so it must render
-                  regardless of the row's expand state. The audit result is NOT
-                  surfaced here — it already has its own entry points (the "View
-                  results" button in the Action row and the Audit result detail
-                  above), so a tab here would just duplicate the same modal. */}
-              {(() => {
+              {/* Pre-flight pane (zero AI calls to render). Positioned LAST —
+                  after the Audit Result section — as supporting/diagnostic detail.
+                  Visibility follows the SAME single rule as Access-Policy /
+                  Access-Evidence / Audit Result: shown only while the row is
+                  expanded, hidden entirely when collapsed. Running the check from
+                  the ⋯ menu on a collapsed row auto-expands the row (see the menu
+                  handler) rather than floating this panel on a closed row. ✕ hides
+                  it for this view (the stored result is kept, reopenable) and it
+                  survives a page reload. */}
+              {rowExpanded && (() => {
                 const probing = busy?.startsWith("probe:") && busy.endsWith(f.id);
                 if (probing) {
+                  const pp = probeProgress && probeProgress.folderId === f.id ? probeProgress : null;
+                  const pct = pp && pp.total > 0 ? Math.round((pp.current / pp.total) * 100) : null;
                   return (
                     <div style={{ padding: "0 12px 8px 30px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#475569", maxWidth: "100%", boxSizing: "border-box" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#475569", maxWidth: "100%", boxSizing: "border-box", flexWrap: "wrap" }}>
+                        {/* Spinner animates continuously, so even while the counter
+                            holds on one slow file it's clear the check is alive. */}
                         <Spinner />
-                        <span>Checking folder… listing files and testing each is readable (no AI used).</span>
+                        <span style={{ fontWeight: 600 }}>
+                          {pp ? `Checking file ${pp.current} of ${pp.total}…` : "Listing folder…"}
+                        </span>
+                        <span style={{ color: "#94a3b8" }}>testing each file is readable (no AI used)</span>
+                        {pct != null && (
+                          <span style={{ flex: 1, minWidth: 120, display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ flex: 1, height: 5, borderRadius: 3, background: "#e2e8f0", overflow: "hidden" }}>
+                              <span style={{ display: "block", height: "100%", width: `${pct}%`, background: "#8b5cf6", borderRadius: 3, transition: "width 0.3s ease" }} />
+                            </span>
+                            <span style={{ fontSize: 10.5, color: "#8b5cf6", fontWeight: 700, minWidth: 30, textAlign: "right" }}>{pct}%</span>
+                          </span>
+                        )}
                       </div>
                     </div>
                   );

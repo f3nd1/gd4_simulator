@@ -442,6 +442,9 @@ export type WorkspaceState = {
   // (viewable beside the audit result). A new probe replaces the stored one.
   folderProbes: Record<string, { result: FolderProbeResult; probedAt: string }>;
   setFolderProbe: (folderId: string, result: FolderProbeResult) => void;
+  // Live per-file progress while a pre-flight probe reads each file, so the UI
+  // can show "Checking file N of TOTAL" instead of a static line. Transient.
+  probeProgress: { folderId: string; current: number; total: number } | null;
   // Extracted-text cache keyed by "fileId:modifiedTime". Allows unchanged Drive
   // files to skip the download step on repeat audits.
   // readMethod records HOW the content was extracted ("text" = direct text
@@ -839,6 +842,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       lastAuditRuns: {},
       folderProbes: {},
       setFolderProbe: (folderId, result) => set((s) => ({ folderProbes: { ...s.folderProbes, [folderId]: { result, probedAt: new Date().toISOString() } } })),
+      probeProgress: null,
       fileTextCache: {},
       bulkAuditStatus: null,
       additionalInfo: { link: "" },
@@ -2858,24 +2862,48 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             return { ...empty, listError: detail || (err instanceof Error ? err.message : String(err)) };
           }
           const probeFiles: ProbeFile[] = [];
-          for (const f of listed) {
+          const total = listed.length;
+          // A vision model makes image-based/scanned PDFs readable (the audit
+          // OCRs them), so the pre-flight must classify them accordingly rather
+          // than flagging them unreadable. No AI call is made here — the audit
+          // does the actual vision extraction.
+          const aiForVision = useAISettingsStore.getState();
+          const canVision = aiForVision.enabled && !!aiForVision.apiKey;
+          for (let fi = 0; fi < listed.length; fi++) {
+            const f = listed[fi];
+            // Live progress: "Checking file N of TOTAL".
+            set({ probeProgress: { folderId: id, current: fi + 1, total } });
             if (IMAGE_MIME_TYPES.has(f.mimeType)) { probeFiles.push({ name: f.path.split("/").pop() || f.path, path: f.path, bucket: classifyFileBucket(f.path), readable: true, driveFileId: f.id }); continue; }
             const cacheKey = `${f.id}:${f.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
-            let readable = true; let readError: string | undefined;
+            let readable = true; let readError: string | undefined; let readVia: "vision" | undefined;
             if (cached) {
               readable = !!cached.text;
+              if (cached.readMethod === "vision") readVia = "vision";
             } else {
               try {
                 const readToken = await useGoogleDriveStore.getState().getFreshToken();
                 if (!readToken) { readable = false; readError = "Drive token could not be refreshed."; }
                 else {
                   const body = await exportFileText(f, readToken, timeoutSignal(undefined, DRIVE_FILE_TIMEOUT_MS));
-                  readable = body != null && body.trim().length > 0;
+                  const hasText = body != null && body.trim().length > 0;
+                  // Image-based/scanned PDF: near-zero extractable typed text. The
+                  // real audit reads these through the vision path, so mark them
+                  // readable-via-vision when a vision model is available — only
+                  // genuinely unreadable when it is not. (Same trigger the audit
+                  // uses: classifyPdfTextQuality === "none".)
+                  const isImagePdf = f.mimeType === "application/pdf" && classifyPdfTextQuality(body ?? "").extractedTextQuality === "none";
+                  if (isImagePdf) {
+                    if (canVision) { readable = true; readVia = "vision"; }
+                    else { readable = false; readError = "Image-based/scanned PDF — enable AI + an API key in Settings so the audit can read it via vision."; }
+                  } else {
+                    readable = hasText;
+                    if (!hasText) readError = "No extractable text.";
+                  }
                   // Only cache a genuine (non-empty) extraction — never lock in a
                   // blank read or clobber a good vision transcription with "".
-                  if (body != null && body.trim().length > 0) {
-                    const text = body;
+                  if (hasText) {
+                    const text = body!;
                     set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: f.mimeType, fileName: f.path.split("/").pop() || f.path, filePath: f.path, cachedAt: Date.now(), readMethod: "text" } } }));
                   }
                 }
@@ -2884,11 +2912,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 readError = classifyDriveReadError(err instanceof Error ? err.message : String(err)).detail || (err instanceof Error ? err.message : String(err));
               }
             }
-            probeFiles.push({ name: f.path.split("/").pop() || f.path, path: f.path, bucket: classifyFileBucket(f.path), readable, readError, driveFileId: f.id });
+            probeFiles.push({ name: f.path.split("/").pop() || f.path, path: f.path, bucket: classifyFileBucket(f.path), readable, readError, driveFileId: f.id, ...(readVia ? { readVia } : {}) });
           }
           return analyzeFolderProbe(probeFiles, sharedFolder);
         } finally {
-          set({ busy: null });
+          set({ busy: null, probeProgress: null });
         }
       },
 
