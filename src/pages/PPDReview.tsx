@@ -14,6 +14,8 @@ import { ppdResultSummary } from "../lib/ppdSelection";
 import { auditModeLabel } from "../lib/runModes";
 import { TONE } from "../lib/theme";
 import { exportOptionASummaryCsv, exportFileLedgerCsvFor, downloadCsv, auditCsvFilename } from "../lib/auditCsvExport";
+import { LineageDiagram } from "../components/ui/LineageDiagram";
+import { normalizeAuditRef } from "../lib/gd4Refs";
 import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
@@ -261,6 +263,12 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
       next.has(ref) ? next.delete(ref) : next.add(ref);
       return next;
     });
+  // Lineage-diagram node click: expand the matching row and scroll it into view.
+  const openLine = (ref: string) => {
+    setExpandedRows((prev) => new Set(prev).add(ref));
+    const id = `ppdline-${normalizeAuditRef(ref)}`;
+    requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  };
 
   // Old-format results (pre per-line refactor) keyed rows per whole item and
   // lack `ref`; force a re-run rather than render the collapsed single row.
@@ -415,6 +423,9 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
             {" · "}{liveResult.rows.filter((r) => r.verdict === "Adequate").length} Adequate, {liveResult.rows.filter((r) => r.verdict === "Partial").length} Partial, {liveResult.rows.filter((r) => r.verdict === "Not documented").length} Not documented
           </div>
 
+          {/* Requirement → PPD lineage map (reuses this run's row data). */}
+          <LineageDiagram mode="ppd" ppd={liveResult} onOpenLine={openLine} />
+
           <div style={{ display: "grid", gridTemplateColumns: PPD_GRID, gap: 10, position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px 8px 0 0", padding: "6px 12px", marginBottom: -1 }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>GD4 requirement</span>
             <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>PPD procedure (AI-matched)</span>
@@ -429,7 +440,7 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
                 : "No chunk cited";
               const extractPreview = row.fullComment || row.shortComment || "(no comment returned)";
               return (
-                <div key={row.ref} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${ppdVerdictBorderColor(row.verdict)}`, borderRadius: 8, padding: "10px 12px" }}>
+                <div key={row.ref} id={`ppdline-${normalizeAuditRef(row.ref)}`} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${ppdVerdictBorderColor(row.verdict)}`, borderRadius: 8, padding: "10px 12px", scrollMarginTop: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: PPD_GRID, gap: 10, alignItems: "start" }}>
                     <div>
                       <div style={{ fontFamily: "ui-monospace,monospace", fontSize: 12, fontWeight: 700, color: "#4338ca", marginBottom: 4 }}>{row.ref}</div>
@@ -751,6 +762,12 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
       next.has(ref) ? next.delete(ref) : next.add(ref);
       return next;
     });
+  // Lineage-diagram node click: expand the matching evidence row + scroll to it.
+  const openLine = (ref: string) => {
+    setExpandedRows((prev) => new Set(prev).add(ref));
+    const id = `evline-${normalizeAuditRef(ref)}`;
+    requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  };
 
   // Mirrors compileEvidenceFindings' exclusions: already-saved, failed, and
   // "Not assessed" rows raise nothing, so they don't count as compilable.
@@ -837,6 +854,9 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
           chunk quotes and contradictions that produced it. */}
       <HybridGatePanel subCriterionId={selectedId} />
 
+      {/* Requirement → PPD → Evidence lineage map (reuses stored row data). */}
+      <LineageDiagram mode="evidence" evidence={assessment} ppd={ppd} onOpenLine={openLine} />
+
       <div style={{ display: "grid", gridTemplateColumns: EV_GRID, gap: 10, position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px 8px 0 0", padding: "6px 12px", marginBottom: -1 }}>
         <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>GD4 requirement</span>
         <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>PPD</span>
@@ -850,7 +870,7 @@ function EvidenceTab({ selectedId }: { selectedId: string }) {
           const border = row.assessmentFailed ? "#9ca3af" : row.verdict ? evVerdictBorderColor(row.verdict) : "#e2e8f0";
           const ppdExtractShort = row.ppdExtract.length > 160 ? `${row.ppdExtract.slice(0, 160)}…` : row.ppdExtract;
           return (
-            <div key={row.gdRef} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${border}`, borderRadius: 8, padding: "10px 12px" }}>
+            <div key={row.gdRef} id={`evline-${normalizeAuditRef(row.gdRef)}`} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${border}`, borderRadius: 8, padding: "10px 12px", scrollMarginTop: 12 }}>
               <div style={{ display: "grid", gridTemplateColumns: EV_GRID, gap: 10, alignItems: "start" }}>
                 {/* Column 1 — GD4 requirement */}
                 <div>
