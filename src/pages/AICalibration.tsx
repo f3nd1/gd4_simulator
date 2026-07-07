@@ -2,7 +2,7 @@
 // EduTrust assessment reports (src/data/benchmarkAFIs.ts). A MEASUREMENT
 // tool only: it never tunes prompts or changes audit results.
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
 import { useCalibrationStore, type MatchStatus } from "../store/useCalibrationStore";
 import { useBenchmarkAfiStore } from "../store/useBenchmarkAfiStore";
@@ -409,12 +409,33 @@ Give a one-line justification naming what matched or what was missed. Respond wi
         </Card>
       )}
 
-      {/* Per-AFI comparison */}
-      {(selected === "all" ? subCriteria : [selected]).map((sc) => {
-        const afis = allAfis.filter((a) => a.subCriterion === sc && (sourceFilter === "all" || a.source === sourceFilter));
-        if (afis.length === 0) return null;
-        return <SubCriterionSection key={sc} subCriterionId={sc} afis={afis} statusOf={statusOf} matchesJustification={(id) => matches[id]} setMatch={setMatch} />;
-      })}
+      {/* Per-AFI comparison — grouped under a Criterion heading. Sub-criterion
+          ids sort naturally into criterion order (e.g. "1.1", "1.2", "2.1.1"),
+          so a header is inserted whenever the running criterion changes,
+          rather than needing a separate grouping pass. */}
+      {(() => {
+        const list = selected === "all" ? subCriteria : [selected];
+        let lastCriterion: string | null = null;
+        return list.map((sc) => {
+          const afis = allAfis.filter((a) => a.subCriterion === sc && (sourceFilter === "all" || a.source === sourceFilter));
+          if (afis.length === 0) return null;
+          const criterionId = GD4_SUB_CRITERIA.find((s) => s.id === sc)?.criterionId;
+          const showHeader = !!criterionId && criterionId !== lastCriterion;
+          if (criterionId) lastCriterion = criterionId;
+          const criterionTitle = criterionId ? GD4_CRITERIA.find((c) => c.id === criterionId)?.title : undefined;
+          return (
+            <Fragment key={sc}>
+              {showHeader && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#4338ca", flexShrink: 0, boxShadow: "0 0 0 3px #e0e7ff" }} />
+                  <h2 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: "#1e293b" }}>Criterion {criterionId} — {criterionTitle}</h2>
+                </div>
+              )}
+              <SubCriterionSection subCriterionId={sc} afis={afis} statusOf={statusOf} matchesJustification={(id) => matches[id]} setMatch={setMatch} />
+            </Fragment>
+          );
+        });
+      })()}
     </div>
   );
 }
