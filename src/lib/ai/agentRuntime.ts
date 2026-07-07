@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, AgentMemoryEntry, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
 import { chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage } from "./aiClient";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
@@ -16,10 +16,6 @@ import { perspectiveOf, perspectiveLabel, perspectiveGuidance, detectPanelDisagr
 import { normalizeAuditRef } from "../gd4Refs";
 
 export { AIClientError };
-
-function memoryToMessages(memory: AgentMemoryEntry[]) {
-  return memory.map((m) => ({ role: m.role, content: m.content }));
-}
 
 // Extracts the first valid JSON object from a model response (which may have
 // preamble text before the object). Uses a non-greedy scan over brace depth
@@ -60,16 +56,15 @@ export async function runLiveItemReview(
   agent: AgentDefinition,
   item: { id: string; eff: number; band: number; checklistOverride: boolean },
   ev: ItemEvidence,
-  settings: AISettings,
-  memory: AgentMemoryEntry[]
+  settings: AISettings
 ): Promise<Omit<SimulatedItemVerdict, "live"> & { live: true; usage?: AIUsage }> {
   const itemDomainSkill = domainExpertiseFor(item.id);
-  const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine (sourced from the Sub-Criterion Checklist outcome where one exists, otherwise from the evidence matrix below) and given to you here; you must not contradict it or imply a different one. Your tone must match that fixed band exactly: never use positive, encouraging or reassuring language when the band is low, when any evidence limb below is "Missing", or when the Drive evidence link is absent — in every such case you must name the gap plainly instead of softening it. A missing Drive evidence link is itself a real gap to call out even if the four evidence limbs look strong, because it means the human auditor cannot actually verify the evidence. Use your earlier-turn memory of other items you have reviewed to flag when the SAME gap recurs across items (e.g. a missing review/record pattern), so the auditor can fix it systemically. Write a short, specific justification (2-3 sentences) referencing only the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.${buildSystemPrompt("bandRecommend", null, "runLiveItemReview", item.id, itemDomainSkill)}${buildDomainBlock(itemDomainSkill)}`;
+  const system = `You are ${agent.name}, an EduTrust GD4 internal audit review agent with focus area "${agent.focus}". You assist a human auditor and never decide the official GD4 score or band yourself — that figure is fixed by the workspace's scoring engine (sourced from the Sub-Criterion Checklist outcome where one exists, otherwise from the evidence matrix below) and given to you here; you must not contradict it or imply a different one. Your tone must match that fixed band exactly: never use positive, encouraging or reassuring language when the band is low, when any evidence limb below is "Missing", or when the Drive evidence link is absent — in every such case you must name the gap plainly instead of softening it. A missing Drive evidence link is itself a real gap to call out even if the four evidence limbs look strong, because it means the human auditor cannot actually verify the evidence. Write a short, specific justification (2-3 sentences) referencing only the evidence given, and one concrete recommendation for reaching a higher band. Respond with JSON only: {"justification": string, "higherBand": string, "confidence": "Low" | "Medium" | "High"}.${buildSystemPrompt("bandRecommend", null, "runLiveItemReview", item.id, itemDomainSkill)}${buildDomainBlock(itemDomainSkill)}`;
   const user = `Item ${item.id}. Fixed evidence score: ${item.eff}/100, fixed band: ${item.band} (source: ${item.checklistOverride ? "Sub-Criterion Checklist outcome" : "evidence matrix quick rating"}). Evidence: approach=${ev.approach}, processes=${ev.processes}, systemsOutcomes=${ev.systemsOutcomes}, review=${ev.review}, traceability=${ev.trace}%, evidence age=${ev.age} days, owner=${ev.owner || "(unassigned)"}, Drive evidence link=${ev.drive ? ev.drive : "MISSING — no link has been provided"}.`;
 
   let usage: AIUsage | undefined;
   const content = await chatComplete(
-    [{ role: "system", content: system }, ...memoryToMessages(memory), { role: "user", content: user }],
+    [{ role: "system", content: system }, { role: "user", content: user }],
     settings,
     { onUsage: (u) => { usage = u; } }
   );
@@ -253,7 +248,6 @@ ${sourceBlock}${req.gateSensitive ? "\n\nNote: This item is gate-sensitive — a
 export async function runLiveClosureReview(
   closure: { root?: string; corr?: string; prev?: string; evid?: string },
   settings: AISettings,
-  memory: AgentMemoryEntry[],
   calibration?: SkillCalibrationExample[],
   criterionId?: string
 ): Promise<Omit<SimulatedClosureVerdict, "live"> & { live: true; usage?: AIUsage }> {
@@ -267,7 +261,7 @@ export async function runLiveClosureReview(
 
   let usage: AIUsage | undefined;
   const content = await chatComplete(
-    [{ role: "system", content: system }, ...memoryToMessages(memory), { role: "user", content: user }],
+    [{ role: "system", content: system }, { role: "user", content: user }],
     settings,
     { onUsage: (u) => { usage = u; } }
   );

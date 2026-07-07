@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAISettingsStore } from "../store/useAISettingsStore";
-import { useAgentMemoryStore } from "../store/useAgentMemoryStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { useSupabaseSettingsStore } from "../store/useSupabaseSettingsStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
@@ -27,7 +26,6 @@ async function rehydrateAllFromSupabase() {
     useAISettingsStore as unknown as StoreWithPersist,
     useWorkspaceStore as unknown as StoreWithPersist,
     useChecklistModuleStore as unknown as StoreWithPersist,
-    useAgentMemoryStore as unknown as StoreWithPersist,
     useScoringConfigStore as unknown as StoreWithPersist,
     useGoogleDriveStore as unknown as StoreWithPersist,
   ];
@@ -113,8 +111,6 @@ function PanelModeSettings() {
 export function Settings() {
   const { apiKey, model, utilityModel, visionModel, enabled, setApiKey, setModel, setUtilityModel, setVisionModel, setEnabled, clearApiKey, setVerdictTemperature } = useAISettingsStore();
   const verdictTemperature = useAISettingsStore((s) => verdictTemp(s));
-  const memory = useAgentMemoryStore((s) => s.memory);
-  const clearMemory = useAgentMemoryStore((s) => s.clearMemory);
   const [draftKey, setDraftKey] = useState(apiKey);
   // apiKey now rehydrates asynchronously (Supabase round-trip, or the
   // timeout fallback), so it can still be the empty default when this
@@ -163,8 +159,6 @@ export function Settings() {
   const dbConfigured = !!effectiveUrl && !!effectiveKey;
   const usingOverride = !!dbUrl || !!dbKey;
 
-  const memoryAgentCount = Object.keys(memory).filter((k) => (memory[k] || []).length > 0).length;
-
   async function testDbConnection() {
     setTesting(true);
     setTestResult(null);
@@ -211,7 +205,7 @@ export function Settings() {
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Supabase database</h3>
         <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
           When connected, this entire workspace — audit cycle, departments, findings, checklist evidence, closures,
-          folders, auditors, AI agent memory, the OpenAI key and the Google Drive Client ID — is read from and written
+          folders, auditors, the OpenAI key and the Google Drive Client ID — is read from and written
           to this database, with this browser's local storage kept as an offline cache and fallback if the database is
           unreachable. Leave this blank to keep everything local to this browser only.
         </p>
@@ -507,23 +501,6 @@ create policy "anon read/write" on public.workspace_state
           <Pill s={driveConnected ? "good" : "neutral"}>{driveConnected ? "Connected" : "Not connected"}</Pill>
         </div>
         {lastError && <p style={{ fontSize: 12, color: "#b91c1c", marginBottom: 0 }}>{lastError}</p>}
-      </Card>
-
-      <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Agent memory</h3>
-        <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
-          Each agent keeps a short rolling history of its own prior turns in this workspace, so a live AI call has context
-          from earlier reviews it ran. Syncs through the Supabase database above when connected, otherwise stays local.
-        </p>
-        <p style={{ fontSize: 12.5 }}>
-          {memoryAgentCount === 0 ? "No agent memory recorded yet." : `${memoryAgentCount} agent(s) have recorded memory.`}
-        </p>
-        <button
-          onClick={() => clearMemory()}
-          style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "8px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}
-        >
-          Clear all agent memory
-        </button>
       </Card>
 
       <Card>

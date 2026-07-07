@@ -42,7 +42,6 @@ import { simulateItemReview, simulateClosure, simulateFolderAudit, deriveApsrSta
 import { runLiveItemReview, runLiveClosureReview, runLiveClosureDraft, runLiveFolderAudit, runLiveFindingObservation, FOLDER_DOC_CAP, runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr, simulateStagedPolicyAudit, simulateStagedEvidenceAudit, simulateStagedOutcomeReview, runPPDRequirementsReview, runEvidenceAssessment, runAuditorPanel, type PPDRequirementInput, type EvidenceAssessmentInput } from "../lib/ai/agentRuntime";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
-import { useAgentMemoryStore } from "./useAgentMemoryStore";
 // Static circular import (useFindingDraftStore also imports this store) —
 // same pattern as useChecklistModuleStore; safe because all cross-store
 // usage happens inside actions at runtime, never at module-init time.
@@ -2208,7 +2207,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             departments: s.departments,
             schoolContext: s.schoolContext,
             additionalInfo: s.additionalInfo,
-            agentMemory: useAgentMemoryStore.getState().memory,
             auditJournal: s.auditJournal,
             // Option A state + run history. promptSent is kept IN FULL for
             // development — the team inspects full prompts in the AI Review
@@ -2250,7 +2248,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // restored bands match. Older snapshots may not carry it, in which
           // case the current checklist is left untouched.
           if (snap.checklistEntries) useChecklistModuleStore.getState().replaceAllEntries(snap.checklistEntries);
-          if (snap.agentMemory) useAgentMemoryStore.getState().replaceAllMemory(snap.agentMemory);
           // Grouped drafts point at findings/lines that are about to roll back —
           // reset them (same as createNewCycle) so no draft dangles.
           useFindingDraftStore.getState().resetAllDrafts();
@@ -2355,7 +2352,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             departments: s.departments,
             schoolContext: s.schoolContext,
             additionalInfo: s.additionalInfo,
-            agentMemory: useAgentMemoryStore.getState().memory,
             auditJournal: s.auditJournal,
             // Option A state + run history. promptSent is kept IN FULL for
             // development — the team inspects full prompts in the AI Review
@@ -2399,11 +2395,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // only returns if "Use demo data" is clicked again afterward.
       createNewCycle: () => {
         useChecklistModuleStore.getState().replaceAllEntries({});
-        // Sibling stores that must not leak the old cycle's context into the
-        // new one: per-agent AI memory (old conversations otherwise keep
-        // feeding new prompts) and grouped finding drafts (their
-        // savedFindingIds point at findings wiped below).
-        useAgentMemoryStore.getState().clearMemory();
+        // Sibling store that must not leak the old cycle's context into the
+        // new one: grouped finding drafts (their savedFindingIds point at
+        // findings wiped below).
         useFindingDraftStore.getState().resetAllDrafts();
         // PDCA carryover (ISO 9011/9001): archive the outgoing cycle's full
         // register so new-cycle findings can be matched against it
@@ -2525,13 +2519,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let liveError: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
-            const memory = useAgentMemoryStore.getState().memory[agentId] || [];
             const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
-            verdict = await runLiveItemReview(agent, item, ev, settings, memory);
-            const bandLabels = ["", "Band 1 — no system", "Band 2 — awareness", "Band 3 — systematic", "Band 4 — integrated", "Band 5 — excellent"];
-            const bandLabel = bandLabels[item.band] || `Band ${item.band}`;
-            useAgentMemoryStore.getState().addMemory(agentId, { role: "user", content: `GD4 ${itemId}: requesting review. Evidence score ${item.eff}/100, band ${item.band}.`, createdAt: new Date().toISOString() });
-            useAgentMemoryStore.getState().addMemory(agentId, { role: "assistant", content: `GD4 ${itemId} reviewed: Band ${verdict.band} (${bandLabel}). ${verdict.justification} Recommendation: ${verdict.higherBand}`, createdAt: new Date().toISOString() });
+            verdict = await runLiveItemReview(agent, item, ev, settings);
           } catch (err) {
             liveError = err instanceof Error ? err.message : String(err);
             verdict = simulateItemReview(agent, item, ev);
@@ -2657,14 +2646,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let liveError: string | undefined;
         if (aiSettings.enabled && aiSettings.apiKey) {
           try {
-            const memory = useAgentMemoryStore.getState().memory["closure-reviewer"] || [];
             const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
             const closureCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "AFI Closure").slice(0, 3);
             if (closureCalibration.length) get().markCalibrationUsed(closureCalibration.map((e) => e.id));
             const closureItemId = get().customFindings.find((f) => f.id === afiId)?.gd4ItemId;
-            verdict = await runLiveClosureReview(c, settings, memory, closureCalibration, closureItemId);
-            useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "user", content: `Reviewed closure for ${afiId}.`, createdAt: new Date().toISOString() });
-            useAgentMemoryStore.getState().addMemory("closure-reviewer", { role: "assistant", content: verdict.reason, createdAt: new Date().toISOString() });
+            verdict = await runLiveClosureReview(c, settings, closureCalibration, closureItemId);
           } catch (err) {
             liveError = err instanceof Error ? err.message : String(err);
             verdict = simulateClosure(c);

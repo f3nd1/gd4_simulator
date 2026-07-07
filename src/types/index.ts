@@ -1160,13 +1160,12 @@ export type WorkspaceSnapshot = {
   // restore keeps the SAMPLE banner in sync with the restored seed findings.
   sampleDataActive?: boolean;
   // Added so a version captures the full picture and restore loses nothing:
-  // the AI verdicts/log, the School Context briefing, the Additional-info
-  // folder link, and per-agent memory. All optional for older snapshots.
+  // the AI verdicts/log, the School Context briefing and the Additional-info
+  // folder link. All optional for older snapshots.
   itemReviews?: Record<string, unknown>;
   aiReviewLog?: AIReviewLogEntry[];
   schoolContext?: { text: string; link: string; driveCache?: string; cachedAt?: string; accessStatus?: DriveAccessStatus; accessNote?: string; enabled?: boolean };
   additionalInfo?: { link: string; accessStatus?: DriveAccessStatus; accessNote?: string; accessAt?: string };
-  agentMemory?: Record<string, AgentMemoryEntry[]>;
   auditJournal?: string;
   // Option A state + run history: captured so restoring a version can't
   // leave PPD-review / evidence-assessment rows whose savedFindingIds point
@@ -1219,12 +1218,6 @@ export type AgentDefinition = {
 
 // Per-agent conversation memory, kept so a live LLM call can be given context
 // from its own prior turns in this workspace.
-export type AgentMemoryEntry = {
-  role: "user" | "assistant";
-  content: string;
-  createdAt: string;
-};
-
 export type SampleRecordType = "Student" | "Staff" | "Academic" | "Financial" | "QA";
 
 export type SampleRecord = {
