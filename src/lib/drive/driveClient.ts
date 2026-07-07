@@ -289,7 +289,9 @@ const GOOGLE_EXPORT_MIME: Record<string, string> = {
 // PDF has no Drive /export conversion (that's only for Google-native
 // formats) — read the raw bytes via alt=media instead and extract text
 // client-side, consistent with this app having no backend to do it for us.
-async function extractPdfText(bytes: ArrayBuffer): Promise<string> {
+// Exported (not just used internally) because it has zero Drive dependency
+// itself — src/lib/uploadedDocText.ts reuses it for locally-uploaded PDFs.
+export async function extractPdfText(bytes: ArrayBuffer): Promise<string> {
   const loadingTask = pdfjsLib.getDocument({ data: bytes });
   const pdf = await loadingTask.promise;
   try {
@@ -355,7 +357,7 @@ export async function exportPdfPageImages(file: DriveFile, accessToken: string, 
   return renderPdfBytesToImages(await res.arrayBuffer(), maxPages);
 }
 
-const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+export const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 export const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/tiff"]);
 

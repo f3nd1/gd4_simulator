@@ -27,15 +27,27 @@ export type BenchmarkFindingPattern =
 // counting them as gaps the AI should have raised.
 export type BenchmarkAFIKind = "AFI" | "higher-band" | "strength";
 
+// Whether a finding came from the real external SSG EduTrust assessment
+// reports seeded below, or was added later from an uploaded internal audit
+// report (see useCustomBenchmarkStore + the Benchmark tab's upload panel).
+export type BenchmarkSource = "Internal" | "External";
+
 export type BenchmarkAFI = {
   id: string;                    // e.g. "2025-B4", "2026-C1"
-  year: 2025 | 2026;
+  // Widened from a 2025|2026 literal union (which only ever fit the two
+  // seeded reports below) to a plain number so uploaded reports from any
+  // year — past or future — can be recorded without a type change.
+  year: number;
   kind: BenchmarkAFIKind;
   subCriterion: string;          // e.g. "2.1.1" — the GD4 sub-criterion it falls under
   gd4Ref?: string;               // finer ref where inferable, e.g. "2.1.1" or "2.1.1.DS3"
   findingText: string;           // VERBATIM text from the report — never paraphrase
   findingPattern: BenchmarkFindingPattern;
   hasNamedExample: boolean;      // does the real finding cite a concrete document/date/record?
+  // Required (not optional) so every new construction site — the AI
+  // extraction/review flow — must set it explicitly rather than silently
+  // defaulting somewhere via `??`.
+  source: BenchmarkSource;
 };
 
 // Seeded verbatim from the two real SSG EduTrust assessment reports:
@@ -48,7 +60,11 @@ export type BenchmarkAFI = {
 // PII while preserving each finding's pattern, dates, courses and document
 // references, which is what the calibration benchmark measures against. Do NOT
 // restore the real names.
-export const BENCHMARK_AFIS: BenchmarkAFI[] = [
+// The 67 literals below predate the `source` field and are all real,
+// seeded-verbatim external SSG findings — kept untouched here and defaulted
+// to source: "External" at the export boundary just below, so this list
+// never needs a 67-entry hand-edit.
+const BENCHMARK_AFIS_RAW: Omit<BenchmarkAFI, "source">[] = [
   // ── July 2025 report — B-series AFIs ──────────────────────────────────────
   {
     id: "2025-B1",
@@ -650,8 +666,21 @@ export const BENCHMARK_AFIS: BenchmarkAFI[] = [
   },
 ];
 
+export const BENCHMARK_AFIS: BenchmarkAFI[] = BENCHMARK_AFIS_RAW.map((a) => ({ ...a, source: "External" as const }));
+
 // Sub-criteria that appear anywhere in the benchmark — drives the page's
-// selector and the over-rating sweep.
-export function benchmarkSubCriteria(): string[] {
-  return [...new Set(BENCHMARK_AFIS.map((a) => a.subCriterion))].sort();
+// selector and the over-rating sweep. Pass a combined (static + custom
+// upload) array to include user-added entries; defaults to the static set.
+export function benchmarkSubCriteria(afis: BenchmarkAFI[] = BENCHMARK_AFIS): string[] {
+  return [...new Set(afis.map((a) => a.subCriterion))].sort();
+}
+
+// Merges the static, seeded-verbatim external findings with user-uploaded
+// entries (from useCustomBenchmarkStore) into one ground-truth list — the
+// single source every Benchmark-tab computation should read from once both
+// exist, so uploaded internal (or additional external) findings participate
+// in the scoreboard, matching, CSV export, over-rating check and tuning
+// advisor exactly like the seeded ones.
+export function combineBenchmarkAfis(custom: BenchmarkAFI[]): BenchmarkAFI[] {
+  return [...BENCHMARK_AFIS, ...custom];
 }

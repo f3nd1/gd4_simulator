@@ -5,8 +5,9 @@
 import { useMemo, useState } from "react";
 import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
 import { useCalibrationStore, type MatchStatus } from "../store/useCalibrationStore";
+import { useCustomBenchmarkStore } from "../store/useCustomBenchmarkStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
-import { BENCHMARK_AFIS, benchmarkSubCriteria, type BenchmarkAFI, type BenchmarkFindingPattern } from "../data/benchmarkAFIs";
+import { benchmarkSubCriteria, combineBenchmarkAfis, type BenchmarkAFI, type BenchmarkFindingPattern, type BenchmarkSource } from "../data/benchmarkAFIs";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { Card, inputStyle } from "../components/ui/Card";
@@ -15,6 +16,7 @@ import { ConsistencyTab, AvsBTab, RecommendationsPanel } from "./CalibrationLab"
 import { recommendFromBenchmark } from "../lib/tuningAdvisor";
 import { BenchmarkBreakdownChart, ImprovementChart } from "../components/ui/calibrationCharts";
 import { RuleTuningTab } from "./RuleTuningTab";
+import { UploadBenchmarkPanel } from "./UploadBenchmarkPanel";
 import type { Finding } from "../types";
 
 const PATTERNS: BenchmarkFindingPattern[] = [
@@ -120,8 +122,11 @@ export function AICalibration() {
 }
 
 function BenchmarkTab() {
-  const subCriteria = benchmarkSubCriteria();
+  const customEntries = useCustomBenchmarkStore((s) => s.entries);
+  const allAfis = useMemo(() => combineBenchmarkAfis(customEntries), [customEntries]);
+  const subCriteria = benchmarkSubCriteria(allAfis);
   const [selected, setSelected] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | BenchmarkSource>("all");
   const matches = useCalibrationStore((s) => s.matches);
   const setMatch = useCalibrationStore((s) => s.setMatch);
   const setAiMatch = useCalibrationStore((s) => s.setAiMatch);
@@ -137,8 +142,8 @@ function BenchmarkTab() {
   const [runError, setRunError] = useState<string | null>(null);
 
   const visibleAFIs = useMemo(
-    () => BENCHMARK_AFIS.filter((a) => selected === "all" || a.subCriterion === selected),
-    [selected]
+    () => allAfis.filter((a) => (selected === "all" || a.subCriterion === selected) && (sourceFilter === "all" || a.source === sourceFilter)),
+    [allAfis, selected, sourceFilter]
   );
   const gapAFIs = visibleAFIs.filter((a) => a.kind === "AFI");
 
@@ -163,22 +168,22 @@ function BenchmarkTab() {
   // Over-rating sweep: benchmark sub-criteria where the app says all-positive
   // but real assessors raised AFIs.
   const overRated = useMemo(() => {
-    return benchmarkSubCriteria()
+    return benchmarkSubCriteria(allAfis)
       .map((sc) => {
-        const realAFIs = BENCHMARK_AFIS.filter((a) => a.subCriterion === sc && a.kind === "AFI");
+        const realAFIs = allAfis.filter((a) => a.subCriterion === sc && a.kind === "AFI");
         if (realAFIs.length === 0) return null;
         const ids = new Set(itemIdsOf(sc));
         const findings = customFindings.filter((f) => ids.has(f.gd4ItemId));
         return isAllPositive(ppdReviewResults[sc], evidenceAssessments[sc], findings) ? { subCriterion: sc, count: realAFIs.length } : null;
       })
       .filter((x): x is { subCriterion: string; count: number } => x !== null);
-  }, [customFindings, ppdReviewResults, evidenceAssessments]);
+  }, [allAfis, customFindings, ppdReviewResults, evidenceAssessments]);
 
   async function runMatchAnalysis() {
     setRunError(null);
     if (!aiSettings.enabled || !aiSettings.apiKey) { setRunError("AI is disabled or no API key is configured in Settings."); return; }
     const targets = [...new Set(gapAFIs.map((a) => a.subCriterion))];
-    if (targets.length === 0) { setRunError("No benchmark AFIs to analyse — paste the real report AFIs into src/data/benchmarkAFIs.ts first."); return; }
+    if (targets.length === 0) { setRunError("No benchmark AFIs to analyse in the current filter — paste real report AFIs into src/data/benchmarkAFIs.ts, or upload a report below."); return; }
     setRunning(true);
     try {
       const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(schoolContext) });
@@ -211,7 +216,7 @@ Give a one-line justification naming what matched or what was missed. Respond wi
       // `matches` snapshot predates the setAiMatch calls above.
       const fresh = useCalibrationStore.getState().matches;
       const totals = { caught: 0, partial: 0, missed: 0, unassessed: 0 };
-      for (const a of BENCHMARK_AFIS.filter((x) => x.kind === "AFI")) totals[fresh[a.id]?.status ?? "unassessed"]++;
+      for (const a of allAfis.filter((x) => x.kind === "AFI")) totals[fresh[a.id]?.status ?? "unassessed"]++;
       recordRun(totals);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
@@ -221,10 +226,10 @@ Give a one-line justification naming what matched or what was missed. Respond wi
   }
 
   function exportCsv() {
-    const header = ["AFI ID", "Year", "Sub-criterion", "GD4 ref", "Pattern", "Has named example", "Real finding text", "Match status", "Human override", "Justification", "Verdict assessed at", "Match analysis last run"];
+    const header = ["AFI ID", "Source", "Year", "Sub-criterion", "GD4 ref", "Pattern", "Has named example", "Real finding text", "Match status", "Human override", "Justification", "Verdict assessed at", "Match analysis last run"];
     const rows = gapAFIs.map((a) => {
       const m = matches[a.id];
-      return [a.id, a.year, a.subCriterion, a.gd4Ref ?? "", a.findingPattern, a.hasNamedExample, a.findingText, m?.status ?? "unassessed", m?.humanOverride ?? false, m?.justification ?? "", m?.assessedAt ?? "", lastRunAt ?? ""];
+      return [a.id, a.source, a.year, a.subCriterion, a.gd4Ref ?? "", a.findingPattern, a.hasNamedExample, a.findingText, m?.status ?? "unassessed", m?.humanOverride ?? false, m?.justification ?? "", m?.assessedAt ?? "", lastRunAt ?? ""];
     });
     const csv = [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -236,28 +241,38 @@ Give a one-line justification naming what matched or what was missed. Respond wi
     URL.revokeObjectURL(url);
   }
 
-  if (BENCHMARK_AFIS.length === 0) {
+  if (allAfis.length === 0) {
     return (
-      <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>AI Calibration — benchmark against real SSG reports</h3>
-        <div style={{ fontSize: 12.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px" }}>
-          <b>No benchmark data yet.</b> The harness is ready, but the real AFI text from the July 2025 and June 2026
-          SSG assessment reports has not been pasted into <code>src/data/benchmarkAFIs.ts</code>. Add one entry per AFI
-          (a template is in that file) — this page activates automatically once entries exist. Real SSG finding text is
-          never invented by the app.
-        </div>
-      </Card>
+      <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
+        <UploadBenchmarkPanel />
+        <Card>
+          <h3 style={{ marginTop: 0, fontSize: 14 }}>AI Calibration — benchmark against real SSG reports</h3>
+          <div style={{ fontSize: 12.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px" }}>
+            <b>No benchmark data yet.</b> The harness is ready, but no findings exist — paste the real AFI text from
+            the July 2025 and June 2026 SSG assessment reports into <code>src/data/benchmarkAFIs.ts</code> (a template
+            is in that file), or upload an audit report above to extract findings with AI. This page activates
+            automatically once entries exist either way. Real finding text is never invented by the app.
+          </div>
+        </Card>
+      </div>
     );
   }
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
+      <UploadBenchmarkPanel />
+
       <Card>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <h3 style={{ margin: 0, fontSize: 14 }}>AI Calibration — benchmark against real SSG reports</h3>
           <select value={selected} onChange={(e) => setSelected(e.target.value)} style={{ ...inputStyle, width: 180, padding: "4px 6px" }}>
             <option value="all">All sub-criteria</option>
             {subCriteria.map((sc) => <option key={sc} value={sc}>{sc}</option>)}
+          </select>
+          <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as "all" | BenchmarkSource)} style={{ ...inputStyle, width: 140, padding: "4px 6px" }}>
+            <option value="all">All sources</option>
+            <option value="Internal">Internal only</option>
+            <option value="External">External only</option>
           </select>
           <button disabled={running} onClick={runMatchAnalysis} style={{ cursor: running ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #4a5a8a", background: "#eaeef6", color: "#4a5a8a" }}>
             {running ? "Analysing…" : "Run match analysis"}
@@ -267,7 +282,7 @@ Give a one-line justification naming what matched or what was missed. Respond wi
           </button>
         </div>
         <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0 0" }}>
-          Measures whether the app's AI raises the same gaps real SSG assessors raised. Measurement only — nothing here
+          Measures whether the app's AI raises the same gaps real assessors raised. Measurement only — nothing here
           changes prompts or audit results. AI match verdicts are editable; a human edit is never overwritten by a re-run.
         </p>
         {runError && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 6 }}>{runError}</div>}
@@ -342,7 +357,7 @@ Give a one-line justification naming what matched or what was missed. Respond wi
 
       {/* Tuning Advisor — auto-generated from the missed/partial findings. */}
       {lastRunAt && (
-        <RecommendationsPanel source="benchmark" recommendations={recommendFromBenchmark(matches, BENCHMARK_AFIS)} />
+        <RecommendationsPanel source="benchmark" recommendations={recommendFromBenchmark(matches, allAfis)} />
       )}
 
       {/* Over-rating check */}
@@ -362,7 +377,7 @@ Give a one-line justification naming what matched or what was missed. Respond wi
 
       {/* Per-AFI comparison */}
       {(selected === "all" ? subCriteria : [selected]).map((sc) => {
-        const afis = BENCHMARK_AFIS.filter((a) => a.subCriterion === sc);
+        const afis = allAfis.filter((a) => a.subCriterion === sc && (sourceFilter === "all" || a.source === sourceFilter));
         if (afis.length === 0) return null;
         return <SubCriterionSection key={sc} subCriterionId={sc} afis={afis} statusOf={statusOf} matchesJustification={(id) => matches[id]} setMatch={setMatch} />;
       })}
@@ -407,6 +422,7 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
                 <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 12, fontWeight: 700, color: "#4338ca" }}>{a.id}</span>
                 {a.gd4Ref && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#64748b" }}>{a.gd4Ref}</span>}
                 <Pill s={a.kind === "AFI" ? "critical" : a.kind === "strength" ? "good" : "medium"}>{a.kind}</Pill>
+                <Pill s={a.source === "Internal" ? "medium" : "neutral"}>{a.source}</Pill>
                 <Pill s="neutral">{a.findingPattern}</Pill>
                 {a.hasNamedExample && <Pill s="neutral">named example</Pill>}
                 {isGap && (

@@ -8,8 +8,9 @@ import { Link } from "react-router-dom";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
-import { BENCHMARK_AFIS } from "../data/benchmarkAFIs";
+import { combineBenchmarkAfis } from "../data/benchmarkAFIs";
 import { useRuleTuningStore } from "../store/useRuleTuningStore";
+import { useCustomBenchmarkStore } from "../store/useCustomBenchmarkStore";
 import { foldersConnected, aiReady, runScratch, judgeVsBenchmark } from "../lib/calibrationRunner";
 import { consistencyAgreement } from "../lib/calibrationTesting";
 import {
@@ -39,6 +40,7 @@ export function RuleTuningTab() {
   const setActive = useRuleTuningStore((s) => s.setActive);
   const recordConsistency = useRuleTuningStore((s) => s.recordConsistency);
   const recordBenchmark = useRuleTuningStore((s) => s.recordBenchmark);
+  const customBenchmarkEntries = useCustomBenchmarkStore((s) => s.entries);
 
   const active = versions.find((v) => v.id === activeVersionId) ?? versions[0];
   const champion = versions.find((v) => v.id === championVersionId);
@@ -70,9 +72,9 @@ export function RuleTuningTab() {
 
   // Connected sub-criteria that have benchmark truth (best test targets).
   const benchmarkSubs = useMemo(() => {
-    const withTruth = [...new Set(BENCHMARK_AFIS.filter((a) => a.kind === "AFI").map((a) => a.subCriterion))];
+    const withTruth = [...new Set(combineBenchmarkAfis(customBenchmarkEntries).filter((a) => a.kind === "AFI").map((a) => a.subCriterion))];
     return withTruth.map((sc) => ({ id: sc, title: GD4_SUB_CRITERIA.find((s) => s.id === sc)?.title ?? sc, connected: foldersConnected(sc) }));
-  }, []);
+  }, [customBenchmarkEntries]);
 
   async function testConsistency(versionId: string, subCriterionId: string, runs = 3) {
     const offline = aiReady(); if (offline) { setBusy(null); alert(offline); return; }
@@ -110,7 +112,7 @@ export function RuleTuningTab() {
         const o = await runScratch("B", sc, abort.signal, (st) => setBusy(`Benchmark ${i + 1}/${targets.length}: ${sc} — ${st}`), injection);
         if (!o.ok) continue;
         const j = await judgeVsBenchmark(sc, o.digest, abort.signal);
-        if (j.judged) { caught += j.caught; total += BENCHMARK_AFIS.filter((a) => a.subCriterion === sc && a.kind === "AFI").length; }
+        if (j.judged) { caught += j.caught; total += combineBenchmarkAfis(customBenchmarkEntries).filter((a) => a.subCriterion === sc && a.kind === "AFI").length; }
       }
       if (total > 0) recordBenchmark(versionId, caught, total);
       else alert("No benchmark verdicts could be judged (folders/AI unavailable).");

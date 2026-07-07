@@ -27,7 +27,8 @@ import {
 import { deriveApsrStatus } from "./ai/simulateAI";
 import { chatComplete, effectiveSettings, aiOfflineReason, type AIUsage } from "./ai/aiClient";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { BENCHMARK_AFIS } from "../data/benchmarkAFIs";
+import { combineBenchmarkAfis } from "../data/benchmarkAFIs";
+import { useCustomBenchmarkStore } from "../store/useCustomBenchmarkStore";
 import type { EvidenceFolder } from "../types";
 import { ppdVerdictToStatus, countGaps, countByType, bandEstimate, type ScratchStatus } from "./calibrationTesting";
 
@@ -243,7 +244,7 @@ export async function runScratch(path: "A" | "B", subCriterionId: string, signal
 // AFIs — the SAME prompt shape the Benchmark tab's match analysis uses.
 // Scratch-only: never writes to the calibration matches store.
 export async function judgeVsBenchmark(subCriterionId: string, digest: string, signal: AbortSignal): Promise<{ judged: boolean; caught: number; partial: number; missed: number }> {
-  const afis = BENCHMARK_AFIS.filter((a) => a.subCriterion === subCriterionId && a.kind === "AFI");
+  const afis = combineBenchmarkAfis(useCustomBenchmarkStore.getState().entries).filter((a) => a.subCriterion === subCriterionId && a.kind === "AFI");
   if (afis.length === 0) return { judged: false, caught: 0, partial: 0, missed: 0 };
   try {
     const system = `You are judging whether an internal AI audit tool caught the same gaps a real SSG EduTrust assessor raised. For each REAL finding, compare it against the tool's results and verdict exactly one of:
