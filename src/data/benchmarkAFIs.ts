@@ -669,18 +669,10 @@ const BENCHMARK_AFIS_RAW: Omit<BenchmarkAFI, "source">[] = [
 export const BENCHMARK_AFIS: BenchmarkAFI[] = BENCHMARK_AFIS_RAW.map((a) => ({ ...a, source: "External" as const }));
 
 // Sub-criteria that appear anywhere in the benchmark — drives the page's
-// selector and the over-rating sweep. Pass a combined (static + custom
-// upload) array to include user-added entries; defaults to the static set.
+// selector and the over-rating sweep. The live Benchmark tab always passes
+// useBenchmarkAfiStore's `entries` (the full, editable ground-truth set,
+// which is seeded from this static array); the default here is only for
+// callers that want just the original seeded set specifically.
 export function benchmarkSubCriteria(afis: BenchmarkAFI[] = BENCHMARK_AFIS): string[] {
   return [...new Set(afis.map((a) => a.subCriterion))].sort();
-}
-
-// Merges the static, seeded-verbatim external findings with user-uploaded
-// entries (from useCustomBenchmarkStore) into one ground-truth list — the
-// single source every Benchmark-tab computation should read from once both
-// exist, so uploaded internal (or additional external) findings participate
-// in the scoreboard, matching, CSV export, over-rating check and tuning
-// advisor exactly like the seeded ones.
-export function combineBenchmarkAfis(custom: BenchmarkAFI[]): BenchmarkAFI[] {
-  return [...BENCHMARK_AFIS, ...custom];
 }

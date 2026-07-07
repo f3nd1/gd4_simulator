@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Card, inputStyle } from "../components/ui/Card";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import type { BenchmarkFindingPattern, BenchmarkSource } from "../data/benchmarkAFIs";
-import { useCustomBenchmarkStore } from "../store/useCustomBenchmarkStore";
+import { useBenchmarkAfiStore } from "../store/useBenchmarkAfiStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { effectiveSettings } from "../lib/ai/aiClient";
 import { extractTextFromFile } from "../lib/uploadedDocText";
@@ -20,7 +20,7 @@ const PATTERNS: BenchmarkFindingPattern[] = [
 // Benchmark tab's "upload an audit report" panel: pick a file (internal or
 // external audit report), AI extracts each finding as a draft, the human
 // reviews/edits every row, and only an explicit "Add N to benchmark set"
-// commits them to useCustomBenchmarkStore — nothing here writes to the real
+// commits them to useBenchmarkAfiStore — nothing here writes to the real
 // ground-truth set until that final click. Collapsed by default so it
 // doesn't push the scoreboard down for people who never use it.
 export function UploadBenchmarkPanel() {
@@ -33,7 +33,7 @@ export function UploadBenchmarkPanel() {
   const [draft, setDraft] = useState<ExtractedAFIDraft[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const aiSettings = useAISettingsStore((s) => s);
-  const addEntries = useCustomBenchmarkStore((s) => s.addEntries);
+  const addEntries = useBenchmarkAfiStore((s) => s.addEntries);
 
   async function extract() {
     setError(null);

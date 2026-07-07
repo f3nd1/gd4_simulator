@@ -2,7 +2,7 @@
 // text already extracted from an uploaded audit report (see
 // uploadedDocText.ts) and asks the model to pull out each distinct finding
 // as a draft BenchmarkAFI-shaped record, for a human to review/edit before
-// any of it is added to the ground-truth set (useCustomBenchmarkStore).
+// any of it is added to the ground-truth set (useBenchmarkAfiStore).
 // Deliberately has NO offline/simulated fallback — genuine document
 // understanding isn't something a rule-based keyword matcher can do
 // credibly, unlike the rest of the app's audit steps. Callers must gate on

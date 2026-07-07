@@ -2,13 +2,13 @@
 // EduTrust assessment reports (src/data/benchmarkAFIs.ts). A MEASUREMENT
 // tool only: it never tunes prompts or changes audit results.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
 import { useCalibrationStore, type MatchStatus } from "../store/useCalibrationStore";
-import { useCustomBenchmarkStore } from "../store/useCustomBenchmarkStore";
+import { useBenchmarkAfiStore } from "../store/useBenchmarkAfiStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
-import { benchmarkSubCriteria, combineBenchmarkAfis, type BenchmarkAFI, type BenchmarkFindingPattern, type BenchmarkSource } from "../data/benchmarkAFIs";
-import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { benchmarkSubCriteria, type BenchmarkAFI, type BenchmarkFindingPattern, type BenchmarkSource } from "../data/benchmarkAFIs";
+import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA, GD4_CRITERIA } from "../data/gd4Requirements";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -122,9 +122,9 @@ export function AICalibration() {
 }
 
 function BenchmarkTab() {
-  const customEntries = useCustomBenchmarkStore((s) => s.entries);
-  const allAfis = useMemo(() => combineBenchmarkAfis(customEntries), [customEntries]);
-  const subCriteria = benchmarkSubCriteria(allAfis);
+  const allAfis = useBenchmarkAfiStore((s) => s.entries);
+  const resetToDefaults = useBenchmarkAfiStore((s) => s.resetToDefaults);
+  const [criterionFilter, setCriterionFilter] = useState<string>("all");
   const [selected, setSelected] = useState<string>("all");
   const [sourceFilter, setSourceFilter] = useState<"all" | BenchmarkSource>("all");
   const matches = useCalibrationStore((s) => s.matches);
@@ -141,9 +141,28 @@ function BenchmarkTab() {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
 
+  // Sub-criterion options narrow to the chosen criterion — same cascading
+  // pattern as PreCheckChecklistSetup.tsx's Criterion/Sub-criterion filter.
+  const subCritOptions = useMemo(
+    () => (criterionFilter === "all" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === criterionFilter)),
+    [criterionFilter]
+  );
+  useEffect(() => {
+    if (selected !== "all" && !subCritOptions.some((sc) => sc.id === selected)) setSelected("all");
+  }, [subCritOptions, selected]);
+
+  const subCriteria = useMemo(() => {
+    const all = benchmarkSubCriteria(allAfis);
+    return criterionFilter === "all" ? all : all.filter((sc) => subCritOptions.some((o) => o.id === sc));
+  }, [allAfis, criterionFilter, subCritOptions]);
+
   const visibleAFIs = useMemo(
-    () => allAfis.filter((a) => (selected === "all" || a.subCriterion === selected) && (sourceFilter === "all" || a.source === sourceFilter)),
-    [allAfis, selected, sourceFilter]
+    () => allAfis.filter((a) =>
+      (criterionFilter === "all" || GD4_SUB_CRITERIA.find((sc) => sc.id === a.subCriterion)?.criterionId === criterionFilter) &&
+      (selected === "all" || a.subCriterion === selected) &&
+      (sourceFilter === "all" || a.source === sourceFilter)
+    ),
+    [allAfis, criterionFilter, selected, sourceFilter]
   );
   const gapAFIs = visibleAFIs.filter((a) => a.kind === "AFI");
 
@@ -248,11 +267,16 @@ Give a one-line justification naming what matched or what was missed. Respond wi
         <Card>
           <h3 style={{ marginTop: 0, fontSize: 14 }}>AI Calibration — benchmark against real SSG reports</h3>
           <div style={{ fontSize: 12.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px" }}>
-            <b>No benchmark data yet.</b> The harness is ready, but no findings exist — paste the real AFI text from
-            the July 2025 and June 2026 SSG assessment reports into <code>src/data/benchmarkAFIs.ts</code> (a template
-            is in that file), or upload an audit report above to extract findings with AI. This page activates
-            automatically once entries exist either way. Real finding text is never invented by the app.
+            <b>No benchmark findings left.</b> Every seeded and uploaded finding has been removed. Click{" "}
+            <b>"Reset to original 67 findings"</b> once it reappears below, or upload an audit report above to add
+            findings with AI. Real finding text is never invented by the app.
           </div>
+          <button
+            onClick={() => { if (confirm("Restore the 67 original SSG findings to their seeded text and un-delete any you removed? Any audit reports you've uploaded yourself are not affected.")) resetToDefaults(); }}
+            style={{ marginTop: 10, cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
+          >
+            Reset to original 67 findings
+          </button>
         </Card>
       </div>
     );
@@ -265,6 +289,10 @@ Give a one-line justification naming what matched or what was missed. Respond wi
       <Card>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <h3 style={{ margin: 0, fontSize: 14 }}>AI Calibration — benchmark against real SSG reports</h3>
+          <select value={criterionFilter} onChange={(e) => setCriterionFilter(e.target.value)} style={{ ...inputStyle, width: 190, padding: "4px 6px" }}>
+            <option value="all">All criteria</option>
+            {GD4_CRITERIA.map((c) => <option key={c.id} value={c.id}>{c.id} — {c.title}</option>)}
+          </select>
           <select value={selected} onChange={(e) => setSelected(e.target.value)} style={{ ...inputStyle, width: 180, padding: "4px 6px" }}>
             <option value="all">All sub-criteria</option>
             {subCriteria.map((sc) => <option key={sc} value={sc}>{sc}</option>)}
@@ -279,6 +307,12 @@ Give a one-line justification naming what matched or what was missed. Respond wi
           </button>
           <button onClick={exportCsv} style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>
             Export CSV
+          </button>
+          <button
+            onClick={() => { if (confirm("Restore the 67 original SSG findings to their seeded text and un-delete any you removed? Any audit reports you've uploaded yourself are not affected.")) resetToDefaults(); }}
+            style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
+          >
+            Reset to original 67 findings
           </button>
         </div>
         <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0 0" }}>
@@ -395,6 +429,29 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
   const { ppd, ev, findings } = useAppResults(subCriterionId);
   const digest = appResultsDigest(subCriterionId, ppd, ev, findings);
   const [showApp, setShowApp] = useState(false);
+  const updateEntry = useBenchmarkAfiStore((s) => s.updateEntry);
+  const removeEntry = useBenchmarkAfiStore((s) => s.removeEntry);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<Omit<BenchmarkAFI, "id"> | null>(null);
+
+  function startEdit(a: BenchmarkAFI) {
+    setEditingId(a.id);
+    setEditDraft({ year: a.year, kind: a.kind, subCriterion: a.subCriterion, gd4Ref: a.gd4Ref, findingText: a.findingText, findingPattern: a.findingPattern, hasNamedExample: a.hasNamedExample, source: a.source });
+  }
+  function saveEdit(id: string) {
+    if (!editDraft) return;
+    updateEntry(id, editDraft);
+    setEditingId(null);
+    setEditDraft(null);
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setEditDraft(null);
+  }
+  function removeFinding(a: BenchmarkAFI) {
+    if (!confirm(`Remove finding ${a.id}? This cannot be undone (use "Reset to original 67 findings" above to recover a seeded finding).`)) return;
+    removeEntry(a.id);
+  }
 
   return (
     <Card>
@@ -416,6 +473,46 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
           const st = statusOf(a);
           const m = matchesJustification(a.id);
           const isGap = a.kind === "AFI";
+          const isEditing = editingId === a.id;
+          if (isEditing && editDraft) {
+            return (
+              <div key={a.id} style={{ border: "1px solid #7c3aed", borderRadius: 8, padding: "9px 12px", background: "#faf5ff" }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                  <select value={editDraft.subCriterion} onChange={(e) => setEditDraft({ ...editDraft, subCriterion: e.target.value })} style={{ ...inputStyle, width: 200, padding: "3px 6px", fontSize: 11.5 }}>
+                    {GD4_SUB_CRITERIA.map((sc) => <option key={sc.id} value={sc.id}>{sc.id} — {sc.title}</option>)}
+                  </select>
+                  <input placeholder="GD4 ref (optional)" value={editDraft.gd4Ref ?? ""} onChange={(e) => setEditDraft({ ...editDraft, gd4Ref: e.target.value || undefined })} style={{ ...inputStyle, width: 120, padding: "3px 6px", fontSize: 11.5 }} />
+                  <select value={editDraft.kind} onChange={(e) => setEditDraft({ ...editDraft, kind: e.target.value as BenchmarkAFI["kind"] })} style={{ ...inputStyle, width: 110, padding: "3px 6px", fontSize: 11.5 }}>
+                    <option value="AFI">AFI</option>
+                    <option value="higher-band">higher-band</option>
+                    <option value="strength">strength</option>
+                  </select>
+                  <select value={editDraft.findingPattern} onChange={(e) => setEditDraft({ ...editDraft, findingPattern: e.target.value as BenchmarkFindingPattern })} style={{ ...inputStyle, width: 180, padding: "3px 6px", fontSize: 11.5 }}>
+                    {PATTERNS.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  <select value={editDraft.source} onChange={(e) => setEditDraft({ ...editDraft, source: e.target.value as BenchmarkSource })} style={{ ...inputStyle, width: 110, padding: "3px 6px", fontSize: 11.5 }}>
+                    <option value="Internal">Internal</option>
+                    <option value="External">External</option>
+                  </select>
+                  <input type="number" value={editDraft.year} onChange={(e) => setEditDraft({ ...editDraft, year: Number(e.target.value) || editDraft.year })} style={{ ...inputStyle, width: 80, padding: "3px 6px", fontSize: 11.5 }} />
+                  <label style={{ fontSize: 11.5, display: "flex", alignItems: "center", gap: 4 }}>
+                    <input type="checkbox" checked={editDraft.hasNamedExample} onChange={(e) => setEditDraft({ ...editDraft, hasNamedExample: e.target.checked })} />
+                    named example
+                  </label>
+                </div>
+                <textarea
+                  value={editDraft.findingText}
+                  onChange={(e) => setEditDraft({ ...editDraft, findingText: e.target.value })}
+                  rows={2}
+                  style={{ ...inputStyle, width: "100%", fontSize: 12, resize: "vertical", fontFamily: "inherit" }}
+                />
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={() => saveEdit(a.id)} style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "4px 10px", borderRadius: 6, border: "1px solid #86efac", background: "#f0fdf4", color: "#15803d" }}>Save</button>
+                  <button onClick={cancelEdit} style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 600, padding: "4px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}>Cancel</button>
+                </div>
+              </div>
+            );
+          }
           return (
             <div key={a.id} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${st === "caught" ? "#16a34a" : st === "partial" ? "#d97706" : st === "missed" ? "#dc2626" : "#94a3b8"}`, borderRadius: 8, padding: "9px 12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
@@ -426,11 +523,15 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
                 <Pill s="neutral">{a.findingPattern}</Pill>
                 {a.hasNamedExample && <Pill s="neutral">named example</Pill>}
                 {isGap && (
-                  <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     {m?.humanOverride && <Pill s="neutral">human</Pill>}
                     <Pill s={STATUS_TONE[st]}>{st === "partial" ? "partially caught" : st}</Pill>
                   </span>
                 )}
+                <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                  <button onClick={() => startEdit(a)} style={{ cursor: "pointer", fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}>Edit</button>
+                  <button onClick={() => removeFinding(a)} style={{ cursor: "pointer", fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}>Remove</button>
+                </span>
               </div>
               <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.5, whiteSpace: "pre-line" }}>{a.findingText}</div>
               {isGap && (

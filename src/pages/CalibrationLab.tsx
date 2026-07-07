@@ -13,9 +13,8 @@ import { Link } from "react-router-dom";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
-import { combineBenchmarkAfis } from "../data/benchmarkAFIs";
 import { useCalibrationStore } from "../store/useCalibrationStore";
-import { useCustomBenchmarkStore } from "../store/useCustomBenchmarkStore";
+import { useBenchmarkAfiStore } from "../store/useBenchmarkAfiStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { verdictTemp } from "../lib/ai/aiClient";
@@ -127,9 +126,8 @@ type SubCritInfo = {
 };
 
 function useSubCritInfo(testedMap: Record<string, { runAt: string }>): SubCritInfo[] {
-  const customEntries = useCustomBenchmarkStore((s) => s.entries);
+  const allAfis = useBenchmarkAfiStore((s) => s.entries);
   return useMemo(() => {
-    const allAfis = combineBenchmarkAfis(customEntries);
     const infos = GD4_SUB_CRITERIA.map((sc) => {
       const benchmarkCount = allAfis.filter((a) => a.subCriterion === sc.id && a.kind === "AFI").length;
       const connected = foldersConnected(sc.id);
@@ -145,7 +143,7 @@ function useSubCritInfo(testedMap: Record<string, { runAt: string }>): SubCritIn
       const rank = (x: SubCritInfo) => (x.recommended ? 0 : x.benchmarkCount > 0 ? 1 : x.connected ? 2 : 3);
       return rank(a) - rank(b) || a.id.localeCompare(b.id, undefined, { numeric: true });
     });
-  }, [testedMap, customEntries]);
+  }, [testedMap, allAfis]);
 }
 
 function pickerLabel(i: SubCritInfo): string {
@@ -489,7 +487,7 @@ export function AvsBTab() {
       const a = await toOutcome("A");
       if (abort.signal.aborted) return;
       const b = await toOutcome("B");
-      const allAfis = combineBenchmarkAfis(useCustomBenchmarkStore.getState().entries);
+      const allAfis = useBenchmarkAfiStore.getState().entries;
       const benchmarkCount = allAfis.filter((x) => x.subCriterion === subCriterionId && x.kind === "AFI").length;
       const patterns = [...new Set(allAfis.filter((x) => x.subCriterion === subCriterionId && x.kind === "AFI").map((x) => x.findingPattern))];
       const result: ABTestResult = {
@@ -613,8 +611,8 @@ function PathColumn({ label, outcome, benchmarkCount }: { label: string; outcome
 }
 
 function ABResult({ result, onDelete }: { result: ABTestResult; onDelete: () => void }) {
-  const customEntries = useCustomBenchmarkStore((s) => s.entries);
-  const realAFIs = combineBenchmarkAfis(customEntries).filter((a) => a.subCriterion === result.subCriterionId && a.kind === "AFI");
+  const allAfis = useBenchmarkAfiStore((s) => s.entries);
+  const realAFIs = allAfis.filter((a) => a.subCriterion === result.subCriterionId && a.kind === "AFI");
   const [drill, setDrill] = useState(false);
   return (
     <Card>
