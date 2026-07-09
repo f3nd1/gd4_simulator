@@ -116,6 +116,7 @@ function fmtUSD(n: number): string {
 }
 
 import { FeedbackModal } from "../components/ui/FeedbackModal";
+import { AiOutputView } from "../components/ui/AiOutputView";
 
 export function AIReview() {
   const log = useWorkspaceStore((s) => s.aiReviewLog);
@@ -449,11 +450,11 @@ export function AIReview() {
                             Output tab ("Files read this run"), so the link was
                             redundant. */}
                       </div>
-                      <div style={{ whiteSpace: "pre-wrap", fontFamily: "ui-monospace,monospace", fontSize: 11.5 }}>
-                        {(expandedTab[e.id] ?? "output") === "output"
+                      <AiOutputView
+                        text={(expandedTab[e.id] ?? "output") === "output"
                           ? (e.generatedContent || e.keyConcerns.join("\n"))
                           : (e.promptSent || "(prompt not captured for this run)")}
-                      </div>
+                      />
                       {/* Per-file read detail for this run, inline on the Output
                           tab — the full ledger (read method, cached, char count,
                           cited, expandable extracted text) without leaving the log. */}

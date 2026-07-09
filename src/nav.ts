@@ -91,6 +91,7 @@ export const NAV: NavGroup[] = [
     tools: [
       { path: "/ai-memories", label: "AI Memories", hint: "Manage calibration memories used to guide AI audit outputs" },
       { path: "/ai-calibration", label: "AI Calibration", hint: "Benchmark the app's AI findings against UCC's real SSG assessment reports — caught / partially caught / missed per real AFI" },
+      { path: "/prompt-review", label: "Prompt Review", hint: "Review an AI output, rate it, and — if it's weak — have the AI improve the instruction (prompt) behind it, with human sign-off before it goes live" },
       { path: "/change-log", label: "Change Log", hint: "History of every push/pull the app recorded, with a plain-English summary of what changed" },
     ],
   },

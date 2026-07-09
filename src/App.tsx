@@ -26,6 +26,7 @@ import { ExportCentre } from "./pages/ExportCentre";
 import { Settings } from "./pages/Settings";
 import { AIMemories } from "./pages/AIMemories";
 import { AICalibration } from "./pages/AICalibration";
+import { PromptReview } from "./pages/PromptReview";
 import { ChangeLog } from "./pages/ChangeLog";
 import { ProfileOfPei } from "./pages/ProfileOfPei";
 import { FinalReport } from "./pages/FinalReport";
@@ -73,6 +74,7 @@ export default function App() {
           <Route path="/export" element={<ExportCentre />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/ai-memories" element={<AIMemories />} />
+          <Route path="/prompt-review" element={<PromptReview />} />
           <Route path="/change-log" element={<ChangeLog />} />
         </Route>
       </Routes>

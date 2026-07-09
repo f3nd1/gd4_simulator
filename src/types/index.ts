@@ -1088,6 +1088,7 @@ export type HumanDecisionModule =
   | "Final Report"
   | "AI Review Log Feedback"
   | "Panel Conclusion"
+  | "Prompt Review"
   | "Run mode gate";
 
 export type HumanDecisionType = "Accepted" | "Edited" | "Overridden" | "Dismissed";
@@ -1105,6 +1106,67 @@ export type HumanDecisionEntry = {
   reason: string;
   field?: string;
   memoryId?: string;
+};
+
+// ── Prompt Review feature ────────────────────────────────────────────────────
+// A PARALLEL, user-authored "reviewable prompt" object and a connected
+// review → revise → log loop. Deliberately does NOT touch the app's real
+// code-based AI prompts (agentRuntime.ts / skills.ts) — it operates only on
+// these user-authored ReviewablePrompt objects. See usePromptReviewStore.ts.
+
+// The user-authored prompt object being rated/revised (never a code prompt).
+export type ReviewablePrompt = {
+  id: string;
+  name: string;
+  // Plain label for the intended use, e.g. "Quality Action", "Audit Findings".
+  purpose: string;
+  // The current OPERATIONAL text — only replaced when a reviewer explicitly
+  // promotes a drafted revision (the champion-vs-active gate).
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PromptRatingLevel = "Strong" | "Adequate" | "Weak";
+export type ComplianceRiskLevel = "Low" | "Medium" | "High";
+
+export type PromptReviewRatings = {
+  accuracy: PromptRatingLevel;
+  completeness: PromptRatingLevel;
+  relevance: PromptRatingLevel;
+  tone: PromptRatingLevel;
+  complianceRisk: ComplianceRiskLevel;
+};
+
+// reviewed_ok    — no poor rating; output accepted, no revision needed.
+// needs_revision — a poor rating fired the correction flow; feedback captured,
+//                  revision not yet drafted.
+// revision_drafted — an AI-drafted revised prompt exists, awaiting human confirm.
+// revision_live  — the reviewer promoted the revised prompt to operational.
+export type PromptReviewStatus = "reviewed_ok" | "needs_revision" | "revision_drafted" | "revision_live";
+
+// The ONE connected record (requirement: tie original → revised together, which
+// neither AIReviewLogEntry nor HumanDecisionEntry does). Reuses
+// HumanDecisionEntry's reason / decisionType / timestamp shape as its base and
+// adds the pieces those logs never capture: originalPrompt, ratings, the free
+// text notes, the AI-drafted revisedPrompt, and a reviewer identity.
+export type PromptReviewRecord = {
+  id: string;
+  promptId: string;
+  promptName: string;
+  originalPrompt: string;   // the ReviewablePrompt text at review time
+  output: string;           // the AI output under review
+  ratings: PromptReviewRatings;
+  missingInfo: string;      // free text (optional)
+  suggestedImprovement: string; // free text (optional)
+  // Captured from the reused FeedbackModal, only when a poor rating triggered it.
+  correction: string;       // "what is the correct answer"
+  reason: string;           // "why was the AI wrong" — reuses HumanDecisionEntry.reason
+  revisedPrompt: string | null; // AI-drafted revision; null until drafted
+  reviewer: string;         // NEW identity field (resolved from the active auditor)
+  timestamp: string;        // reuses HumanDecisionEntry.timestamp shape
+  decisionType: HumanDecisionType; // reused: "Accepted" (ok) | "Overridden" (revised)
+  status: PromptReviewStatus;
 };
 
 export type CalibrationExample = {
