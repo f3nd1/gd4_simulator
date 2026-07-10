@@ -19,6 +19,8 @@ import { RunStepper, ppdRunStep, evidenceRunStep } from "../components/ui/RunSte
 import { FileLedger } from "./EvidenceFolder";
 import { normalizeAuditRef } from "../lib/gd4Refs";
 import { PreAnalysisChecklistPanel } from "../components/ui/PreAnalysisChecklistPanel";
+import { ThumbsButtons } from "../components/ui/ThumbsButtons";
+import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck } from "../types";
@@ -218,6 +220,7 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
             justArrived={justContinued}
             onDismissJustArrived={() => setJustContinued(false)}
             onGoToPrecheck={() => { setTab("precheck"); setJustContinued(false); }}
+            onGoToPpd={() => { setTab("ppd"); setJustContinued(false); }}
           />
         )}
     </>
@@ -299,6 +302,12 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
   // aborts the in-flight AI call and stops the run; runPPDReview writes no
   // checklist verdicts and no pendingCommits, so a cancel strands nothing.
   const [cancelled, setCancelled] = useState(false);
+  // Per-line feedback → CalibrationMemory (reuses the app's ThumbsButtons +
+  // FeedbackModal pattern). A thumbs-down on a PPD line teaches future Option A
+  // runs, because runPPDReview now injects active "Line Status" memories.
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
+  const [lineFeedback, setLineFeedback] = useState<{ ref: string; text: string } | null>(null);
 
   const result = ppdReviewResults[selectedId];
   const isRunning = busy === "ppdreview" + selectedId;
@@ -539,6 +548,14 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
                       >
                         {expanded ? "Hide full comment + rewrite ▲" : "Show full comment + rewrite ▼"}
                       </button>
+                      {/* Was this PPD verdict right? 👎 opens the correction modal,
+                          which stores a CalibrationMemory that future runs learn from. */}
+                      <div style={{ marginTop: 6 }}>
+                        <ThumbsButtons
+                          onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: row.ref, aiOutput: `PPD ${row.ref}: ${row.verdict}`, humanDecision: `Accepted PPD verdict: ${row.verdict}`, changed: false, decisionType: "Accepted", reason: "" })}
+                          onReject={() => setLineFeedback({ ref: row.ref, text: `PPD verdict "${row.verdict}" for ${row.ref}: ${row.fullComment || row.shortComment || "(no comment)"}` })}
+                        />
+                      </div>
                     </div>
                   </div>
                   {expanded && (
@@ -588,6 +605,19 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
           </div>
         </>
       )}
+      <FeedbackModal
+        open={!!lineFeedback}
+        aiOutput={lineFeedback?.text ?? ""}
+        module="Line Status"
+        onClose={() => setLineFeedback(null)}
+        onSubmit={(fb) => {
+          logHumanDecision({ module: "Line Status", subjectId: selectedId, field: lineFeedback?.ref, aiOutput: lineFeedback?.text ?? "", humanDecision: (fb.correction || lineFeedback?.text) ?? "", changed: !!fb.correction, decisionType: "Overridden", reason: fb.reason });
+          if (!fb.correct && fb.correction) {
+            addCalibrationMemory({ module: "Line Status", subjectId: selectedId, context: lineFeedback?.text ?? "", aiOutput: lineFeedback?.text ?? "", staffCorrection: fb.correction, keyLearning: fb.reason, status: "active", tokenCount: Math.round((lineFeedback?.text?.length ?? 0) / 4) });
+          }
+          setLineFeedback(null);
+        }}
+      />
     </>
   );
 }
@@ -847,12 +877,13 @@ function fmtRunAt(iso: string): string {
 }
 
 function EvidenceArrivalPanel({
-  state, onRun, onReviewPrecheck, onDismiss,
+  state, onRun, onReviewPrecheck, onDismiss, onGoToPpd,
 }: {
   state: EvidenceArrivalState;
   onRun: () => void;
   onReviewPrecheck: () => void;
   onDismiss?: () => void;
+  onGoToPpd?: () => void;
 }) {
   const changedState = state.kind === "changed";
   const tone = changedState
@@ -863,7 +894,8 @@ function EvidenceArrivalPanel({
   let actions: React.ReactNode = null;
 
   if (state.kind === "not-ready") {
-    message = "You're on the Evidence step now, but the PPD Review hasn't been completed yet — run it on the other tab first.";
+    message = "You're on the Evidence step now, but the PPD Review hasn't been completed yet — the Evidence assessment reuses each line's PPD verdict, so run the PPD Review first.";
+    if (onGoToPpd) actions = <button type="button" onClick={onGoToPpd} style={arrivalPrimaryBtn}>Go to PPD Review →</button>;
   } else if (state.kind === "checking") {
     message = "Checking whether the evidence folder has changed since the last run…";
   } else if (state.kind === "ready-no-flags") {
@@ -927,7 +959,7 @@ function EvidenceArrivalPanel({
   );
 }
 
-function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrecheck }: { selectedId: string; justArrived?: boolean; onDismissJustArrived?: () => void; onGoToPrecheck?: () => void }) {
+function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrecheck, onGoToPpd }: { selectedId: string; justArrived?: boolean; onDismissJustArrived?: () => void; onGoToPrecheck?: () => void; onGoToPpd?: () => void }) {
   const busy = useWorkspaceStore((s) => s.busy);
   const runEvidenceAssessment = useWorkspaceStore((s) => s.runEvidenceAssessment);
   const deriveEvidenceAssessmentFromAudit = useWorkspaceStore((s) => s.deriveEvidenceAssessmentFromAudit);
@@ -940,6 +972,12 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
   const checklistData = usePreCheckChecklistStore((s) => s.checklists);
   const preChecks = useWorkspaceStore((s) => s.preAnalysisChecks);
   const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
+  // Per-line feedback → CalibrationMemory (reuses ThumbsButtons + FeedbackModal).
+  // A thumbs-down on an evidence line teaches future runs, because
+  // runEvidenceAssessment now injects active "Line Status" memories.
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
+  const [lineFeedback, setLineFeedback] = useState<{ ref: string; text: string } | null>(null);
 
   const ppd = ppdReviewResults[selectedId];
   const ppdReady = !!ppd && ppd.rows.length > 0 && !ppd.rows.some((r) => !r.ref);
@@ -1025,7 +1063,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
     return (
       <>
         {justArrived && (
-          <EvidenceArrivalPanel state={{ kind: "not-ready" }} onRun={() => runEvidenceAssessment(selectedId)} onReviewPrecheck={() => onGoToPrecheck?.()} onDismiss={onDismissJustArrived} />
+          <EvidenceArrivalPanel state={{ kind: "not-ready" }} onRun={() => runEvidenceAssessment(selectedId)} onReviewPrecheck={() => onGoToPrecheck?.()} onDismiss={onDismissJustArrived} onGoToPpd={() => onGoToPpd?.()} />
         )}
         <div style={{ fontSize: 12.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px" }}>
           Run the <b>PPD Review</b> first (the other tab) — the Evidence assessment reuses each requirement line's PPD verdict and doesn't re-read the policy.
@@ -1055,6 +1093,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
           onRun={() => { setCompileMsg(null); runEvidenceAssessment(selectedId); }}
           onReviewPrecheck={() => onGoToPrecheck?.()}
           onDismiss={onDismissJustArrived}
+          onGoToPpd={() => onGoToPpd?.()}
         />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
@@ -1206,6 +1245,14 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
                           {expanded ? "Hide comment ▲" : "Show comment ▼"}
                         </button>
                       )}
+                      {/* Was this evidence verdict right? 👎 stores a CalibrationMemory
+                          that future Option A runs learn from. */}
+                      <div style={{ marginTop: 6 }}>
+                        <ThumbsButtons
+                          onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: row.gdRef, aiOutput: `Evidence ${row.gdRef}: ${row.verdict}`, humanDecision: `Accepted evidence verdict: ${row.verdict}`, changed: false, decisionType: "Accepted", reason: "" })}
+                          onReject={() => setLineFeedback({ ref: row.gdRef, text: `Evidence verdict "${row.verdict}" for ${row.gdRef}: ${row.comment || row.evidenceSummary || "(no comment)"}` })}
+                        />
+                      </div>
                       <div style={{ marginTop: 5 }}>
                         {row.savedFindingId ? (
                           <>
@@ -1255,6 +1302,19 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
           );
         })}
       </div>
+      <FeedbackModal
+        open={!!lineFeedback}
+        aiOutput={lineFeedback?.text ?? ""}
+        module="Line Status"
+        onClose={() => setLineFeedback(null)}
+        onSubmit={(fb) => {
+          logHumanDecision({ module: "Line Status", subjectId: selectedId, field: lineFeedback?.ref, aiOutput: lineFeedback?.text ?? "", humanDecision: (fb.correction || lineFeedback?.text) ?? "", changed: !!fb.correction, decisionType: "Overridden", reason: fb.reason });
+          if (!fb.correct && fb.correction) {
+            addCalibrationMemory({ module: "Line Status", subjectId: selectedId, context: lineFeedback?.text ?? "", aiOutput: lineFeedback?.text ?? "", staffCorrection: fb.correction, keyLearning: fb.reason, status: "active", tokenCount: Math.round((lineFeedback?.text?.length ?? 0) / 4) });
+          }
+          setLineFeedback(null);
+        }}
+      />
     </>
   );
 }

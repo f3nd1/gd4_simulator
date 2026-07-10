@@ -51,7 +51,7 @@ import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { usePreCheckChecklistStore } from "./usePreCheckChecklistStore";
 import { computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
-import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "../lib/drive/driveClient";
+import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine, EvidenceDriftCheck } from "../types";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
@@ -233,6 +233,95 @@ async function readFolderPlainText(folderId: string, token: string, maxChars = 1
     }
   }
   return parts.join("\n\n").slice(0, maxChars);
+}
+
+// ── Shared read-with-vision helper (Option A) ────────────────────────────
+// The full-audit (auditFolderContents) and staged (auditFolderStaged) paths
+// each read a Drive file through THREE tiers: (1) typed text extraction, with
+// embedded pictures in Office files transcribed via the SAME vision path; (2)
+// a scanned/image-only PDF rendered to page images and read via vision; (3) a
+// standalone image described via vision. Option A's two read loops (runPPDReview
+// and runEvidenceAssessment) historically did tier (1) text-only, so scanned
+// PDFs, photographed evidence and Office-embedded pictures produced empty text
+// and were silently dropped. This helper is that exact three-tier mechanism,
+// extracted ONCE so both Option A loops call it (rather than a third/fourth
+// inline copy). The full-audit/staged inline versions are intentionally left
+// as-is — this only gives Option A the reading capability they already have.
+type VisionReadCtx = {
+  canDescribeImages: boolean;
+  visionSettings: ReturnType<typeof effectiveSettings>;
+  visionModelId: string;
+  budget: { count: number; max: number }; // mutable run-level image/page budget
+  maxPerFile: number;                      // per-file cap (mirrors MAX_PDF_VISION_PAGES)
+  onUsage?: (u: AIUsage) => void;
+};
+type VisionReadResult = {
+  text: string | null;                     // null = nothing readable was produced
+  readMethod: "text" | "vision";
+  pdfQuality?: ReturnType<typeof classifyPdfTextQuality>;
+  note?: string;                           // reason when text is null (unreadable/cap)
+};
+async function readDriveFileWithVision(
+  file: DriveFile & { mimeType: string },
+  token: string,
+  signal: AbortSignal | undefined,
+  ctx: VisionReadCtx
+): Promise<VisionReadResult> {
+  const isImage = IMAGE_MIME_TYPES.has(file.mimeType);
+  let embeddedVisionUsed = false;
+  const embeddedImageHook: EmbeddedImageHook | undefined = ctx.canDescribeImages
+    ? async (images) => {
+        const transcripts: { location: string; text: string }[] = [];
+        let skippedForCapCount = 0;
+        let usedThisFile = 0;
+        for (const img of images) {
+          if (usedThisFile >= ctx.maxPerFile || ctx.budget.count >= ctx.budget.max) { skippedForCapCount++; continue; }
+          ctx.budget.count++; usedThisFile++;
+          const d = await describeImage(img.dataUrl, ctx.visionSettings, { signal, onUsage: ctx.onUsage });
+          if (d.trim()) { transcripts.push({ location: img.location, text: d.trim() }); embeddedVisionUsed = true; }
+        }
+        return { transcripts, skippedForCapCount };
+      }
+    : undefined;
+
+  const readScannedPdfViaVision = async (): Promise<VisionReadResult> => {
+    if (!ctx.canDescribeImages) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
+    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: `Scanned/image-only PDF not read: the ${ctx.budget.max}-image vision budget for this run was reached.` };
+    const pagesToRender = Math.min(ctx.maxPerFile, ctx.budget.max - ctx.budget.count);
+    const { images, totalPages } = await exportPdfPageImages(file, token, pagesToRender, signal);
+    if (images.length === 0) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: no text could be extracted and its pages could not be rendered for vision." };
+    const parts: string[] = [];
+    for (let p = 0; p < images.length; p++) {
+      ctx.budget.count++;
+      const d = await describeImage(images[p], ctx.visionSettings, { signal, onUsage: ctx.onUsage });
+      if (d.trim()) parts.push(images.length > 1 ? `--- Page ${p + 1} ---\n${d.trim()}` : d.trim());
+    }
+    if (parts.length === 0) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: rendered pages produced no readable text via the vision model." };
+    const capNote = totalPages > images.length ? `\n\n[Vision transcription of the first ${images.length} of ${totalPages} pages — page/image budget reached; later pages were not read.]` : "";
+    return { text: parts.join("\n\n") + capNote, readMethod: "vision" };
+  };
+
+  const text = await exportFileText(file, token, signal, embeddedImageHook);
+  if (text !== null) {
+    if (file.mimeType === "application/pdf") {
+      const pdfQuality = classifyPdfTextQuality(text);
+      // Vision fallback ONLY when text extraction genuinely failed (near-zero
+      // chars = scanned/image-only PDF). A normal text PDF keeps the fast path.
+      if (pdfQuality.extractedTextQuality === "none") return await readScannedPdfViaVision();
+      return { text, readMethod: "text", pdfQuality };
+    }
+    // Office file whose embedded pictures were transcribed via vision counts as
+    // a vision read so the cache is stamped correctly.
+    return { text, readMethod: embeddedVisionUsed ? "vision" : "text" };
+  }
+  // No typed text at all: a standalone image → describe it via vision.
+  if (isImage && ctx.canDescribeImages && ctx.budget.count < ctx.budget.max) {
+    ctx.budget.count++;
+    const dataUrl = await exportFileImageDataUrl(file, token, signal);
+    const description = await describeImage(dataUrl, ctx.visionSettings, { signal, onUsage: ctx.onUsage });
+    return { text: description.trim() || null, readMethod: "vision", note: description.trim() ? undefined : "Image produced no readable description via the vision model." };
+  }
+  return { text: null, readMethod: "text", note: isImage ? "No vision model available to read this image (enable AI and add an API key in Settings)." : undefined };
 }
 
 function inferEvidenceType(lineText: string): string {
@@ -1065,11 +1154,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               : mime.startsWith("image/") ? "image"
               : "text";
           const fileLedger: AuditFileRecord[] = [];
+          // Vision context so this loop reads scanned/image-only PDFs, standalone
+          // images and Office-embedded pictures — the same three-tier capability
+          // the staged/full-audit paths already have (readDriveFileWithVision).
+          const ppdReadAi = useAISettingsStore.getState();
+          const ppdVisionCtx: VisionReadCtx = {
+            canDescribeImages: ppdReadAi.enabled && !!ppdReadAi.apiKey,
+            visionSettings: effectiveSettings(ppdReadAi, { purpose: "vision", context: composeSchoolContext(get().schoolContext) }),
+            visionModelId: effectiveSettings(ppdReadAi, { purpose: "vision" }).model,
+            budget: { count: 0, max: 10 },
+            maxPerFile: 5,
+          };
           for (const file of policyFiles) {
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
             let body: string | null;
             let readErrored = false;
+            let readMethodUsed: "text" | "vision" = cached?.readMethod ?? "text";
+            let skipNote: string | undefined;
             if (cached) {
               body = cached.text;
             } else {
@@ -1078,7 +1180,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const readToken = await useGoogleDriveStore.getState().getFreshToken();
               if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
-                body = await exportFileText(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
+                const rr = await readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), ppdVisionCtx);
+                body = rr.text;
+                readMethodUsed = rr.readMethod;
+                skipNote = rr.note;
                 // Only cache genuine (non-empty) extractions — caching `text: null`
                 // made a transient read failure stick until the Drive file's
                 // modifiedTime changed, with no way to retry; caching an empty
@@ -1086,7 +1191,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 // vision transcription cached under the same key.
                 if (body != null && body.trim().length > 0) {
                   const text = body;
-                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: "text" } } }));
+                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: readMethodUsed } } }));
                 }
               } catch {
                 body = null;
@@ -1099,10 +1204,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               path: file.path, name: fileName, mimeType: file.mimeType, fileKind: ppdFileKind(file.mimeType),
               bucket: "policy", readStatus: "found", auditStatus: "audited",
               driveFileId: file.id, driveModifiedTime: file.modifiedTime,
-              readMethod: cached?.readMethod ?? "text",
+              readMethod: readMethodUsed,
             };
             if (!body) {
-              fileLedger.push({ ...ledgerBase, readStatus: readErrored ? "failed" : "skipped", auditStatus: "pending", charCount: 0, ...(readErrored ? { failReason: "Drive read error" } : { skipReason: "No extractable text" }) });
+              fileLedger.push({ ...ledgerBase, readStatus: readErrored ? "failed" : "skipped", auditStatus: "pending", charCount: 0, ...(readErrored ? { failReason: "Drive read error" } : { skipReason: skipNote ?? "No extractable text" }) });
               continue;
             }
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
@@ -1124,9 +1229,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, aiOfflineReason(aiSettings) ?? "AI is disabled or no API key is configured in Settings."); return; }
           const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
 
+          // Active "Line Status" calibration memories feed the PPD assessment as
+          // LEARNED CORRECTIONS — the same selection the staged path uses, so a
+          // thumbs-down on a PPD line teaches future runs (see PPDReview.tsx).
+          const ppdMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
+          ppdMemories.forEach((m) => get().incrementMemoryUsage(m.id));
+
           set({ ppdReviewProgress: { subCriterionId, detail: "Starting PPD requirements review…" } });
           const result = await runPPDRequirementsReview(requirements, policyDocText, analysisSettings, {
             criterionId: subCriterionId,
+            memories: ppdMemories,
             ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
             onProgress: (detail) => set({ ppdReviewProgress: { subCriterionId, detail } }),
             // Cancel support: cancelBusy() clears busy and aborts the signal.
@@ -1396,6 +1508,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Drive read ERRORS, kept separate from genuinely empty files, so the
           // run summary can flag incompleteness — see runPPDReview.
           const readFailedFiles: string[] = [];
+          // Vision context so this loop reads scanned/image-only PDFs, standalone
+          // images and Office-embedded pictures — the same three-tier capability
+          // the staged/full-audit paths already have (readDriveFileWithVision).
+          const evReadAi = useAISettingsStore.getState();
+          const evVisionCtx: VisionReadCtx = {
+            canDescribeImages: evReadAi.enabled && !!evReadAi.apiKey,
+            visionSettings: effectiveSettings(evReadAi, { purpose: "vision", context: composeSchoolContext(get().schoolContext) }),
+            visionModelId: effectiveSettings(evReadAi, { purpose: "vision" }).model,
+            budget: { count: 0, max: 10 },
+            maxPerFile: 5,
+          };
           for (const file of evidenceFiles) {
             const readFileName = file.path.split("/").pop() || file.path;
             patchEv({ currentFile: readFileName, detail: `Reading ${readFileName}…`, pct: Math.min(24, 4 + Math.round((filesReadCount / Math.max(1, evidenceFiles.length)) * 20)) });
@@ -1421,12 +1544,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const readToken = await useGoogleDriveStore.getState().getFreshToken();
               if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
-                body = await exportFileText(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS));
-                rec.readMethod = "text";
+                const rr = await readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), evVisionCtx);
+                body = rr.text;
+                rec.readMethod = rr.readMethod;
+                if (rr.pdfQuality) { rec.suspectedScannedPdf = rr.pdfQuality.suspectedScannedPdf; rec.extractedTextQuality = rr.pdfQuality.extractedTextQuality; }
+                if (rr.note) rec.skipReason = rr.note;
                 // Only cache genuine (non-empty) extractions — see runPPDReview.
                 if (body != null && body.trim().length > 0) {
                   const text = body;
-                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: "text" } } }));
+                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: rr.readMethod, ...(rr.pdfQuality ? { pdfQuality: rr.pdfQuality } : {}) } } }));
                 }
               } catch {
                 body = null;
@@ -1437,7 +1563,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const failed = readFailedFiles.includes(readFileName);
               rec.readStatus = failed ? "failed" : "skipped";
               rec.charCount = 0;
-              if (failed) rec.failReason = "Drive read error — file not assessed."; else rec.skipReason = "No extractable text (empty or unreadable).";
+              if (failed) rec.failReason = "Drive read error — file not assessed."; else rec.skipReason = rec.skipReason ?? "No extractable text (empty or unreadable).";
               fileLedger.push(rec);
               logEv(failed ? `FAILED to read ${readFileName} (Drive error) — not assessed` : `Skipped ${readFileName} (empty)`, failed ? "bad" : "warn");
               continue;
@@ -1498,8 +1624,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             promises: r.promises,
             preCheckFlags: flagsByItemId[r.gd4ItemId],
           }));
+          // Active "Line Status" calibration memories feed the evidence
+          // assessment as LEARNED CORRECTIONS — same selection the staged path
+          // uses, so a thumbs-down on an evidence line teaches future runs.
+          const evMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
+          evMemories.forEach((m) => get().incrementMemoryUsage(m.id));
           const result = await runEvidenceAssessment(inputs, evidenceDocText, analysisSettings, {
             criterionId: subCriterionId,
+            memories: evMemories,
             ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
             onProgress: (detail, pct) => setEvProgress(detail, typeof pct === "number" ? Math.max(25, Math.min(98, pct)) : 50),
             onEvent: (ev) => {

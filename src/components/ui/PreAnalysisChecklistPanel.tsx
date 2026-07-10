@@ -45,7 +45,7 @@ function ChecklistRow({ item, folderId, scanned }: { item: ChecklistItemResult; 
     item.mode === "manual" ? "manual" : !scanned ? "pending" : item.outcome?.status ?? "pending";
   const chip = STATUS_STYLE[kind];
   const message = item.mode === "manual"
-    ? "Needs human judgement — the app can't verify this itself."
+    ? "Needs human judgement — the app can't verify this itself. Ticking it raises an advisory flag passed to the AI (non-blocking — it never stops you continuing)."
     : !scanned
       ? "Waiting for files to be read — this will scan automatically once they are."
       : item.outcome?.message ?? "";
@@ -54,7 +54,7 @@ function ChecklistRow({ item, folderId, scanned }: { item: ChecklistItemResult; 
   return (
     <div style={{ borderTop: "1px solid #f1f5f9", padding: "8px 2px" }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
-        <input type="checkbox" checked={checked} onChange={() => toggle(markKey)} title="Optional — tick for your own tracking (never required)" style={{ marginTop: 2, cursor: "pointer", flexShrink: 0 }} />
+        <input type="checkbox" checked={checked} onChange={() => toggle(markKey)} title={item.mode === "manual" ? "Optional and non-blocking (never stops you continuing) — but ticking counts this as a pre-check flag and passes it to the AI as an advisory note." : "Optional — tick for your own tracking (never blocks continuing)."} style={{ marginTop: 2, cursor: "pointer", flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1e293b" }}>{item.title}</span>
@@ -110,6 +110,7 @@ export function PreAnalysisChecklistPanel({
 }) {
   const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
   const checklists = usePreCheckChecklistStore((s) => s.checklists);
+  const marks = useWorkspaceStore((s) => s.preAnalysisChecks);
 
   // Resolve each file's extracted text from the cache. Callers only reliably
   // have a driveFileId (not the modifiedTime half of the cache key), so
@@ -128,7 +129,11 @@ export function PreAnalysisChecklistPanel({
   // No definition for this sub-criterion's items yet → render nothing at all.
   if (!hasChecklist(checklists, itemIds) || results.length === 0) return null;
 
-  const flags = scanned ? results.filter((r) => r.mode === "auto" && r.outcome?.status === "flag").length : 0;
+  // Mirror computeFlaggedPreCheckItems (the shared definition used by the
+  // Evidence arrival panel + the AI prompt): an auto item whose scan returned
+  // "flag", OR a manual item the auditor has ticked. Counting ticked manual
+  // items here keeps this header honest with the checkbox's (relabelled) effect.
+  const flags = results.filter((r) => (r.mode === "auto" ? scanned && r.outcome?.status === "flag" : !!marks[`${folderId}::${r.id}`])).length;
 
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff", maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
