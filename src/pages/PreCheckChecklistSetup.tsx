@@ -3,6 +3,8 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
+import { useAllFindings } from "../hooks/useAllFindings";
+import { detectRecurringPatterns, buildPromotedChecklistItemFields, type RecurringPattern } from "../lib/recurringFindings";
 import type { ChecklistItemDef, ChecklistMode, ChecklistSourceKind, DetectionKey } from "../lib/preAnalysisChecklist";
 
 // CRUD setup page for the per-sub-criterion pre-analysis checklist — the SAME
@@ -76,6 +78,15 @@ export function PreCheckChecklistSetup() {
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [editingDefId, setEditingDefId] = useState<string | null>(null);
+
+  // Recurring-finding → checklist-item promotion: SEMI-automatic. This only
+  // detects candidates (recurringFindings.ts) — nothing is added to the
+  // checklist until an explicit "Promote" click below calls the same addItem
+  // used by the manual "Add item" form, so a promoted item lands as an
+  // unverified draft and goes through the exact same Approve step as any
+  // other draft item.
+  const allFindings = useAllFindings();
+  const recurringPatterns = useMemo(() => detectRecurringPatterns(allFindings, checklists), [allFindings, checklists]);
 
   // Sub-criterion options narrow to the chosen criterion; GD4 item options
   // narrow to the chosen sub-criterion. Reset a downstream filter whenever
@@ -190,6 +201,27 @@ export function PreCheckChecklistSetup() {
     setForm(EMPTY_FORM);
   }
 
+  // Recurring-finding patterns, grouped per sub-criterion and narrowed by the
+  // Criterion/Sub-criterion filters above (the same scoping the rest of the
+  // page uses) — a genuinely single-occurrence finding never appears here at
+  // all (detectRecurringPatterns already excludes it).
+  const patternsBySubCrit = useMemo(() => {
+    const inScope = recurringPatterns.filter((p) => subCritOptions.some((sc) => sc.id === p.subCriterionId));
+    const m = new Map<string, RecurringPattern[]>();
+    for (const p of inScope) m.set(p.subCriterionId, [...(m.get(p.subCriterionId) ?? []), p]);
+    return m;
+  }, [recurringPatterns, subCritOptions]);
+
+  function promote(pattern: RecurringPattern) {
+    addItem(pattern.gd4ItemId, buildPromotedChecklistItemFields(pattern));
+  }
+
+  function fmtDate(iso?: string): string {
+    if (!iso) return "date unknown";
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? "date unknown" : d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <Card>
@@ -235,6 +267,60 @@ export function PreCheckChecklistSetup() {
           <p style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 8, marginBottom: 0 }}>{selectedSubCrit.description}</p>
         )}
       </Card>
+
+      {patternsBySubCrit.size > 0 && (
+        <Card>
+          <h3 style={{ marginTop: 0, fontSize: 14 }}>Recurring findings not yet on the checklist</h3>
+          <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
+            The same gap raised more than once, in separate audits, for a sub-criterion — a real recurring pattern, the
+            same idea as 6.2's hand-built "Follow-up actions carry owners and timelines" item. Nothing is added
+            automatically: click <b>Promote to checklist item</b> to turn one into a new checklist item, which lands as
+            an unverified <b>draft</b> just like any other new item, citing exactly which findings it came from.
+          </p>
+          {Array.from(patternsBySubCrit.entries()).map(([subCritId, patterns]) => {
+            const sc = GD4_SUB_CRITERIA.find((s) => s.id === subCritId);
+            return (
+              <div key={subCritId} style={{ marginTop: 10, borderTop: "1px solid #f1f5f9", paddingTop: 10 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1e293b", marginBottom: 6 }}>
+                  {subCritId} — {sc?.title ?? "Unknown sub-criterion"}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {patterns.map((p) => (
+                    <div key={p.matchKey} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px" }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                        <div style={{ flex: 1, minWidth: 220 }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#4338ca" }}>{p.gd4ItemId}</div>
+                          <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.4 }}>{p.findingText}</div>
+                          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+                            Raised {p.occurrences.length} times — findings{" "}
+                            {p.occurrences.map((o, i) => (
+                              <span key={o.findingId}>
+                                {i > 0 ? ", " : ""}
+                                <span style={{ fontFamily: "ui-monospace,monospace" }}>{o.findingId}</span> ({fmtDate(o.createdAt)})
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        {p.alreadyCovered ? (
+                          <Pill s="good">Already covered</Pill>
+                        ) : (
+                          <button
+                            onClick={() => promote(p)}
+                            title="Creates a new draft checklist item for this GD4 item, citing these exact findings — it still needs Approve below before it's treated as fully grounded."
+                            style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "5px 10px", borderRadius: 6, border: "1px solid #7c3aed", background: "#7c3aed", color: "#fff", flexShrink: 0 }}
+                          >
+                            Promote to checklist item
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
 
       <Card>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
