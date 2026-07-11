@@ -194,17 +194,15 @@ textarea:focus {
   .option-a-run-cols { grid-template-columns: 1fr; }
 }
 
-/* LineageDiagram.tsx expanded-row detail: PPD passage / Evidence passage side
-   by side on the Evidence tab, stacking on narrow widths — same "2 columns,
-   stack below a breakpoint" idea as .ef-card-cols, but this panel sits nested
-   inside the map's row indent so it goes cramped sooner; hence a narrower
-   breakpoint than .ef-card-cols' 720px. */
+/* LineageDiagram.tsx expanded-row detail: "What the policy says" / "What the
+   evidence shows" side by side on the Evidence tab, stacking vertically below
+   ~900px — same "2 columns, stack below a breakpoint" idea as .ef-card-cols. */
 .lineage-detail-cols {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  gap: 20px;
   align-items: start;
 }
-@media (max-width: 640px) {
+@media (max-width: 900px) {
   .lineage-detail-cols { grid-template-columns: 1fr; }
 }
