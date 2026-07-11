@@ -115,6 +115,7 @@ export {
 type SkillModule =
   | "checklistScoring"
   | "evidenceReview"
+  | "ppdReview"
   | "findingWriter"
   | "afiClosure"
   | "bandRecommend"
@@ -136,6 +137,18 @@ const MODULE_SKILLS: Record<SkillModule, { capped: string[]; uncapped: string[] 
     // common-ssg-finding-patterns primes the verdict passes with the gap
     // patterns real assessors raised at this PEI.
     capped:   [evidenceRetrievalSkill, sourceCitationSkill, evidenceTimelinessSkill, commonFindingPatternsSkill],
+    uncapped: [regulatoryReferencesSkill],
+  },
+  // Option A's PPD (policy documentation) passes previously reused the
+  // evidenceReview module wholesale, which injected evidence-retrieval.md —
+  // pure APSR-dimension/implementation-record retrieval mechanics that have
+  // no meaning in a documentation-only check ("retrieve implementation
+  // record chunks…"). Same set minus that one misrouted skill;
+  // evidence-timeliness stays because its policy-dating guidance (version/
+  // approval dates, "policy dated 3 months before audit claiming to govern
+  // 4 years") genuinely applies to a PPD read.
+  ppdReview: {
+    capped:   [sourceCitationSkill, evidenceTimelinessSkill, commonFindingPatternsSkill],
     uncapped: [regulatoryReferencesSkill],
   },
   findingWriter: {

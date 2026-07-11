@@ -1796,7 +1796,25 @@ function normaliseForQuoteMatch(s: string): string {
 export function quoteExistsInSource(quote: string, sourceText: string): boolean {
   const inner = quote.replace(/^(\.{3}|…)\s*/, "").replace(/\s*(\.{3}|…)$/, "").trim();
   if (inner.length < QUOTE_MIN_CHARS) return true;
-  return normaliseForQuoteMatch(sourceText).includes(normaliseForQuoteMatch(inner));
+  const srcNorm = normaliseForQuoteMatch(sourceText);
+  if (srcNorm.includes(normaliseForQuoteMatch(inner))) return true;
+  // Elided quote ("start ... end"): models routinely shorten a long sentence
+  // with a mid-quote ellipsis. Only the leading/trailing ellipses were being
+  // stripped, so a genuinely-verbatim-except-elision quote failed and was
+  // SILENTLY dropped — presenting downstream as "no exact quote" ("spread
+  // across the document"). Accept it only when EVERY segment between
+  // ellipses appears verbatim, in order, in the source — elision marks
+  // omitted text, never licence to paraphrase.
+  const segments = inner.split(/\s*(?:\.{3}|…)\s*/).map((s) => s.trim()).filter(Boolean);
+  if (segments.length < 2) return false;
+  let pos = 0;
+  for (const seg of segments) {
+    if (seg.length < 8) return false; // tiny fragments prove nothing
+    const idx = srcNorm.indexOf(normaliseForQuoteMatch(seg), pos);
+    if (idx < 0) return false;
+    pos = idx + normaliseForQuoteMatch(seg).length;
+  }
+  return true;
 }
 
 // A named clause reference counts as REAL only when it — or its leading heading
@@ -1806,12 +1824,21 @@ export function quoteExistsInSource(quote: string, sourceText: string): boolean 
 // em-dash rather than a clause an assessor would navigate to and never find.
 // The comma fallback lets a legitimate "4.2 Heading, Step 1: Sub-heading"
 // pass when the document splits heading and sub-heading across lines.
+//
+// Deliberately does NOT reuse quoteExistsInSource: that helper auto-passes
+// any string under 20 chars (fine for incidental short quotes like term
+// names), which for clauses meant every short reference — including bullet
+// fragments like "- Responsibilities" (18 chars) — passed "verification"
+// against ANY document without being checked at all (the real bug behind
+// seven rows showing "- Responsibilities" as their Policy clause). A clause
+// must actually appear in the source, whatever its length.
 export function clauseAppearsInSource(clause: string, sourceText: string): boolean {
   const c = clause.trim();
   if (c.length < 4) return false;
-  if (quoteExistsInSource(c, sourceText)) return true;
+  const srcNorm = normaliseForQuoteMatch(sourceText);
+  if (srcNorm.includes(normaliseForQuoteMatch(c))) return true;
   const head = c.split(",")[0].trim();
-  return head.length >= 4 && head !== c && quoteExistsInSource(head, sourceText);
+  return head.length >= 4 && head !== c && srcNorm.includes(normaliseForQuoteMatch(head));
 }
 
 // Strips a leading numbered/bulleted section identifier (e.g. "7.3", "7.4(a)",
@@ -1827,6 +1854,23 @@ export function clauseAppearsInSource(clause: string, sourceText: string): boole
 function stripLeadingClauseNumber(clause: string): string | undefined {
   const m = clause.match(/^\(?\d+(?:\.\d+)*\)?\s*\(?[a-zA-Z]?\)?\s+(.+)$/);
   return m ? m[1].trim() : undefined;
+}
+
+// Full clause-reference verification used by the PPD parse: sanitise, then
+// verify against source. A bare list marker ("- Responsibilities",
+// "• Fees") is a bullet fragment, not a clause identifier — it is stripped
+// BEFORE verification so it can neither render as a fake "heading" nor ride
+// through on the marker-plus-text form. Real numbered identifiers
+// ("7.3(a) Audit Report") are kept and verified as-is, with the
+// number-stripped heading as the second-chance fallback (see
+// stripLeadingClauseNumber). Returns the verified reference to display, or
+// undefined when nothing verifies — never an unverified or marker-prefixed one.
+export function verifyClauseRef(rawClause: string, sourceText: string): string | undefined {
+  const stripped = rawClause.trim().replace(/^[-–—•*·▪◦>]+\s+/, "").trim();
+  if (!stripped) return undefined;
+  if (clauseAppearsInSource(stripped, sourceText)) return stripped;
+  const unnumbered = stripLeadingClauseNumber(stripped);
+  return unnumbered && clauseAppearsInSource(unnumbered, sourceText) ? unnumbered : undefined;
 }
 const UNVERIFIED_QUOTE_NOTE = " [⚠ unverified quote — not found in source]";
 
@@ -1895,7 +1939,7 @@ export async function runPPDRequirementsReview(
   // should get its own debug-log entry.
   const buildSystem = (label: string) => `You are an SSG EduTrust assessor reviewing ONLY the Policy & Procedure Document (PPD) for a GD4 sub-criterion, requirement by requirement — not implementation evidence, not outcomes. Work the way a real assessor works: decompose, check each obligation, and report specific gaps with named examples — never summarise.
 
-STEP 1 — DECOMPOSE. For each GD4 requirement line, first break it into its constituent sub-clauses: the explicit (a)/(b)/(c) parts if present, otherwise each distinct obligation in the sentence (e.g. "documented (a) a code of conduct AND (b) non-collection of monies" = two sub-clauses). Then give a per-sub-clause verdict: "documented" or "not documented" in the PPD, AND — independently for each sub-clause — the ONE exact sentence copied VERBATIM from the cited chunk that documents THAT specific sub-clause (not the whole line). A sub-clause that is "not documented" gets an empty quote — never invent one to fill the gap, and never reuse one sub-clause's quote for another. If the sub-clause IS documented but its support is spread across SEVERAL statements rather than one single sentence, leave quote empty and instead list those actual statements (up to 8, each copied VERBATIM, each with its own chunk ID) in spreadQuotes — real evidence the reader can check, never a bare "spread across the document" assertion with nothing behind it; only leave BOTH quote and spreadQuotes empty when there is truly no cleanly extractable passage at all. For each sub-clause ALSO record: (i) clause — the FULL section/clause reference of the SOURCE document where you found it, COPIED EXACTLY from a heading that actually appears in the cited chunk text, INCLUDING its leading number or bullet identifier if the document numbers that heading (e.g. "4.2 Competency-Based Recruitment and Selection Strategy, Step 1: Manpower Planning and Deployment", or "7.3(a) Audit Report" when the document itself labels the heading that way) — copy the number exactly as written, never renumber one or add a number that is not there; if the document does not number this heading, give the heading text alone as usual; if the cited chunk shows no identifiable heading for this passage, return "" — NEVER construct, infer, tidy up or guess a clause reference, because an assessor will try to navigate to it and an invented one is worse than none; (ii) rationale — ONE short auditor-register sentence stating WHY this sub-clause is or is not documented (distinct from the quote), or "" if you cannot state a reason beyond the quote itself; (iii) chunkId — the single chunk ID the quote came from, or "" if none.
+STEP 1 — DECOMPOSE. For each GD4 requirement line, first break it into its constituent sub-clauses: the explicit (a)/(b)/(c) parts if present, otherwise each distinct obligation in the sentence (e.g. "documented (a) a code of conduct AND (b) non-collection of monies" = two sub-clauses). Then give a per-sub-clause verdict: "documented" or "not documented" in the PPD, AND — independently for each sub-clause — the ONE exact sentence copied VERBATIM from the cited chunk that documents THAT specific sub-clause (not the whole line). A sub-clause that is "not documented" gets an empty quote — never invent one to fill the gap, and never reuse one sub-clause's quote for another. If the sub-clause IS documented but its support is spread across SEVERAL statements rather than one single sentence, leave quote empty and instead list those actual statements (up to 8, each copied VERBATIM, each with its own chunk ID) in spreadQuotes — real evidence the reader can check, never a bare "spread across the document" assertion with nothing behind it; only leave BOTH quote and spreadQuotes empty when there is truly no cleanly extractable passage at all. For each sub-clause ALSO record: (i) clause — the FULL section/clause reference of the SOURCE document where you found it, COPIED EXACTLY from a heading that actually appears in the cited chunk text, INCLUDING its leading number identifier if the document numbers that heading (e.g. "4.2 Competency-Based Recruitment and Selection Strategy, Step 1: Manpower Planning and Deployment", or "7.3(a) Audit Report" when the document itself labels the heading that way) — copy the number exactly as written, never renumber one or add a number that is not there; a bare list dash/bullet ("- ", "• ", "* ") in front of a line is a list marker, NOT a clause identifier — never include it, and never cite a bullet list item as if it were a heading; if the document does not number this heading, give the heading text alone as usual; if the cited chunk shows no identifiable heading for this passage, return "" — NEVER construct, infer, tidy up or guess a clause reference, because an assessor will try to navigate to it and an invented one is worse than none; (ii) rationale — ONE short auditor-register sentence stating WHY this sub-clause is or is not documented (distinct from the quote), or "" if you cannot state a reason beyond the quote itself; (iii) chunkId — the single chunk ID the quote came from, or "" if none.
 
 STEP 2 — DERIVE the line verdict from the sub-clauses:
 "Adequate" = EVERY sub-clause is documented clearly, specifically and sustainably (named responsible role, what they do, when/how often, what record is produced).
@@ -1910,7 +1954,7 @@ PHRASING REGISTER (mandatory):
 - Positive verdicts stay factual and specific (what is documented, in which document/section) — no praise adjectives, no "good"/"structured framework"/"comprehensive".
 
 For each requirement return:
-- subClauses: [{text: string, verdict: "documented"|"not documented", quote: string, spreadQuotes: [{quote: string, chunkId: string}], clause: string, rationale: string, chunkId: string}] — the STEP 1 decomposition. One entry per sub-clause, text naming that obligation tightly (by what it IS, e.g. "Manpower planning"). quote = the exact verbatim sentence supporting THAT sub-clause specifically (empty string "" for "not documented" sub-clauses, or when no single sentence captures it) — never the whole line's quote, never invented. spreadQuotes = when documented but no single quote captures it, the actual verbatim statements (up to 8) that TOGETHER support it, each with its own chunkId — empty array [] when quote is set, or when genuinely nothing extractable exists. clause = the source document's own section heading for this sub-clause, copied verbatim from the cited chunk INCLUDING its leading number/bullet identifier if the document numbers that heading (e.g. "7.3(a) Audit Report"), or the heading text alone if the document does not number it, or "" if the chunk shows no identifiable heading — never invented or tidied, never a number that isn't actually printed next to that heading. rationale = one short auditor-register sentence on why it is/isn't documented, or "" if none distinct from the quote. chunkId = the chunk ID the quote came from, or "".
+- subClauses: [{text: string, verdict: "documented"|"not documented", quote: string, spreadQuotes: [{quote: string, chunkId: string}], clause: string, rationale: string, chunkId: string}] — the STEP 1 decomposition. One entry per sub-clause, text naming that obligation tightly (by what it IS, e.g. "Manpower planning"). quote = the exact verbatim sentence supporting THAT sub-clause specifically (empty string "" for "not documented" sub-clauses, or when no single sentence captures it) — never the whole line's quote, never invented. spreadQuotes = when documented but no single quote captures it, the actual verbatim statements (up to 8) that TOGETHER support it, each with its own chunkId — empty array [] when quote is set, or when genuinely nothing extractable exists. clause = the source document's own section heading for this sub-clause, copied verbatim from the cited chunk INCLUDING its leading number identifier if the document numbers that heading (e.g. "7.3(a) Audit Report"), or the heading text alone if the document does not number it, or "" if the chunk shows no identifiable heading — never invented or tidied, never a number that isn't actually printed next to that heading, and never a bare list dash/bullet ("- ", "• ") — a list marker is not a clause identifier. rationale = one short auditor-register sentence on why it is/isn't documented, or "" if none distinct from the quote. chunkId = the chunk ID the quote came from, or "".
 - verdict: "Adequate" | "Partial" | "Not documented" — derived per STEP 2.
 - shortComment: MANDATORY for every verdict, never blank — one sentence stating WHY this verdict was reached. For "Adequate" state specifically what makes it adequate (the named owner, mechanism, frequency, or record that satisfies it) — "Documented, because…" is exactly as required as a negative's reason. For "Partial"/"Not documented" use the SSG register and name the missing sub-clause(s).
 - fullComment: (1) the justification — for Adequate state specifically WHAT makes it adequate (named owner, frequency, record and where documented); for Partial/Not documented use the SSG register, name each missing sub-clause, and give the concrete example. (2) a verbatim quoted excerpt from the PPD in double quotes followed by its chunk ID, e.g. "...auditors must be independent of the area they audit..." (C001). For "Not documented" state that no PPD passage addresses this requirement instead of inventing a quote. Factual and neutral throughout.
@@ -1920,7 +1964,7 @@ For each requirement return:
 - supportQuote: for Adequate/Partial ONLY, the ONE exact sentence (or short clause) copied VERBATIM from the cited chunk text that most directly documents this requirement — character-for-character, so it can be located in the source. If no single sentence captures it (support is spread across the passage) or the verdict is Not documented, return an empty string "" — never paraphrase, summarise, or invent a quote.
 
 Respond with JSON only:
-{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented", "quote": string, "spreadQuotes": [{"quote": string, "chunkId": string}], "clause": string, "rationale": string, "chunkId": string}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}], "suggestedRewrite": string, "chunkIds": string[], "supportQuote": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
+{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented", "quote": string, "spreadQuotes": [{"quote": string, "chunkId": string}], "clause": string, "rationale": string, "chunkId": string}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}], "suggestedRewrite": string, "chunkIds": string[], "supportQuote": string}]}${buildSystemPrompt("ppdReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   // Technique 2 — internal contradiction hunt. Run as its OWN pass per
   // window (not folded into the per-requirement prompt) so the requirement
@@ -1933,12 +1977,32 @@ Rules:
 - description: one factual sentence naming the subject and the two conflicting values, in the SSG register (e.g. "The PPD states two different refund timelines for the same process: 'within 5 working days' and 'within 3 working days'.").
 - Report nothing if the window contains no contradiction — an empty array is the correct answer for a consistent PPD.
 
-Respond with JSON only: {"contradictions": [{"description": string, "quoteA": string, "chunkA": string, "quoteB": string, "chunkB": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
+Respond with JSON only: {"contradictions": [{"description": string, "quoteA": string, "chunkA": string, "quoteB": string, "chunkB": string}]}${buildSystemPrompt("ppdReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   const windows = buildDocWindows(policyDocText);
 
   type BestPPD = { verdict: PPDVerdict; shortComment: string; fullComment: string; suggestedRewrite?: string; chunkIds: string[]; subClauses?: PPDSubClause[]; promises?: PPDPromise[]; supportQuote?: string };
   const bestByRef = new Map<string, BestPPD>();
+
+  // Cross-window sub-clause merge. A later window that upgrades the verdict
+  // used to replace the previous window's subClauses WHOLESALE — discarding
+  // verified quotes/spreadQuotes/clauses window 1 had already located when
+  // window 2's copy of the same sub-clause arrived without them (window 2
+  // cannot quote text it never saw). Carry the previous window's
+  // presentational fields onto a same-text documented sub-clause that lacks
+  // them; verdicts are NEVER changed by this merge.
+  const mergeSubClauses = (next: PPDSubClause[], prev?: PPDSubClause[]): PPDSubClause[] => {
+    if (!prev?.length) return next;
+    const byText = new Map(prev.map((p) => [p.text.trim().toLowerCase(), p]));
+    return next.map((n) => {
+      const p = byText.get(n.text.trim().toLowerCase());
+      if (!p || p.verdict !== "documented" || n.verdict !== "documented") return n;
+      if (!n.quote && !n.spreadQuotes && (p.quote || p.spreadQuotes)) {
+        return { ...n, quote: p.quote, spreadQuotes: p.spreadQuotes, chunkId: n.chunkId ?? p.chunkId, clause: n.clause ?? p.clause, rationale: n.rationale ?? p.rationale, quoteUnverified: undefined };
+      }
+      return { ...n, clause: n.clause ?? p.clause, rationale: n.rationale ?? p.rationale };
+    });
+  };
   // Contradictions merged across windows, deduped on the two quotes.
   const contradictions: PPDContradiction[] = [];
   const contradictionKeys = new Set<string>();
@@ -2039,21 +2103,25 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
                   // Clause is verified against source the same way quotes are:
                   // a reference that isn't really in the document is dropped to
                   // undefined ("no clause identified"), never shown — an invented
-                  // clause an assessor would chase is worse than an em-dash. When
-                  // the model included a leading number/bullet (e.g. "7.3(a) Audit
-                  // Report") that doesn't verify as a contiguous verbatim match,
-                  // fall back to verifying the heading with the number stripped —
-                  // see stripLeadingClauseNumber's comment for why.
+                  // clause an assessor would chase is worse than an em-dash.
+                  // verifyClauseRef also strips bare list markers ("- X") and
+                  // falls back to the number-stripped heading when the numbered
+                  // form isn't a contiguous verbatim match.
                   const rawClause = typeof c.clause === "string" ? c.clause.trim() : "";
-                  const unnumbered = rawClause ? stripLeadingClauseNumber(rawClause) : undefined;
-                  const clause = rawClause && clauseAppearsInSource(rawClause, policyDocText)
-                    ? rawClause
-                    : (unnumbered && clauseAppearsInSource(unnumbered, policyDocText) ? unnumbered : undefined);
+                  const clause = rawClause ? verifyClauseRef(rawClause, policyDocText) : undefined;
                   // Rationale is reasoning (like shortComment), not a quotation —
                   // stored as-is when non-empty, never verified/padded.
                   const rationale = typeof c.rationale === "string" && c.rationale.trim() ? c.rationale.trim() : undefined;
                   const chunkId = typeof c.chunkId === "string" && c.chunkId.trim() ? c.chunkId.trim() : undefined;
-                  return { text: c.text as string, verdict: c.verdict as PPDSubClause["verdict"], quote, spreadQuotes: spreadQuotes.length > 0 ? spreadQuotes : undefined, clause, rationale, chunkId };
+                  // The model DID cite support but none of it verified — that is
+                  // a materially different state from "the model itself said no
+                  // single passage exists", and the UI must not present it as
+                  // the honest "spread across the document" note (a factual
+                  // claim nothing supports when the truth is "cited passage
+                  // failed verification").
+                  const rawSpreadCount = Array.isArray(c.spreadQuotes) ? (c.spreadQuotes as unknown[]).length : 0;
+                  const quoteUnverified = (!!rawQuote || rawSpreadCount > 0) && !quote && spreadQuotes.length === 0 ? true : undefined;
+                  return { text: c.text as string, verdict: c.verdict as PPDSubClause["verdict"], quote, spreadQuotes: spreadQuotes.length > 0 ? spreadQuotes : undefined, clause, rationale, chunkId, quoteUnverified };
                 })
             : [];
           // Promises carry verbatim source quotes — verify each against the
@@ -2088,7 +2156,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
               fullComment: fullComment || prev?.fullComment || "",
               suggestedRewrite,
               chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])],
-              subClauses: subClauses.length > 0 ? subClauses : prev?.subClauses,
+              subClauses: subClauses.length > 0 ? mergeSubClauses(subClauses, prev?.subClauses) : prev?.subClauses,
               // Union promises across windows (different windows see
               // different PPD sections), deduped on promiseText.
               promises: [...(prev?.promises ?? []), ...promises.filter((p) => !(prev?.promises ?? []).some((q) => q.promiseText === p.promiseText))],
@@ -2221,7 +2289,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
   if (!stopRequested() && !stoppedEarly) {
     opts.onProgress?.("PPD requirements review — overall synthesis");
     const lineDigest = rows.map((r) => `[${r.ref}] ${r.verdict}: ${r.requirementText} — ${r.shortComment}`).join("\n");
-    const narrativeSystem = `You are writing a short overall roll-up of a PPD (Policy & Procedure Document) requirements review for one GD4 EduTrust sub-criterion. You are given the per-requirement-line verdicts already decided ("Adequate" / "Partial" / "Not documented"). Write a 2-4 sentence synthesis of the sub-criterion AS A WHOLE: whether the PPD documents this sub-criterion's requirements overall, which areas are strongest (documented), and where the gaps are (Partial / Not documented lines). This is a roll-up — do NOT repeat each line's comment verbatim. Keep it factual and neutral: state what is documented and what is missing; do not editorialise with words like "good"/"poor"/"excellent". Respond with JSON only: {"narrative": string}.${buildSystemPrompt("evidenceReview", null, "runPPDRequirementsReview (overall synthesis)", opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
+    const narrativeSystem = `You are writing a short overall roll-up of a PPD (Policy & Procedure Document) requirements review for one GD4 EduTrust sub-criterion. You are given the per-requirement-line verdicts already decided ("Adequate" / "Partial" / "Not documented"). Write a 2-4 sentence synthesis of the sub-criterion AS A WHOLE: whether the PPD documents this sub-criterion's requirements overall, which areas are strongest (documented), and where the gaps are (Partial / Not documented lines). This is a roll-up — do NOT repeat each line's comment verbatim. Keep it factual and neutral: state what is documented and what is missing; do not editorialise with words like "good"/"poor"/"excellent". Respond with JSON only: {"narrative": string}.${buildSystemPrompt("ppdReview", null, "runPPDRequirementsReview (overall synthesis)", opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
     const narrativeUser = `Per-requirement-line verdicts for this sub-criterion:\n${lineDigest}\n\nWrite the overall roll-up narrative.`;
     try {
       // Generative (fixed): a 2-4 sentence roll-up NARRATIVE synthesising the

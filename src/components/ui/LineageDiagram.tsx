@@ -62,6 +62,10 @@ type SpineItem = {
   // honest state has actual evidence behind it, not just an assertion.
   spreadQuotes?: { quote: string; sourceFile?: CitedFile }[];
   noExactQuote?: boolean;  // covered, no single passage AND no spreadQuotes either (the true diffuse-mention fallback)
+  // The model cited support but none of it verified against the source — a
+  // different, more suspicious state than the diffuse-mention fallback, and
+  // shown as such (never as the "spread across the document" claim).
+  quoteUnverified?: boolean;
   contradicted?: boolean;  // evidence-only: the passage contradicts the promise
   sourceFile?: CitedFile;
   rationale?: string;      // per-clause / per-promise "why"
@@ -171,8 +175,10 @@ function policySpine(row: PPDReviewRow, files: CitedFile[], chunkFileNames: Reco
           sourceFile: resolveSourceFile(sq.chunkId, sq.quote, files, chunkFileNames, resolveText),
         }));
         if (spreadQuotes.length > 0) return { name: sc.text, clause: sc.clause, found: true, spreadQuotes, sourceFile, rationale: sc.rationale };
-        // True fallback: documented, but genuinely no extractable passage at all.
-        return { name: sc.text, clause: sc.clause, found: true, noExactQuote: true, sourceFile, rationale: sc.rationale };
+        // No verified passage. Distinguish "the AI cited support that failed
+        // verification" (suspicious — say so) from the true fallback of
+        // "documented, but genuinely no extractable passage at all".
+        return { name: sc.text, clause: sc.clause, found: true, noExactQuote: true, quoteUnverified: sc.quoteUnverified, sourceFile, rationale: sc.rationale };
       }
       return { name: sc.text, clause: sc.clause, found: false, sourceFile, rationale: sc.rationale };
     });
@@ -422,9 +428,17 @@ function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: Re
           )}
         </div>
       )}
-      {item.found && item.noExactQuote && (
+      {item.found && item.noExactQuote && !item.quoteUnverified && (
         <div style={{ fontSize: 11.5, color: "#64748b", fontStyle: "italic", fontFamily: "Georgia, 'Times New Roman', serif", marginTop: 3 }}>
           Covered, but spread across the document rather than one passage.
+        </div>
+      )}
+      {/* The AI cited support that failed word-for-word verification against
+          the source — say exactly that, never the "spread across" claim
+          (which asserts a fact about the document nothing supports here). */}
+      {item.found && item.quoteUnverified && (
+        <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "3px 6px", marginTop: 3, lineHeight: 1.45 }}>
+          ⚠ The AI cited a supporting passage, but it could not be verified word-for-word against the source document, so it is not shown. Treat this sub-part's coverage with caution — re-running the review may resolve it.
         </div>
       )}
 

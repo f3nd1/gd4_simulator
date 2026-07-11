@@ -810,6 +810,15 @@ export type PPDSubClause = {
   // no cleanly extractable passage exists at all — the true diffuse-mention
   // fallback the UI keeps as an italic note.
   spreadQuotes?: { quote: string; chunkId?: string }[];
+  // True when the model DID cite a supporting quote (or spread passages) for
+  // this documented sub-clause but NONE of it verified as a real verbatim
+  // excerpt of the source — a materially different state from "no single
+  // passage exists" (empty quote AND empty spreadQuotes from the model
+  // itself). The UI renders an honest "cited passage could not be verified"
+  // note instead of the "spread across the document" claim, which nothing
+  // supports in this case. Optional/additive — undefined on older runs and
+  // whenever something real verified.
+  quoteUnverified?: boolean;
 };
 
 // A specific, verifiable commitment the PPD makes for a requirement line

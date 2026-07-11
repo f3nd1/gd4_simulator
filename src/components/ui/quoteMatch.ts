@@ -24,6 +24,42 @@ export function findQuoteSpan(text: string, quote: string): [number, number] | n
   try { rx = new RegExp(escaped, "i"); } catch { return null; }
   const m = rx.exec(text);
   if (m && typeof m.index === "number") return [m.index, m.index + m[0].length];
+  // Elided quote ("start ... end"): the assessment engine accepts a quote
+  // whose ellipsis-separated segments ALL appear verbatim, in order (see
+  // quoteExistsInSource) — locate the same real span here, from the first
+  // segment's start to the last segment's end, so an accepted elided quote
+  // still highlights its actual source region instead of silently losing
+  // its context. Same rules: every segment ≥8 chars, verbatim, in order —
+  // otherwise null (never a fabricated position).
+  const segments = trimmed.split(/\s*(?:\.{3}|…)\s*/).map((s) => s.trim()).filter(Boolean);
+  if (segments.length < 2) return null;
+  let spanStart = -1;
+  let pos = 0;
+  for (const seg of segments) {
+    if (seg.length < 8) return null;
+    const span = findQuoteSpanFrom(text, seg, pos);
+    if (!span) return null;
+    if (spanStart < 0) spanStart = span[0];
+    pos = span[1];
+  }
+  return spanStart >= 0 ? [spanStart, pos] : null;
+}
+
+// Locate one plain (non-elided) segment at or after `from`, with the same
+// exact-then-whitespace/curly-tolerant matching the main path uses.
+function findQuoteSpanFrom(text: string, segment: string, from: number): [number, number] | null {
+  const exact = text.indexOf(segment, from);
+  if (exact >= 0) return [exact, exact + segment.length];
+  const escaped = segment
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/['‘’]/g, "['‘’]")
+    .replace(/["“”]/g, "[\"“”]")
+    .replace(/\s+/g, "\\s+");
+  let rx: RegExp;
+  try { rx = new RegExp(escaped, "ig"); } catch { return null; }
+  rx.lastIndex = from;
+  const m = rx.exec(text);
+  if (m && typeof m.index === "number") return [m.index, m.index + m[0].length];
   return null;
 }
 

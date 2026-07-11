@@ -45,6 +45,19 @@ describe("findQuoteSpan — highlight only a real, verbatim occurrence", () => {
     expect(span).not.toBeNull();
     expect(SOURCE.slice(span![0], span![1])).toContain("risk register");
   });
+
+  it("locates a mid-elided quote as the real span from first to last segment (3.1 'spread across' fix)", () => {
+    const span = findQuoteSpan(SOURCE, "The Board of Directors meets quarterly ... academic quality reports");
+    expect(span).not.toBeNull();
+    const located = SOURCE.slice(span![0], span![1]);
+    expect(located.startsWith("The Board of Directors meets quarterly")).toBe(true);
+    expect(located.endsWith("academic quality reports")).toBe(true);
+  });
+
+  it("returns null for an elided quote whose segments are out of order or paraphrased — elision is not licence to reword", () => {
+    expect(findQuoteSpan(SOURCE, "academic quality reports ... The Board of Directors meets quarterly")).toBeNull();
+    expect(findQuoteSpan(SOURCE, "The Board of Directors meets quarterly ... convenes to discuss money matters")).toBeNull();
+  });
 });
 
 describe("excerptAround — a short, located excerpt, never the whole document", () => {

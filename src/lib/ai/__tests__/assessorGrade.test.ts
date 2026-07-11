@@ -7,7 +7,7 @@ vi.mock("../aiClient", async (importOriginal) => {
 });
 
 import { chatComplete } from "../aiClient";
-import { runPPDRequirementsReview, runEvidenceAssessment, quoteExistsInSource, clauseAppearsInSource, type PPDRequirementInput, type EvidenceAssessmentInput } from "../agentRuntime";
+import { runPPDRequirementsReview, runEvidenceAssessment, quoteExistsInSource, clauseAppearsInSource, verifyClauseRef, type PPDRequirementInput, type EvidenceAssessmentInput } from "../agentRuntime";
 
 const mockChat = vi.mocked(chatComplete);
 const SETTINGS: AISettings = { provider: "openai", apiKey: "test-key", model: "m", utilityModel: "m", enabled: true };
@@ -249,9 +249,20 @@ describe("quoteExistsInSource", () => {
     expect(quoteExistsInSource("the Principal signs a quarterly compliance attestation form", src)).toBe(false);
     expect(quoteExistsInSource("Adequate", src)).toBe(true);
   });
+
+  it("accepts a mid-quote-elided quote when every segment is verbatim and in order (3.1 'spread across' investigation)", () => {
+    const src = "The contract period with each agent shall be stated in the agency agreement and shall not exceed two years without a formal renewal review.";
+    // Both halves verbatim, in order → accepted (was silently dropped before).
+    expect(quoteExistsInSource("The contract period with each agent ... shall not exceed two years", src)).toBe(true);
+    expect(quoteExistsInSource("The contract period with each agent … without a formal renewal review", src)).toBe(true);
+    // A paraphrased segment still fails — elision is not licence to reword.
+    expect(quoteExistsInSource("The contract period with each agent ... must never go beyond twenty-four months", src)).toBe(false);
+    // Segments out of order fail — elision marks omitted text, not reordering.
+    expect(quoteExistsInSource("shall not exceed two years ... The contract period with each agent shall be stated", src)).toBe(false);
+  });
 });
 
-describe("clauseAppearsInSource", () => {
+describe("clauseAppearsInSource — no short-string free pass (the '- Responsibilities' investigation)", () => {
   const src = "4.2 Competency-Based Recruitment and Selection Strategy\nStep 1: Manpower Planning and Deployment\nThe HR Manager reviews staffing quarterly.";
   it("accepts a clause that is verbatim in the source", () => {
     expect(clauseAppearsInSource("4.2 Competency-Based Recruitment and Selection Strategy", src)).toBe(true);
@@ -262,6 +273,33 @@ describe("clauseAppearsInSource", () => {
   it("rejects an invented/tidied clause whose leading segment is not in the source", () => {
     expect(clauseAppearsInSource("Section 9.9 Total Quality Excellence Framework", src)).toBe(false);
     expect(clauseAppearsInSource("", src)).toBe(false);
+  });
+  it("rejects a SHORT clause not in the source — previously any string under 20 chars auto-passed unverified", () => {
+    // "- Responsibilities" is 18 chars: it used to pass against ANY document.
+    expect(clauseAppearsInSource("- Responsibilities", "Totally unrelated document text.")).toBe(false);
+    expect(clauseAppearsInSource("9.9 Bogus", src)).toBe(false);
+  });
+  it("still accepts a short clause that genuinely appears in the source", () => {
+    expect(clauseAppearsInSource("Step 1", src)).toBe(true);
+  });
+});
+
+describe("verifyClauseRef — bare list markers are bullet fragments, not clause identifiers", () => {
+  const src = "PPD-SES-SL-3.1.1 Student Recruitment Policy\n5. Responsibilities\nThe Recruitment Manager oversees agent onboarding.";
+  it("strips a leading '- ' marker and verifies the remaining heading against the source", () => {
+    expect(verifyClauseRef("- Responsibilities", src)).toBe("Responsibilities");
+    expect(verifyClauseRef("• Responsibilities", src)).toBe("Responsibilities");
+  });
+  it("drops a marker-prefixed fragment whose heading is NOT in the source (never auto-passes)", () => {
+    expect(verifyClauseRef("- Responsibilities", "Nothing relevant here at all.")).toBeUndefined();
+  });
+  it("keeps a real numbered heading as-is, with the number-stripped fallback intact", () => {
+    expect(verifyClauseRef("5. Responsibilities", src)).toBe("5. Responsibilities");
+    // Number doesn't verify contiguously → falls back to the bare heading.
+    expect(verifyClauseRef("7.7 Responsibilities", src)).toBe("Responsibilities");
+  });
+  it("drops a wholly invented reference to undefined", () => {
+    expect(verifyClauseRef("9.9(z) Wholly Invented Compliance Section", src)).toBeUndefined();
   });
 });
 
@@ -452,6 +490,112 @@ The Internal Audit Unit issues a report to the Board within 10 working days.`;
     });
     const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], SRC, SETTINGS, {});
     expect(result.rows[0].subClauses![0].clause).toBeUndefined();
+  });
+});
+
+describe("3.1 investigation fixes — bullet clauses, unverified-quote honesty, cross-window quote survival, PPD skill gating", () => {
+  const SRC = `[CHUNK:C001] --- ppd-ses-sl-3.1.1.docx ---
+5. Responsibilities
+The Recruitment Manager oversees agent onboarding. The contract period with each agent shall be stated in the agency agreement.`;
+
+  function mockPpdReply(subClauses: unknown[]) {
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{ ref: "3.1.1.DS2.a", subClauses, verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }],
+      });
+    });
+  }
+  const reqs = [{ ref: "3.1.1.DS2.a", gd4ItemId: "3.1.1", requirementText: "Contract period stated." }];
+
+  it("a '- Responsibilities' bullet clause is stripped to the verified heading, never shown with the marker", async () => {
+    mockPpdReply([{ text: "Contract period", verdict: "documented", quote: "The contract period with each agent shall be stated in the agency agreement.", clause: "- Responsibilities", rationale: "", chunkId: "C001" }]);
+    const result = await runPPDRequirementsReview(reqs, SRC, SETTINGS, {});
+    expect(result.rows[0].subClauses![0].clause).toBe("Responsibilities");
+  });
+
+  it("a bullet-fragment clause with no matching heading in the source is dropped to undefined", async () => {
+    mockPpdReply([{ text: "Contract period", verdict: "documented", quote: "The contract period with each agent shall be stated in the agency agreement.", clause: "- Renewal Provisions", rationale: "", chunkId: "C001" }]);
+    const result = await runPPDRequirementsReview(reqs, SRC, SETTINGS, {});
+    expect(result.rows[0].subClauses![0].clause).toBeUndefined();
+  });
+
+  it("a documented sub-clause whose ONLY cited quote fails verification is flagged quoteUnverified — not presented as 'spread across the document'", async () => {
+    mockPpdReply([{ text: "Contract period", verdict: "documented", quote: "This exact sentence is nowhere in the source document whatsoever.", spreadQuotes: [], clause: "", rationale: "", chunkId: "C001" }]);
+    const result = await runPPDRequirementsReview(reqs, SRC, SETTINGS, {});
+    const sc = result.rows[0].subClauses![0];
+    expect(sc.quote).toBeUndefined();
+    expect(sc.quoteUnverified).toBe(true);
+  });
+
+  it("a documented sub-clause where the model itself returned NO quote and NO spreadQuotes is NOT flagged (true diffuse-mention state)", async () => {
+    mockPpdReply([{ text: "Contract period", verdict: "documented", quote: "", spreadQuotes: [], clause: "", rationale: "", chunkId: "" }]);
+    const result = await runPPDRequirementsReview(reqs, SRC, SETTINGS, {});
+    const sc = result.rows[0].subClauses![0];
+    expect(sc.quote).toBeUndefined();
+    expect(sc.quoteUnverified).toBeUndefined();
+  });
+
+  it("a mid-elided quote whose segments are all verbatim in order is now KEPT, not dropped", async () => {
+    mockPpdReply([{ text: "Contract period", verdict: "documented", quote: "The contract period with each agent ... stated in the agency agreement", clause: "", rationale: "", chunkId: "C001" }]);
+    const result = await runPPDRequirementsReview(reqs, SRC, SETTINGS, {});
+    const sc = result.rows[0].subClauses![0];
+    expect(sc.quote).toBe("The contract period with each agent ... stated in the agency agreement");
+    expect(sc.quoteUnverified).toBeUndefined();
+  });
+
+  it("cross-window merge keeps window 1's verified quote when window 2 upgrades the verdict but returns the same sub-clause without one", async () => {
+    // > WINDOW_SIZE forces two windows; put the quotable text in the padding
+    // header so it exists in the full policyDocText both windows verify against.
+    const LONG_SRC = `[CHUNK:C001] --- ppd.docx ---\nThe contract period with each agent shall be stated in the agency agreement.\n${"Filler policy text. ".repeat(3000)}`;
+    let assessCall = 0;
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      assessCall++;
+      if (assessCall === 1) {
+        return JSON.stringify({
+          results: [{
+            ref: "3.1.1.DS2.a",
+            subClauses: [{ text: "Contract period", verdict: "documented", quote: "The contract period with each agent shall be stated in the agency agreement.", clause: "", rationale: "Names the agency agreement.", chunkId: "C001" }],
+            verdict: "Partial", shortComment: "Partial in window 1.", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+          }],
+        });
+      }
+      // Window 2 upgrades to Adequate but its copy of the SAME sub-clause has
+      // no quote (window 2 never saw that passage).
+      return JSON.stringify({
+        results: [{
+          ref: "3.1.1.DS2.a",
+          subClauses: [{ text: "Contract period", verdict: "documented", quote: "", clause: "", rationale: "", chunkId: "" }],
+          verdict: "Adequate", shortComment: "Adequate in window 2.", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+        }],
+      });
+    });
+    const result = await runPPDRequirementsReview(reqs, LONG_SRC, SETTINGS, {});
+    const row = result.rows[0];
+    expect(row.verdict).toBe("Adequate"); // higher verdict still wins — merge never changes verdicts
+    expect(row.subClauses![0].quote).toBe("The contract period with each agent shall be stated in the agency agreement."); // window 1's verified quote survives
+    expect(row.subClauses![0].rationale).toBe("Names the agency agreement.");
+  });
+
+  it("PPD prompts use the ppdReview skill module: evidence-retrieval.md is gated out, regulatory-references stays, and the bullet-marker rule is present", async () => {
+    const capturedSystems: string[] = [];
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      capturedSystems.push(system);
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({ results: [{ ref: "3.1.1.DS2.a", subClauses: [], verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }] });
+    });
+    await runPPDRequirementsReview(reqs, SRC, SETTINGS, {});
+    const mainSystem = capturedSystems.find((s) => s.includes("STEP 1 — DECOMPOSE"))!;
+    expect(mainSystem).not.toContain("=== SKILL: evidence-retrieval.md");
+    expect(mainSystem).toContain("=== SKILL: regulatory-references.md");
+    expect(mainSystem).toContain("NOT a clause identifier");
   });
 });
 
