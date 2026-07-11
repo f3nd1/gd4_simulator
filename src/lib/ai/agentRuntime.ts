@@ -1094,6 +1094,20 @@ function buildDocWindows(text: string): DocWindow[] {
   return windows;
 }
 
+// The distinct chunk IDs ("[CHUNK:C001] --- path ---") a window's text
+// actually contains, in first-seen order — lets a caller (useWorkspaceStore's
+// run loops) resolve which SOURCE FILES the in-flight AI call for this window
+// covers, via its own chunkId -> file-name map, for a live "currently
+// processing: <files>" indicator. Shared by runPPDRequirementsReview and
+// runEvidenceAssessment rather than duplicated.
+function chunkIdsInWindow(text: string): string[] {
+  const seen = new Set<string>();
+  const re = /\[CHUNK:([^\]]+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) seen.add(m[1]);
+  return [...seen];
+}
+
 // Coverage priority: Yes > Partial > No. Returns the better of the two.
 function mergeCoverage(a: StagedCoverageStatus, b: StagedCoverageStatus): StagedCoverageStatus {
   if (a === "Yes" || b === "Yes") return "Yes";
@@ -1844,9 +1858,13 @@ export function flagUnverifiedQuotes(fullComment: string, sourceText: string): s
 // Emitting them changes no assessment behaviour — they mirror the window/
 // batch loop the run already performs.
 export type PPDRunEvent =
-  | { type: "window-start"; window: { current: number; total: number }; refs: string[] }
+  // chunkIds: the chunk IDs this window's text actually contains, so the
+  // caller can resolve which source files the in-flight call covers.
+  | { type: "window-start"; window: { current: number; total: number }; refs: string[]; chunkIds: string[] }
   | { type: "batch-done"; verdicts: { ref: string; verdict: PPDVerdict }[] }
-  | { type: "batch-failed"; refs: string[] };
+  // error: the real failure reason (exception message, or "no parseable
+  // verdicts" for a malformed/empty reply) — never just "it failed".
+  | { type: "batch-failed"; refs: string[]; error: string };
 
 export async function runPPDRequirementsReview(
   requirements: PPDRequirementInput[],
@@ -1946,7 +1964,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     for (const [bi, batch] of batches.entries()) {
       if (stopRequested()) { stoppedEarly = true; break; }
       opts.onProgress?.(`PPD requirements review — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
-      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((r) => r.ref) });
+      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((r) => r.ref), chunkIds: chunkIdsInWindow(win.text) });
       const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText}`).join("\n");
       const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess PPD documentation for each GD4 requirement line:\n${pointsBlock}`;
       const system = buildSystem(windows.length > 1 ? `runPPDRequirementsReview (window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview");
@@ -1971,7 +1989,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           const label = windows.length > 1 ? `PPD window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD batch ${bi + 1}/${batches.length}`;
           windowErrors.push(`${label} returned no parseable verdicts — the AI reply was empty or not valid JSON.`);
           console.error("[PPDRequirementsReview]", label, "no parseable results");
-          opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref) });
+          opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no verdicts could be parsed from it." });
           continue;
         }
         const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
@@ -2080,7 +2098,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         const label = windows.length > 1 ? `PPD window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD batch ${bi + 1}/${batches.length}`;
         windowErrors.push(`${label} failed — ${msg}`);
         console.error("[PPDRequirementsReview]", label, msg);
-        opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref) });
+        opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg });
       }
     }
     if (stoppedEarly) break;
@@ -2283,9 +2301,12 @@ const EVIDENCE_VERDICT_ORDER: Record<EvidenceVerdict, number> = { "Not assessed"
 // UI can show a detailed activity view. Emitting them changes no assessment
 // behaviour — they mirror the window/batch loop the run already performs.
 export type EvidenceRunEvent =
-  | { type: "window-start"; window: { current: number; total: number }; refs: string[]; firstLine: number; lastLine: number }
+  // chunkIds: the chunk IDs this window's text actually contains, so the
+  // caller can resolve which source files the in-flight call covers.
+  | { type: "window-start"; window: { current: number; total: number }; refs: string[]; firstLine: number; lastLine: number; chunkIds: string[] }
   | { type: "batch-done"; verdicts: { ref: string; verdict: EvidenceVerdict }[]; usage?: AIUsage }
-  | { type: "batch-failed"; refs: string[] };
+  // error: the real failure reason (exception message) — never just "it failed".
+  | { type: "batch-failed"; refs: string[]; error: string };
 
 export async function runEvidenceAssessment(
   inputs: EvidenceAssessmentInput[],
@@ -2396,7 +2417,7 @@ Respond with JSON only:
       const lineLabel = inputs.length === 1 ? "line 1 of 1" : `lines ${firstLine}–${lastLine} of ${inputs.length}`;
       const winLabel = windows.length > 1 ? ` · window ${win.index + 1}/${win.total}` : "";
       opts.onProgress?.(`Assessing ${lineLabel}${winLabel}…`, Math.round((unitsDone / totalUnits) * 100));
-      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((b) => b.ref), firstLine, lastLine });
+      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((b) => b.ref), firstLine, lastLine, chunkIds: chunkIdsInWindow(win.text) });
       const pointsBlock = batch.map((r, i) => {
         const promisesBlock = (r.promises ?? []).length > 0
           ? `\n  PPD promises to verify:${(r.promises ?? []).map((p, pi) => `\n    (${pi + 1}) ${p.promiseText}`).join("")}`
@@ -2498,9 +2519,10 @@ Respond with JSON only:
         if (stopRequested()) { stoppedEarly = true; break; }
         // Mark the batch's lines as failed and CONTINUE — one stuck/timed-out
         // call must not abort the rest of the assessment.
+        const msg = err instanceof Error ? err.message : String(err);
         for (const inp of batch) if (!bestByRef.has(inp.ref)) failedRefs.add(inp.ref);
-        opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref) });
-        console.error("[EvidenceAssessment]", windows.length > 1 ? `window ${win.index + 1}/${win.total}` : "call failed", err instanceof Error ? err.message : String(err));
+        opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: msg });
+        console.error("[EvidenceAssessment]", windows.length > 1 ? `window ${win.index + 1}/${win.total}` : "call failed", msg);
       }
       unitsDone++;
     }

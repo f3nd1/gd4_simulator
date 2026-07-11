@@ -571,7 +571,13 @@ export type WorkspaceState = {
   // audit's stored per-checklist-line results (matched by GD4 requirement
   // ref) — no AI calls. Returns true if any audited line was found.
   deriveEvidenceAssessmentFromAudit: (subCriterionId: string) => boolean;
-  runEvidenceAssessment: (subCriterionId: string) => Promise<void>;
+  // retryRefs: when set, re-assesses ONLY these requirement-line refs — the
+  // rest of the stored result is left completely untouched (not silently
+  // overwritten). Always re-reads/re-sends the FULL evidence file set
+  // regardless of which refs are retried (never a per-file subset — a line's
+  // verdict depends on ALL its cited evidence together). Omit for a normal
+  // full run.
+  runEvidenceAssessment: (subCriterionId: string, retryRefs?: string[]) => Promise<void>;
   // Metadata-only Drive listing (no file content read, no AI) compared
   // against the stored assessment's fileLedger — lets the Evidence tab warn
   // "evidence has changed since this result" before the user acts on a
@@ -1200,6 +1206,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             let readErrored = false;
             let readMethodUsed: "text" | "vision" = cached?.readMethod ?? "text";
             let skipNote: string | undefined;
+            let readErrorMsg = "";
             if (cached) {
               body = cached.text;
             } else {
@@ -1221,17 +1228,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   const text = body;
                   set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: readMethodUsed } } }));
                 }
-              } catch {
+              } catch (err) {
                 body = null;
                 readErrored = true;
                 readFailedFiles.push(file.path.split("/").pop() || file.path);
+                readErrorMsg = err instanceof Error ? err.message : String(err);
               }
             }
             const fileName = readFileName;
             if (!body) {
               fileRecords[fi] = { ...fileRecords[fi], readStatus: readErrored ? "failed" : "skipped", auditStatus: "pending", charCount: 0, readMethod: readMethodUsed, ...(readErrored ? { failReason: "Drive read error" } : { skipReason: skipNote ?? "No extractable text" }) };
-              patchPpd({ filesFound: [...fileRecords] });
-              logPpd(readErrored ? `FAILED to read ${fileName} (Drive error)` : `Skipped ${fileName} (empty)`, readErrored ? "bad" : "warn");
+              patchPpd({ filesFound: [...fileRecords], ...(readErrored ? { lastIssue: { at: Date.now(), kind: "file-read-error" as const, message: `Failed to read ${fileName}: ${readErrorMsg}` } } : {}) });
+              logPpd(readErrored ? `FAILED to read ${fileName} (Drive error: ${readErrorMsg})` : `Skipped ${fileName} (empty)`, readErrored ? "bad" : "warn");
               continue;
             }
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
@@ -1276,7 +1284,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (ev.type === "window-start") {
                 const ls = { ...(curPpd().lineStatus ?? {}) };
                 for (const r of ev.refs) if (ls[r] !== "done") ls[r] = "assessing";
-                patchPpd({ window: ev.window, lineStatus: ls });
+                // Resolve this window's chunk IDs back to source file names via
+                // the SAME chunkFileNames map built during the read loop above,
+                // so the live view shows which specific file(s) the in-flight
+                // call is using, not just which lines.
+                const files = [...new Set(ev.chunkIds.map((c) => chunkFileNames[c]).filter((n): n is string => !!n))];
+                patchPpd({ window: ev.window, lineStatus: ls, currentWindowFiles: files });
                 logPpd(`Assessing window ${ev.window.current}/${ev.window.total} (${ev.refs.length} line${ev.refs.length === 1 ? "" : "s"})…`);
               } else if (ev.type === "batch-done") {
                 const cur = curPpd();
@@ -1286,7 +1299,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 patchPpd({ lineStatus: ls, lineVerdict: lv });
                 for (const v of ev.verdicts) logPpd(`Assessed ${v.ref} → ${v.verdict}`, v.verdict === "Adequate" ? "good" : v.verdict === "Not documented" ? "bad" : "warn");
               } else if (ev.type === "batch-failed") {
-                logPpd(`Batch failed for ${ev.refs.join(", ")} — will retry in a later window`, "bad");
+                logPpd(`Batch failed for ${ev.refs.join(", ")} — will retry in a later window: ${ev.error}`, "bad");
+                patchPpd({ lastIssue: { at: Date.now(), kind: "call-error", message: ev.error } });
               }
             },
             // Cancel support: cancelBusy() clears busy and aborts the signal.
@@ -1400,7 +1414,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // already-decided PPD verdict per requirement line (no policy re-read),
       // reads the Actual Evidence folder, and produces a combined verdict per
       // line, with live progress and per-line failure isolation.
-      runEvidenceAssessment: async (subCriterionId) => {
+      runEvidenceAssessment: async (subCriterionId, retryRefs) => {
         const s = get();
         const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
         if (!folder) return;
@@ -1408,6 +1422,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const auditorGate = checkAuditorForRun(s.auditors, s.activeAuditorId);
         if (!auditorGate.ok) { set({ auditBlockedReason: auditorGate.message }); return; }
         const ppd = s.ppdReviewResults[subCriterionId];
+        // Scoped retry: assess ONLY these refs; every other ref's stored row is
+        // carried through untouched (see the rows-merge below) — never silently
+        // overwritten by a run it wasn't part of.
+        const isRetry = !!retryRefs && retryRefs.length > 0;
+        const retrySet = new Set(retryRefs ?? []);
+        const priorRowsByRef = new Map((s.evidenceAssessments[subCriterionId]?.rows ?? []).map((r) => [r.gdRef, r]));
         set({ busy: "evidenceassess" + subCriterionId, auditBlockedReason: null });
         const runId = `EV-${subCriterionId}-${Date.now().toString(36).toUpperCase()}`;
         // Run-level abort — cancelBusy() kills the in-flight AI call.
@@ -1524,13 +1544,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set({ driveBlockedReason: null });
           if (!token || !evidenceId) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; } // should be unreachable past the guard; never strand busy
 
-          const lineRefs = ppd.rows.map((r) => r.ref);
+          // On a retry, only the retried lines are in scope for the AI call and
+          // the live progress view — every other line's row is carried through
+          // untouched from the stored result (see the rows-merge below).
+          const targetPpdRows = isRetry ? ppd.rows.filter((r) => retrySet.has(r.ref)) : ppd.rows;
+          const lineRefs = targetPpdRows.map((r) => r.ref);
           patchEv({
-            stage: "reading", startedAt: Date.now(), pct: 3, detail: "Reading the Actual Evidence folder…",
+            stage: "reading", startedAt: Date.now(), pct: 3,
+            detail: isRetry ? `Retrying ${lineRefs.length} line${lineRefs.length === 1 ? "" : "s"} — reading the Actual Evidence folder…` : "Reading the Actual Evidence folder…",
             lineRefs, lineStatus: Object.fromEntries(lineRefs.map((r) => [r, "waiting" as const])),
             lineVerdict: {}, filesRead: [], log: [], ai: { calls: 0, totalTokens: 0 },
           });
-          logEv("Listing the Actual Evidence folder…");
+          logEv(isRetry ? `Retrying ${lineRefs.length} line${lineRefs.length === 1 ? "" : "s"}: ${lineRefs.join(", ")} — the complete evidence file set is re-read/re-sent, not a subset.` : "Listing the Actual Evidence folder…");
           const allFiles = await listFolderFilesRecursive(evidenceId, token, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS));
           // Dedicated evidence folder -> all files are evidence; shared
           // single-folder convention -> keep only the "Actual Evidence" bucket.
@@ -1587,6 +1612,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             let readMethod: "text" | "vision" | undefined;
             let pdfQuality: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" } | undefined;
             let skipNote: string | undefined;
+            let readErrorMsg = "";
             // Manual skip: races the real read against a never-resolving promise
             // that ONLY settles when the user clicks Skip (skipCurrentFile()),
             // mirroring the exact pattern used for the mid-run token-refresh
@@ -1629,10 +1655,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                     set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: readFileName, filePath: file.path, cachedAt: Date.now(), readMethod: raced.readMethod, ...(raced.pdfQuality ? { pdfQuality: raced.pdfQuality } : {}) } } }));
                   }
                 }
-              } catch {
+              } catch (err) {
                 _currentFileAbort = null;
                 body = null;
                 readFailedFiles.push(readFileName);
+                readErrorMsg = err instanceof Error ? err.message : String(err);
               }
             }
             if (!body) {
@@ -1642,8 +1669,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 ...(readMethod ? { readMethod } : {}), ...(pdfQuality ?? {}),
                 ...(failed ? { failReason: "Drive read error — file not assessed." } : { skipReason: skipNote ?? "No extractable text (empty or unreadable)." }),
               };
-              patchEv({ filesFound: [...fileRecords] });
-              logEv(failed ? `FAILED to read ${readFileName} (Drive error) — not assessed` : `Skipped ${readFileName}${skipNote === "Skipped by user" ? " (by user)" : " (empty)"}`, failed ? "bad" : "warn");
+              patchEv({ filesFound: [...fileRecords], ...(failed ? { lastIssue: { at: Date.now(), kind: "file-read-error" as const, message: `Failed to read ${readFileName}: ${readErrorMsg}` } } : {}) });
+              logEv(failed ? `FAILED to read ${readFileName} (Drive error: ${readErrorMsg}) — not assessed` : `Skipped ${readFileName}${skipNote === "Skipped by user" ? " (by user)" : " (empty)"}`, failed ? "bad" : "warn");
               continue;
             }
             filesReadCount++;
@@ -1695,7 +1722,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             checklistData, get().preAnalysisChecks, subCriterionId, ppd.rows.map((r) => r.gd4ItemId), detectFiles
           );
 
-          const inputs: EvidenceAssessmentInput[] = ppd.rows.map((r) => ({
+          const inputs: EvidenceAssessmentInput[] = targetPpdRows.map((r) => ({
             ref: r.ref,
             requirementText: r.requirementText,
             ppdVerdict: r.verdict,
@@ -1719,7 +1746,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (ev.type === "window-start") {
                 const ls = { ...(curEv().lineStatus ?? {}) };
                 for (const r of ev.refs) if (ls[r] !== "done") ls[r] = "assessing";
-                patchEv({ stage: "assessing", window: ev.window, lineStatus: ls });
+                // Resolve this window's chunk IDs back to source file names via
+                // the SAME chunkFileNames map built during the read loop above,
+                // so the live view shows which specific file(s) the in-flight
+                // call is using, not just which lines.
+                const files = [...new Set(ev.chunkIds.map((c) => chunkFileNames[c]).filter((n): n is string => !!n))];
+                patchEv({ stage: "assessing", window: ev.window, lineStatus: ls, currentWindowFiles: files });
                 logEv(`Assessing lines ${ev.firstLine}–${ev.lastLine}${ev.window.total > 1 ? ` · window ${ev.window.current}/${ev.window.total}` : ""}…`);
               } else if (ev.type === "batch-done") {
                 const cur = curEv();
@@ -1732,7 +1764,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 for (const v of ev.verdicts) logEv(`Assessed ${v.ref} → ${v.verdict}`, v.verdict === "Met" ? "good" : v.verdict === "Not met" ? "bad" : "warn");
                 if (ev.usage) logEv(`AI call done — ${ev.usage.model}, ${ev.usage.totalTokens.toLocaleString()} tokens so far`);
               } else if (ev.type === "batch-failed") {
-                logEv(`Batch failed for ${ev.refs.join(", ")} — will retry in a later window`, "bad");
+                logEv(`Batch failed for ${ev.refs.join(", ")} — will retry in a later window: ${ev.error}`, "bad");
+                patchEv({ lastIssue: { at: Date.now(), kind: "call-error", message: ev.error } });
               }
             },
             shouldStop: () => get().busy !== "evidenceassess" + subCriterionId,
@@ -1744,6 +1777,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Merge AI line results with the reused PPD data + resolved file refs.
           const byRef = new Map(result.rows.map((r) => [r.ref, r]));
           const rows: EvidenceAssessmentRow[] = ppd.rows.map((p) => {
+            // Scoped retry: a ref NOT in this retry carries its EXISTING stored
+            // row through completely unchanged — it was never part of this
+            // call, so it must never be silently overwritten by a fresh
+            // (possibly blank) default. Only reachable when isRetry; a normal
+            // full run always has retrySet empty and falls through below.
+            if (isRetry && !retrySet.has(p.ref)) {
+              const prior = priorRowsByRef.get(p.ref);
+              if (prior) return prior;
+            }
             const ev = byRef.get(p.ref);
             const chunkIds = ev?.chunkIds ?? [];
             // Dedupe file refs by name across the row's cited chunks.

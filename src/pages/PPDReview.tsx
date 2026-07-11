@@ -25,7 +25,7 @@ import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../l
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import { ppdVerdictTone, ppdVerdictBorderColor, evVerdictTone, evVerdictBorderColor } from "../lib/verdictTone";
 import { excerptAround } from "../components/ui/quoteMatch";
-import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, EvidenceLineRunStatus, EvidenceRunLogLine, PPDReviewRow } from "../types";
+import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, EvidenceLineRunStatus, EvidenceRunLogLine, PPDReviewRow, EvidenceRunIssue } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
 //   • PPD Review — policy only, one row per GD4 requirement line (3 columns).
@@ -747,11 +747,19 @@ type RunDetailColumnsProps = {
   filesTotal?: number;
   isReadingStage: boolean;
   currentFile?: string;
+  // Source file(s) the CURRENT in-flight assessment AI call's window covers —
+  // distinct from currentFile, which is only set during the earlier reading
+  // stage. Undefined until the first "assessing" window starts.
+  currentWindowFiles?: string[];
   canSkipCurrentFile?: boolean;
   onSkipFile?: () => void;
   ai?: { calls: number; model?: string; totalTokens: number };
   log: EvidenceRunLogLine[];
   onCancel: () => void;
+  // Most recent call/file-read failure, if any — shown alongside the "no
+  // activity" stall message so a stall reads as an explicit reason (error)
+  // rather than only ever "still working".
+  lastIssue?: EvidenceRunIssue;
 };
 
 function RunDetailColumns(p: RunDetailColumnsProps) {
@@ -765,6 +773,10 @@ function RunDetailColumns(p: RunDetailColumnsProps) {
   const elapsedLabel = elapsedS >= 60 ? `${Math.floor(elapsedS / 60)}m ${elapsedS % 60}s` : `${elapsedS}s`;
   const sinceBeatS = p.heartbeatAt ? Math.floor((Date.now() - p.heartbeatAt) / 1000) : 0;
   const doneLines = p.lineRefs.filter((r) => p.lineStatus?.[r] === "done").length;
+  // Lines the CURRENT in-flight AI call's window is assessing — the "5/5
+  // files read"/"7/7 lines done" chips below show cumulative totals only;
+  // this is the missing "which one is active right now" view.
+  const activeLines = p.lineRefs.filter((r) => p.lineStatus?.[r] === "assessing");
 
   const R = 26, CIRC = 2 * Math.PI * R;
   const chip = (label: string, value: string, tone: { fg: string; bg: string }) => (
@@ -790,8 +802,32 @@ function RunDetailColumns(p: RunDetailColumnsProps) {
           </div>
           <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 2 }}>
             {p.detail} · {doneLines}/{p.lineRefs.length} lines · elapsed {elapsedLabel}
-            {sinceBeatS > 12 && <span style={{ color: "#92600a", fontWeight: 700 }}> · no activity {sinceBeatS}s (still working, a window can be slow)</span>}
+            {sinceBeatS > 12 && (
+              <span style={{ color: "#92600a", fontWeight: 700 }}>
+                {" "}· no activity {sinceBeatS}s
+                {p.lastIssue
+                  ? ` (${p.lastIssue.kind === "call-error" ? "most recent AI call issue" : "most recent file-read issue"}: ${p.lastIssue.message})`
+                  : " (still working, a window can be slow)"}
+              </span>
+            )}
           </div>
+          {/* Currently processing — which line(s) and which specific file(s)
+              the ACTIVE call is using, not just cumulative totals. Reading
+              stage: currentFile. Assessing stage: the batch's lines + the
+              window's resolved source files. */}
+          {p.isReadingStage && p.currentFile && (
+            <div style={{ fontSize: 11, color: "#3730a3", marginTop: 3 }}>
+              Currently reading: <span style={{ fontFamily: "ui-monospace,monospace" }}>{p.currentFile}</span>
+            </div>
+          )}
+          {!p.isReadingStage && activeLines.length > 0 && (
+            <div style={{ fontSize: 11, color: "#3730a3", marginTop: 3 }}>
+              Currently processing: <span style={{ fontFamily: "ui-monospace,monospace" }}>{activeLines.join(", ")}</span>
+              {p.currentWindowFiles && p.currentWindowFiles.length > 0 && (
+                <> · using <span style={{ fontFamily: "ui-monospace,monospace" }}>{p.currentWindowFiles.join(", ")}</span></>
+              )}
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button onClick={() => setOpen((o) => !o)} style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: "1px solid #c7d2fe", background: "#fff", color: "#4338ca" }}>
@@ -888,11 +924,13 @@ function EvidenceRunPanel({ progress: p, onCancel, onSkipFile }: { progress: Evi
       filesTotal={p?.filesTotal}
       isReadingStage={p?.stage === "reading"}
       currentFile={p?.currentFile}
+      currentWindowFiles={p?.currentWindowFiles}
       canSkipCurrentFile={p?.canSkipCurrentFile}
       onSkipFile={onSkipFile}
       ai={p?.ai}
       log={p?.log ?? []}
       onCancel={onCancel}
+      lastIssue={p?.lastIssue}
     />
   );
 }
@@ -921,9 +959,11 @@ function PpdRunPanel({ progress: p, onCancel }: { progress: PPDReviewProgress | 
       filesTotal={p?.filesTotal}
       isReadingStage={p?.stage === "reading"}
       currentFile={p?.currentFile}
+      currentWindowFiles={p?.currentWindowFiles}
       ai={p?.ai}
       log={p?.log ?? []}
       onCancel={onCancel}
+      lastIssue={p?.lastIssue}
     />
   );
 }
@@ -1238,6 +1278,13 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
   // Mirrors compileEvidenceFindings' exclusions: already-saved, failed, and
   // "Not assessed" rows raise nothing, so they don't count as compilable.
   const compilable = assessment ? assessment.rows.filter((r) => !r.savedFindingId && !r.assessmentFailed && r.verdict !== "Not assessed").length : 0;
+  // Lines whose AI call failed/timed out and never recovered — see
+  // assessmentFailed's doc comment. Retry re-submits ONLY these refs, but
+  // still against the FULL evidence file set (runEvidenceAssessment always
+  // re-reads/re-sends every cited file, never a per-file subset — a line's
+  // verdict depends on all its evidence together, so a narrower retry would
+  // be unsafe). Every other line's stored row is left completely untouched.
+  const failedGdRefs = assessment ? assessment.rows.filter((r) => r.assessmentFailed).map((r) => r.gdRef) : [];
 
   function handleCompile() {
     const n = compileEvidenceFindings(selectedId);
@@ -1310,6 +1357,34 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
           Findings register →
         </Link>
       </div>
+
+      {/* Retry — shown once the run has ended (successfully or not) if any
+          line's AI call failed. Re-submits ONLY the failed line(s), always
+          against the complete evidence file set (never a per-file subset —
+          see failedGdRefs above); every other line's stored verdict is left
+          untouched, not silently overwritten. Token counter: this is a fresh
+          runEvidenceAssessment call, so its live "tokens" chip starts at 0
+          and counts only the retry's own AI calls, not the original run's —
+          each run/retry's usage is logged as its own separate AI Review Log
+          entry, never summed into one running total. File reads for lines
+          already read successfully hit the in-memory fileTextCache (shared
+          with Option B), so only genuinely-unread/failed files are re-fetched
+          from Drive — see the caching investigation in this task's report. */}
+      {!isRunning && failedGdRefs.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8, padding: "9px 12px", background: "#fff5f5", border: "1px solid #fca5a5", borderRadius: 8 }}>
+          <span style={{ fontSize: 12.5, color: "#b23121", fontWeight: 600 }}>
+            ⚠ {failedGdRefs.length} line{failedGdRefs.length === 1 ? "" : "s"} failed to assess: <span style={{ fontFamily: "ui-monospace,monospace", fontWeight: 400 }}>{failedGdRefs.join(", ")}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => { setCompileMsg(null); runEvidenceAssessment(selectedId, failedGdRefs); }}
+            title="Re-assesses only these line(s), against the complete evidence file set — every other line's verdict is left untouched"
+            style={{ marginLeft: "auto", cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #b23121", background: "#fff", color: "#b23121", whiteSpace: "nowrap" }}
+          >
+            Retry {failedGdRefs.length} failed line{failedGdRefs.length === 1 ? "" : "s"}
+          </button>
+        </div>
+      )}
 
       {/* Step-by-step view (consistent with the staged audit modal) sits above
           the detailed live-activity panel below, which keeps the full blow-by-

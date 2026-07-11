@@ -296,6 +296,83 @@ The Internal Audit Unit issues a report to the Board within 10 working days.`;
   });
 });
 
+describe("live-run visibility: window-start carries chunk IDs, batch-failed carries a real error (stall diagnosis)", () => {
+  it("PPD: window-start.chunkIds names the chunk(s) actually in this window's text", async () => {
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{ ref: "1.1.1.DS1", subClauses: [], verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }],
+      });
+    });
+    const events: unknown[] = [];
+    await runPPDRequirementsReview(
+      [{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }],
+      `[CHUNK:C001] --- hr.docx ---\nThe HR Manager reviews staffing quarterly.`,
+      SETTINGS, { onEvent: (ev) => events.push(ev) }
+    );
+    const windowStart = events.find((e) => (e as { type: string }).type === "window-start") as { chunkIds: string[] };
+    expect(windowStart.chunkIds).toEqual(["C001"]);
+  });
+
+  it("PPD: batch-failed carries the real exception message, not a generic label", async () => {
+    mockChat.mockImplementation(async () => { throw new Error("rate limit exceeded (429)"); });
+    const events: unknown[] = [];
+    await runPPDRequirementsReview(
+      [{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }],
+      `[CHUNK:C001] --- hr.docx ---\nThe HR Manager reviews staffing quarterly.`,
+      SETTINGS, { onEvent: (ev) => events.push(ev) }
+    );
+    const failed = events.find((e) => (e as { type: string }).type === "batch-failed") as { error: string };
+    expect(failed.error).toContain("rate limit exceeded (429)");
+  });
+
+  it("PPD: batch-failed carries an honest reason when the reply parses but has no verdicts (not a generic label either)", async () => {
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return "not valid json";
+    });
+    const events: unknown[] = [];
+    await runPPDRequirementsReview(
+      [{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }],
+      `[CHUNK:C001] --- hr.docx ---\nThe HR Manager reviews staffing quarterly.`,
+      SETTINGS, { onEvent: (ev) => events.push(ev) }
+    );
+    const failed = events.find((e) => (e as { type: string }).type === "batch-failed") as { error: string };
+    expect(failed.error.length).toBeGreaterThan(0);
+    expect(failed.error).not.toBe("");
+  });
+
+  it("Evidence: window-start.chunkIds names the chunk(s) actually in this window's text", async () => {
+    mockChat.mockImplementation(async () => JSON.stringify({
+      results: [{ ref: "4.4.1.DS1", evidenceSummary: "x", verdict: "Met", comment: "x", promiseChecks: [], chunkIds: ["C001"] }],
+    }));
+    const events: unknown[] = [];
+    await runEvidenceAssessment(
+      [{ ref: "4.4.1.DS1", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [] }],
+      `[CHUNK:C001] --- refund-register.xlsx ---\nRefund log 2025: request 12 Jan, paid 15 Jan.`,
+      SETTINGS, { onEvent: (ev) => events.push(ev) }
+    );
+    const windowStart = events.find((e) => (e as { type: string }).type === "window-start") as { chunkIds: string[] };
+    expect(windowStart.chunkIds).toEqual(["C001"]);
+  });
+
+  it("Evidence: batch-failed carries the real exception message, not a generic label", async () => {
+    mockChat.mockImplementation(async () => { throw new Error("request timed out after 90000ms"); });
+    const events: unknown[] = [];
+    await runEvidenceAssessment(
+      [{ ref: "4.4.1.DS1", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [] }],
+      `[CHUNK:C001] --- refund-register.xlsx ---\nRefund log 2025: request 12 Jan, paid 15 Jan.`,
+      SETTINGS, { onEvent: (ev) => events.push(ev) }
+    );
+    const failed = events.find((e) => (e as { type: string }).type === "batch-failed") as { error: string };
+    expect(failed.error).toContain("request timed out after 90000ms");
+  });
+});
+
 describe("rationale placeholder honesty (a real verdict must never claim 'no verdict returned')", () => {
   const HR_SOURCE = `[CHUNK:C001] --- hr.docx ---
 The HR Manager reviews staffing quarterly.`;

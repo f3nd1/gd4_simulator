@@ -984,6 +984,16 @@ export type EvidenceLineRunStatus = "waiting" | "assessing" | "done";
 // One entry in the live activity log surfaced in the detailed progress panel.
 export type EvidenceRunLogLine = { at: number; text: string; tone?: "info" | "good" | "warn" | "bad" };
 
+// The most recent thing that went wrong during a live PPD/Evidence run —
+// surfaced alongside the "no activity Ns" stall message so a stall reads as
+// "still working" (genuinely no issue yet), "a call errored" (kind:
+// call-error, the real exception/timeout/malformed-response message), or "a
+// file read failed" (kind: file-read-error) instead of one generic message
+// for all three. Never cleared mid-run (kept as the latest-known issue, not
+// asserted as necessarily the CURRENT stall's cause) so it survives even if
+// the run then moves on to a new window before finishing.
+export type EvidenceRunIssue = { at: number; kind: "call-error" | "file-read-error"; message: string };
+
 export type EvidenceAssessmentProgress = {
   subCriterionId: string;
   pct: number;      // 0–100
@@ -1008,11 +1018,17 @@ export type EvidenceAssessmentProgress = {
   // Skip control instead of only the automatic per-file timeout.
   canSkipCurrentFile?: boolean;
   currentFile?: string;    // file being read right now
+  // Source file names the CURRENT in-flight assessment AI call's window
+  // covers (resolved from its chunk IDs), so the live view can show WHICH
+  // evidence file(s) — not just which requirement lines — the active call is
+  // using. Set at "assessing" stage only; undefined while reading.
+  currentWindowFiles?: string[];
   lineRefs?: string[];     // all requirement-line refs, in order
   lineStatus?: Record<string, EvidenceLineRunStatus>;
   lineVerdict?: Record<string, string>; // ref → last verdict once assessed
   log?: EvidenceRunLogLine[];           // running activity log, newest last
   ai?: { calls: number; model?: string; totalTokens: number }; // live AI usage
+  lastIssue?: EvidenceRunIssue; // most recent call/file-read failure, if any
 };
 
 // Same shape and intent as EvidenceAssessmentProgress, for the PPD tab's live
@@ -1031,11 +1047,13 @@ export type PPDReviewProgress = {
   filesFound?: AuditFileRecord[];
   canSkipCurrentFile?: boolean;
   currentFile?: string;
+  currentWindowFiles?: string[];
   lineRefs?: string[];
   lineStatus?: Record<string, EvidenceLineRunStatus>;
   lineVerdict?: Record<string, string>;
   log?: EvidenceRunLogLine[];
   ai?: { calls: number; model?: string; totalTokens: number };
+  lastIssue?: EvidenceRunIssue;
 };
 
 // ─── Change Log ─────────────────────────────────────────────────────────────
