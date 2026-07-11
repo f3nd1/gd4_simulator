@@ -178,3 +178,18 @@ textarea:focus {
     margin-top: 2px;
   }
 }
+
+/* Option A live-run detail (EvidenceRunPanel, PPDReview.tsx): Requirement
+   lines / File ledger / Live activity log side by side on desktop, stacking
+   in that same order on narrow widths. File ledger gets extra share (its
+   table content needs more room); a wider breakpoint than .ef-card-cols'
+   720px since three columns get cramped sooner than two. */
+.option-a-run-cols {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(300px, 1.3fr) minmax(220px, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .option-a-run-cols { grid-template-columns: 1fr; }
+}

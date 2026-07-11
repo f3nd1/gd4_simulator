@@ -699,48 +699,54 @@ function EvidenceRunPanel({ progress, onCancel, onSkipFile }: { progress: Eviden
             {p?.ai?.model && chip("model", p.ai.model, TONE.neutral)}
           </div>
 
-          {/* Per-line status */}
-          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 5 }}>Requirement lines</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
-              {lineRefs.length === 0 ? <div style={{ fontSize: 12, color: "#94a3b8" }}>Preparing…</div> : lineRefs.map((r) => {
-                const st = p?.lineStatus?.[r];
-                const tone = lineTone(st);
-                const v = p?.lineVerdict?.[r];
-                return (
-                  <div key={r} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11.5 }}>
-                    <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: tone.fg, flexShrink: 0, opacity: st === "waiting" || !st ? 0.4 : 1 }} />
-                    <span style={{ fontFamily: "ui-monospace,monospace", fontWeight: 700, color: tone.fg }}>{r}</span>
-                    <span style={{ color: tone.fg, opacity: 0.85 }}>{st === "done" ? (v ?? "done") : st === "assessing" ? "assessing…" : "waiting"}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Files read — the same expandable file ledger (filter tabs, search,
-              Drive links, expand-to-view-extracted-text, amber "reading now" row,
-              working Skip button) the staged/full-audit progress modal uses —
-              reused verbatim, not a second file-list UI. filesFound is populated
-              upfront with every file in scope ("found"/pending), so the full set
-              is visible immediately rather than growing one row at a time. */}
-          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
-            <FileLedger
-              files={p?.filesFound ?? []}
-              isActive={p?.stage === "reading"}
-              progress={{ currentFileName: p?.stage === "reading" ? p?.currentFile : undefined }}
-              onSkipFile={p?.canSkipCurrentFile ? onSkipFile : undefined}
-            />
-          </div>
-
-          {/* Live log — newest at the bottom */}
-          <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 11px", maxHeight: 160, overflowY: "auto" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Live activity log</div>
-            {log.length === 0 ? <div style={{ fontSize: 11.5, color: "#64748b" }}>Waiting for activity…</div> : log.map((l, i) => (
-              <div key={i} style={{ fontSize: 11.5, fontFamily: "ui-monospace,monospace", color: l.tone ? LOG_TONE[l.tone] : "#cbd5e1", lineHeight: 1.6 }}>
-                <span style={{ color: "#64748b" }}>{new Date(l.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>{" "}{l.text}
+          {/* Three side-by-side columns on desktop, stacking in the same order
+              (lines → ledger → log) on narrow widths — see .option-a-run-cols
+              in index.css. Layout only: none of the three panels' own logic,
+              data or components changed from directly above. */}
+          <div className="option-a-run-cols">
+            {/* Per-line status */}
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 5 }}>Requirement lines</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 320, overflowY: "auto" }}>
+                {lineRefs.length === 0 ? <div style={{ fontSize: 12, color: "#94a3b8" }}>Preparing…</div> : lineRefs.map((r) => {
+                  const st = p?.lineStatus?.[r];
+                  const tone = lineTone(st);
+                  const v = p?.lineVerdict?.[r];
+                  return (
+                    <div key={r} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11.5 }}>
+                      <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: tone.fg, flexShrink: 0, opacity: st === "waiting" || !st ? 0.4 : 1 }} />
+                      <span style={{ fontFamily: "ui-monospace,monospace", fontWeight: 700, color: tone.fg }}>{r}</span>
+                      <span style={{ color: tone.fg, opacity: 0.85 }}>{st === "done" ? (v ?? "done") : st === "assessing" ? "assessing…" : "waiting"}</span>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            </div>
+
+            {/* Files read — the same expandable file ledger (filter tabs, search,
+                Drive links, expand-to-view-extracted-text, amber "reading now" row,
+                working Skip button) the staged/full-audit progress modal uses —
+                reused verbatim, not a second file-list UI. filesFound is populated
+                upfront with every file in scope ("found"/pending), so the full set
+                is visible immediately rather than growing one row at a time. */}
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
+              <FileLedger
+                files={p?.filesFound ?? []}
+                isActive={p?.stage === "reading"}
+                progress={{ currentFileName: p?.stage === "reading" ? p?.currentFile : undefined }}
+                onSkipFile={p?.canSkipCurrentFile ? onSkipFile : undefined}
+              />
+            </div>
+
+            {/* Live log — newest at the bottom */}
+            <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 11px", maxHeight: 320, overflowY: "auto" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Live activity log</div>
+              {log.length === 0 ? <div style={{ fontSize: 11.5, color: "#64748b" }}>Waiting for activity…</div> : log.map((l, i) => (
+                <div key={i} style={{ fontSize: 11.5, fontFamily: "ui-monospace,monospace", color: l.tone ? LOG_TONE[l.tone] : "#cbd5e1", lineHeight: 1.6 }}>
+                  <span style={{ color: "#64748b" }}>{new Date(l.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>{" "}{l.text}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
