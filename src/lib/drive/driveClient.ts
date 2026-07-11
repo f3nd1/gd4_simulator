@@ -18,6 +18,7 @@ import "./pdfCompat";
 // Safari) actually runs. A plain workerSrc URL can't inject that.
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import PdfjsWorker from "./pdfWorker?worker";
+import { withDeadline } from "../asyncGuards";
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 // Import pure text utilities for use within this module, and re-export so
@@ -156,6 +157,15 @@ export class DriveAuthError extends Error {}
 // re-establish the connection on page load (the access token itself is
 // never persisted, so every reload otherwise starts "disconnected" even
 // though the user already granted access earlier in the same browser).
+// GIS settles ONLY via its callback — and a failed silent request can drop the
+// callback entirely (blocked third-party cookies, dead network, backgrounded
+// tab), leaving the promise unsettleable. A mid-run token refresh awaiting it
+// froze a real 155-file audit for 98 minutes. Silent requests therefore get a
+// hard deadline: a healthy silent refresh completes in ~1–2s, so 20s is 10×
+// margin. Interactive requests are NOT deadlined — the user may legitimately
+// sit in Google's consent popup for minutes.
+const SILENT_AUTH_TIMEOUT_MS = 20_000;
+
 export async function requestDriveAccessToken(
   clientId: string,
   opts: { silent?: boolean } = {}
@@ -164,7 +174,7 @@ export async function requestDriveAccessToken(
   await loadGsiScript();
   if (!window.google?.accounts?.oauth2) throw new DriveAuthError("Google Identity Services failed to load.");
 
-  return new Promise((resolve, reject) => {
+  const tokenPromise = new Promise<{ accessToken: string; expiresInSeconds: number }>((resolve, reject) => {
     const client = window.google!.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: DRIVE_SCOPE,
@@ -178,6 +188,9 @@ export async function requestDriveAccessToken(
     });
     client.requestAccessToken(opts.silent ? { prompt: "none" } : undefined);
   });
+  return opts.silent
+    ? withDeadline(tokenPromise, SILENT_AUTH_TIMEOUT_MS, "Silent Google Drive re-authentication timed out — Google never responded. Reconnect Google Drive and re-run.")
+    : tokenPromise;
 }
 
 // Folder links look like https://drive.google.com/drive/folders/<ID>?... —

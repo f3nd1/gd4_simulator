@@ -3574,7 +3574,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Refresh silently before each uncached read — and HARD-STOP if a
           // fresh token can't be minted, so the run never silently skips the
           // remaining files and scores "no evidence" against unread evidence.
-          const readToken = await useGoogleDriveStore.getState().getFreshToken();
+          // This await sits OUTSIDE the per-file read race below, so it gets
+          // its own honest stage label + Skip wiring: GIS's silent refresh can
+          // stall (bounded by requestDriveAccessToken's 20s watchdog — this
+          // exact spot once froze a real run for 98 minutes, with the UI
+          // blaming the innocent file whose name was already on screen).
+          setProgress("reading", { stageDetail: `Refreshing Google Drive access (before reading ${file.path.split("/").pop() || file.path})…`, lastHeartbeatAt: Date.now() });
+          const TOKEN_WAIT_SKIPPED = Symbol("token-wait-skipped");
+          let skipTokenWait!: () => void;
+          const tokenWaitSkip = new Promise<typeof TOKEN_WAIT_SKIPPED>((resolve) => { skipTokenWait = () => resolve(TOKEN_WAIT_SKIPPED); });
+          _currentFileAbort = skipTokenWait;
+          const tokenResult = await Promise.race([useGoogleDriveStore.getState().getFreshToken(), tokenWaitSkip]);
+          _currentFileAbort = null;
+          if (tokenResult === TOKEN_WAIT_SKIPPED) {
+            skipped.push(file.path);
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: "Skipped by user" };
+            setProgress("reading", { filesFound: [...fileRecords], filesSkipped: skipped.length, lastHeartbeatAt: Date.now() });
+            continue;
+          }
+          const readToken = tokenResult;
           if (!readToken) {
             auditHadError = true;
             finish(DRIVE_EXPIRED_MID_RUN, false, DRIVE_EXPIRED_MID_RUN);
@@ -4762,7 +4780,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
           // See auditFolderContents: refresh the Drive token per uncached read
           // and HARD-STOP when it can't be refreshed (never skip files silently).
-          const readToken = await useGoogleDriveStore.getState().getFreshToken();
+          // Same honest label + Skip wiring as there — this await is outside the
+          // per-file read race, and a stalled GIS silent refresh here is what
+          // froze a real 155-file run for 98 minutes.
+          setProgress("reading", { stageDetail: `Refreshing Google Drive access (before reading ${file.path.split("/").pop() || file.path})…`, lastHeartbeatAt: Date.now() });
+          const TOKEN_WAIT_SKIPPED = Symbol("token-wait-skipped");
+          let skipTokenWait!: () => void;
+          const tokenWaitSkip = new Promise<typeof TOKEN_WAIT_SKIPPED>((resolve) => { skipTokenWait = () => resolve(TOKEN_WAIT_SKIPPED); });
+          _currentFileAbort = skipTokenWait;
+          const tokenResult = await Promise.race([useGoogleDriveStore.getState().getFreshToken(), tokenWaitSkip]);
+          _currentFileAbort = null;
+          if (tokenResult === TOKEN_WAIT_SKIPPED) {
+            skipped.push(file.path);
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: "Skipped by user" };
+            setProgress("reading", { filesFound: [...fileRecords], filesSkipped: skipped.length, lastHeartbeatAt: Date.now() });
+            continue;
+          }
+          const readToken = tokenResult;
           if (!readToken) {
             auditHadError = true;
             finish(DRIVE_EXPIRED_MID_RUN, false, DRIVE_EXPIRED_MID_RUN);

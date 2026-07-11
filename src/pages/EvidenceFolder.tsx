@@ -214,23 +214,29 @@ function DimIcons({ file }: { file: AuditFileRecord }) {
 type FileFilter = "all" | "read" | "cited" | "not_used" | "skipped" | "failed" | "new" | "changed" | "reused";
 type FileSort = "name" | "status" | "type";
 
-function FileRow({ file, isReading, onSkipFile, resolveText }: { file: AuditFileRecord; isReading?: boolean; onSkipFile?: () => void; resolveText?: (f: AuditFileRecord) => string | null | undefined }) {
+function FileRow({ file, isReading, onSkipFile, resolveText, showParent }: { file: AuditFileRecord; isReading?: boolean; onSkipFile?: () => void; resolveText?: (f: AuditFileRecord) => string | null | undefined; showParent?: boolean }) {
   const bucketLabel = file.bucket === "policy" ? "Policy" : file.bucket === "evidence" ? "Evid" : "Auto";
   const bucketColor = file.bucket === "policy" ? "#1d4ed8" : file.bucket === "evidence" ? "#15803d" : "#9ca3af";
   const [open, setOpen] = useState(false);
   // Expandable only for files that were actually read/skipped/failed — a file
   // still being read has nothing to show yet.
   const canExpand = !!resolveText && !isReading && file.readStatus !== "found" && file.readStatus !== "reading";
+  // Parent folder, shown inline when another ledger row shares this file's
+  // name (Drive permits same-name files) so the two are never interchangeable.
+  const parentDir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : "(folder root)";
   return (
     <>
       <div
         onClick={canExpand ? () => setOpen((o) => !o) : undefined}
-        style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderBottom: open ? "none" : "1px solid #f1f5f9", fontSize: 11, background: isReading ? "#fffbeb" : open ? "#fbfcfe" : undefined, cursor: canExpand ? "pointer" : undefined }}
+        style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderBottom: open ? "none" : "1px solid #f1f5f9", fontSize: 11, background: isReading ? "#fef3c7" : open ? "#fbfcfe" : undefined, borderLeft: isReading ? "3px solid #f59e0b" : "3px solid transparent", cursor: canExpand ? "pointer" : undefined }}
       >
-        <span style={{ width: 10, flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{canExpand ? (open ? "▾" : "▸") : ""}</span>
+        <span style={{ width: 10, flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{isReading ? "⏵" : canExpand ? (open ? "▾" : "▸") : ""}</span>
         <span style={{ fontSize: 9, color: bucketColor, background: bucketColor + "18", borderRadius: 3, padding: "1px 4px", flexShrink: 0 }}>{bucketLabel}</span>
-        <span style={{ flex: 1, color: isReading ? "#92400e" : "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: isReading ? 600 : undefined }} title={file.path}>{file.name}</span>
-        {isReading && <span style={{ fontSize: 9, color: "#92400e", flexShrink: 0 }}>reading…</span>}
+        <span style={{ flex: 1, color: isReading ? "#92400e" : "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: isReading ? 700 : undefined }} title={file.path}>
+          {file.name}
+          {showParent && <span style={{ color: "#94a3b8", fontWeight: 400 }}> · in {parentDir}</span>}
+        </span>
+        {isReading && <span style={{ fontSize: 9, color: "#92400e", fontWeight: 700, flexShrink: 0 }}>reading now<Dots /></span>}
         <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.fileKind}</span>
         {file.charCount != null && <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.charCount.toLocaleString()}c</span>}
         {file.suspectedScannedPdf && (
@@ -401,6 +407,15 @@ export function FileLedger({
     ...(totalReused  > 0 ? [{ key: "reused"  as FileFilter, label: "Cached",  count: totalReused }]  : []),
   ];
 
+  // Names appearing more than once in this ledger (Drive permits same-name
+  // files side by side) — those rows get their parent folder shown inline so
+  // two same-named files are never visually interchangeable.
+  const dupNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const f of files) counts.set(f.name, (counts.get(f.name) ?? 0) + 1);
+    return new Set([...counts].filter(([, n]) => n > 1).map(([name]) => name));
+  }, [files]);
+
   const filtered = useMemo(() => {
     let out = files;
     if (filter === "read")     out = out.filter((f) => f.readStatus === "read" || f.readStatus === "condensed");
@@ -492,11 +507,16 @@ export function FileLedger({
       >
         {filtered.map((file) => (
           <FileRow
-            key={file.path}
+            // Google Drive allows two DIFFERENT files with the same name in the
+            // same folder, so `path` is not unique (a real run rendered one file
+            // as seemingly both "reading" and "read"). driveFileId is unique per
+            // file; the bucket suffix covers one file listed in both buckets.
+            key={`${file.driveFileId ?? file.path}::${file.bucket}`}
             file={file}
             isReading={isActive && file.readStatus === "reading"}
             onSkipFile={isActive && file.readStatus === "reading" ? onSkipFile : undefined}
             resolveText={resolveText}
+            showParent={dupNames.has(file.name)}
           />
         ))}
         {filtered.length === 0 && (
