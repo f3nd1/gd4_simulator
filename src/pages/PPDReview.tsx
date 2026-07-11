@@ -23,7 +23,8 @@ import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
-import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, EvidenceLineRunStatus, EvidenceRunLogLine } from "../types";
+import { ppdVerdictTone, ppdVerdictBorderColor, evVerdictTone, evVerdictBorderColor } from "../lib/verdictTone";
+import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, EvidenceLineRunStatus, EvidenceRunLogLine } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
 //   • PPD Review — policy only, one row per GD4 requirement line (3 columns).
@@ -31,22 +32,6 @@ import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, Evid
 //                  for a combined Met/Partial/Not met verdict (4 columns).
 // Findings are compiled from the Evidence tab. The single-column Sub-Criterion
 // Checklist (Option B) is untouched.
-
-function ppdVerdictTone(v: PPDVerdict): "good" | "medium" | "critical" | "neutral" {
-  return v === "Adequate" ? "good" : v === "Partial" ? "medium" : v === "Not assessed" ? "neutral" : "critical";
-}
-
-function ppdVerdictBorderColor(v: PPDVerdict): string {
-  return v === "Adequate" ? "#22c55e" : v === "Partial" ? "#f59e0b" : v === "Not assessed" ? "#94a3b8" : "#ef4444";
-}
-
-function evVerdictTone(v: EvidenceVerdict): "good" | "medium" | "critical" | "neutral" {
-  return v === "Met" ? "good" : v === "Partial" ? "medium" : v === "Not assessed" ? "neutral" : "critical";
-}
-
-function evVerdictBorderColor(v: EvidenceVerdict): string {
-  return v === "Met" ? "#22c55e" : v === "Partial" ? "#f59e0b" : v === "Not assessed" ? "#94a3b8" : "#ef4444";
-}
 
 function overallVerdictTone(v: PPDOverallVerdict): "good" | "medium" | "critical" {
   return v === "PPD Adequate" ? "good" : v === "PPD Partial" ? "medium" : "critical";

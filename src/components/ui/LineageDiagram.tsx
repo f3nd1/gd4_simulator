@@ -3,30 +3,37 @@ import { normalizeAuditRef } from "../../lib/gd4Refs";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
 import { excerptAround } from "./quoteMatch";
-import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, AuditFileRecord, PPDSubClause, PromiseCheck } from "../../types";
+import { Pill } from "./Pill";
+import { ppdVerdictTone, evVerdictTone } from "../../lib/verdictTone";
+import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, AuditFileRecord, PPDSubClause, PromiseCheck, PPDVerdict, EvidenceVerdict } from "../../types";
 
 // Requirement → PPD-clause → Evidence lineage diagram.
 //
 // A read-only visualisation of data ALREADY computed per requirement line by
-// the PPD review / evidence assessment — no recompute, no re-fetch. Each line
-// renders as a horizontal chain of nodes:
-//   (1) the GD4 requirement line   (2) the PPD clause that documents it
-//   (3) the evidence cited for it  (Evidence tab only)
-// A node with no real backing (PPD not documented, or no evidence cited) shows
-// as a visually distinct dashed "gap" node so misses are obvious at a glance.
+// the PPD review / evidence assessment — no recompute, no re-fetch. Every row
+// starts COLLAPSED, showing only the ref, a one-line requirement snippet, and
+// a single status pill carrying the line's own already-computed verdict
+// (PPDReviewRow.verdict on the PPD tab; EvidenceAssessmentRow.verdict — the
+// combined PPD+evidence judgement — on the Evidence tab). Clicking a row
+// expands it INLINE (no modal, one row open at a time) into the cited
+// passages: on the Evidence tab, a PPD column and an Evidence column render
+// side by side (stacking on narrow widths — see .lineage-detail-cols in
+// index.css); on the PPD tab there is only the PPD column. A line with no
+// PPD match at all (and so nothing to line up against) renders a single
+// plain "not addressed" note instead of two columns, one of them empty.
 //
-// Clicking a row expands it INLINE (no modal). Many GD4 requirement lines have
-// several sub-parts (A/B/C/D — the PPD review's STEP 1 sub-clause decomposition
-// on the PPD side; the per-promise checks on the Evidence side), and each
-// sub-part is checked INDEPENDENTLY, with its own verdict and its own exact
-// verbatim quote. The expanded view shows exactly that: one small block PER
-// sub-part, each labelled and showing only the short excerpt around its own
-// quote — never the whole document, and never one quote standing in for the
-// whole line. A sub-part with no located quote is shown as an explicit gap for
-// THAT sub-part, not silently folded into the line's overall verdict. Lines
-// with no sub-part decomposition fall back to the single line-level quote,
-// same excerpt-only treatment. The full extracted document is still reachable
-// via an explicit "View full text" toggle, but it is never the default view.
+// Many GD4 requirement lines have several sub-parts (A/B/C/D — the PPD
+// review's STEP 1 sub-clause decomposition on the PPD side; the per-promise
+// checks on the Evidence side), and each sub-part is checked INDEPENDENTLY,
+// with its own verdict and its own exact verbatim quote. Each expanded column
+// shows exactly that: one small block PER sub-part, each labelled and showing
+// only the short excerpt around its own quote — never the whole document, and
+// never one quote standing in for the whole line. A sub-part with no located
+// quote is shown as an explicit gap for THAT sub-part, not silently folded
+// into the line's overall verdict. Lines with no sub-part decomposition fall
+// back to the single line-level quote, same excerpt-only treatment. The full
+// extracted document is still reachable via an explicit "View full text"
+// toggle per column, but it is never the default view.
 
 type NodeState = "documented" | "gap";
 // One independently-checked sub-part of a requirement line (a PPD sub-clause,
@@ -47,6 +54,11 @@ type LineageLine = {
   reqLabel: string;
   ppd: NodeData;
   evidence?: NodeData;
+  // The line's own already-computed overall verdict (PPDReviewRow.verdict on
+  // the PPD tab, EvidenceAssessmentRow.verdict — the combined PPD+evidence
+  // judgement — on the Evidence tab), reused as-is for the collapsed row's
+  // single status pill. Never recomputed from ppd/evidence gap state.
+  verdictText: PPDVerdict | EvidenceVerdict;
 };
 
 function shorten(s: string, n = 84): string {
@@ -102,6 +114,7 @@ function ppdLineage(ppd: PPDReviewResult): LineageLine[] {
     return {
       ref: r.ref,
       reqLabel: r.requirementText,
+      verdictText: r.verdict,
       ppd: {
         state: documented ? "documented" : "gap",
         label: documented ? `PPD · ${r.verdict}` : "PPD gap",
@@ -128,6 +141,7 @@ function evidenceLineage(ev: EvidenceAssessmentResult, ppd?: PPDReviewResult): L
     return {
       ref: r.gdRef,
       reqLabel: r.requirementText,
+      verdictText: r.verdict,
       ppd: {
         state: documented ? "documented" : "gap",
         label: documented ? `PPD · ${r.ppdVerdict}` : "PPD gap",
@@ -147,30 +161,6 @@ function evidenceLineage(ev: EvidenceAssessmentResult, ppd?: PPDReviewResult): L
       },
     };
   });
-}
-
-const NODE_BASE: React.CSSProperties = {
-  fontSize: 11, borderRadius: 7, padding: "5px 9px", minWidth: 0, boxSizing: "border-box",
-  display: "flex", flexDirection: "column", gap: 1, overflow: "hidden",
-};
-const Arrow = ({ dim }: { dim?: boolean }) => (
-  <span aria-hidden style={{ flexShrink: 0, color: dim ? "#cbd5e1" : "#94a3b8", fontSize: 13, alignSelf: "center" }}>→</span>
-);
-
-function nodeStyle(state: NodeState, kind: "ppd" | "evidence"): React.CSSProperties {
-  if (state === "gap") return { ...NODE_BASE, background: "#fff", border: "1px dashed #fca5a5", color: "#b91c1c" };
-  return kind === "ppd"
-    ? { ...NODE_BASE, background: "#eef2ff", border: "1px solid #c7d2fe", color: "#3730a3" }
-    : { ...NODE_BASE, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#15803d" };
-}
-
-function Node({ data, kind }: { data: NodeData; kind: "ppd" | "evidence" }) {
-  return (
-    <div style={nodeStyle(data.state, kind)} title={`${data.label} — ${data.sub}`}>
-      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.2, opacity: 0.85 }}>{data.label}</span>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{data.sub}</span>
-    </div>
-  );
 }
 
 // Renders EITHER the short excerpt around a located quote, OR an explicit gap
@@ -244,14 +234,20 @@ function PassageBlock({
   const resolved = node.file ? resolveText(node.file) : undefined;
   const text = typeof resolved === "string" ? resolved : undefined;
   const hasParts = !!node.parts && node.parts.length > 0;
+  // node.url is only ever pre-populated on the Evidence side (from the
+  // evidence assessment's EvidenceFileRef); the PPD side only carries the
+  // resolved AuditFileRecord, so build the same Drive link URL the rest of
+  // the app already uses (see FileLedger/PreAnalysisChecklistPanel) from its
+  // driveFileId — same pattern, not a new one.
+  const driveUrl = node.url ?? (node.file?.driveFileId ? `https://drive.google.com/file/d/${node.file.driveFileId}/view` : undefined);
 
   return (
-    <div style={{ marginTop: 8 }}>
+    <div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
         <span style={{ fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.3 }}>{title}</span>
-        {node.state === "documented" && node.sub && <span style={{ fontSize: 11, color: "#64748b" }}>{node.sub}</span>}
-        {node.url && (
-          <a href={node.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ fontSize: 11, color: "#4338ca", textDecoration: "none" }}>Open in Drive ↗</a>
+        {node.state === "documented" && node.sub && <span style={{ fontSize: 11, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{node.sub}</span>}
+        {driveUrl && (
+          <a href={driveUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ fontSize: 11, color: "#4338ca", textDecoration: "none", whiteSpace: "nowrap" }}>Open ↗</a>
         )}
       </div>
       {hasParts ? (
@@ -302,7 +298,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
   if (lines.length === 0) return null;
 
   const gaps = lines.filter((l) => l.ppd.state === "gap" || (l.evidence && l.evidence.state === "gap")).length;
-  const gridCols = mode === "evidence" ? "12px minmax(0,1fr) 14px minmax(0,1fr) 14px minmax(0,1fr)" : "12px minmax(0,1fr) 14px minmax(0,1.3fr)";
+  const lineTone = (l: LineageLine) => mode === "ppd" ? ppdVerdictTone(l.verdictText as PPDVerdict) : evVerdictTone(l.verdictText as EvidenceVerdict);
 
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, background: "#fff", marginBottom: 12, overflow: "hidden" }}>
@@ -313,17 +309,9 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
         <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.3 }}>
           Requirement → PPD{mode === "evidence" ? " → Evidence" : ""} map
         </span>
-        <span style={{ fontSize: 11, color: "#94a3b8" }}>{lines.length} line{lines.length !== 1 ? "s" : ""}{gaps > 0 ? ` · ${gaps} with a gap` : " · all traced"} · click a row to see the cited text</span>
-        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12, fontSize: 10.5, color: "#64748b", flexWrap: "wrap" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 14, height: 10, borderRadius: 3, background: "#eef2ff", border: "1px solid #c7d2fe" }} /> documented
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 14, height: 10, borderRadius: 3, background: "#fff", border: "1px dashed #fca5a5" }} /> gap
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 3px" }}>abc</mark> exact quote
-          </span>
+        <span style={{ fontSize: 11, color: "#94a3b8" }}>{lines.length} line{lines.length !== 1 ? "s" : ""}{gaps > 0 ? ` · ${gaps} with a gap` : " · all traced"} · click a row to expand</span>
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "#64748b" }}>
+          <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 3px" }}>abc</mark> exact quote
         </span>
         <span style={{ color: "#94a3b8", fontSize: 12 }}>{open ? "▲" : "▼"}</span>
       </div>
@@ -332,46 +320,57 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
         <div style={{ maxHeight: 520, overflowY: "auto", padding: "6px 10px 10px" }}>
           {lines.map((line, i) => {
             const isOpen = openRef === line.ref;
+            // Pure gap: no PPD match at all AND no sub-parts to show — nothing
+            // meaningful to line up in two columns, so the expanded view is a
+            // single plain note instead of a PPD column with nothing in it.
+            const pureGap = line.ppd.state === "gap" && !(line.ppd.parts && line.ppd.parts.length > 0);
             return (
               <div key={line.ref + i} style={{ borderTop: i ? "1px solid #f6f7f9" : "none" }}>
-                {/* Clickable node row — toggles the inline passage view. */}
+                {/* Collapsed row (default state): ref + one-line requirement
+                    snippet + a single status pill — no sub-part detail, no
+                    passage boxes. Click toggles the detail view below. */}
                 <div
                   onClick={() => setOpenRef(isOpen ? null : line.ref)}
-                  style={{ display: "grid", gridTemplateColumns: gridCols, alignItems: "stretch", gap: 6, padding: "4px 0", cursor: "pointer" }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", cursor: "pointer" }}
                 >
-                  <span aria-hidden style={{ alignSelf: "center", color: "#94a3b8", fontSize: 10 }}>{isOpen ? "▾" : "▸"}</span>
-                  {/* (1) Requirement node */}
-                  <div style={{ ...NODE_BASE, background: "#f8fafc", border: "1px solid #e2e8f0", color: "#1e293b" }} title={`${line.ref} — ${line.reqLabel}`}>
-                    <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10, fontWeight: 700, color: "#4338ca" }}>{line.ref}</span>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{shorten(line.reqLabel)}</span>
-                  </div>
-                  <Arrow dim={line.ppd.state === "gap"} />
-                  {/* (2) PPD clause node */}
-                  <Node data={line.ppd} kind="ppd" />
-                  {/* (3) Evidence node — Evidence tab only */}
-                  {mode === "evidence" && line.evidence && (
-                    <>
-                      <Arrow dim={line.evidence.state === "gap"} />
-                      <Node data={line.evidence} kind="evidence" />
-                    </>
-                  )}
+                  <span aria-hidden style={{ flexShrink: 0, color: "#94a3b8", fontSize: 10, width: 10, textAlign: "center" }}>{isOpen ? "▾" : "▸"}</span>
+                  <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", fontSize: 10.5, fontWeight: 700, color: "#4338ca" }}>{line.ref}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: "#334155" }} title={line.reqLabel}>
+                    {shorten(line.reqLabel, 100)}
+                  </span>
+                  <Pill s={lineTone(line)}>{line.verdictText}</Pill>
                 </div>
 
-                {/* Inline expand-to-reveal — the cited passages with highlight. */}
+                {/* Inline expand-to-reveal — the cited passages with highlight,
+                    PPD and Evidence side by side (Evidence tab) or PPD alone
+                    (PPD tab). */}
                 {isOpen && (
-                  <div style={{ margin: "2px 0 10px 18px", paddingLeft: 10, borderLeft: "2px solid #e2e8f0" }}>
-                    <PassageBlock
-                      title="PPD passage"
-                      node={line.ppd}
-                      resolveText={resolveText}
-                      emptyText="No PPD passage — this requirement is not documented in the Policy & Procedure Document."
-                    />
-                    {mode === "evidence" && line.evidence && (
+                  <div style={{ margin: "2px 0 10px 18px", paddingLeft: 10, paddingTop: 4, borderLeft: "2px solid #e2e8f0" }}>
+                    {pureGap ? (
+                      <div style={{ fontSize: 11.5, color: "#b91c1c", background: "#fff", border: "1px dashed #fca5a5", borderRadius: 6, padding: "8px 10px", fontStyle: "italic" }}>
+                        Not addressed — no matching PPD clause was found for this requirement{mode === "evidence" ? ", so there is no PPD basis to check evidence against" : ""}.
+                      </div>
+                    ) : mode === "evidence" && line.evidence ? (
+                      <div className="lineage-detail-cols">
+                        <PassageBlock
+                          title="PPD passage"
+                          node={line.ppd}
+                          resolveText={resolveText}
+                          emptyText="No PPD passage — this requirement is not documented in the Policy & Procedure Document."
+                        />
+                        <PassageBlock
+                          title="Evidence passage"
+                          node={line.evidence}
+                          resolveText={resolveText}
+                          emptyText="No evidence found — no implementation record was cited for this requirement."
+                        />
+                      </div>
+                    ) : (
                       <PassageBlock
-                        title="Evidence passage"
-                        node={line.evidence}
+                        title="PPD passage"
+                        node={line.ppd}
                         resolveText={resolveText}
-                        emptyText="No evidence found — no implementation record was cited for this requirement."
+                        emptyText="No PPD passage — this requirement is not documented in the Policy & Procedure Document."
                       />
                     )}
                     <button
