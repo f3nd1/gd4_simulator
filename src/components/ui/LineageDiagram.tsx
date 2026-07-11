@@ -281,6 +281,19 @@ function TextCell({ text, muted, italic }: { text?: string; muted: boolean; ital
   );
 }
 
+// Rationale column. Unlike TextCell's bare "—" (used for genuinely-N/A cells,
+// e.g. a flat gap row's Supporting Passage), an empty rationale here is never
+// "not applicable" — every line's shortComment/comment is meant to carry one.
+// A blank one means the AI genuinely returned none for this line, which is
+// worth saying plainly rather than hiding behind a dash indistinguishable
+// from "nothing to show here".
+function RationaleCell({ text }: { text?: string }) {
+  if (!text) return <span style={{ color: "#94a3b8", fontStyle: "italic" }}>No rationale returned by the AI for this line</span>;
+  return (
+    <span title={text} style={{ fontSize: 11, color: "#475569", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{text}</span>
+  );
+}
+
 function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: ResolveText }) {
   const text = item.sourceFile?.record ? resolveText(item.sourceFile.record) : undefined;
   const quoted = (item.found || item.contradicted) && item.quote;
@@ -520,7 +533,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
                     {isEv
                       ? <TextCell text={line.passagePreview} muted={!line.expandable} italic />
                       : <StackCell items={line.clauses} muted={!line.expandable} more="clause" />}
-                    <TextCell text={line.rowRationale} muted={false} />
+                    <RationaleCell text={line.rowRationale} />
                   </div>
 
                   {isOpen && line.expandable && <RowDetail line={line} resolveText={resolveText} onOpenLine={onOpenLine} />}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
@@ -24,7 +24,8 @@ import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import { ppdVerdictTone, ppdVerdictBorderColor, evVerdictTone, evVerdictBorderColor } from "../lib/verdictTone";
-import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, EvidenceLineRunStatus, EvidenceRunLogLine } from "../types";
+import { excerptAround } from "../components/ui/quoteMatch";
+import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, EvidenceLineRunStatus, EvidenceRunLogLine, PPDReviewRow } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
 //   • PPD Review — policy only, one row per GD4 requirement line (3 columns).
@@ -45,6 +46,31 @@ function overallPanelColors(v: PPDOverallVerdict): { bg: string; border: string 
 
 const PPD_GRID = "1fr 1fr 1fr";
 const EV_GRID = "1.1fr 1.1fr 1.1fr 0.9fr";
+
+// The "PPD procedure (AI-matched)" column's exact matched span: the same
+// quote+excerptAround(...) lookup the lineage map's expanded spine detail
+// already does (LineageDiagram.tsx's resolveSourceFile + excerptAround), so
+// this preview highlights via the SAME located passage rather than a new
+// mechanism. Prefers the first documented sub-clause's own quote (matches
+// what the spine would show first); falls back to the row-level supportQuote
+// on older/undecomposed rows. Returns null when no quote resolves against the
+// cited file's cached text — callers fall back to the plain comment preview,
+// never a fabricated highlight.
+function policyMatchedExcerpt(
+  row: PPDReviewRow,
+  chunkFileNames: Record<string, string> | undefined,
+  fileLedger: AuditFileRecord[] | undefined,
+  resolveText: (f: AuditFileRecord) => string | null | undefined
+) {
+  const sub = row.subClauses?.find((c) => c.verdict === "documented" && c.quote);
+  const quote = sub?.quote || row.supportQuote;
+  if (!quote) return null;
+  const chunkId = sub?.chunkId || row.chunkIds[0];
+  const fileName = chunkId ? chunkFileNames?.[chunkId] : undefined;
+  const record = fileName ? fileLedger?.find((f) => f.name === fileName) : undefined;
+  const text = record ? resolveText(record) : undefined;
+  return typeof text === "string" ? excerptAround(text, quote) : null;
+}
 
 // NOTE: the standalone PPD Requirements Review page (and its /ppd-review route)
 // was retired — the review now runs entirely in the Evidence Folder's review
@@ -291,6 +317,14 @@ function PpdNextStep({ selectedId, bare }: { selectedId: string; bare?: boolean 
 function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: number }) {
   const busy = useWorkspaceStore((s) => s.busy);
   const runPPDReview = useWorkspaceStore((s) => s.runPPDReview);
+  // Same fileTextCache -> extracted-text lookup LineageDiagram uses, so the
+  // "PPD procedure (AI-matched)" column can locate + highlight its matched
+  // quote in the same cached text the spine detail highlights.
+  const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
+  const resolveText = useCallback(
+    (f: AuditFileRecord) => (f.driveFileId ? fileTextCache[`${f.driveFileId}:${f.driveModifiedTime ?? ""}`]?.text : undefined),
+    [fileTextCache]
+  );
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   // Transient "you stopped this" flag, shown until the next run starts. Cancel
@@ -334,9 +368,14 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
       next.has(ref) ? next.delete(ref) : next.add(ref);
       return next;
     });
-  // Lineage-diagram node click: expand the matching row and scroll it into view.
+  // Lineage-diagram node click: expand the matching row and scroll it into
+  // view. Must also open the full requirement table itself — the row's DOM
+  // node (id="ppdline-...") only exists when tableOpen is true, so a click
+  // while the table is collapsed previously found no element and silently
+  // did nothing.
   const openLine = (ref: string) => {
     setExpandedRows((prev) => new Set(prev).add(ref));
+    setTableOpen(true);
     const id = `ppdline-${normalizeAuditRef(ref)}`;
     requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" }));
   };
@@ -566,6 +605,11 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
                 ? row.chunkIds.map((cid) => liveResult.chunkFileNames?.[cid] ? `${liveResult.chunkFileNames[cid]} · ${cid}` : cid).join(", ")
                 : "No chunk cited";
               const extractPreview = row.fullComment || row.shortComment || "(no comment returned)";
+              // The exact quote this row matched, located in the cited file's
+              // cached text — same mechanism the spine's <mark> uses. null
+              // when no quote resolves (older run, or text not cached yet),
+              // in which case the plain comment preview below is shown as-is.
+              const matched = policyMatchedExcerpt(row, liveResult.chunkFileNames, liveResult.fileLedger, resolveText);
               return (
                 <div key={row.ref} id={`ppdline-${normalizeAuditRef(row.ref)}`} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${ppdVerdictBorderColor(row.verdict)}`, borderRadius: 8, padding: "10px 12px", scrollMarginTop: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: PPD_GRID, gap: 10, alignItems: "start" }}>
@@ -575,7 +619,15 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
                     </div>
                     <div>
                       <div style={{ fontSize: 10.5, color: "#94a3b8", marginBottom: 4, fontFamily: "ui-monospace,monospace" }}>{sourceRef}</div>
-                      <div style={{ borderLeft: "3px solid #c7d2fe", paddingLeft: 8, fontSize: 12, color: "#374151", lineHeight: 1.4, fontStyle: "italic" }}>{extractPreview}</div>
+                      <div style={{ borderLeft: "3px solid #c7d2fe", paddingLeft: 8, fontSize: 12, color: "#374151", lineHeight: 1.4, fontStyle: "italic" }}>
+                        {matched ? (
+                          <>
+                            {matched.clippedStart && "… "}{matched.before}
+                            <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 1px", fontStyle: "normal" }}>{matched.match}</mark>
+                            {matched.after}{matched.clippedEnd && " …"}
+                          </>
+                        ) : extractPreview}
+                      </div>
                     </div>
                     <div>
                       <Pill s={ppdVerdictTone(row.verdict)}>{row.verdict}</Pill>
@@ -1171,9 +1223,14 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
       next.has(ref) ? next.delete(ref) : next.add(ref);
       return next;
     });
-  // Lineage-diagram node click: expand the matching evidence row + scroll to it.
+  // Lineage-diagram node click: expand the matching evidence row + scroll to
+  // it. Must also open the full requirement table itself — the row's DOM
+  // node (id="evline-...") only exists when tableOpen is true, so a click
+  // while the table is collapsed previously found no element and silently
+  // did nothing.
   const openLine = (ref: string) => {
     setExpandedRows((prev) => new Set(prev).add(ref));
+    setTableOpen(true);
     const id = `evline-${normalizeAuditRef(ref)}`;
     requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" }));
   };

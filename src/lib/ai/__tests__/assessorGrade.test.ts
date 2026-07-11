@@ -124,6 +124,37 @@ Refund log 2025: request 12 Jan, paid 15 Jan (3 working days). Peer review sched
     await runEvidenceAssessment(evInputs(), EV_SOURCE, SETTINGS, {});
     expect(mockChat).toHaveBeenCalled();
   });
+
+  it("keeps window 1's real comment when a later window upgrades the verdict but returns one blank (the same merge bug as the PPD side)", async () => {
+    // > WINDOW_SIZE (55,000 chars) forces two windows over the evidence text.
+    const LONG_EV_SOURCE = `[CHUNK:C001] --- refund-register.xlsx ---\n${"Filler evidence text. ".repeat(2500)}`;
+    let callCount = 0;
+    mockChat.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return JSON.stringify({
+          results: [{
+            ref: "4.4.1.DS1", evidenceSummary: "Partial register sighted.", verdict: "Partial",
+            comment: "The refund register shows timely payment but no peer-review record.",
+            promiseChecks: [], chunkIds: ["C001"],
+          }],
+        });
+      }
+      // Window 2 upgrades to Met (a real, higher verdict) but its comment
+      // comes back blank — the exact reported failure mode.
+      return JSON.stringify({
+        results: [{
+          ref: "4.4.1.DS1", evidenceSummary: "Full register sighted.", verdict: "Met",
+          comment: "", promiseChecks: [], chunkIds: ["C001"],
+        }],
+      });
+    });
+    const result = await runEvidenceAssessment(evInputs(), LONG_EV_SOURCE, SETTINGS, {});
+    const row = result.rows[0];
+    expect(row.verdict).toBe("Met"); // the later, higher verdict still wins
+    expect(row.comment).not.toBe(""); // but its real justification must not be discarded for a blank one
+    expect(row.comment).toContain("no peer-review record");
+  });
 });
 
 describe("quoteExistsInSource", () => {
@@ -198,6 +229,73 @@ Q1 manpower review held 12 Feb; HR Manager present; staffing gaps logged.`;
   });
 });
 
+describe("clause capture includes the source's own leading number/bullet (Task 4)", () => {
+  it("keeps the number when the numbered heading is verbatim in the source", async () => {
+    const SRC = `[CHUNK:C001] --- audit-manual.docx ---
+7.3(a) Audit Report. The Internal Audit Unit issues a report to the Board within 10 working days.`;
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{
+          ref: "6.1.1.DS1",
+          subClauses: [{ text: "Audit reporting", verdict: "documented", quote: "The Internal Audit Unit issues a report to the Board within 10 working days.", clause: "7.3(a) Audit Report", rationale: "", chunkId: "C001" }],
+          verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+        }],
+      });
+    });
+    const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], SRC, SETTINGS, {});
+    expect(result.rows[0].subClauses![0].clause).toBe("7.3(a) Audit Report");
+  });
+
+  it("falls back to the heading alone when the numbered form isn't a contiguous verbatim match — never drops a clause the unnumbered heading would have shown before this change", async () => {
+    // The number and heading are on separate lines in the source (a real
+    // document layout), so joining them into one string as the prompt now
+    // asks for won't verify verbatim — the fallback must still surface the
+    // heading, exactly as it would have before Task 4. The heading itself is
+    // kept long (>20 chars) so this genuinely exercises verbatim matching
+    // rather than quoteExistsInSource's short-string always-pass rule.
+    const SRC = `[CHUNK:C001] --- audit-manual.docx ---
+7.3
+(a) Detailed Audit Reporting Requirements
+The Internal Audit Unit issues a report to the Board within 10 working days.`;
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{
+          ref: "6.1.1.DS1",
+          subClauses: [{ text: "Audit reporting", verdict: "documented", quote: "The Internal Audit Unit issues a report to the Board within 10 working days.", clause: "7.3(a) Detailed Audit Reporting Requirements", rationale: "", chunkId: "C001" }],
+          verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+        }],
+      });
+    });
+    const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], SRC, SETTINGS, {});
+    expect(result.rows[0].subClauses![0].clause).toBe("Detailed Audit Reporting Requirements");
+  });
+
+  it("never invents a number — a wholly fabricated numbered clause is dropped to undefined", async () => {
+    const SRC = `[CHUNK:C001] --- audit-manual.docx ---
+The Internal Audit Unit issues a report to the Board within 10 working days.`;
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{
+          ref: "6.1.1.DS1",
+          subClauses: [{ text: "Audit reporting", verdict: "documented", quote: "The Internal Audit Unit issues a report to the Board within 10 working days.", clause: "9.9(z) Wholly Invented Compliance Section", rationale: "", chunkId: "C001" }],
+          verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+        }],
+      });
+    });
+    const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], SRC, SETTINGS, {});
+    expect(result.rows[0].subClauses![0].clause).toBeUndefined();
+  });
+});
+
 describe("rationale placeholder honesty (a real verdict must never claim 'no verdict returned')", () => {
   const HR_SOURCE = `[CHUNK:C001] --- hr.docx ---
 The HR Manager reviews staffing quarterly.`;
@@ -248,5 +346,49 @@ The HR Manager reviews staffing quarterly.`;
     // Not the false "No verdict returned" claim — and not fabricated text either.
     expect(dropped.shortComment).toBe("");
     expect(dropped.fullComment).toBe("");
+  });
+});
+
+describe("multi-window merge must not discard a real comment for a blank one (empty Rationale investigation)", () => {
+  // > WINDOW_SIZE (55,000 chars) forces buildDocWindows to split this into
+  // two windows, reproducing the exact mechanism a large real PPD (several
+  // policy documents combined) hits in production.
+  const LONG_SOURCE = `[CHUNK:C001] --- ppd.docx ---\n${"Filler compliance text. ".repeat(2500)}`;
+
+  it("keeps window 1's real shortComment/fullComment when a later window upgrades the verdict but returns them blank", async () => {
+    let reqCallCount = 0;
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      reqCallCount++;
+      if (reqCallCount === 1) {
+        // Window 1 sees only a section that partially covers the line.
+        return JSON.stringify({
+          results: [{
+            ref: "6.1.1.DS1", subClauses: [], verdict: "Partial",
+            shortComment: "Only the annual review cadence is documented; the reporting line is missing.",
+            fullComment: "The PPD names an annual review but does not name who it reports to.",
+            promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+          }],
+        });
+      }
+      // Window 2 sees the section that fully covers the line (a real,
+      // higher verdict) but its shortComment/fullComment come back blank —
+      // the exact failure mode reported as "Rationale empty on every line".
+      return JSON.stringify({
+        results: [{
+          ref: "6.1.1.DS1", subClauses: [], verdict: "Adequate",
+          shortComment: "", fullComment: "",
+          promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+        }],
+      });
+    });
+    const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], LONG_SOURCE, SETTINGS, {});
+    const row = result.rows[0];
+    expect(row.verdict).toBe("Adequate"); // the later, higher verdict still wins — verdict logic unchanged
+    expect(row.shortComment).not.toBe(""); // but its real justification must not be discarded for a blank one
+    expect(row.shortComment).toContain("annual review cadence");
+    expect(row.fullComment).toContain("does not name who it reports to");
   });
 });
