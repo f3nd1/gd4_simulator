@@ -229,6 +229,7 @@ function VerdictCell({ coverage, label }: { coverage: Coverage; label: string })
 }
 
 // Up to two entries, then "+N more <thing>(s)". Em-dash when muted (flat row) or empty.
+// Used for the Policy Clause column only — clause text has no Drive link.
 function StackCell({ items, muted, more, mono }: { items: string[]; muted: boolean; more: string; mono?: boolean }) {
   if (muted || items.length === 0) return <span style={{ color: "#94a3b8" }}>—</span>;
   const show = items.slice(0, 2);
@@ -239,6 +240,36 @@ function StackCell({ items, muted, more, mono }: { items: string[]; muted: boole
         <span key={i} title={t} style={{ fontSize: 11, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: mono ? "ui-monospace,monospace" : undefined }}>{t}</span>
       ))}
       {extra > 0 && <span style={{ fontSize: 10.5, color: "#94a3b8" }}>+{extra} more {more}{extra === 1 ? "" : "s"}</span>}
+    </div>
+  );
+}
+
+// Policy File(s) / Evidence File(s) column. Full filenames only — never
+// clipped with an ellipsis or shortened; long names wrap onto extra lines
+// instead (the row simply grows taller). Each filename is the SAME working
+// Drive link the spine's "from [filename] ↗" attribution uses (driveUrlFor /
+// EvidenceFileRef.url, already resolved onto CitedFile.url). Only the FIRST
+// two files show by default for scannability; "+N more" is itself a toggle —
+// expanding it reveals the rest exactly the same way (full, wrapped, linked),
+// never a second, more-truncated tier, and never a hover-only reveal.
+function FileListCell({ files, muted }: { files: CitedFile[]; muted: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  if (muted || files.length === 0) return <span style={{ color: "#94a3b8" }}>—</span>;
+  const show = expanded ? files : files.slice(0, 2);
+  const extra = files.length - Math.min(2, files.length);
+  const nameStyle: React.CSSProperties = { fontSize: 11, lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+      {show.map((f) => (
+        f.url
+          ? <a key={f.name} href={f.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ ...nameStyle, color: "#4338ca", textDecoration: "none" }}>{f.name} ↗</a>
+          : <span key={f.name} style={{ ...nameStyle, color: "#475569" }}>{f.name}</span>
+      ))}
+      {!expanded && extra > 0 && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); setExpanded(true); }} style={{ fontSize: 10.5, fontWeight: 600, color: "#4338ca", background: "transparent", border: "none", padding: 0, textAlign: "left", cursor: "pointer", textDecoration: "underline" }}>
+          +{extra} more file{extra === 1 ? "" : "s"}
+        </button>
+      )}
     </div>
   );
 }
@@ -389,9 +420,13 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
   const gaps = lines.filter((l) => l.coverage === "not-covered" || l.coverage === "not-checked").length;
   const isEv = mode === "evidence";
   // Header + every row share this template so columns line up down the matrix.
+  // The file column got a wider share (1.1fr → 1.6fr) plus a 170px floor —
+  // full filenames now wrap instead of clipping (FileListCell), so this
+  // column needs real room; Requirement and Clause/Passage were trimmed
+  // slightly to compensate rather than letting the row overflow.
   const gridCols = isEv
-    ? "minmax(0,2.2fr) 118px minmax(0,1.1fr) minmax(0,1.7fr) minmax(0,1.7fr)"
-    : "minmax(0,2.2fr) 118px minmax(0,1.1fr) minmax(0,1.5fr) minmax(0,1.7fr)";
+    ? "minmax(0,2fr) 118px minmax(170px,1.6fr) minmax(0,1.5fr) minmax(0,1.6fr)"
+    : "minmax(0,2fr) 118px minmax(170px,1.6fr) minmax(0,1.3fr) minmax(0,1.6fr)";
   const headerCell: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 };
   const col4Header = isEv ? "Supporting passage" : "Policy clause";
 
@@ -481,7 +516,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
                       </span>
                     </div>
                     <VerdictCell coverage={line.coverage} label={line.verdictLabel} />
-                    <StackCell items={line.files.map((f) => f.name)} muted={!line.expandable} more="file" />
+                    <FileListCell files={line.files} muted={!line.expandable} />
                     {isEv
                       ? <TextCell text={line.passagePreview} muted={!line.expandable} italic />
                       : <StackCell items={line.clauses} muted={!line.expandable} more="clause" />}
