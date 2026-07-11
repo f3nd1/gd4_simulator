@@ -1809,11 +1809,20 @@ export function flagUnverifiedQuotes(fullComment: string, sourceText: string): s
   return `${fullComment}\n\n${flags}${more}`;
 }
 
+// Purely-observational live events emitted as the review proceeds, so the UI
+// can show a detailed activity view (same idea as EvidenceRunEvent above).
+// Emitting them changes no assessment behaviour — they mirror the window/
+// batch loop the run already performs.
+export type PPDRunEvent =
+  | { type: "window-start"; window: { current: number; total: number }; refs: string[] }
+  | { type: "batch-done"; verdicts: { ref: string; verdict: PPDVerdict }[] }
+  | { type: "batch-failed"; refs: string[] };
+
 export async function runPPDRequirementsReview(
   requirements: PPDRequirementInput[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string) => void; onEvent?: (ev: PPDRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
 ): Promise<PPDRequirementsReviewResult> {
   if (requirements.length === 0 || !policyDocText.trim()) {
     return {
@@ -1907,6 +1916,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     for (const [bi, batch] of batches.entries()) {
       if (stopRequested()) { stoppedEarly = true; break; }
       opts.onProgress?.(`PPD requirements review — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
+      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((r) => r.ref) });
       const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText}`).join("\n");
       const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess PPD documentation for each GD4 requirement line:\n${pointsBlock}`;
       const system = buildSystem(windows.length > 1 ? `runPPDRequirementsReview (window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview");
@@ -1931,9 +1941,11 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           const label = windows.length > 1 ? `PPD window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD batch ${bi + 1}/${batches.length}`;
           windowErrors.push(`${label} returned no parseable verdicts — the AI reply was empty or not valid JSON.`);
           console.error("[PPDRequirementsReview]", label, "no parseable results");
+          opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref) });
           continue;
         }
         const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
+        const batchVerdicts: { ref: string; verdict: PPDVerdict }[] = [];
         for (const [idx, r] of batch.entries()) {
           // Positional recovery: some models keep the requirement order but drop
           // or rename the per-result "ref". When the result count matches the
@@ -1942,6 +1954,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           const res = byRef.get(normalizeAuditRef(r.ref)) ?? (results.length === batch.length ? results[idx] : undefined);
           const verdict = (["Adequate", "Partial", "Not documented"] as PPDVerdict[]).includes(res?.verdict as PPDVerdict)
             ? (res!.verdict as PPDVerdict) : "Not documented";
+          batchVerdicts.push({ ref: r.ref, verdict });
           const shortComment = typeof res?.shortComment === "string" ? res.shortComment : "";
           const fullComment = typeof res?.fullComment === "string" ? res.fullComment : "";
           const suggestedRewrite = typeof res?.suggestedRewrite === "string" && res.suggestedRewrite.trim() ? res.suggestedRewrite : undefined;
@@ -2000,6 +2013,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
             });
           }
         }
+        opts.onEvent?.({ type: "batch-done", verdicts: batchVerdicts });
       } catch (err) {
         // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
         if (stopRequested()) { stoppedEarly = true; break; }
@@ -2007,6 +2021,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         const label = windows.length > 1 ? `PPD window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD batch ${bi + 1}/${batches.length}`;
         windowErrors.push(`${label} failed — ${msg}`);
         console.error("[PPDRequirementsReview]", label, msg);
+        opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref) });
       }
     }
     if (stoppedEarly) break;

@@ -23,7 +23,7 @@ import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
-import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck } from "../types";
+import type { PPDVerdict, PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, EvidenceLineRunStatus, EvidenceRunLogLine } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
 //   • PPD Review — policy only, one row per GD4 requirement line (3 columns).
@@ -391,15 +391,22 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
       )}
       {isRunning && (() => {
         const detail = liveProgress?.subCriterionId === selectedId ? liveProgress.detail : "Working…";
+        const runProgress = liveProgress?.subCriterionId === selectedId ? liveProgress : null;
         return (
-          <div style={{ marginBottom: 12, padding: "10px 12px", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#3730a3" }}>PPD review running</span>
-              <span style={{ fontSize: 11, color: "#6366f1" }}>live</span>
+          <>
+            <div style={{ marginBottom: 12, padding: "10px 12px", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#3730a3" }}>PPD review running</span>
+                <span style={{ fontSize: 11, color: "#6366f1" }}>live</span>
+              </div>
+              {/* Same step-by-step view as the staged audit modal. */}
+              <RunStepper current={ppdRunStep(detail, true, false)} running detail={detail} />
             </div>
-            {/* Same step-by-step view as the staged audit modal. */}
-            <RunStepper current={ppdRunStep(detail, true, false)} running detail={detail} />
-          </div>
+            {/* Detailed live-activity panel (collapsible to a compact summary) —
+                same RunDetailColumns component the Evidence tab's EvidenceRunPanel
+                uses, so both tabs' 3-column live views are visually identical. */}
+            <PpdRunPanel progress={runProgress} onCancel={cancelBusy} />
+          </>
         );
       })()}
 
@@ -633,23 +640,46 @@ const LOG_TONE: Record<NonNullable<import("../types").EvidenceRunLogLine["tone"]
   info: "#475569", good: "#166534", warn: "#92600a", bad: "#b23121",
 };
 
-function EvidenceRunPanel({ progress, onCancel, onSkipFile }: { progress: EvidenceAssessmentProgress | null; onCancel: () => void; onSkipFile: () => void }) {
+// Normalized shape both EvidenceAssessmentProgress and PPDReviewProgress can
+// be reduced to, so ONE component renders the whole live-detail panel
+// (compact summary + stat chips + 3-column body) for both Option A tabs —
+// kept in perfect visual sync by construction, not by convention. Evidence-
+// only fields (filesRead list, verifying/synthesising stages) are folded into
+// generic ones (filesReadCount, stageLabel) at each caller so this component
+// carries no per-tab special-casing.
+type RunDetailColumnsProps = {
+  pct: number;
+  stageLabel: string;
+  windowLabel?: string;
+  detail: string;
+  startedAt?: number;
+  heartbeatAt?: number;
+  lineRefs: string[];
+  lineStatus?: Record<string, EvidenceLineRunStatus>;
+  lineVerdict?: Record<string, string>;
+  filesFound: AuditFileRecord[];
+  filesReadCount: number;
+  filesTotal?: number;
+  isReadingStage: boolean;
+  currentFile?: string;
+  canSkipCurrentFile?: boolean;
+  onSkipFile?: () => void;
+  ai?: { calls: number; model?: string; totalTokens: number };
+  log: EvidenceRunLogLine[];
+  onCancel: () => void;
+};
+
+function RunDetailColumns(p: RunDetailColumnsProps) {
   const [open, setOpen] = useState(true);
   // 1s tick so the elapsed timer and "no activity for Ns" heartbeat move even
   // when a slow window produces no events — the run must never look frozen.
   const [, setTick] = useState(0);
   useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
 
-  const p = progress;
-  const pct = p?.pct ?? 5;
-  const stage = p?.stage ? STAGE_LABEL[p.stage] : "Starting…";
-  const elapsedS = p?.startedAt ? Math.max(0, Math.floor((Date.now() - p.startedAt) / 1000)) : 0;
+  const elapsedS = p.startedAt ? Math.max(0, Math.floor((Date.now() - p.startedAt) / 1000)) : 0;
   const elapsedLabel = elapsedS >= 60 ? `${Math.floor(elapsedS / 60)}m ${elapsedS % 60}s` : `${elapsedS}s`;
-  const sinceBeatS = p?.heartbeatAt ? Math.floor((Date.now() - p.heartbeatAt) / 1000) : 0;
-  const lineRefs = p?.lineRefs ?? [];
-  const doneLines = lineRefs.filter((r) => p?.lineStatus?.[r] === "done").length;
-  const filesRead = p?.filesRead ?? [];
-  const log = p?.log ?? [];
+  const sinceBeatS = p.heartbeatAt ? Math.floor((Date.now() - p.heartbeatAt) / 1000) : 0;
+  const doneLines = p.lineRefs.filter((r) => p.lineStatus?.[r] === "done").length;
 
   const R = 26, CIRC = 2 * Math.PI * R;
   const chip = (label: string, value: string, tone: { fg: string; bg: string }) => (
@@ -665,16 +695,16 @@ function EvidenceRunPanel({ progress, onCancel, onSkipFile }: { progress: Eviden
           <svg width={60} height={60}>
             <circle cx={30} cy={30} r={R} fill="none" stroke={TONE.neutral.bg} strokeWidth={6} />
             <circle cx={30} cy={30} r={R} fill="none" stroke={TONE.progress.fg} strokeWidth={6} strokeLinecap="round"
-              strokeDasharray={CIRC} strokeDashoffset={CIRC * (1 - pct / 100)} transform="rotate(-90 30 30)" style={{ transition: "stroke-dashoffset 0.4s ease" }} />
+              strokeDasharray={CIRC} strokeDashoffset={CIRC * (1 - p.pct / 100)} transform="rotate(-90 30 30)" style={{ transition: "stroke-dashoffset 0.4s ease" }} />
           </svg>
-          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800, color: "#0f172a" }}>{pct}%</div>
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800, color: "#0f172a" }}>{p.pct}%</div>
         </div>
         <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#3730a3" }}>
-            {stage}{p?.window && p.window.total > 1 ? ` · window ${p.window.current} of ${p.window.total}` : ""}
+            {p.stageLabel}{p.windowLabel ? ` · ${p.windowLabel}` : ""}
           </div>
           <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 2 }}>
-            {p?.detail ?? "Working…"} · {doneLines}/{lineRefs.length} lines · elapsed {elapsedLabel}
+            {p.detail} · {doneLines}/{p.lineRefs.length} lines · elapsed {elapsedLabel}
             {sinceBeatS > 12 && <span style={{ color: "#92600a", fontWeight: 700 }}> · no activity {sinceBeatS}s (still working, a window can be slow)</span>}
           </div>
         </div>
@@ -682,7 +712,7 @@ function EvidenceRunPanel({ progress, onCancel, onSkipFile }: { progress: Eviden
           <button onClick={() => setOpen((o) => !o)} style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: "1px solid #c7d2fe", background: "#fff", color: "#4338ca" }}>
             {open ? "Hide detail ▲" : "Show detail ▼"}
           </button>
-          <button onClick={onCancel} title="Stops the assessment: the in-flight AI call is aborted" style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "5px 12px", borderRadius: 7, border: "1px solid #fca5a5", background: "#fff5f5", color: "#b23121" }}>
+          <button onClick={p.onCancel} title="Stops the assessment: the in-flight AI call is aborted" style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "5px 12px", borderRadius: 7, border: "1px solid #fca5a5", background: "#fff5f5", color: "#b23121" }}>
             Cancel
           </button>
         </div>
@@ -692,26 +722,27 @@ function EvidenceRunPanel({ progress, onCancel, onSkipFile }: { progress: Eviden
         <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
           {/* Stat chips */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {chip("files read", String(filesRead.length + (p?.filesTotal ? `/${p.filesTotal}` : "")), TONE.good)}
-            {chip("lines done", `${doneLines}/${lineRefs.length}`, TONE.progress)}
-            {chip(p?.ai && p.ai.calls === 1 ? "AI call" : "AI calls", String(p?.ai?.calls ?? 0), TONE.neutral)}
-            {p?.ai && p.ai.totalTokens > 0 && chip("tokens", p.ai.totalTokens.toLocaleString(), TONE.neutral)}
-            {p?.ai?.model && chip("model", p.ai.model, TONE.neutral)}
+            {chip("files read", String(p.filesReadCount) + (p.filesTotal ? `/${p.filesTotal}` : ""), TONE.good)}
+            {chip("lines done", `${doneLines}/${p.lineRefs.length}`, TONE.progress)}
+            {chip(p.ai && p.ai.calls === 1 ? "AI call" : "AI calls", String(p.ai?.calls ?? 0), TONE.neutral)}
+            {p.ai && p.ai.totalTokens > 0 && chip("tokens", p.ai.totalTokens.toLocaleString(), TONE.neutral)}
+            {p.ai?.model && chip("model", p.ai.model, TONE.neutral)}
           </div>
 
           {/* Three side-by-side columns on desktop, stacking in the same order
               (lines → ledger → log) on narrow widths — see .option-a-run-cols
-              in index.css. Layout only: none of the three panels' own logic,
-              data or components changed from directly above. */}
+              in index.css. Shared verbatim by both Option A tabs (Evidence and
+              PPD Review) via this one component — layout can never drift
+              between them because there is only one copy of it. */}
           <div className="option-a-run-cols">
             {/* Per-line status */}
             <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 5 }}>Requirement lines</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 320, overflowY: "auto" }}>
-                {lineRefs.length === 0 ? <div style={{ fontSize: 12, color: "#94a3b8" }}>Preparing…</div> : lineRefs.map((r) => {
-                  const st = p?.lineStatus?.[r];
+                {p.lineRefs.length === 0 ? <div style={{ fontSize: 12, color: "#94a3b8" }}>Preparing…</div> : p.lineRefs.map((r) => {
+                  const st = p.lineStatus?.[r];
                   const tone = lineTone(st);
-                  const v = p?.lineVerdict?.[r];
+                  const v = p.lineVerdict?.[r];
                   return (
                     <div key={r} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11.5 }}>
                       <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: tone.fg, flexShrink: 0, opacity: st === "waiting" || !st ? 0.4 : 1 }} />
@@ -725,23 +756,24 @@ function EvidenceRunPanel({ progress, onCancel, onSkipFile }: { progress: Eviden
 
             {/* Files read — the same expandable file ledger (filter tabs, search,
                 Drive links, expand-to-view-extracted-text, amber "reading now" row,
-                working Skip button) the staged/full-audit progress modal uses —
-                reused verbatim, not a second file-list UI. filesFound is populated
-                upfront with every file in scope ("found"/pending), so the full set
-                is visible immediately rather than growing one row at a time. */}
+                working Skip button where wired) the staged/full-audit progress
+                modal uses — reused verbatim, not a second file-list UI. filesFound
+                is populated upfront with every file in scope ("found"/pending), so
+                the full set is visible immediately rather than growing one row
+                at a time. */}
             <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
               <FileLedger
-                files={p?.filesFound ?? []}
-                isActive={p?.stage === "reading"}
-                progress={{ currentFileName: p?.stage === "reading" ? p?.currentFile : undefined }}
-                onSkipFile={p?.canSkipCurrentFile ? onSkipFile : undefined}
+                files={p.filesFound}
+                isActive={p.isReadingStage}
+                progress={{ currentFileName: p.isReadingStage ? p.currentFile : undefined }}
+                onSkipFile={p.canSkipCurrentFile ? p.onSkipFile : undefined}
               />
             </div>
 
             {/* Live log — newest at the bottom */}
             <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 11px", maxHeight: 320, overflowY: "auto" }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Live activity log</div>
-              {log.length === 0 ? <div style={{ fontSize: 11.5, color: "#64748b" }}>Waiting for activity…</div> : log.map((l, i) => (
+              {p.log.length === 0 ? <div style={{ fontSize: 11.5, color: "#64748b" }}>Waiting for activity…</div> : p.log.map((l, i) => (
                 <div key={i} style={{ fontSize: 11.5, fontFamily: "ui-monospace,monospace", color: l.tone ? LOG_TONE[l.tone] : "#cbd5e1", lineHeight: 1.6 }}>
                   <span style={{ color: "#64748b" }}>{new Date(l.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>{" "}{l.text}
                 </div>
@@ -751,6 +783,63 @@ function EvidenceRunPanel({ progress, onCancel, onSkipFile }: { progress: Eviden
         </div>
       )}
     </div>
+  );
+}
+
+function EvidenceRunPanel({ progress: p, onCancel, onSkipFile }: { progress: EvidenceAssessmentProgress | null; onCancel: () => void; onSkipFile: () => void }) {
+  return (
+    <RunDetailColumns
+      pct={p?.pct ?? 5}
+      stageLabel={p?.stage ? STAGE_LABEL[p.stage] : "Starting…"}
+      windowLabel={p?.window && p.window.total > 1 ? `window ${p.window.current} of ${p.window.total}` : undefined}
+      detail={p?.detail ?? "Working…"}
+      startedAt={p?.startedAt}
+      heartbeatAt={p?.heartbeatAt}
+      lineRefs={p?.lineRefs ?? []}
+      lineStatus={p?.lineStatus}
+      lineVerdict={p?.lineVerdict}
+      filesFound={p?.filesFound ?? []}
+      filesReadCount={(p?.filesRead ?? []).length}
+      filesTotal={p?.filesTotal}
+      isReadingStage={p?.stage === "reading"}
+      currentFile={p?.currentFile}
+      canSkipCurrentFile={p?.canSkipCurrentFile}
+      onSkipFile={onSkipFile}
+      ai={p?.ai}
+      log={p?.log ?? []}
+      onCancel={onCancel}
+    />
+  );
+}
+
+// PPD tab's live-run detail panel — same RunDetailColumns body as Evidence's,
+// fed from PPDReviewProgress instead of EvidenceAssessmentProgress. PPD has
+// no manual per-file Skip wiring (only Evidence does — see runPPDReview in
+// useWorkspaceStore.ts), so onSkipFile is simply omitted.
+const PPD_STAGE_LABEL: Record<NonNullable<PPDReviewProgress["stage"]>, string> = {
+  reading: "Reading files", assessing: "Assessing PPD documentation", done: "Done",
+};
+function PpdRunPanel({ progress: p, onCancel }: { progress: PPDReviewProgress | null; onCancel: () => void }) {
+  return (
+    <RunDetailColumns
+      pct={p?.pct ?? 5}
+      stageLabel={p?.stage ? PPD_STAGE_LABEL[p.stage] : "Starting…"}
+      windowLabel={p?.window && p.window.total > 1 ? `window ${p.window.current} of ${p.window.total}` : undefined}
+      detail={p?.detail ?? "Working…"}
+      startedAt={p?.startedAt}
+      heartbeatAt={p?.heartbeatAt}
+      lineRefs={p?.lineRefs ?? []}
+      lineStatus={p?.lineStatus}
+      lineVerdict={p?.lineVerdict}
+      filesFound={p?.filesFound ?? []}
+      filesReadCount={(p?.filesFound ?? []).filter((f) => f.readStatus === "read").length}
+      filesTotal={p?.filesTotal}
+      isReadingStage={p?.stage === "reading"}
+      currentFile={p?.currentFile}
+      ai={p?.ai}
+      log={p?.log ?? []}
+      onCancel={onCancel}
+    />
   );
 }
 

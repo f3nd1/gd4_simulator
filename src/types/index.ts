@@ -988,6 +988,29 @@ export type EvidenceAssessmentProgress = {
   ai?: { calls: number; model?: string; totalTokens: number }; // live AI usage
 };
 
+// Same shape and intent as EvidenceAssessmentProgress, for the PPD tab's live
+// run — reuses EvidenceLineRunStatus/EvidenceRunLogLine rather than a second
+// set of near-identical types, so both tabs' live-run panels can share one
+// rendering component (RunDetailColumns in PPDReview.tsx).
+export type PPDReviewProgress = {
+  subCriterionId: string;
+  detail: string;
+  pct?: number;
+  stage?: "reading" | "assessing" | "done";
+  startedAt?: number;
+  heartbeatAt?: number;
+  window?: { current: number; total: number };
+  filesTotal?: number;
+  filesFound?: AuditFileRecord[];
+  canSkipCurrentFile?: boolean;
+  currentFile?: string;
+  lineRefs?: string[];
+  lineStatus?: Record<string, EvidenceLineRunStatus>;
+  lineVerdict?: Record<string, string>;
+  log?: EvidenceRunLogLine[];
+  ai?: { calls: number; model?: string; totalTokens: number };
+};
+
 // ─── Change Log ─────────────────────────────────────────────────────────────
 // A running history of the git push/pull info the footer surfaces. The footer
 // reads a build-time constant (__GIT_INFO__) that only ever holds the latest

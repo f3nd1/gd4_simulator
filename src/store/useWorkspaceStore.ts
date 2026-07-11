@@ -52,7 +52,7 @@ import { usePreCheckChecklistStore } from "./usePreCheckChecklistStore";
 import { computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine, EvidenceDriftCheck } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine, EvidenceDriftCheck } from "../types";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
 import { computePanelConclusion } from "../lib/panelConclusion";
@@ -583,7 +583,7 @@ export type WorkspaceState = {
   evidenceAssessmentProgress: EvidenceAssessmentProgress | null;
   // Live heartbeat for the PPD review run (window/batch detail), so the tab
   // shows real progress instead of a static "Reviewing…" button.
-  ppdReviewProgress: { subCriterionId: string; detail: string } | null;
+  ppdReviewProgress: PPDReviewProgress | null;
   // Which analysis path a sub-criterion uses: "A" (PPD Requirements Review —
   // default/recommended) or "B" (the existing checklist, unchanged).
   // Missing key means "A" — see ANALYSIS_PATH_DEFAULT.
@@ -1045,6 +1045,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const runAbort = new AbortController();
         _currentRunAbort = runAbort;
 
+        // Merge-based progress updaters — same pattern as runEvidenceAssessment's
+        // curEv/patchEv/logEv, so the detailed live-activity fields (stage,
+        // files, per-line status, log) survive every pct/detail tick instead of
+        // being wiped by a plain replace.
+        const PPD_LOG_CAP = 60;
+        const curPpd = (): PPDReviewProgress => {
+          const p = get().ppdReviewProgress;
+          return p && p.subCriterionId === subCriterionId ? p : { subCriterionId, detail: "" };
+        };
+        const patchPpd = (patch: Partial<PPDReviewProgress>) =>
+          set({ ppdReviewProgress: { ...curPpd(), ...patch, subCriterionId, heartbeatAt: Date.now() } });
+        const logPpd = (text: string, tone?: "info" | "good" | "warn" | "bad") =>
+          patchPpd({ log: [...(curPpd().log ?? []), { at: Date.now(), text, tone }].slice(-PPD_LOG_CAP) });
+
         const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[], contradictions?: PPDContradiction[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           // Sub-criterion roll-up, derived deterministically from the rows.
@@ -1153,7 +1167,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               : mime.includes("google-apps.presentation") ? "Google Slides"
               : mime.startsWith("image/") ? "image"
               : "text";
-          const fileLedger: AuditFileRecord[] = [];
+          // Every policy file in scope, built upfront (all "found"/pending) so
+          // the live view shows the whole file set immediately and updates each
+          // record's readStatus live — same pattern as runEvidenceAssessment's
+          // fileRecords, reusing the identical AuditFileRecord/FileLedger
+          // vocabulary so the PPD and Evidence tabs' live file lists match.
+          const fileRecords: AuditFileRecord[] = policyFiles.map((file) => ({
+            path: file.path, name: file.path.split("/").pop() || file.path, mimeType: file.mimeType, fileKind: ppdFileKind(file.mimeType),
+            bucket: "policy", readStatus: "found", auditStatus: "pending",
+            driveFileId: file.id, driveModifiedTime: file.modifiedTime,
+          }));
+          patchPpd({ filesTotal: policyFiles.length, filesFound: [...fileRecords], stage: "reading" });
           // Vision context so this loop reads scanned/image-only PDFs, standalone
           // images and Office-embedded pictures — the same three-tier capability
           // the staged/full-audit paths already have (readDriveFileWithVision).
@@ -1165,7 +1189,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             budget: { count: 0, max: 10 },
             maxPerFile: 5,
           };
-          for (const file of policyFiles) {
+          for (let fi = 0; fi < policyFiles.length; fi++) {
+            const file = policyFiles[fi];
+            const readFileName = file.path.split("/").pop() || file.path;
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "reading" };
+            patchPpd({ currentFile: readFileName, detail: `Reading ${readFileName}…`, filesFound: [...fileRecords] });
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
             let body: string | null;
@@ -1199,15 +1227,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 readFailedFiles.push(file.path.split("/").pop() || file.path);
               }
             }
-            const fileName = file.path.split("/").pop() || file.path;
-            const ledgerBase: AuditFileRecord = {
-              path: file.path, name: fileName, mimeType: file.mimeType, fileKind: ppdFileKind(file.mimeType),
-              bucket: "policy", readStatus: "found", auditStatus: "audited",
-              driveFileId: file.id, driveModifiedTime: file.modifiedTime,
-              readMethod: readMethodUsed,
-            };
+            const fileName = readFileName;
             if (!body) {
-              fileLedger.push({ ...ledgerBase, readStatus: readErrored ? "failed" : "skipped", auditStatus: "pending", charCount: 0, ...(readErrored ? { failReason: "Drive read error" } : { skipReason: skipNote ?? "No extractable text" }) });
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: readErrored ? "failed" : "skipped", auditStatus: "pending", charCount: 0, readMethod: readMethodUsed, ...(readErrored ? { failReason: "Drive read error" } : { skipReason: skipNote ?? "No extractable text" }) };
+              patchPpd({ filesFound: [...fileRecords] });
+              logPpd(readErrored ? `FAILED to read ${fileName} (Drive error)` : `Skipped ${fileName} (empty)`, readErrored ? "bad" : "warn");
               continue;
             }
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
@@ -1220,7 +1244,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               chunkFileNames[chunkId] = fileName;
               fileChunkIds.push(chunkId);
             }
-            fileLedger.push({ ...ledgerBase, readStatus: "read", charCount: body.length, chunkIds: fileChunkIds });
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", auditStatus: "audited", charCount: body.length, readMethod: readMethodUsed, chunkIds: fileChunkIds };
+            patchPpd({ filesFound: [...fileRecords] });
+            logPpd(`Read ${fileName}${cached ? " (cached)" : ""}`, "good");
           }
           if (docParts.length === 0) { finish(null, false, "No readable text could be extracted from the Policy & Procedure files."); return; }
           const policyDocText = docParts.join("\n\n=== POLICY & PROCEDURE ===\n\n");
@@ -1235,12 +1261,34 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const ppdMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
           ppdMemories.forEach((m) => get().incrementMemoryUsage(m.id));
 
-          set({ ppdReviewProgress: { subCriterionId, detail: "Starting PPD requirements review…" } });
+          const ppdLineRefs = requirements.map((r) => r.ref);
+          patchPpd({
+            detail: "Starting PPD requirements review…", stage: "assessing", currentFile: undefined,
+            lineRefs: ppdLineRefs, lineStatus: Object.fromEntries(ppdLineRefs.map((r) => [r, "waiting" as const])),
+          });
+          logPpd(`Read ${policyFiles.length - readFailedFiles.length} file${policyFiles.length - readFailedFiles.length === 1 ? "" : "s"} — assessing ${ppdLineRefs.length} requirement line${ppdLineRefs.length === 1 ? "" : "s"}.`);
           const result = await runPPDRequirementsReview(requirements, policyDocText, analysisSettings, {
             criterionId: subCriterionId,
             memories: ppdMemories,
             ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
-            onProgress: (detail) => set({ ppdReviewProgress: { subCriterionId, detail } }),
+            onProgress: (detail) => patchPpd({ detail }),
+            onEvent: (ev) => {
+              if (ev.type === "window-start") {
+                const ls = { ...(curPpd().lineStatus ?? {}) };
+                for (const r of ev.refs) if (ls[r] !== "done") ls[r] = "assessing";
+                patchPpd({ window: ev.window, lineStatus: ls });
+                logPpd(`Assessing window ${ev.window.current}/${ev.window.total} (${ev.refs.length} line${ev.refs.length === 1 ? "" : "s"})…`);
+              } else if (ev.type === "batch-done") {
+                const cur = curPpd();
+                const ls = { ...(cur.lineStatus ?? {}) };
+                const lv = { ...(cur.lineVerdict ?? {}) };
+                for (const v of ev.verdicts) { ls[v.ref] = "done"; lv[v.ref] = v.verdict; }
+                patchPpd({ lineStatus: ls, lineVerdict: lv });
+                for (const v of ev.verdicts) logPpd(`Assessed ${v.ref} → ${v.verdict}`, v.verdict === "Adequate" ? "good" : v.verdict === "Not documented" ? "bad" : "warn");
+              } else if (ev.type === "batch-failed") {
+                logPpd(`Batch failed for ${ev.refs.join(", ")} — will retry in a later window`, "bad");
+              }
+            },
             // Cancel support: cancelBusy() clears busy and aborts the signal.
             shouldStop: () => get().busy !== "ppdreview" + subCriterionId,
             signal: runAbort.signal,
@@ -1256,7 +1304,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const liveError = result.windowErrors?.length
             ? `${result.windowErrors.length} AI call(s) failed during the review — results may be incomplete. First error: ${result.windowErrors[0]}`
             : undefined;
-          finish(result.rows, true, liveError, result.promptSent, result.usage, chunkFileNames, result.overallNarrative, runWarnings.length > 0 ? runWarnings : undefined, result.contradictions, fileLedger);
+          finish(result.rows, true, liveError, result.promptSent, result.usage, chunkFileNames, result.overallNarrative, runWarnings.length > 0 ? runWarnings : undefined, result.contradictions, fileRecords);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
         }
