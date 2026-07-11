@@ -362,7 +362,10 @@ export function FileLedger({
 }: {
   files: AuditFileRecord[];
   isActive?: boolean;
-  progress?: AuditProgressState;
+  // Narrowed to the two fields this component actually reads (the "📂
+  // Reading: X" banner) so any live-progress state can reuse this component,
+  // not only the staged/full-audit AuditProgressState.
+  progress?: Pick<AuditProgressState, "currentFileName" | "currentFileAction">;
   onSkipFile?: () => void;
   onExportCsv?: () => void;
 }) {

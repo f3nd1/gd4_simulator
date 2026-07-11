@@ -1495,15 +1495,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const chunkFileNames: Record<string, string> = {};
           const chunkFileRefs: Record<string, EvidenceFileRef> = {};
           let chunkCounter = 0;
-          // Per-file ledger for this Option A evidence run, in the same
-          // AuditFileRecord shape the staged path uses so the CSVs line up.
-          const fileLedger: AuditFileRecord[] = [];
           const fileKindOf = (mime: string) =>
             mime === "application/pdf" ? "PDF" : mime.includes("wordprocessingml") ? "Word" : mime.includes("google-apps.document") ? "Google Doc"
             : mime.includes("google-apps.spreadsheet") ? "Google Sheet" : mime === XLSX_MIME ? "Excel" : mime === XLS_MIME ? "Excel"
             : mime === "text/csv" ? "CSV" : mime.includes("presentationml") ? "PowerPoint" : mime.includes("google-apps.presentation") ? "Google Slides"
             : mime.startsWith("image/") ? "image" : "text";
-          patchEv({ filesTotal: evidenceFiles.length });
+          // Every file in scope, built upfront (all "found"/pending) so the live
+          // view — reusing the same FileLedger/AuditFileRecord vocabulary the
+          // staged/full-audit paths already have — shows the whole file set
+          // immediately rather than growing one row at a time. Also doubles as
+          // this run's fileLedger (evidenceAssessments[subCriterionId].fileLedger).
+          const fileRecords: AuditFileRecord[] = evidenceFiles.map((file) => ({
+            path: file.path, name: file.path.split("/").pop() || file.path, mimeType: file.mimeType, fileKind: fileKindOf(file.mimeType),
+            bucket: "evidence", readStatus: "found", auditStatus: "pending",
+            driveFileId: file.id, driveModifiedTime: file.modifiedTime,
+            chunkIds: [],
+          }));
+          patchEv({ filesTotal: evidenceFiles.length, filesFound: [...fileRecords] });
           let filesReadCount = 0;
           // Drive read ERRORS, kept separate from genuinely empty files, so the
           // run summary can flag incompleteness — see runPPDReview.
@@ -1519,61 +1527,84 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             budget: { count: 0, max: 10 },
             maxPerFile: 5,
           };
-          for (const file of evidenceFiles) {
+          for (let fi = 0; fi < evidenceFiles.length; fi++) {
+            const file = evidenceFiles[fi];
             const readFileName = file.path.split("/").pop() || file.path;
-            patchEv({ currentFile: readFileName, detail: `Reading ${readFileName}…`, pct: Math.min(24, 4 + Math.round((filesReadCount / Math.max(1, evidenceFiles.length)) * 20)) });
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "reading" };
+            patchEv({ currentFile: readFileName, detail: `Reading ${readFileName}…`, pct: Math.min(24, 4 + Math.round((filesReadCount / Math.max(1, evidenceFiles.length)) * 20)), filesFound: [...fileRecords], canSkipCurrentFile: true });
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
-            // Base ledger record — real read data only; assessment tagging (cited
-            // / not_used) is applied after the AI rows are known.
-            const rec: AuditFileRecord = {
-              path: file.path, name: readFileName, mimeType: file.mimeType, fileKind: fileKindOf(file.mimeType),
-              bucket: "evidence", readStatus: "found", auditStatus: "pending",
-              driveFileId: file.id, driveModifiedTime: file.modifiedTime,
-              processingMode: cached ? "reused" : "new",
-              chunkIds: [],
-            };
+            const processingMode = cached ? "reused" : "new";
             let body: string | null;
+            let readMethod: "text" | "vision" | undefined;
+            let pdfQuality: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" } | undefined;
+            let skipNote: string | undefined;
+            // Manual skip: races the real read against a never-resolving promise
+            // that ONLY settles when the user clicks Skip (skipCurrentFile()),
+            // mirroring the exact pattern used for the mid-run token-refresh
+            // wait in runPPDReview/runEvidenceAssessment — the abandoned read
+            // keeps running to its own DRIVE_FILE_TIMEOUT_MS in the background
+            // (harmless: nothing awaits it once skipped) rather than being
+            // forcibly aborted, so this stays display/control-layer only.
+            const FILE_SKIPPED = Symbol("file-skipped");
+            let resolveSkip!: () => void;
+            const skipSignal = new Promise<typeof FILE_SKIPPED>((resolve) => { resolveSkip = () => resolve(FILE_SKIPPED); });
             if (cached) {
               body = cached.text;
-              rec.readMethod = cached.readMethod;
-              if (cached.pdfQuality) { rec.suspectedScannedPdf = cached.pdfQuality.suspectedScannedPdf; rec.extractedTextQuality = cached.pdfQuality.extractedTextQuality; }
+              readMethod = cached.readMethod;
+              if (cached.pdfQuality) pdfQuality = cached.pdfQuality;
             } else {
               // Refresh the Drive token per uncached read and HARD-STOP when it
               // can't be refreshed — see auditFolderContents.
+              _currentFileAbort = resolveSkip;
               const readToken = await useGoogleDriveStore.getState().getFreshToken();
+              _currentFileAbort = null;
               if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
-                const rr = await readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), evVisionCtx);
-                body = rr.text;
-                rec.readMethod = rr.readMethod;
-                if (rr.pdfQuality) { rec.suspectedScannedPdf = rr.pdfQuality.suspectedScannedPdf; rec.extractedTextQuality = rr.pdfQuality.extractedTextQuality; }
-                if (rr.note) rec.skipReason = rr.note;
-                // Only cache genuine (non-empty) extractions — see runPPDReview.
-                if (body != null && body.trim().length > 0) {
-                  const text = body;
-                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: rr.readMethod, ...(rr.pdfQuality ? { pdfQuality: rr.pdfQuality } : {}) } } }));
+                _currentFileAbort = resolveSkip;
+                const raced = await Promise.race([
+                  readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), evVisionCtx),
+                  skipSignal,
+                ]);
+                _currentFileAbort = null;
+                if (raced === FILE_SKIPPED) {
+                  body = null;
+                  skipNote = "Skipped by user";
+                } else {
+                  body = raced.text;
+                  readMethod = raced.readMethod;
+                  if (raced.pdfQuality) pdfQuality = raced.pdfQuality;
+                  if (raced.note) skipNote = raced.note;
+                  // Only cache genuine (non-empty) extractions — see runPPDReview.
+                  if (body != null && body.trim().length > 0) {
+                    const text = body;
+                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: readFileName, filePath: file.path, cachedAt: Date.now(), readMethod: raced.readMethod, ...(raced.pdfQuality ? { pdfQuality: raced.pdfQuality } : {}) } } }));
+                  }
                 }
               } catch {
+                _currentFileAbort = null;
                 body = null;
                 readFailedFiles.push(readFileName);
               }
             }
             if (!body) {
               const failed = readFailedFiles.includes(readFileName);
-              rec.readStatus = failed ? "failed" : "skipped";
-              rec.charCount = 0;
-              if (failed) rec.failReason = "Drive read error — file not assessed."; else rec.skipReason = rec.skipReason ?? "No extractable text (empty or unreadable).";
-              fileLedger.push(rec);
-              logEv(failed ? `FAILED to read ${readFileName} (Drive error) — not assessed` : `Skipped ${readFileName} (empty)`, failed ? "bad" : "warn");
+              fileRecords[fi] = {
+                ...fileRecords[fi], readStatus: failed ? "failed" : "skipped", charCount: 0, processingMode,
+                ...(readMethod ? { readMethod } : {}), ...(pdfQuality ?? {}),
+                ...(failed ? { failReason: "Drive read error — file not assessed." } : { skipReason: skipNote ?? "No extractable text (empty or unreadable)." }),
+              };
+              patchEv({ filesFound: [...fileRecords] });
+              logEv(failed ? `FAILED to read ${readFileName} (Drive error) — not assessed` : `Skipped ${readFileName}${skipNote === "Skipped by user" ? " (by user)" : " (empty)"}`, failed ? "bad" : "warn");
               continue;
             }
             filesReadCount++;
-            patchEv({ filesRead: [...(curEv().filesRead ?? []), { name: readFileName, driveFileId: file.id }], currentFile: undefined });
+            patchEv({ filesRead: [...(curEv().filesRead ?? []), { name: readFileName, driveFileId: file.id }], currentFile: undefined, canSkipCurrentFile: false });
             logEv(`Read ${readFileName}${cached ? " (cached)" : ""}`, "good");
-            const fileName = file.path.split("/").pop() || file.path;
+            const fileName = readFileName;
             const fileUrl = `https://drive.google.com/file/d/${file.id}/view`;
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
+            const chunkIds: string[] = [];
             for (let pi = 0; pi < totalParts; pi++) {
               const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
               const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
@@ -1581,15 +1612,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               docParts.push(`[CHUNK:${chunkId}] --- ${file.path}${partLabel} ---\n${chunkBody}`);
               chunkFileNames[chunkId] = fileName;
               chunkFileRefs[chunkId] = { name: fileName, url: fileUrl };
-              rec.chunkIds!.push(chunkId);
+              chunkIds.push(chunkId);
             }
-            rec.readStatus = "read";
-            rec.charCount = body.length;
-            fileLedger.push(rec);
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode, ...(readMethod ? { readMethod } : {}), ...(pdfQuality ?? {}), chunkIds };
+            patchEv({ filesFound: [...fileRecords] });
           }
+          // Per-file ledger for this Option A evidence run, in the same
+          // AuditFileRecord shape the staged path uses so the CSVs line up.
+          const fileLedger: AuditFileRecord[] = fileRecords;
           const evidenceDocText = docParts.join("\n\n=== ACTUAL EVIDENCE ===\n\n");
           logEv(`Read ${filesReadCount} file${filesReadCount === 1 ? "" : "s"} — assessing ${lineRefs.length} requirement line${lineRefs.length === 1 ? "" : "s"}.`);
-          patchEv({ stage: "assessing", currentFile: undefined });
+          patchEv({ stage: "assessing", currentFile: undefined, canSkipCurrentFile: false });
 
           const aiSettings = useAISettingsStore.getState();
           if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, aiOfflineReason(aiSettings) ?? "AI is disabled or no API key is configured in Settings."); return; }

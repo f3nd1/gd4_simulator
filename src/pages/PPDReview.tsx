@@ -633,7 +633,7 @@ const LOG_TONE: Record<NonNullable<import("../types").EvidenceRunLogLine["tone"]
   info: "#475569", good: "#166534", warn: "#92600a", bad: "#b23121",
 };
 
-function EvidenceRunPanel({ progress, onCancel }: { progress: EvidenceAssessmentProgress | null; onCancel: () => void }) {
+function EvidenceRunPanel({ progress, onCancel, onSkipFile }: { progress: EvidenceAssessmentProgress | null; onCancel: () => void; onSkipFile: () => void }) {
   const [open, setOpen] = useState(true);
   // 1s tick so the elapsed timer and "no activity for Ns" heartbeat move even
   // when a slow window produces no events — the run must never look frozen.
@@ -699,44 +699,38 @@ function EvidenceRunPanel({ progress, onCancel }: { progress: EvidenceAssessment
             {p?.ai?.model && chip("model", p.ai.model, TONE.neutral)}
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            {/* Per-line status */}
-            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 5 }}>Requirement lines</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
-                {lineRefs.length === 0 ? <div style={{ fontSize: 12, color: "#94a3b8" }}>Preparing…</div> : lineRefs.map((r) => {
-                  const st = p?.lineStatus?.[r];
-                  const tone = lineTone(st);
-                  const v = p?.lineVerdict?.[r];
-                  return (
-                    <div key={r} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11.5 }}>
-                      <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: tone.fg, flexShrink: 0, opacity: st === "waiting" || !st ? 0.4 : 1 }} />
-                      <span style={{ fontFamily: "ui-monospace,monospace", fontWeight: 700, color: tone.fg }}>{r}</span>
-                      <span style={{ color: tone.fg, opacity: 0.85 }}>{st === "done" ? (v ?? "done") : st === "assessing" ? "assessing…" : "waiting"}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Files read */}
-            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 5 }}>
-                Files read{p?.filesTotal ? ` (${filesRead.length}/${p.filesTotal})` : ""}
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
-                {p?.currentFile && <div style={{ fontSize: 11.5, color: TONE.progress.fg, fontWeight: 600 }}>▸ {p.currentFile} …</div>}
-                {filesRead.length === 0 && !p?.currentFile ? <div style={{ fontSize: 12, color: "#94a3b8" }}>None yet</div> : filesRead.slice().reverse().map((f, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#166534", minWidth: 0 }}>
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>✓ {f.name}</span>
-                    {/* Open the exact file in Drive — same link pattern as the pre-flight list. */}
-                    {f.driveFileId && (
-                      <a href={`https://drive.google.com/file/d/${f.driveFileId}/view`} target="_blank" rel="noopener noreferrer" title={`Open "${f.name}" in Google Drive`} style={{ flexShrink: 0, color: "#2563eb", textDecoration: "none", padding: "0 2px", lineHeight: 1 }}>↗</a>
-                    )}
+          {/* Per-line status */}
+          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 5 }}>Requirement lines</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 180, overflowY: "auto" }}>
+              {lineRefs.length === 0 ? <div style={{ fontSize: 12, color: "#94a3b8" }}>Preparing…</div> : lineRefs.map((r) => {
+                const st = p?.lineStatus?.[r];
+                const tone = lineTone(st);
+                const v = p?.lineVerdict?.[r];
+                return (
+                  <div key={r} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11.5 }}>
+                    <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: tone.fg, flexShrink: 0, opacity: st === "waiting" || !st ? 0.4 : 1 }} />
+                    <span style={{ fontFamily: "ui-monospace,monospace", fontWeight: 700, color: tone.fg }}>{r}</span>
+                    <span style={{ color: tone.fg, opacity: 0.85 }}>{st === "done" ? (v ?? "done") : st === "assessing" ? "assessing…" : "waiting"}</span>
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
+          </div>
+
+          {/* Files read — the same expandable file ledger (filter tabs, search,
+              Drive links, expand-to-view-extracted-text, amber "reading now" row,
+              working Skip button) the staged/full-audit progress modal uses —
+              reused verbatim, not a second file-list UI. filesFound is populated
+              upfront with every file in scope ("found"/pending), so the full set
+              is visible immediately rather than growing one row at a time. */}
+          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
+            <FileLedger
+              files={p?.filesFound ?? []}
+              isActive={p?.stage === "reading"}
+              progress={{ currentFileName: p?.stage === "reading" ? p?.currentFile : undefined }}
+              onSkipFile={p?.canSkipCurrentFile ? onSkipFile : undefined}
+            />
           </div>
 
           {/* Live log — newest at the bottom */}
@@ -969,6 +963,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
   const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
   const progress = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
+  const skipCurrentFile = useWorkspaceStore((s) => s.skipCurrentFile);
   const checklistData = usePreCheckChecklistStore((s) => s.checklists);
   const preChecks = useWorkspaceStore((s) => s.preAnalysisChecks);
   const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
@@ -1137,7 +1132,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
       {/* Detailed live-activity panel while a fresh assessment runs (collapsible
           to a compact summary). Surfaces the backend activity the run already
           performs: stage, window, per-line status, files read, live log, AI usage. */}
-      {isRunning && <EvidenceRunPanel progress={runProgress} onCancel={cancelBusy} />}
+      {isRunning && <EvidenceRunPanel progress={runProgress} onCancel={cancelBusy} onSkipFile={skipCurrentFile} />}
 
       {/* Files read this run — same clickable/inspectable ledger the staged audit
           shows; each file expands to its extracted text. (Fresh runs only; the
