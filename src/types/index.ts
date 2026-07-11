@@ -949,6 +949,15 @@ export type EvidenceAssessmentRow = {
   // stored only when it verifies as a real substring; absent means "no exact
   // quote identified". Highlights the supporting sentence in the lineage view.
   evidenceQuote?: string;
+  // "What would make this Met" — one or two sentences grounded in the SAME
+  // gap `comment`/`promiseChecks` already identified (named record, count,
+  // document), never a generic template. Only ever populated for Partial/Not
+  // met; undefined on Met rows and on any run from before this field existed
+  // (optional/additive — old stored runs render with no suggestion shown,
+  // never a crash). Captured here on the row so a future "add to Findings"
+  // action can pull it in as the proposed corrective step without needing a
+  // new field.
+  suggestedAction?: string;
 };
 
 export type EvidenceAssessmentResult = {

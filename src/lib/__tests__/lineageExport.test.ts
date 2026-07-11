@@ -25,7 +25,21 @@ describe("buildLineageCsv", () => {
     expect(headerLine).toBe("GD4 Requirement,Ref,Policy Verdict,Policy File(s),Policy Clause,Rationale");
 
     const evCsv = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow()]);
-    expect(evCsv.split("\r\n")[0]).toBe("GD4 Requirement,Ref,Evidence Verdict,Evidence File(s),Supporting Passage,Rationale");
+    expect(evCsv.split("\r\n")[0]).toBe("GD4 Requirement,Ref,Evidence Verdict,Evidence File(s),Supporting Passage,Rationale,Suggested Action");
+  });
+
+  it("includes the Suggested Action column on the evidence tab only, and shows an em-dash when unset", () => {
+    const evCsv = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow({ suggestedAction: "Add owner and timeline fields to the remaining 17 unassigned actions in the Management Review Meeting minutes." })]);
+    expect(evCsv).toContain("Add owner and timeline fields to the remaining 17 unassigned actions");
+
+    const evCsvEmpty = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow()]);
+    const dataLine = evCsvEmpty.split("\r\n")[1];
+    expect(dataLine.endsWith(",—")).toBe(true);
+
+    // Policy tab has no Suggested Action column at all, even if the field were set.
+    const policyCsv = buildLineageCsv(policyMeta(), [multiFileRow({ suggestedAction: "Should not appear on the policy tab." })]);
+    expect(policyCsv).not.toContain("Should not appear on the policy tab");
+    expect(policyCsv.split("\r\n")[0]).not.toContain("Suggested Action");
   });
 
   it("joins ALL cited files with '; ' — no truncation, no '+N more'", () => {
@@ -99,5 +113,15 @@ describe("buildLineagePdfHtml", () => {
     const html = buildLineagePdfHtml(policyMeta(), [multiFileRow({ requirementText: "Covers <script>alert(1)</script> & \"quotes\"" })]);
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("adds a Suggested Action column+cell on the evidence tab only", () => {
+    const evHtml = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [multiFileRow({ suggestedAction: "Add owner and timeline fields to the remaining 17 unassigned actions." })]);
+    expect(evHtml).toContain("<th>Suggested Action</th>");
+    expect(evHtml).toContain("Add owner and timeline fields to the remaining 17 unassigned actions.");
+
+    const policyHtml = buildLineagePdfHtml(policyMeta(), [multiFileRow({ suggestedAction: "Should not appear on the policy tab." })]);
+    expect(policyHtml).not.toContain("Suggested Action");
+    expect(policyHtml).not.toContain("Should not appear on the policy tab");
   });
 });

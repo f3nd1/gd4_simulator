@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
-import { excerptAround, findQuoteSpan } from "./quoteMatch";
+import { excerptAround, findQuoteSpan, type QuoteExcerpt } from "./quoteMatch";
 import { downloadLineageCsv, openLineagePdf, type LineageExportRow, type LineageExportMeta } from "../../lib/lineageExport";
 import { ppdVerdictLabel, evVerdictLabel } from "../../lib/verdictTone";
 import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, AuditFileRecord, PPDVerdict, EvidenceVerdict } from "../../types";
@@ -76,7 +76,16 @@ type MatrixLine = {
   files: CitedFile[];
   clauses: string[];       // policy: distinct clause references for the matrix cell
   passagePreview?: string; // evidence: supporting-passage preview for the matrix cell
+  // Evidence tab only: the SAME quote as passagePreview plus the file it was
+  // resolved against, so the matrix cell can locate+highlight it exactly like
+  // the spine detail does (excerptAround) instead of showing plain italic text.
+  passageSource?: { quote: string; sourceFile?: CitedFile };
   rowRationale?: string;   // shortComment (policy) / comment (evidence)
+  // Evidence tab only: "what would make this Met" — grounded in the AI's own
+  // gap reasoning (agentRuntime's suggestedAction), never a generic template.
+  // Only ever set for Partial/Not met rows; undefined on Met rows and on any
+  // run recorded before this field existed.
+  suggestedAction?: string;
   items: SpineItem[];      // spine, only for expandable rows
 };
 
@@ -217,10 +226,19 @@ function buildEvidenceLines(ev: EvidenceAssessmentResult, resolveText: ResolveTe
     const files = citedEvidenceFiles(r.evidenceFiles, ev.fileLedger);
     const expandable = coverage === "covered" || coverage === "partial";
     const items = expandable ? evidenceSpine(r, files, ev.chunkFileNames, resolveText) : [];
+    const passageItem = items.find((it) => it.found && it.quote);
+    const passageQuote = passageItem?.quote ?? (r.evidenceQuote || undefined);
+    // Only attribute the fallback (no spine item) quote to a source file when
+    // there's exactly one candidate — guessing among several would be a
+    // fabricated attribution, so leave it unresolved and fall back to plain text.
+    const passageSourceFile = passageItem ? passageItem.sourceFile : (files.length === 1 ? files[0] : undefined);
     return {
       ref: r.gdRef, reqLabel: r.requirementText, coverage, expandable, verdictLabel: evVerdictLabel(r.verdict),
-      files, clauses: [], passagePreview: items.find((it) => it.found && it.quote)?.quote ?? (r.evidenceQuote || undefined),
-      rowRationale: r.comment || undefined, items,
+      files, clauses: [], passagePreview: passageQuote,
+      passageSource: passageQuote ? { quote: passageQuote, sourceFile: passageSourceFile } : undefined,
+      rowRationale: r.comment || undefined,
+      suggestedAction: r.suggestedAction || undefined,
+      items,
     };
   });
 }
@@ -284,23 +302,72 @@ function FileListCell({ files, muted }: { files: CitedFile[]; muted: boolean }) 
   );
 }
 
-function TextCell({ text, muted, italic }: { text?: string; muted: boolean; italic?: boolean }) {
-  if (muted || !text) return <span style={{ color: "#94a3b8" }}>—</span>;
+// The ONE yellow-highlight treatment for a located quote, shared by every
+// place that shows an excerpt (spine detail, Supporting Passage cell) — do
+// not re-style a second copy of this <mark>.
+function ExcerptSpan({ excerpt }: { excerpt: QuoteExcerpt }) {
   return (
-    <span title={text} style={{ fontSize: 11, color: "#475569", fontStyle: italic ? "italic" : undefined, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{text}</span>
+    <>
+      {excerpt.clippedStart && "… "}{excerpt.before}
+      <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 1px" }}>{excerpt.match}</mark>
+      {excerpt.after}{excerpt.clippedEnd && " …"}
+    </>
   );
 }
 
-// Rationale column. Unlike TextCell's bare "—" (used for genuinely-N/A cells,
-// e.g. a flat gap row's Supporting Passage), an empty rationale here is never
+// Supporting Passage column (evidence tab). Resolves the row's passage quote
+// against its source file's extracted text and highlights the exact matched
+// span with ExcerptSpan — the SAME logic the spine detail uses, not a second
+// implementation. Falls back to plain italic text (no highlight) when the
+// source text isn't resolvable yet or the quote can't be located verbatim.
+function PassageCell({ source, fallbackText, muted, resolveText }: { source?: { quote: string; sourceFile?: CitedFile }; fallbackText?: string; muted: boolean; resolveText: ResolveText }) {
+  const text = source?.sourceFile?.record ? resolveText(source.sourceFile.record) : undefined;
+  const excerpt = source && typeof text === "string" ? excerptAround(text, source.quote, 90) : null;
+  if (muted || (!fallbackText && !source)) return <span style={{ color: "#94a3b8" }}>—</span>;
+  return (
+    <span title={fallbackText ?? source?.quote} style={{ fontSize: 11, color: "#475569", fontStyle: "italic", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+      {excerpt ? <ExcerptSpan excerpt={excerpt} /> : (fallbackText ?? source?.quote)}
+    </span>
+  );
+}
+
+// Rationale column. Unlike PassageCell/StackCell's bare "—" (used for
+// genuinely-N/A cells, e.g. a flat gap row's Supporting Passage), an empty
+// rationale here is never
 // "not applicable" — every line's shortComment/comment is meant to carry one.
 // A blank one means the AI genuinely returned none for this line, which is
 // worth saying plainly rather than hiding behind a dash indistinguishable
 // from "nothing to show here".
-function RationaleCell({ text }: { text?: string }) {
-  if (!text) return <span style={{ color: "#94a3b8", fontStyle: "italic" }}>No rationale returned by the AI for this line</span>;
+//
+// Long rationale text wraps in full rather than clamping — the same "don't
+// crop, wrap instead" convention used for filenames/clauses — up to a soft
+// cap; beyond that a "Show more" toggle avoids letting one outlier row blow
+// out every row's height by default. suggestedAction (evidence tab, Partial/
+// Not met only) renders as a distinct "To reach Met" callout underneath.
+function RationaleCell({ text, suggestedAction }: { text?: string; suggestedAction?: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const long = !!text && text.length > 220;
+  const shown = long && !expanded ? `${text!.slice(0, 220).trimEnd()}…` : text;
   return (
-    <span title={text} style={{ fontSize: 11, color: "#475569", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{text}</span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+      {!text ? (
+        <span style={{ color: "#94a3b8", fontStyle: "italic", fontSize: 11 }}>No rationale returned by the AI for this line</span>
+      ) : (
+        <span style={{ fontSize: 11, color: "#475569", lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }}>
+          {shown}
+          {long && (
+            <button type="button" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} style={{ marginLeft: 4, fontSize: 10.5, fontWeight: 600, color: "#4338ca", background: "transparent", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          )}
+        </span>
+      )}
+      {suggestedAction && (
+        <div style={{ fontSize: 10.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "3px 6px", lineHeight: 1.4 }}>
+          <span style={{ fontWeight: 700 }}>To reach Met: </span>{suggestedAction}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -322,9 +389,7 @@ function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: Re
 
       {quoted && excerpt && (
         <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 3 }}>
-          {excerpt.clippedStart && "… "}{excerpt.before}
-          <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 1px" }}>{excerpt.match}</mark>
-          {excerpt.after}{excerpt.clippedEnd && " …"}
+          <ExcerptSpan excerpt={excerpt} />
         </div>
       )}
       {quoted && !excerpt && (
@@ -406,6 +471,11 @@ function RowDetail({ line, resolveText, onOpenLine }: { line: MatrixLine; resolv
       <div style={{ display: "flex", flexDirection: "column", gap: 12, borderLeft: "1px solid #cbd5e1", marginLeft: 4, paddingLeft: 16 }}>
         {line.items.map((it, i) => <SpineItemView key={i} item={it} resolveText={resolveText} />)}
       </div>
+      {line.suggestedAction && (
+        <div style={{ marginTop: 10, fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 8px", lineHeight: 1.45 }}>
+          <span style={{ fontWeight: 700 }}>To reach Met: </span>{line.suggestedAction}
+        </div>
+      )}
       {readable.length > 0 && (
         <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
           {readable.map((f) => (
@@ -503,6 +573,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
     fileNames: l.files.map((f) => f.name),
     clauseOrPassage: isEv ? (l.passagePreview || "") : l.clauses.join("; "),
     rationale: l.rowRationale || "",
+    suggestedAction: isEv ? l.suggestedAction : undefined,
     barColor: COV_DOT[l.coverage], // same solid colour scale the verdict dot uses (border-left can't take the on-screen gradient)
   }));
   const exportBtnStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#0f766e", padding: "4px 9px", border: "1px solid #99f6e4", borderRadius: 6, background: "#f0fdfa", whiteSpace: "nowrap", cursor: "pointer" };
@@ -572,9 +643,9 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
                     <VerdictCell coverage={line.coverage} label={line.verdictLabel} />
                     <FileListCell files={line.files} muted={!line.expandable} />
                     {isEv
-                      ? <TextCell text={line.passagePreview} muted={!line.expandable} italic />
+                      ? <PassageCell source={line.passageSource} fallbackText={line.passagePreview} muted={!line.expandable} resolveText={resolveText} />
                       : <StackCell items={line.clauses} muted={!line.expandable} more="clause" />}
-                    <RationaleCell text={line.rowRationale} />
+                    <RationaleCell text={line.rowRationale} suggestedAction={isEv ? line.suggestedAction : undefined} />
                   </div>
 
                   {isOpen && line.expandable && <RowDetail line={line} resolveText={resolveText} onOpenLine={onOpenLine} />}

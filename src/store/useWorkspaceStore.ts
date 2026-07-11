@@ -1202,6 +1202,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             patchPpd({ currentFile: readFileName, detail: `Reading ${readFileName}…`, filesFound: [...fileRecords] });
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
+            // Same processingMode bookkeeping runEvidenceAssessment/auditFolderContents/
+            // auditFolderStaged already do — feeds FileLedger's "♻ Cached" badge and
+            // AIReview's cached/fresh summary. Previously this loop looked up `cached`
+            // but never recorded it on the record, so the PPD tab's ledger could never
+            // show a cache hit even when one genuinely occurred.
+            const processingMode: "new" | "reused" = cached ? "reused" : "new";
             let body: string | null;
             let readErrored = false;
             let readMethodUsed: "text" | "vision" = cached?.readMethod ?? "text";
@@ -1237,7 +1243,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
             const fileName = readFileName;
             if (!body) {
-              fileRecords[fi] = { ...fileRecords[fi], readStatus: readErrored ? "failed" : "skipped", auditStatus: "pending", charCount: 0, readMethod: readMethodUsed, ...(readErrored ? { failReason: "Drive read error" } : { skipReason: skipNote ?? "No extractable text" }) };
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: readErrored ? "failed" : "skipped", auditStatus: "pending", charCount: 0, readMethod: readMethodUsed, processingMode, ...(readErrored ? { failReason: "Drive read error" } : { skipReason: skipNote ?? "No extractable text" }) };
               patchPpd({ filesFound: [...fileRecords], ...(readErrored ? { lastIssue: { at: Date.now(), kind: "file-read-error" as const, message: `Failed to read ${fileName}: ${readErrorMsg}` } } : {}) });
               logPpd(readErrored ? `FAILED to read ${fileName} (Drive error: ${readErrorMsg})` : `Skipped ${fileName} (empty)`, readErrored ? "bad" : "warn");
               continue;
@@ -1252,7 +1258,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               chunkFileNames[chunkId] = fileName;
               fileChunkIds.push(chunkId);
             }
-            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", auditStatus: "audited", charCount: body.length, readMethod: readMethodUsed, chunkIds: fileChunkIds };
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", auditStatus: "audited", charCount: body.length, readMethod: readMethodUsed, processingMode, chunkIds: fileChunkIds };
             patchPpd({ filesFound: [...fileRecords] });
             logPpd(`Read ${fileName}${cached ? " (cached)" : ""}`, "good");
           }
@@ -1809,6 +1815,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               assessmentFailed: ev?.failed,
               promiseChecks: ev?.promiseChecks,
               evidenceQuote: ev?.evidenceQuote,
+              suggestedAction: ev?.suggestedAction,
             };
           });
           // Tag the ledger with citation status from the assessed rows: a file

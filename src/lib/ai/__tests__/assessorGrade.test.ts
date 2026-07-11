@@ -157,6 +157,91 @@ Refund log 2025: request 12 Jan, paid 15 Jan (3 working days). Peer review sched
   });
 });
 
+describe("suggestedAction — grounded 'what would make this Met' (Task 3)", () => {
+  const EV_SOURCE = `[CHUNK:C001] --- mrm-minutes.docx ---
+Management review meeting held 12 Jan 2026. 17 of 24 action items have no assigned owner or due date.`;
+
+  function evInputs(): EvidenceAssessmentInput[] {
+    return [{
+      ref: "6.2.1.DS1.a",
+      requirementText: "Management review actions are assigned an owner and a timeline.",
+      ppdVerdict: "Adequate",
+      ppdExtract: "Documented.",
+      promises: [],
+    }];
+  }
+
+  it("carries a Partial verdict's grounded suggestion through to the row", async () => {
+    mockChat.mockImplementation(async () => JSON.stringify({
+      results: [{
+        ref: "6.2.1.DS1.a",
+        evidenceSummary: "MRM minutes sighted but most actions lack owners.",
+        verdict: "Partial",
+        comment: "17 of 24 action items in the MRM minutes have no assigned owner or due date.",
+        promiseChecks: [],
+        chunkIds: ["C001"],
+        evidenceQuote: "",
+        suggestedAction: "Add owner and timeline fields to the remaining 17 unassigned actions in the Management Review Meeting minutes.",
+      }],
+    }));
+
+    const result = await runEvidenceAssessment(evInputs(), EV_SOURCE, SETTINGS, {});
+    const row = result.rows[0];
+    expect(row.verdict).toBe("Partial");
+    expect(row.suggestedAction).toBe("Add owner and timeline fields to the remaining 17 unassigned actions in the Management Review Meeting minutes.");
+  });
+
+  it("leaves suggestedAction undefined for a Met verdict (honesty rule: no suggestion needed)", async () => {
+    mockChat.mockImplementation(async () => JSON.stringify({
+      results: [{
+        ref: "6.2.1.DS1.a",
+        evidenceSummary: "All 24 action items have an assigned owner and due date.",
+        verdict: "Met",
+        comment: "All MRM action items are fully assigned.",
+        promiseChecks: [],
+        chunkIds: ["C001"],
+        evidenceQuote: "",
+        suggestedAction: "",
+      }],
+    }));
+
+    const result = await runEvidenceAssessment(evInputs(), EV_SOURCE, SETTINGS, {});
+    expect(result.rows[0].verdict).toBe("Met");
+    expect(result.rows[0].suggestedAction).toBeUndefined();
+  });
+
+  it("keeps window 1's grounded suggestion when a later window upgrades the verdict but returns none (same merge protection as comment)", async () => {
+    const LONG_EV_SOURCE = `[CHUNK:C001] --- mrm-minutes.docx ---\n${"Filler evidence text. ".repeat(2500)}`;
+    let callCount = 0;
+    mockChat.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return JSON.stringify({
+          results: [{
+            ref: "6.2.1.DS1.a", evidenceSummary: "Partial minutes sighted.", verdict: "Partial",
+            comment: "17 of 24 action items lack an assigned owner.",
+            suggestedAction: "Add owner and timeline fields to the remaining 17 unassigned actions.",
+            promiseChecks: [], chunkIds: ["C001"],
+          }],
+        });
+      }
+      return JSON.stringify({
+        results: [{
+          ref: "6.2.1.DS1.a", evidenceSummary: "Full minutes sighted.", verdict: "Partial",
+          comment: "Some action items remain unassigned.", suggestedAction: "",
+          promiseChecks: [], chunkIds: ["C001"],
+        }],
+      });
+    });
+    const result = await runEvidenceAssessment(evInputs(), LONG_EV_SOURCE, SETTINGS, {});
+    const row = result.rows[0];
+    expect(row.verdict).toBe("Partial");
+    // Verdict tie: the better-grounded window wins per-field, falling back to
+    // the previous value rather than discarding a real suggestion for a blank one.
+    expect(row.suggestedAction).toBeTruthy();
+  });
+});
+
 describe("quoteExistsInSource", () => {
   it("matches with whitespace/curly-quote drift; rejects fabricated quotes; passes short quotes", () => {
     const src = "Refunds are processed within 5 working days by the Finance Manager.";

@@ -2293,6 +2293,10 @@ export type EvidenceAssessmentLineResult = {
   // Exact verbatim excerpt from the cited evidence proving implementation —
   // verified real substring, or absent ("no exact quote identified").
   evidenceQuote?: string;
+  // "What would make this Met" — grounded in the SAME gap comment/promiseChecks
+  // already identified, never a generic template. Only ever populated for
+  // Partial/Not met (empty string for Met, per the prompt's own honesty rule).
+  suggestedAction?: string;
 };
 
 export type EvidenceAssessmentRunResult = {
@@ -2365,9 +2369,10 @@ For each line return:
 - promiseChecks: [{promiseText: string, verdict: "evidenced"|"not evidenced"|"contradicted", evidence: string, chunkIds: string[], quote: string, rationale: string, chunkId: string}] — one entry PER promise given for the line, promiseText copied exactly. evidence = the citation/description or "No record found in the evidence documents." quote = the ONE exact sentence copied VERBATIM from the cited evidence chunk that proves (or, for "contradicted", disproves) THIS specific promise — character-for-character, independent of any other promise's quote. Empty string "" for "not evidenced" (nothing to quote) or when no single sentence captures it — never invent one, never reuse another promise's quote. rationale = ONE short auditor-register sentence on WHY this promise is evidenced / not evidenced / contradicted (distinct from the quote), or "" if you cannot state a reason beyond the quote — do not pad. chunkId = the single primary chunk ID the quote came from, or "". Empty array only when the line has no promises.
 - chunkIds: exact chunk ID(s) (e.g. "C001") from evidence document headers supporting the line verdict. Empty if none.
 - evidenceQuote: for Met/Partial ONLY, the ONE exact sentence (or short clause) copied VERBATIM from the cited evidence chunk that most directly proves implementation for this line — character-for-character, so it can be located in the source. If no single sentence captures it, or the verdict is Not met, return an empty string "" — never paraphrase, summarise, or invent a quote.
+- suggestedAction: for Partial or Not met ONLY — one or two sentences on the SPECIFIC evidence or action that would move this line to Met, grounded in the SAME gap you already identified in comment/promiseChecks (name the specific record, how many items, which document/register — e.g. "Add owner and timeline fields to the remaining 17 unassigned actions in the Management Review Meeting minutes"), never generic advice like "add more evidence" or "improve documentation". If you cannot state something concrete beyond generic advice, return empty string "" — do not pad. Empty string for Met.
 
 Respond with JSON only:
-{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[], "quote": string, "rationale": string, "chunkId": string}], "chunkIds": string[], "evidenceQuote": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
+{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[], "quote": string, "rationale": string, "chunkId": string}], "chunkIds": string[], "evidenceQuote": string, "suggestedAction": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   const windows = noEvidence ? [] : buildDocWindows(evidenceDocText);
 
@@ -2375,7 +2380,7 @@ Respond with JSON only:
   // evidence: verified promises that carry a citation dominate, then the number
   // of chunks cited. Used ONLY to break verdict TIES between windows — see the
   // merge below (F1). It is not a verdict input.
-  type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[]; groundScore: number; evidenceQuote?: string };
+  type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[]; groundScore: number; evidenceQuote?: string; suggestedAction?: string };
   const groundScoreOf = (cids: string[], checks: PromiseCheck[]): number => {
     const citedPromises = checks.filter((p) => p.verdict === "evidenced" && p.chunkIds.length > 0).length;
     return citedPromises * 1000 + cids.length;
@@ -2467,6 +2472,11 @@ Respond with JSON only:
           // dropped to undefined ("no exact quote identified"), never a false match.
           const rawEvidenceQuote = typeof res?.evidenceQuote === "string" ? res.evidenceQuote.trim() : "";
           const evidenceQuote = rawEvidenceQuote && quoteExistsInSource(rawEvidenceQuote, win.text) ? rawEvidenceQuote : undefined;
+          // Task 3 — "what would make this Met": reasoning text, not a
+          // quotation, so stored as-is (no source verification) like comment/
+          // rationale — but only ever meaningful for Partial/Not met, so a
+          // Met verdict naturally carries "" per the prompt's own honesty rule.
+          const suggestedAction = typeof res?.suggestedAction === "string" ? res.suggestedAction.trim() : "";
           const promiseChecks: PromiseCheck[] = Array.isArray(res?.promiseChecks)
             ? (res!.promiseChecks as Array<Record<string, unknown>>)
                 .filter((p) => typeof p?.promiseText === "string" && ["evidenced", "not evidenced", "contradicted"].includes(p?.verdict as string))
@@ -2502,7 +2512,7 @@ Respond with JSON only:
             // upgrading the verdict with a blank comment must not discard a
             // real one an earlier window already returned for this ref — the
             // lineage matrix's evidence Rationale column reads `comment`.
-            bestByRef.set(inp.ref, { evidenceSummary, verdict, comment: comment || prev?.comment || "", groundScore: thisGround, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])], promiseChecks: mergePromiseChecks(prev?.promiseChecks, promiseChecks), evidenceQuote: evidenceQuote ?? prev?.evidenceQuote });
+            bestByRef.set(inp.ref, { evidenceSummary, verdict, comment: comment || prev?.comment || "", groundScore: thisGround, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])], promiseChecks: mergePromiseChecks(prev?.promiseChecks, promiseChecks), evidenceQuote: evidenceQuote ?? prev?.evidenceQuote, suggestedAction });
           } else if (EVIDENCE_VERDICT_ORDER[verdict] === EVIDENCE_VERDICT_ORDER[prev.verdict]) {
             // F1 — verdict TIE. Reading order must NOT decide which justification
             // survives: keep the summary/comment from the better-grounded window
@@ -2514,7 +2524,7 @@ Respond with JSON only:
             const better = thisGround > prev.groundScore;
             bestByRef.set(inp.ref, {
               ...prev,
-              ...(better ? { evidenceSummary, comment, groundScore: thisGround, evidenceQuote: evidenceQuote ?? prev.evidenceQuote } : { evidenceQuote: prev.evidenceQuote ?? evidenceQuote }),
+              ...(better ? { evidenceSummary, comment, groundScore: thisGround, evidenceQuote: evidenceQuote ?? prev.evidenceQuote, suggestedAction: suggestedAction || prev.suggestedAction } : { evidenceQuote: prev.evidenceQuote ?? evidenceQuote }),
               chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])],
               promiseChecks: mergePromiseChecks(prev.promiseChecks, promiseChecks),
             });
@@ -2559,6 +2569,7 @@ Respond with JSON only:
           chunkIds: best.chunkIds,
           promiseChecks: best.promiseChecks,
           evidenceQuote: best.evidenceQuote,
+          suggestedAction: best.suggestedAction || undefined,
         };
       }
       // A "Met" verdict that cannot cite any evidence chunk is downgraded to
@@ -2571,6 +2582,7 @@ Respond with JSON only:
           comment: `${verifiedComment ? `${verifiedComment}\n\n` : ""}${UNCITED_DOWNGRADE_NOTE}`,
           chunkIds: [],
           promiseChecks: best.promiseChecks,
+          suggestedAction: best.suggestedAction || undefined,
         };
       }
       // Promise hard-gate: a "Met" line with an unfulfilled or contradicted
@@ -2586,9 +2598,10 @@ Respond with JSON only:
           chunkIds: best.chunkIds,
           promiseChecks: best.promiseChecks,
           evidenceQuote: best.evidenceQuote,
+          suggestedAction: best.suggestedAction || undefined,
         };
       }
-      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks, evidenceQuote: best.evidenceQuote };
+      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks, evidenceQuote: best.evidenceQuote, suggestedAction: best.suggestedAction || undefined };
     }
     if (failedRefs.has(inp.ref)) {
       return { ref: inp.ref, evidenceSummary: "Assessment failed — retry.", verdict: "Not met", comment: "The AI call for this line failed or timed out. Re-run the evidence assessment to retry.", chunkIds: [], failed: true };

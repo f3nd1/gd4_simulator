@@ -14,6 +14,10 @@ export type LineageExportRow = {
   fileNames: string[];       // full list, joined "; " at export time — never "+N more"
   clauseOrPassage: string;   // policy: distinct clause refs joined; evidence: the supporting passage
   rationale: string;
+  // Evidence tab only: "what would make this Met", grounded in the AI's own
+  // gap reasoning — undefined on the policy tab and on Met rows. Additive/
+  // optional so older exported code paths / stored rows without it still work.
+  suggestedAction?: string;
   barColor: string;          // the row's own left-edge coverage colour, reused as-is (not re-derived)
 };
 
@@ -44,9 +48,12 @@ function formatRunAt(iso: string): string {
   return d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+// Evidence tab gets one extra trailing column — "what would make this Met" —
+// so a later "add to Findings" step can pull it straight from the export;
+// the policy tab has no such field and keeps its original 6 columns.
 const CSV_HEADERS: Record<LineageExportMeta["tab"], string[]> = {
   policy: ["GD4 Requirement", "Ref", "Policy Verdict", "Policy File(s)", "Policy Clause", "Rationale"],
-  evidence: ["GD4 Requirement", "Ref", "Evidence Verdict", "Evidence File(s)", "Supporting Passage", "Rationale"],
+  evidence: ["GD4 Requirement", "Ref", "Evidence Verdict", "Evidence File(s)", "Supporting Passage", "Rationale", "Suggested Action"],
 };
 
 // Pure builder — exported for unit testing (column order/content, full
@@ -63,6 +70,7 @@ export function buildLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[
     r.fileNames.join("; ") || "—",
     r.clauseOrPassage || "—",
     r.rationale || "—",
+    ...(meta.tab === "evidence" ? [r.suggestedAction || "—"] : []),
   ]);
   return toCsv(CSV_HEADERS[meta.tab], csvRows);
 }
@@ -91,6 +99,7 @@ export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExport
       <td>${escapeHtml(r.fileNames.join("; ") || "—")}</td>
       <td>${escapeHtml(r.clauseOrPassage || "—")}</td>
       <td>${escapeHtml(r.rationale || "—")}</td>
+      ${meta.tab === "evidence" ? `<td>${escapeHtml(r.suggestedAction || "—")}</td>` : ""}
     </tr>`).join("");
 
   return `<!doctype html>
