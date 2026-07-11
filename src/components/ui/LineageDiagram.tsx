@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
 import { excerptAround, findQuoteSpan } from "./quoteMatch";
+import { downloadLineageCsv, openLineagePdf, type LineageExportRow, type LineageExportMeta } from "../../lib/lineageExport";
 import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, AuditFileRecord, PPDVerdict, EvidenceVerdict } from "../../types";
 
 // Requirement coverage MATRIX — one tab-specific five-column table per Option A
@@ -360,11 +361,16 @@ function LegendSwatch({ bar, label }: { bar: string; label: string }) {
   );
 }
 
-export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
+export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
   mode: "ppd" | "evidence";
   ppd?: PPDReviewResult;
   evidence?: EvidenceAssessmentResult; // NOTE: evidence tab is self-contained; `ppd` is unused there.
   onOpenLine: (ref: string) => void;
+  // Sub-criterion id + title (e.g. "6.2 Management Review"), for the CSV/PDF
+  // export's header and filename only — optional so existing callers that
+  // don't pass it still render exactly as before, just with a plain ref-only
+  // export label instead of the human title.
+  runLabel?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [openRef, setOpenRef] = useState<string | null>(null);
@@ -389,6 +395,29 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
   const headerCell: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 };
   const col4Header = isEv ? "Supporting passage" : "Policy clause";
 
+  // Export reuses EXACTLY the rows currently rendered above — full,
+  // untruncated text (the on-screen "+N more"/2-line clamp is display-only;
+  // the underlying strings were never truncated) — and only THIS tab's mode,
+  // never the other tab's data.
+  const exportMeta: LineageExportMeta = {
+    tab: isEv ? "evidence" : "policy",
+    runLabel: runLabel || (isEv ? evidence?.subCriterionId : ppd?.subCriterionId) || "lineage",
+    runAt: (isEv ? evidence?.runAt : ppd?.runAt) || new Date(0).toISOString(),
+    statusLine: Object.entries(
+      lines.reduce<Record<string, number>>((acc, l) => { acc[l.verdictLabel] = (acc[l.verdictLabel] ?? 0) + 1; return acc; }, {})
+    ).map(([label, n]) => `${n} ${label}`).join(" · "),
+  };
+  const exportRows: LineageExportRow[] = lines.map((l) => ({
+    ref: l.ref,
+    requirementText: l.reqLabel,
+    verdictLabel: l.verdictLabel,
+    fileNames: l.files.map((f) => f.name),
+    clauseOrPassage: isEv ? (l.passagePreview || "") : l.clauses.join("; "),
+    rationale: l.rowRationale || "",
+    barColor: COV_DOT[l.coverage], // same solid colour scale the verdict dot uses (border-left can't take the on-screen gradient)
+  }));
+  const exportBtnStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#0f766e", padding: "4px 9px", border: "1px solid #99f6e4", borderRadius: 6, background: "#f0fdfa", whiteSpace: "nowrap", cursor: "pointer" };
+
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, background: "#fff", marginBottom: 12, overflow: "hidden" }}>
       <div
@@ -407,6 +436,13 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
             <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 3px" }}>abc</mark> exact quote
           </span>
+        </span>
+        {/* Export the rows exactly as rendered above — this tab only, full
+            untruncated file/clause lists (no "+N more"). stopPropagation so
+            clicking an export button doesn't also collapse the panel. */}
+        <span style={{ display: "inline-flex", gap: 6 }}>
+          <button type="button" onClick={(e) => { e.stopPropagation(); downloadLineageCsv(exportMeta, exportRows); }} style={exportBtnStyle} title="Every row above, full file lists, as a CSV">⬇ CSV</button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); openLineagePdf(exportMeta, exportRows); }} style={exportBtnStyle} title="Every row above as a printable/PDF table (opens a new tab)">⬇ PDF</button>
         </span>
         <span style={{ color: "#94a3b8", fontSize: 12 }}>{open ? "▲" : "▼"}</span>
       </div>

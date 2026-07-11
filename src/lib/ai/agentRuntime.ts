@@ -2112,7 +2112,16 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     // downgraded to "Partial" — same uncited-positive rule as buildStagedApsr.
     const uncitedAdequate = best?.verdict === "Adequate" && (best.chunkIds?.length ?? 0) === 0;
     const verdict: PPDVerdict = uncitedAdequate ? "Partial" : (best?.verdict ?? "Not documented");
-    const fullComment = best?.fullComment || "No verdict returned by the AI for this requirement — treat as undocumented until re-run.";
+    // "No verdict returned by the AI…" is only TRUE when `best` itself is
+    // undefined — nothing at all came back for this ref. When `best` exists
+    // (a real verdict was returned), that placeholder would be a false claim
+    // even if this specific comment field happened to come back blank (the
+    // model skipped it, or a later higher-verdict window's merge overwrote a
+    // populated comment with an empty one — see the bestByRef.set() above).
+    // In that case leave it genuinely blank rather than fabricate a reason.
+    const fullComment = best
+      ? (best.fullComment || "")
+      : "No verdict returned by the AI for this requirement — treat as undocumented until re-run.";
     // Quote verification: annotate any quoted excerpt that does not exist
     // verbatim in the source, so hallucinated "quotes" can't pass as real.
     const verifiedComment = flagUnverifiedQuotes(
@@ -2124,7 +2133,9 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       gd4ItemId: r.gd4ItemId,
       requirementText: r.requirementText,
       verdict,
-      shortComment: best?.shortComment || "No verdict returned by the AI for this requirement.",
+      // Same honesty split as fullComment above — never claim "no verdict
+      // returned" when a verdict plainly WAS returned.
+      shortComment: best ? (best.shortComment || "") : "No verdict returned by the AI for this requirement.",
       fullComment: verifiedComment,
       suggestedRewrite: best?.suggestedRewrite,
       chunkIds: best?.chunkIds ?? [],

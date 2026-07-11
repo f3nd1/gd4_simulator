@@ -197,3 +197,56 @@ Q1 manpower review held 12 Feb; HR Manager present; staffing gaps logged.`;
     expect(pc.chunkId).toBe("C001");
   });
 });
+
+describe("rationale placeholder honesty (a real verdict must never claim 'no verdict returned')", () => {
+  const HR_SOURCE = `[CHUNK:C001] --- hr.docx ---
+The HR Manager reviews staffing quarterly.`;
+
+  it("a real Adequate verdict with an empty shortComment/fullComment is left blank, not fabricated as 'No verdict returned'", async () => {
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{
+          ref: "1.1.1.DS1",
+          subClauses: [{ text: "Manpower planning", verdict: "documented", quote: "The HR Manager reviews staffing quarterly." }],
+          verdict: "Adequate", shortComment: "", fullComment: "", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "The HR Manager reviews staffing quarterly.",
+        }],
+      });
+    });
+    const result = await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], HR_SOURCE, SETTINGS, {});
+    const row = result.rows[0];
+    expect(row.verdict).toBe("Adequate"); // a real verdict WAS returned
+    expect(row.shortComment).toBe(""); // honestly blank, not a false claim
+    expect(row.fullComment).toBe("");
+    expect(row.shortComment).not.toContain("No verdict returned");
+    expect(row.fullComment).not.toContain("No verdict returned");
+  });
+
+  it("a line the model silently drops from a successfully-parsed batch is honestly blank, not falsely explained", async () => {
+    // Two lines requested; the model returns only one — the batch still
+    // parses (results.length > 0), so this is NOT the "no parseable
+    // results" failure path (that path IS accurate: it records a
+    // windowError and the line surfaces as "Not assessed", tested
+    // elsewhere in partialCoverage.test.ts). The dropped ref instead falls
+    // through the per-item loop's own "Not documented" default.
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{ ref: "1.1.1.DS1", subClauses: [], verdict: "Adequate", shortComment: "Covered.", fullComment: "Covered.", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }],
+      });
+    });
+    const result = await runPPDRequirementsReview(
+      [{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }, { ref: "1.1.1.DS2", gd4ItemId: "1.1.1", requirementText: "y" }],
+      HR_SOURCE, SETTINGS, {}
+    );
+    const dropped = result.rows.find((r) => r.ref === "1.1.1.DS2")!;
+    expect(dropped.verdict).toBe("Not documented");
+    // Not the false "No verdict returned" claim — and not fabricated text either.
+    expect(dropped.shortComment).toBe("");
+    expect(dropped.fullComment).toBe("");
+  });
+});

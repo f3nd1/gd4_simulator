@@ -537,7 +537,7 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
           {/* Requirement → PPD lineage map (reuses this run's row data) — the
               primary, always-visible view: per-sub-part expand-to-highlighted-
               source already answers "which file/section backs this line". */}
-          <LineageDiagram mode="ppd" ppd={liveResult} onOpenLine={openLine} />
+          <LineageDiagram mode="ppd" ppd={liveResult} onOpenLine={openLine} runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()} />
 
           {/* Full per-line table below is secondary detail (same rows the map
               already summarises), so it defaults collapsed. Every row, every
@@ -1298,7 +1298,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
       {/* Requirement → PPD → Evidence lineage map (reuses stored row data) —
           the primary, always-visible view: per-sub-part expand-to-highlighted-
           source already answers "which file/section backs this line". */}
-      <LineageDiagram mode="evidence" evidence={assessment} ppd={ppd} onOpenLine={openLine} />
+      <LineageDiagram mode="evidence" evidence={assessment} ppd={ppd} onOpenLine={openLine} runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()} />
 
       {/* Full per-line table below is secondary detail (same rows the map
           already summarises), so it defaults collapsed. Every row, every
