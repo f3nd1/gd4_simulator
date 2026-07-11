@@ -782,6 +782,24 @@ export type PPDSubClause = {
   // Undefined for "not documented" sub-clauses. Used to highlight the
   // relevant excerpt per sub-part in the lineage diagram's expanded view.
   quote?: string;
+  // Named section reference of the SOURCE PPD document where this sub-clause
+  // is documented (e.g. "4.2 Competency-Based Recruitment and Selection
+  // Strategy, Step 1: Manpower Planning and Deployment"). Stored ONLY when it
+  // (or its leading heading segment) verifies as a real substring of the
+  // source — an invented/tidied reference is dropped to undefined, so the
+  // lineage map shows an honest em-dash rather than a clause an assessor
+  // would chase and never find. Absent on runs from before this field existed.
+  clause?: string;
+  // One short auditor-register sentence on WHY this sub-clause is / is not
+  // documented, distinct from the quote. Undefined when the model could not
+  // state a reason beyond the quote itself (never padded). Not verified
+  // against source (it is reasoning, like shortComment, not a quotation).
+  rationale?: string;
+  // The single chunk ID (e.g. "C001") the quote came from, for DIRECT file
+  // attribution in the lineage map (chunk → file), instead of searching every
+  // cited file's text for the quote. Undefined on older runs → the map falls
+  // back to quote-search attribution.
+  chunkId?: string;
 };
 
 // A specific, verifiable commitment the PPD makes for a requirement line
@@ -817,6 +835,15 @@ export type PromiseCheck = {
   // label/description rather than a verified verbatim excerpt. Used to
   // highlight the relevant excerpt per sub-part in the lineage diagram.
   quote?: string;
+  // One short auditor-register sentence on WHY this promise is evidenced /
+  // not evidenced / contradicted, distinct from the quote. Undefined when the
+  // model could not state a reason beyond the quote (never padded). Not
+  // verified against source (reasoning, like the line comment, not a quotation).
+  rationale?: string;
+  // The single primary chunk ID the quote came from, for DIRECT file
+  // attribution in the lineage map. Undefined on older runs → the map falls
+  // back to chunkIds[0] / quote-search attribution.
+  chunkId?: string;
 };
 
 export type PPDReviewRow = {

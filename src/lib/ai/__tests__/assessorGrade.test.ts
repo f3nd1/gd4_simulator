@@ -7,7 +7,7 @@ vi.mock("../aiClient", async (importOriginal) => {
 });
 
 import { chatComplete } from "../aiClient";
-import { runPPDRequirementsReview, runEvidenceAssessment, quoteExistsInSource, type PPDRequirementInput, type EvidenceAssessmentInput } from "../agentRuntime";
+import { runPPDRequirementsReview, runEvidenceAssessment, quoteExistsInSource, clauseAppearsInSource, type PPDRequirementInput, type EvidenceAssessmentInput } from "../agentRuntime";
 
 const mockChat = vi.mocked(chatComplete);
 const SETTINGS: AISettings = { provider: "openai", apiKey: "test-key", model: "m", utilityModel: "m", enabled: true };
@@ -132,5 +132,68 @@ describe("quoteExistsInSource", () => {
     expect(quoteExistsInSource("Refunds  are processed\nwithin 5 working days", src)).toBe(true);
     expect(quoteExistsInSource("the Principal signs a quarterly compliance attestation form", src)).toBe(false);
     expect(quoteExistsInSource("Adequate", src)).toBe(true);
+  });
+});
+
+describe("clauseAppearsInSource", () => {
+  const src = "4.2 Competency-Based Recruitment and Selection Strategy\nStep 1: Manpower Planning and Deployment\nThe HR Manager reviews staffing quarterly.";
+  it("accepts a clause that is verbatim in the source", () => {
+    expect(clauseAppearsInSource("4.2 Competency-Based Recruitment and Selection Strategy", src)).toBe(true);
+  });
+  it("accepts a 'Heading, Sub-heading' join via its leading segment (doc split across lines)", () => {
+    expect(clauseAppearsInSource("4.2 Competency-Based Recruitment and Selection Strategy, Step 1: Manpower Planning and Deployment", src)).toBe(true);
+  });
+  it("rejects an invented/tidied clause whose leading segment is not in the source", () => {
+    expect(clauseAppearsInSource("Section 9.9 Total Quality Excellence Framework", src)).toBe(false);
+    expect(clauseAppearsInSource("", src)).toBe(false);
+  });
+});
+
+describe("clause / rationale / chunkId are parsed with honesty (Phase 2)", () => {
+  const PPD_SRC = `[CHUNK:C001] --- hr-manual.docx ---
+4.2 Competency-Based Recruitment and Selection Strategy. Step 1: Manpower Planning and Deployment. The HR Manager reviews staffing needs quarterly and records them in the manpower plan.`;
+
+  it("keeps a real clause + rationale + chunkId, and DROPS an invented clause to undefined", async () => {
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{
+          ref: "1.1.1.DS1",
+          subClauses: [
+            // Real clause present verbatim in the source → kept.
+            { text: "Manpower planning", verdict: "documented", quote: "The HR Manager reviews staffing needs quarterly and records them in the manpower plan.", clause: "4.2 Competency-Based Recruitment and Selection Strategy, Step 1: Manpower Planning and Deployment", rationale: "The manpower plan names the HR Manager and a quarterly cadence.", chunkId: "C001" },
+            // Invented clause not in the source → dropped to undefined (honest em-dash in UI).
+            { text: "Succession planning", verdict: "not documented", quote: "", clause: "9.9 Succession & Talent Pipeline Policy", rationale: "", chunkId: "" },
+          ],
+          verdict: "Partial", shortComment: "Succession planning not documented.", fullComment: "x", promises: [], suggestedRewrite: "y", chunkIds: ["C001"], supportQuote: "",
+        }],
+      });
+    });
+    const result = await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "Manpower and succession planning documented." }], PPD_SRC, SETTINGS, {});
+    const sc = result.rows[0].subClauses!;
+    expect(sc[0].clause).toBe("4.2 Competency-Based Recruitment and Selection Strategy, Step 1: Manpower Planning and Deployment");
+    expect(sc[0].rationale).toContain("quarterly");
+    expect(sc[0].chunkId).toBe("C001");
+    expect(sc[1].clause).toBeUndefined(); // invented clause dropped
+  });
+
+  it("carries promiseCheck rationale + chunkId through the evidence parse", async () => {
+    const EV_SRC = `[CHUNK:C001] --- attendance.xlsx ---
+Q1 manpower review held 12 Feb; HR Manager present; staffing gaps logged.`;
+    mockChat.mockImplementation(async () => JSON.stringify({
+      results: [{
+        ref: "1.1.1.DS1", evidenceSummary: "Review record sighted.", verdict: "Met", comment: "Record confirms the quarterly review ran (C001).",
+        promiseChecks: [
+          { promiseText: "Quarterly manpower review", verdict: "evidenced", evidence: "Q1 review record (C001).", chunkIds: ["C001"], quote: "Q1 manpower review held 12 Feb", rationale: "A dated Q1 record shows the review actually ran.", chunkId: "C001" },
+        ],
+        chunkIds: ["C001"],
+      }],
+    }));
+    const result = await runEvidenceAssessment([{ ref: "1.1.1.DS1", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [{ promiseText: "Quarterly manpower review", sourceQuote: "", chunkId: "C001" }] }], EV_SRC, SETTINGS, {});
+    const pc = result.rows[0].promiseChecks![0];
+    expect(pc.rationale).toContain("Q1 record");
+    expect(pc.chunkId).toBe("C001");
   });
 });

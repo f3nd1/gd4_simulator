@@ -1,70 +1,77 @@
 import { useCallback, useMemo, useState } from "react";
-import { normalizeAuditRef } from "../../lib/gd4Refs";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
 import { excerptAround, findQuoteSpan } from "./quoteMatch";
 import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, AuditFileRecord, PPDVerdict, EvidenceVerdict } from "../../types";
 
-// Requirement → Policy → Evidence coverage MATRIX.
+// Requirement coverage MATRIX — one tab-specific five-column table per Option A
+// tab, scannable straight down each column without expanding anything.
 //
-// A read-only view of data ALREADY computed per requirement line by the PPD
-// review / evidence assessment — no recompute, no re-fetch, no change to any
-// verdict/quote/scoring logic. It renders as an aligned MATRIX with real
-// column headers, scannable straight down each column without expanding:
-//   PPD Review tab (4 cols): Ref | Requirement | Policy verdict | Policy file(s)
-//   Evidence tab   (6 cols): + Evidence verdict | Evidence file(s)
+//   Policy tab:   GD4 requirement | Policy verdict | Policy file(s) | Policy clause | Rationale
+//   Evidence tab: GD4 requirement | Evidence verdict | Evidence file(s) | Supporting passage | Rationale
 //
-// ONE colour axis: a per-row left-edge bar encodes COVERAGE only — solid green
-// (covered), half-amber (partial), plain grey (not covered), dotted grey (not
-// checked). Verdict cells repeat that coverage colour as a small dot + text;
-// colour is used for nothing else. The yellow highlight on a matched quote is
-// a text-highlight of the located passage, not a status colour.
+// A read-only view of data ALREADY computed per requirement line — no recompute,
+// no re-fetch, no change to any verdict/quote/scoring logic.
 //
-// MULTI-FILE IS REAL. A requirement can be backed by several policy files AND
-// several evidence files: policy citations come from the row's chunkIds mapped
-// through chunkFileNames; evidence citations from the row's evidenceFiles list.
-// The file cell stacks up to two names then "+N more file(s)". (The stored data
-// always supported this — the earlier one-file-per-verdict display was a bug.)
+// ONE colour axis: a 3px left-edge bar encodes COVERAGE only — solid green
+// (met), half-amber (partial), plain grey (not met), dotted grey (not checked).
+// The verdict cell repeats that coverage colour as a dot + text; colour is used
+// for nothing else. (The yellow highlight on a matched quote is a text-highlight
+// of the located passage, not a status colour.)
 //
-// Covered/partial rows expand to a SPINE detail (a single 1px rule with items
-// hanging off it, filled dot = found, hollow = not found) — two columns on the
-// Evidence tab ("What the policy says" | "What the evidence shows"), one on the
-// PPD tab. Each found sub-part shows its plain-English name, the located passage
-// (context faint, matched sentence highlighted), and a mandatory "from
-// <filename> ↗" attribution so every quote traces to its true source file when
-// several files back one requirement. A sub-part checked but with no single
-// locatable quote keeps its honest, NON-failure note ("Covered, but spread
-// across the document…"). Gap and unchecked rows are FLAT and non-expandable —
-// an em-dash in the file column, nothing to drill into.
+// MULTI-FILE IS REAL. A requirement can be backed by several files: policy
+// citations come from the row's chunkIds mapped through chunkFileNames; evidence
+// citations from the row's evidenceFiles list. The file cell stacks up to two
+// names then "+N more file(s)".
+//
+// The "Policy clause" column names the SOURCE document's own section reference
+// (e.g. "4.2 Competency-Based Recruitment…, Step 1: Manpower Planning"), never a
+// filename — and shows an em-dash when the assessment could not honestly
+// identify one. (The Evidence tab has no clause structure, so its fourth column
+// is "Supporting passage" — the located evidence excerpt — per the audit's own
+// data, which carries filename + text span but no internal clause reference.)
+//
+// Gap and unchecked rows are FLAT and non-expandable — em-dash in the file and
+// clause/passage columns, nothing to drill into. Covered/partial rows expand to
+// a SPINE: a single 1px rule with the sub-parts hanging off it (filled dot =
+// found, hollow = not found), indented and shaded under the parent row. Each
+// found sub-part shows its plain-English name, its clause reference (policy),
+// the located passage (context faint, match highlighted), a mandatory "from
+// <filename> ↗" attribution, and its per-clause rationale beneath. A sub-part
+// checked but with no single locatable quote keeps its honest, NON-failure note
+// ("Covered, but spread across the document rather than one passage.").
 
 type Coverage = "covered" | "partial" | "not-covered" | "not-checked";
 
-// One cited source file: its name, a Drive link where resolvable, and (where
-// the run's ledger has it) the AuditFileRecord so its extracted text can be
-// read from the cache for highlighting.
+// One cited source file: name, a Drive link where resolvable, and (where the
+// run's ledger has it) the AuditFileRecord so its extracted text can be read.
 type CitedFile = { name: string; url?: string; record?: AuditFileRecord };
 
-// One independently-checked sub-part of a requirement line, resolved for
-// display. `found` drives the spine dot (filled vs hollow); the rest is the
-// located passage + its source-file attribution, or an honest gap/absence.
+// One independently-checked sub-part, resolved for display. `found` drives the
+// spine dot; the rest is the located passage + attribution + rationale, or an
+// honest gap/absence.
 type SpineItem = {
-  name: string;            // plain-English sub-part name (never "Sub-part C")
+  name: string;            // what the sub-part IS (never "Sub-part C")
+  clause?: string;         // policy: the SOURCE document's clause reference
   found: boolean;
-  quote?: string;          // verbatim excerpt to locate + highlight
+  quote?: string;
   noExactQuote?: boolean;  // covered but no single locatable passage (honest, NOT a failure)
   contradicted?: boolean;  // evidence-only: the passage contradicts the promise
-  sourceFile?: CitedFile;  // which file this passage/absence pertains to
+  sourceFile?: CitedFile;
+  rationale?: string;      // per-clause / per-promise "why"
 };
 
-type SideDetail = { files: CitedFile[]; items: SpineItem[] };
-type SideData = { coverage: Coverage; label: string; files: CitedFile[]; detail?: SideDetail };
 type MatrixLine = {
   ref: string;
   reqLabel: string;
-  rowCoverage: Coverage;   // combined verdict → left bar + expandability
+  coverage: Coverage;      // the tab's own verdict → left bar + expandability
   expandable: boolean;
-  policy: SideData;
-  evidence?: SideData;     // Evidence tab only
+  verdictLabel: string;
+  files: CitedFile[];
+  clauses: string[];       // policy: distinct clause references for the matrix cell
+  passagePreview?: string; // evidence: supporting-passage preview for the matrix cell
+  rowRationale?: string;   // shortComment (policy) / comment (evidence)
+  items: SpineItem[];      // spine, only for expandable rows
 };
 
 function shorten(s: string, n = 110): string {
@@ -102,8 +109,7 @@ function coverageBar(c: Coverage): string {
 }
 
 // Policy files a row cites: unique source-file names across its chunkIds,
-// resolved to their ledger records (for extracted text + Drive link). The
-// list — not just chunkIds[0] — so every backing policy file surfaces.
+// resolved to their ledger records (for extracted text + Drive link).
 function citedPolicyFiles(chunkIds: string[], chunkFileNames?: Record<string, string>, ledger?: AuditFileRecord[]): CitedFile[] {
   return uniqStrings(chunkIds.map((id) => chunkFileNames?.[id])).map((name) => {
     const record = ledger?.find((f) => f.name === name);
@@ -112,18 +118,15 @@ function citedPolicyFiles(chunkIds: string[], chunkFileNames?: Record<string, st
 }
 
 // Evidence files a row cites: the row's own evidenceFiles list (already
-// {name,url}), resolved to ledger records where available so their extracted
-// text can be read for highlighting.
+// {name,url}), resolved to ledger records where available for highlighting.
 function citedEvidenceFiles(files: EvidenceFileRef[], ledger?: AuditFileRecord[]): CitedFile[] {
   return files.map((f) => ({ name: f.name, url: f.url, record: ledger?.find((r) => r.name === f.name) }));
 }
 
 type ResolveText = (f: AuditFileRecord) => string | null | undefined;
 
-// Attribute a located quote to whichever cited file's extracted text actually
-// contains it — the SAME verbatim match (findQuoteSpan) the highlighter uses,
-// so when several files back one requirement each quote names its true source.
-// Never guesses: returns undefined if no cited file's cached text contains it.
+// Attribute a quote to whichever cited file's extracted text actually contains
+// it — the SAME verbatim match (findQuoteSpan) the highlighter uses. Never guesses.
 function attributeQuote(quote: string, files: CitedFile[], resolveText: ResolveText): CitedFile | undefined {
   for (const cf of files) {
     const text = cf.record ? resolveText(cf.record) : undefined;
@@ -132,93 +135,86 @@ function attributeQuote(quote: string, files: CitedFile[], resolveText: ResolveT
   return undefined;
 }
 
-// PPD-side spine: the STEP 1 sub-clause decomposition (each its own
-// documented/not verdict + own quote), else a single line-level fallback.
-function policySpine(row: PPDReviewRow, files: CitedFile[], resolveText: ResolveText): SpineItem[] {
+// Resolve a sub-part's source file: DIRECT via its stored chunkId (new runs),
+// else by locating its quote in a cited file (older runs), else the sole file.
+function resolveSourceFile(chunkId: string | undefined, quote: string | undefined, files: CitedFile[], chunkFileNames: Record<string, string> | undefined, resolveText: ResolveText): CitedFile | undefined {
+  const name = chunkId ? chunkFileNames?.[chunkId] : undefined;
+  if (name) return files.find((f) => f.name === name) ?? { name };
+  if (quote) { const a = attributeQuote(quote, files, resolveText); if (a) return a; }
+  return files.length === 1 ? files[0] : undefined;
+}
+
+function policySpine(row: PPDReviewRow, files: CitedFile[], chunkFileNames: Record<string, string> | undefined, resolveText: ResolveText): SpineItem[] {
   const subs = row.subClauses;
-  const only = files.length === 1 ? files[0] : undefined;
   if (subs && subs.length > 0) {
     return subs.map((sc) => {
+      const sourceFile = resolveSourceFile(sc.chunkId, sc.quote, files, chunkFileNames, resolveText);
       if (sc.verdict === "documented") {
-        if (sc.quote) {
-          const src = attributeQuote(sc.quote, files, resolveText) ?? only;
-          return { name: sc.text, found: true, quote: sc.quote, sourceFile: src };
-        }
-        return { name: sc.text, found: true, noExactQuote: true, sourceFile: only };
+        return sc.quote
+          ? { name: sc.text, clause: sc.clause, found: true, quote: sc.quote, sourceFile, rationale: sc.rationale }
+          : { name: sc.text, clause: sc.clause, found: true, noExactQuote: true, sourceFile, rationale: sc.rationale };
       }
-      return { name: sc.text, found: false, sourceFile: only };
+      return { name: sc.text, clause: sc.clause, found: false, sourceFile, rationale: sc.rationale };
     });
   }
-  // No decomposition — single line-level item (same fallback as before).
+  // No decomposition — one line-level item (older runs). Its rationale is the
+  // row rationale (shown in the Rationale column already), so leave it off here.
   if (row.supportQuote) {
-    const src = attributeQuote(row.supportQuote, files, resolveText) ?? files[0];
-    return [{ name: "This requirement", found: true, quote: row.supportQuote, sourceFile: src }];
+    return [{ name: "This requirement", found: true, quote: row.supportQuote, sourceFile: resolveSourceFile(undefined, row.supportQuote, files, chunkFileNames, resolveText) }];
   }
   return [{ name: "This requirement", found: true, noExactQuote: true, sourceFile: files[0] }];
 }
 
-// Evidence-side spine: each PPD promise verified against the Actual Evidence
-// (evidenced / not evidenced / contradicted), each carrying its own chunkIds
-// so its passage attributes directly to a file.
 function evidenceSpine(row: EvidenceAssessmentRow, files: CitedFile[], chunkFileNames: Record<string, string> | undefined, resolveText: ResolveText): SpineItem[] {
   const checks = row.promiseChecks;
-  const only = files.length === 1 ? files[0] : undefined;
-  const byName = (name?: string): CitedFile | undefined => (name ? (files.find((f) => f.name === name) ?? { name }) : undefined);
   if (checks && checks.length > 0) {
     return checks.map((c) => {
-      const named = byName(uniqStrings(c.chunkIds.map((id) => chunkFileNames?.[id]))[0]);
+      const sourceFile = resolveSourceFile(c.chunkId ?? c.chunkIds[0], c.quote, files, chunkFileNames, resolveText);
       if (c.verdict === "evidenced") {
-        if (c.quote) {
-          const src = attributeQuote(c.quote, files, resolveText) ?? named ?? only;
-          return { name: c.promiseText, found: true, quote: c.quote, sourceFile: src };
-        }
-        return { name: c.promiseText, found: true, noExactQuote: true, sourceFile: named ?? only };
+        return c.quote
+          ? { name: c.promiseText, found: true, quote: c.quote, sourceFile, rationale: c.rationale }
+          : { name: c.promiseText, found: true, noExactQuote: true, sourceFile, rationale: c.rationale };
       }
       if (c.verdict === "contradicted") {
-        const src = c.quote ? (attributeQuote(c.quote, files, resolveText) ?? named) : named;
-        return { name: c.promiseText, found: false, contradicted: true, quote: c.quote, sourceFile: src };
+        return { name: c.promiseText, found: false, contradicted: true, quote: c.quote, sourceFile, rationale: c.rationale };
       }
-      return { name: c.promiseText, found: false, sourceFile: named };
+      return { name: c.promiseText, found: false, sourceFile, rationale: c.rationale };
     });
   }
   if (row.evidenceQuote) {
-    const src = attributeQuote(row.evidenceQuote, files, resolveText) ?? files[0];
-    return [{ name: "This requirement", found: true, quote: row.evidenceQuote, sourceFile: src }];
+    return [{ name: "This requirement", found: true, quote: row.evidenceQuote, sourceFile: resolveSourceFile(undefined, row.evidenceQuote, files, chunkFileNames, resolveText) }];
   }
   return [{ name: "This requirement", found: true, noExactQuote: true, sourceFile: files[0] }];
 }
 
 function buildPpdLines(ppd: PPDReviewResult, resolveText: ResolveText): MatrixLine[] {
   return ppd.rows.map((r) => {
-    const cov = ppdCoverage(r.verdict);
+    const coverage = ppdCoverage(r.verdict);
     const files = citedPolicyFiles(r.chunkIds, ppd.chunkFileNames, ppd.fileLedger);
-    const expandable = cov === "covered" || cov === "partial";
+    const expandable = coverage === "covered" || coverage === "partial";
+    const items = expandable ? policySpine(r, files, ppd.chunkFileNames, resolveText) : [];
     return {
-      ref: r.ref, reqLabel: r.requirementText, rowCoverage: cov, expandable,
-      policy: { coverage: cov, label: POLICY_LABEL[cov], files, detail: expandable ? { files, items: policySpine(r, files, resolveText) } : undefined },
+      ref: r.ref, reqLabel: r.requirementText, coverage, expandable, verdictLabel: POLICY_LABEL[coverage],
+      files, clauses: uniqStrings(items.map((it) => it.clause)), rowRationale: r.shortComment || undefined, items,
     };
   });
 }
 
-function buildEvidenceLines(ev: EvidenceAssessmentResult, ppd: PPDReviewResult | undefined, resolveText: ResolveText): MatrixLine[] {
-  const ppdByRef = new Map<string, PPDReviewRow>();
-  if (ppd) for (const r of ppd.rows) ppdByRef.set(normalizeAuditRef(r.ref), r);
+function buildEvidenceLines(ev: EvidenceAssessmentResult, resolveText: ResolveText): MatrixLine[] {
   return ev.rows.map((r) => {
-    const pr = ppdByRef.get(normalizeAuditRef(r.gdRef));
-    const pcov = ppdCoverage(r.ppdVerdict);
-    const ecov = evCoverage(r.verdict); // combined verdict → row bar + expandability
-    const policyFiles = pr ? citedPolicyFiles(pr.chunkIds, ppd?.chunkFileNames, ppd?.fileLedger) : [];
-    const evidenceFiles = citedEvidenceFiles(r.evidenceFiles, ev.fileLedger);
-    const expandable = ecov === "covered" || ecov === "partial";
+    const coverage = evCoverage(r.verdict);
+    const files = citedEvidenceFiles(r.evidenceFiles, ev.fileLedger);
+    const expandable = coverage === "covered" || coverage === "partial";
+    const items = expandable ? evidenceSpine(r, files, ev.chunkFileNames, resolveText) : [];
     return {
-      ref: r.gdRef, reqLabel: r.requirementText, rowCoverage: ecov, expandable,
-      policy: { coverage: pcov, label: POLICY_LABEL[pcov], files: policyFiles, detail: expandable ? { files: policyFiles, items: pr ? policySpine(pr, policyFiles, resolveText) : [] } : undefined },
-      evidence: { coverage: ecov, label: EVID_LABEL[ecov], files: evidenceFiles, detail: expandable ? { files: evidenceFiles, items: evidenceSpine(r, evidenceFiles, ev.chunkFileNames, resolveText) } : undefined },
+      ref: r.gdRef, reqLabel: r.requirementText, coverage, expandable, verdictLabel: EVID_LABEL[coverage],
+      files, clauses: [], passagePreview: items.find((it) => it.found && it.quote)?.quote ?? (r.evidenceQuote || undefined),
+      rowRationale: r.comment || undefined, items,
     };
   });
 }
 
-// ── Cell / detail sub-components ────────────────────────────────────────────
+// ── Cell components ─────────────────────────────────────────────────────────
 
 function VerdictCell({ coverage, label }: { coverage: Coverage; label: string }) {
   const color = COV_DOT[coverage];
@@ -231,105 +227,101 @@ function VerdictCell({ coverage, label }: { coverage: Coverage; label: string })
   );
 }
 
-// Up to two filenames, then "+N more file(s)". Em-dash on a flat row (nothing
-// to drill into) or when this side cited no file at all.
-function FileCell({ files, muted }: { files: CitedFile[]; muted: boolean }) {
-  if (muted || files.length === 0) return <span style={{ color: "#94a3b8" }}>—</span>;
-  const show = files.slice(0, 2);
-  const more = files.length - show.length;
+// Up to two entries, then "+N more <thing>(s)". Em-dash when muted (flat row) or empty.
+function StackCell({ items, muted, more, mono }: { items: string[]; muted: boolean; more: string; mono?: boolean }) {
+  if (muted || items.length === 0) return <span style={{ color: "#94a3b8" }}>—</span>;
+  const show = items.slice(0, 2);
+  const extra = items.length - show.length;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-      {show.map((f) => (
-        <span key={f.name} title={f.name} style={{ fontSize: 11, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+      {show.map((t, i) => (
+        <span key={i} title={t} style={{ fontSize: 11, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: mono ? "ui-monospace,monospace" : undefined }}>{t}</span>
       ))}
-      {more > 0 && <span style={{ fontSize: 10.5, color: "#94a3b8" }}>+{more} more file{more === 1 ? "" : "s"}</span>}
+      {extra > 0 && <span style={{ fontSize: 10.5, color: "#94a3b8" }}>+{extra} more {more}{extra === 1 ? "" : "s"}</span>}
     </div>
+  );
+}
+
+function TextCell({ text, muted, italic }: { text?: string; muted: boolean; italic?: boolean }) {
+  if (muted || !text) return <span style={{ color: "#94a3b8" }}>—</span>;
+  return (
+    <span title={text} style={{ fontSize: 11, color: "#475569", fontStyle: italic ? "italic" : undefined, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{text}</span>
   );
 }
 
 function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: ResolveText }) {
   const text = item.sourceFile?.record ? resolveText(item.sourceFile.record) : undefined;
-  const excerpt = item.found && item.quote && typeof text === "string" ? excerptAround(text, item.quote) : null;
-  const attribution = item.sourceFile?.name;
+  const quoted = (item.found || item.contradicted) && item.quote;
+  const excerpt = quoted && typeof text === "string" ? excerptAround(text, item.quote!) : null;
+  const attr = item.sourceFile?.name;
   const attrUrl = item.sourceFile?.url;
 
   return (
     <div style={{ position: "relative", paddingLeft: 2 }}>
       {/* Spine dot: filled = found, hollow = not found (shape, not colour). */}
       <span aria-hidden style={{ position: "absolute", left: -18, top: 3, width: 8, height: 8, borderRadius: "50%", background: item.found ? "#64748b" : "transparent", border: "1.5px solid #94a3b8" }} />
-      <div style={{ fontSize: 11.5, fontWeight: 600, color: "#334155", marginBottom: 3 }}>{item.name}</div>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: "#334155" }}>{item.name}</div>
+      {item.clause && (
+        <div style={{ fontSize: 10.5, color: "#64748b", marginTop: 1 }}>§ {item.clause}</div>
+      )}
 
-      {item.found && item.quote && excerpt && (
-        <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
+      {quoted && excerpt && (
+        <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 3 }}>
           {excerpt.clippedStart && "… "}{excerpt.before}
           <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 1px" }}>{excerpt.match}</mark>
           {excerpt.after}{excerpt.clippedEnd && " …"}
         </div>
       )}
-      {item.found && item.quote && !excerpt && (
-        <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.5 }}>
-          “{shorten(item.quote, 220)}” <span style={{ color: "#94a3b8", fontStyle: "italic" }}>(context unavailable — re-run to refresh the cache)</span>
+      {quoted && !excerpt && (
+        <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.5, marginTop: 3 }}>
+          “{shorten(item.quote!, 220)}” <span style={{ color: "#94a3b8", fontStyle: "italic" }}>(context unavailable — re-run to refresh the cache)</span>
         </div>
       )}
       {item.found && item.noExactQuote && (
-        <div style={{ fontSize: 11.5, color: "#64748b", fontStyle: "italic", fontFamily: "Georgia, 'Times New Roman', serif" }}>
+        <div style={{ fontSize: 11.5, color: "#64748b", fontStyle: "italic", fontFamily: "Georgia, 'Times New Roman', serif", marginTop: 3 }}>
           Covered, but spread across the document rather than one passage.
         </div>
       )}
-      {item.contradicted && item.quote && excerpt === null && typeof text === "string" && (
-        // Contradicting passage, when its own excerpt couldn't be located, still shown as plain text.
-        <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.5 }}>“{shorten(item.quote, 220)}”</div>
-      )}
-      {item.contradicted && item.quote && excerpt && (
-        <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
-          {excerpt.clippedStart && "… "}{excerpt.before}
-          <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 1px" }}>{excerpt.match}</mark>
-          {excerpt.after}{excerpt.clippedEnd && " …"}
-        </div>
-      )}
 
-      {/* Attribution — mandatory for a found passage; also names the file
-          searched for a not-found / contradicted sub-part. */}
+      {/* Attribution — mandatory for a found/contradicted passage; also names the
+          file searched for a not-found sub-part. */}
       {item.found ? (
-        attribution && (
+        attr && (
           <div style={{ fontSize: 10.5, marginTop: 3 }}>
             {attrUrl
-              ? <a href={attrUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#4338ca", textDecoration: "none" }}>from {attribution} ↗</a>
-              : <span style={{ color: "#64748b" }}>from {attribution}</span>}
+              ? <a href={attrUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#4338ca", textDecoration: "none" }}>from {attr} ↗</a>
+              : <span style={{ color: "#64748b" }}>from {attr}</span>}
           </div>
         )
       ) : (
-        <div style={{ fontSize: 11, color: "#64748b" }}>
-          {item.contradicted ? "Contradicted" : "Not found"}{attribution ? ` in ${attribution}` : ""}.
+        <div style={{ fontSize: 11, color: "#64748b", marginTop: quoted ? 3 : 2 }}>
+          {item.contradicted ? "Contradicted" : "Not found"}{attr ? ` in ${attr}` : ""}.
+          {attrUrl && <> <a href={attrUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#4338ca", textDecoration: "none" }}>↗</a></>}
         </div>
+      )}
+
+      {item.rationale && (
+        <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.45, marginTop: 4 }}>{item.rationale}</div>
       )}
     </div>
   );
 }
 
-function DetailColumn({ title, detail, resolveText }: { title: string; detail: SideDetail; resolveText: ResolveText }) {
+// The expanded detail for one covered/partial row: the spine (indented + shaded
+// under the parent), a "Read the full document" toggle per cited readable file,
+// and "Jump to full line detail". Owns the per-file full-text open state.
+function RowDetail({ line, resolveText, onOpenLine }: { line: MatrixLine; resolveText: ResolveText; onOpenLine: (ref: string) => void }) {
   const [fullFile, setFullFile] = useState<string | null>(null);
-  const n = detail.files.length;
-  const readable = detail.files.filter((f) => f.record);
-  // Highlight, in each file's full-text view, the first located quote that
-  // this column attributed to that file.
-  const firstQuoteFor = (name: string) => detail.items.find((it) => it.found && it.quote && it.sourceFile?.name === name)?.quote;
+  const readable = line.files.filter((f) => f.record);
+  const firstQuoteFor = (name: string) => line.items.find((it) => it.found && it.quote && it.sourceFile?.name === name)?.quote;
 
   return (
-    <div style={{ minWidth: 0 }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.3 }}>{title}</div>
-      <div style={{ fontSize: 10.5, color: "#94a3b8", marginBottom: 8 }}>
-        {n > 0 ? `${n} file${n === 1 ? "" : "s"} · each passage below names its source` : "No file cited"}
+    <div style={{ margin: "2px 0 8px 26px", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 8, padding: "10px 12px" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, borderLeft: "1px solid #cbd5e1", marginLeft: 4, paddingLeft: 16 }}>
+        {line.items.map((it, i) => <SpineItemView key={i} item={it} resolveText={resolveText} />)}
       </div>
-      {detail.items.length === 0 ? (
-        <div style={{ fontSize: 11.5, color: "#94a3b8", fontStyle: "italic" }}>No sub-parts to show.</div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, borderLeft: "1px solid #e2e8f0", marginLeft: 4, paddingLeft: 16 }}>
-          {detail.items.map((it, i) => <SpineItemView key={i} item={it} resolveText={resolveText} />)}
-        </div>
-      )}
       {readable.length > 0 && (
-        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
           {readable.map((f) => (
             <div key={f.name}>
               <button
@@ -348,6 +340,13 @@ function DetailColumn({ title, detail, resolveText }: { title: string; detail: S
           ))}
         </div>
       )}
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onOpenLine(line.ref); }}
+        style={{ marginTop: 10, cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#4338ca", border: "none", background: "transparent", padding: 0 }}
+      >
+        Jump to full line detail →
+      </button>
     </div>
   );
 }
@@ -364,7 +363,7 @@ function LegendSwatch({ bar, label }: { bar: string; label: string }) {
 export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
   mode: "ppd" | "evidence";
   ppd?: PPDReviewResult;
-  evidence?: EvidenceAssessmentResult;
+  evidence?: EvidenceAssessmentResult; // NOTE: evidence tab is self-contained; `ppd` is unused there.
   onOpenLine: (ref: string) => void;
 }) {
   const [open, setOpen] = useState(true);
@@ -376,17 +375,19 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
   );
 
   const lines = useMemo<MatrixLine[]>(
-    () => (mode === "ppd" ? (ppd ? buildPpdLines(ppd, resolveText) : []) : (evidence ? buildEvidenceLines(evidence, ppd, resolveText) : [])),
+    () => (mode === "ppd" ? (ppd ? buildPpdLines(ppd, resolveText) : []) : (evidence ? buildEvidenceLines(evidence, resolveText) : [])),
     [mode, ppd, evidence, resolveText]
   );
   if (lines.length === 0) return null;
 
-  const gaps = lines.filter((l) => l.rowCoverage === "not-covered" || l.rowCoverage === "not-checked").length;
+  const gaps = lines.filter((l) => l.coverage === "not-covered" || l.coverage === "not-checked").length;
+  const isEv = mode === "evidence";
   // Header + every row share this template so columns line up down the matrix.
-  const gridCols = mode === "evidence"
-    ? "minmax(64px,auto) minmax(0,1.9fr) 104px minmax(0,1.05fr) 104px minmax(0,1.05fr)"
-    : "minmax(64px,auto) minmax(0,2.2fr) 104px minmax(0,1.5fr)";
+  const gridCols = isEv
+    ? "minmax(0,2.2fr) 118px minmax(0,1.1fr) minmax(0,1.7fr) minmax(0,1.7fr)"
+    : "minmax(0,2.2fr) 118px minmax(0,1.1fr) minmax(0,1.5fr) minmax(0,1.7fr)";
   const headerCell: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 };
+  const col4Header = isEv ? "Supporting passage" : "Policy clause";
 
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, background: "#fff", marginBottom: 12, overflow: "hidden" }}>
@@ -395,13 +396,13 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
         style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", cursor: "pointer", borderBottom: open ? "1px solid #f1f5f9" : "none", flexWrap: "wrap" }}
       >
         <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.3 }}>
-          Requirement → Policy{mode === "evidence" ? " → Evidence" : ""} map
+          Requirement coverage — {isEv ? "evidence" : "policy"}
         </span>
         <span style={{ fontSize: 11, color: "#94a3b8" }}>{lines.length} line{lines.length !== 1 ? "s" : ""}{gaps > 0 ? ` · ${gaps} with a gap` : " · all covered"}</span>
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10, fontSize: 10.5, color: "#64748b", flexWrap: "wrap" }}>
-          <LegendSwatch bar={coverageBar("covered")} label="covered" />
+          <LegendSwatch bar={coverageBar("covered")} label="met" />
           <LegendSwatch bar={coverageBar("partial")} label="partial" />
-          <LegendSwatch bar={coverageBar("not-covered")} label="not covered" />
+          <LegendSwatch bar={coverageBar("not-covered")} label="not met" />
           <LegendSwatch bar={coverageBar("not-checked")} label="not checked" />
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
             <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 3px" }}>abc</mark> exact quote
@@ -416,12 +417,11 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
           <div style={{ display: "flex", position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", borderBottom: "1px solid #eef2f6" }}>
             <div style={{ width: 3, flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "7px 12px 7px 8px", alignItems: "center" }}>
-              <span style={headerCell}>Ref</span>
-              <span style={headerCell}>Requirement</span>
-              <span style={headerCell}>Policy verdict</span>
-              <span style={headerCell}>Policy file(s)</span>
-              {mode === "evidence" && <span style={headerCell}>Evidence verdict</span>}
-              {mode === "evidence" && <span style={headerCell}>Evidence file(s)</span>}
+              <span style={headerCell}>GD4 requirement</span>
+              <span style={headerCell}>{isEv ? "Evidence verdict" : "Policy verdict"}</span>
+              <span style={headerCell}>{isEv ? "Evidence file(s)" : "Policy file(s)"}</span>
+              <span style={headerCell}>{col4Header}</span>
+              <span style={headerCell}>Rationale</span>
             </div>
           </div>
 
@@ -430,44 +430,29 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine }: {
             return (
               <div key={line.ref + i} style={{ display: "flex", alignItems: "stretch", borderTop: i ? "1px solid #f6f7f9" : "none" }}>
                 {/* Left accent bar — the ONE coverage colour; spans row + detail. */}
-                <div aria-hidden style={{ width: 3, flexShrink: 0, background: coverageBar(line.rowCoverage) }} />
+                <div aria-hidden style={{ width: 3, flexShrink: 0, background: coverageBar(line.coverage) }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     onClick={line.expandable ? () => setOpenRef(isOpen ? null : line.ref) : undefined}
-                    style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "7px 12px 7px 8px", alignItems: "center", cursor: line.expandable ? "pointer" : "default" }}
+                    style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "8px 12px 8px 8px", alignItems: "start", cursor: line.expandable ? "pointer" : "default" }}
                   >
-                    {/* Ref (+ chevron slot, reserved so refs align on every row) */}
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, minWidth: 0 }}>
-                      <span aria-hidden style={{ width: 9, flexShrink: 0, color: "#94a3b8", fontSize: 9 }}>{line.expandable ? (isOpen ? "▾" : "▸") : ""}</span>
-                      <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, fontWeight: 700, color: "#4338ca", whiteSpace: "nowrap" }}>{line.ref}</span>
-                    </span>
-                    <span style={{ fontSize: 12, color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={line.reqLabel}>{shorten(line.reqLabel)}</span>
-                    <VerdictCell coverage={line.policy.coverage} label={line.policy.label} />
-                    <FileCell files={line.policy.files} muted={!line.expandable} />
-                    {mode === "evidence" && line.evidence && <VerdictCell coverage={line.evidence.coverage} label={line.evidence.label} />}
-                    {mode === "evidence" && line.evidence && <FileCell files={line.evidence.files} muted={!line.expandable} />}
+                    {/* GD4 requirement (chevron slot reserved so refs align on every row) */}
+                    <div style={{ minWidth: 0, display: "flex", gap: 6 }}>
+                      <span aria-hidden style={{ width: 9, flexShrink: 0, color: "#94a3b8", fontSize: 9, marginTop: 2 }}>{line.expandable ? (isOpen ? "▾" : "▸") : ""}</span>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, fontWeight: 700, color: "#4338ca" }}>{line.ref}</span>
+                        <span style={{ fontSize: 12, color: "#334155", marginLeft: 6 }} title={line.reqLabel}>{shorten(line.reqLabel, 90)}</span>
+                      </span>
+                    </div>
+                    <VerdictCell coverage={line.coverage} label={line.verdictLabel} />
+                    <StackCell items={line.files.map((f) => f.name)} muted={!line.expandable} more="file" />
+                    {isEv
+                      ? <TextCell text={line.passagePreview} muted={!line.expandable} italic />
+                      : <StackCell items={line.clauses} muted={!line.expandable} more="clause" />}
+                    <TextCell text={line.rowRationale} muted={false} />
                   </div>
 
-                  {/* Detail spine — covered/partial rows only. */}
-                  {isOpen && line.expandable && (
-                    <div style={{ padding: "4px 14px 12px 24px" }}>
-                      {mode === "evidence" && line.evidence?.detail && line.policy.detail ? (
-                        <div className="lineage-detail-cols">
-                          <DetailColumn title="What the policy says" detail={line.policy.detail} resolveText={resolveText} />
-                          <DetailColumn title="What the evidence shows" detail={line.evidence.detail} resolveText={resolveText} />
-                        </div>
-                      ) : line.policy.detail ? (
-                        <DetailColumn title="What the policy says" detail={line.policy.detail} resolveText={resolveText} />
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); onOpenLine(line.ref); }}
-                        style={{ marginTop: 10, cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#4338ca", border: "none", background: "transparent", padding: 0 }}
-                      >
-                        Jump to full line detail →
-                      </button>
-                    </div>
-                  )}
+                  {isOpen && line.expandable && <RowDetail line={line} resolveText={resolveText} onOpenLine={onOpenLine} />}
                 </div>
               </div>
             );

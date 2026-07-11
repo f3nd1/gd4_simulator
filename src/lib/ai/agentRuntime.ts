@@ -1784,6 +1784,21 @@ export function quoteExistsInSource(quote: string, sourceText: string): boolean 
   if (inner.length < QUOTE_MIN_CHARS) return true;
   return normaliseForQuoteMatch(sourceText).includes(normaliseForQuoteMatch(inner));
 }
+
+// A named clause reference counts as REAL only when it — or its leading heading
+// segment, before the first comma — appears verbatim in the source (same
+// anti-hallucination stance as quote verification). A model-tidied or invented
+// reference fails this and is dropped, so the lineage map shows an honest
+// em-dash rather than a clause an assessor would navigate to and never find.
+// The comma fallback lets a legitimate "4.2 Heading, Step 1: Sub-heading"
+// pass when the document splits heading and sub-heading across lines.
+export function clauseAppearsInSource(clause: string, sourceText: string): boolean {
+  const c = clause.trim();
+  if (c.length < 4) return false;
+  if (quoteExistsInSource(c, sourceText)) return true;
+  const head = c.split(",")[0].trim();
+  return head.length >= 4 && head !== c && quoteExistsInSource(head, sourceText);
+}
 const UNVERIFIED_QUOTE_NOTE = " [⚠ unverified quote — not found in source]";
 
 export function flagUnverifiedQuotes(fullComment: string, sourceText: string): string {
@@ -1847,7 +1862,7 @@ export async function runPPDRequirementsReview(
   // should get its own debug-log entry.
   const buildSystem = (label: string) => `You are an SSG EduTrust assessor reviewing ONLY the Policy & Procedure Document (PPD) for a GD4 sub-criterion, requirement by requirement — not implementation evidence, not outcomes. Work the way a real assessor works: decompose, check each obligation, and report specific gaps with named examples — never summarise.
 
-STEP 1 — DECOMPOSE. For each GD4 requirement line, first break it into its constituent sub-clauses: the explicit (a)/(b)/(c) parts if present, otherwise each distinct obligation in the sentence (e.g. "documented (a) a code of conduct AND (b) non-collection of monies" = two sub-clauses). Then give a per-sub-clause verdict: "documented" or "not documented" in the PPD, AND — independently for each sub-clause — the ONE exact sentence copied VERBATIM from the cited chunk that documents THAT specific sub-clause (not the whole line). A sub-clause that is "not documented" gets an empty quote — never invent one to fill the gap, and never reuse one sub-clause's quote for another.
+STEP 1 — DECOMPOSE. For each GD4 requirement line, first break it into its constituent sub-clauses: the explicit (a)/(b)/(c) parts if present, otherwise each distinct obligation in the sentence (e.g. "documented (a) a code of conduct AND (b) non-collection of monies" = two sub-clauses). Then give a per-sub-clause verdict: "documented" or "not documented" in the PPD, AND — independently for each sub-clause — the ONE exact sentence copied VERBATIM from the cited chunk that documents THAT specific sub-clause (not the whole line). A sub-clause that is "not documented" gets an empty quote — never invent one to fill the gap, and never reuse one sub-clause's quote for another. For each sub-clause ALSO record: (i) clause — the named section reference of the SOURCE document where you found it, COPIED EXACTLY from a heading that actually appears in the cited chunk text (e.g. "4.2 Competency-Based Recruitment and Selection Strategy, Step 1: Manpower Planning and Deployment"); if the cited chunk shows no identifiable heading for this passage, return "" — NEVER construct, infer, tidy up or guess a clause reference, because an assessor will try to navigate to it and an invented one is worse than none; (ii) rationale — ONE short auditor-register sentence stating WHY this sub-clause is or is not documented (distinct from the quote), or "" if you cannot state a reason beyond the quote itself; (iii) chunkId — the single chunk ID the quote came from, or "" if none.
 
 STEP 2 — DERIVE the line verdict from the sub-clauses:
 "Adequate" = EVERY sub-clause is documented clearly, specifically and sustainably (named responsible role, what they do, when/how often, what record is produced).
@@ -1862,7 +1877,7 @@ PHRASING REGISTER (mandatory):
 - Positive verdicts stay factual and specific (what is documented, in which document/section) — no praise adjectives, no "good"/"structured framework"/"comprehensive".
 
 For each requirement return:
-- subClauses: [{text: string, verdict: "documented"|"not documented", quote: string}] — the STEP 1 decomposition. One entry per sub-clause, text quoting/paraphrasing that obligation tightly. quote = the exact verbatim sentence supporting THAT sub-clause specifically (empty string "" for "not documented" sub-clauses, or when no single sentence captures it) — never the whole line's quote, never invented.
+- subClauses: [{text: string, verdict: "documented"|"not documented", quote: string, clause: string, rationale: string, chunkId: string}] — the STEP 1 decomposition. One entry per sub-clause, text naming that obligation tightly (by what it IS, e.g. "Manpower planning"). quote = the exact verbatim sentence supporting THAT sub-clause specifically (empty string "" for "not documented" sub-clauses, or when no single sentence captures it) — never the whole line's quote, never invented. clause = the source document's own section heading for this sub-clause, copied verbatim from the cited chunk, or "" if the chunk shows no identifiable heading — never invented or tidied. rationale = one short auditor-register sentence on why it is/isn't documented, or "" if none distinct from the quote. chunkId = the chunk ID the quote came from, or "".
 - verdict: "Adequate" | "Partial" | "Not documented" — derived per STEP 2.
 - shortComment: one sentence; for negatives use the SSG register and name the missing sub-clause(s).
 - fullComment: (1) the justification — for Adequate state specifically WHAT makes it adequate (named owner, frequency, record and where documented); for Partial/Not documented use the SSG register, name each missing sub-clause, and give the concrete example. (2) a verbatim quoted excerpt from the PPD in double quotes followed by its chunk ID, e.g. "...auditors must be independent of the area they audit..." (C001). For "Not documented" state that no PPD passage addresses this requirement instead of inventing a quote. Factual and neutral throughout.
@@ -1872,7 +1887,7 @@ For each requirement return:
 - supportQuote: for Adequate/Partial ONLY, the ONE exact sentence (or short clause) copied VERBATIM from the cited chunk text that most directly documents this requirement — character-for-character, so it can be located in the source. If no single sentence captures it (support is spread across the passage) or the verdict is Not documented, return an empty string "" — never paraphrase, summarise, or invent a quote.
 
 Respond with JSON only:
-{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented", "quote": string}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}], "suggestedRewrite": string, "chunkIds": string[], "supportQuote": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
+{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented", "quote": string, "clause": string, "rationale": string, "chunkId": string}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}], "suggestedRewrite": string, "chunkIds": string[], "supportQuote": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   // Technique 2 — internal contradiction hunt. Run as its OWN pass per
   // window (not folded into the per-requirement prompt) so the requirement
@@ -1975,7 +1990,17 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
                 .map((c) => {
                   const rawQuote = typeof c.quote === "string" ? c.quote.trim() : "";
                   const quote = rawQuote && quoteExistsInSource(rawQuote, policyDocText) ? rawQuote : undefined;
-                  return { text: c.text as string, verdict: c.verdict as PPDSubClause["verdict"], quote };
+                  // Clause is verified against source the same way quotes are:
+                  // a reference that isn't really in the document is dropped to
+                  // undefined ("no clause identified"), never shown — an invented
+                  // clause an assessor would chase is worse than an em-dash.
+                  const rawClause = typeof c.clause === "string" ? c.clause.trim() : "";
+                  const clause = rawClause && clauseAppearsInSource(rawClause, policyDocText) ? rawClause : undefined;
+                  // Rationale is reasoning (like shortComment), not a quotation —
+                  // stored as-is when non-empty, never verified/padded.
+                  const rationale = typeof c.rationale === "string" && c.rationale.trim() ? c.rationale.trim() : undefined;
+                  const chunkId = typeof c.chunkId === "string" && c.chunkId.trim() ? c.chunkId.trim() : undefined;
+                  return { text: c.text as string, verdict: c.verdict as PPDSubClause["verdict"], quote, clause, rationale, chunkId };
                 })
             : [];
           // Promises carry verbatim source quotes — verify each against the
@@ -2258,12 +2283,12 @@ For each line return:
 - evidenceSummary: 1-2 sentences on what implementation evidence was found (or that none was found), factual and neutral.
 - verdict: "Met" | "Partial" | "Not met"
 - comment: justification referencing the PPD state, the promise checks and the named example(s), in the register above.
-- promiseChecks: [{promiseText: string, verdict: "evidenced"|"not evidenced"|"contradicted", evidence: string, chunkIds: string[], quote: string}] — one entry PER promise given for the line, promiseText copied exactly. evidence = the citation/description or "No record found in the evidence documents." quote = the ONE exact sentence copied VERBATIM from the cited evidence chunk that proves (or, for "contradicted", disproves) THIS specific promise — character-for-character, independent of any other promise's quote. Empty string "" for "not evidenced" (nothing to quote) or when no single sentence captures it — never invent one, never reuse another promise's quote. Empty array only when the line has no promises.
+- promiseChecks: [{promiseText: string, verdict: "evidenced"|"not evidenced"|"contradicted", evidence: string, chunkIds: string[], quote: string, rationale: string, chunkId: string}] — one entry PER promise given for the line, promiseText copied exactly. evidence = the citation/description or "No record found in the evidence documents." quote = the ONE exact sentence copied VERBATIM from the cited evidence chunk that proves (or, for "contradicted", disproves) THIS specific promise — character-for-character, independent of any other promise's quote. Empty string "" for "not evidenced" (nothing to quote) or when no single sentence captures it — never invent one, never reuse another promise's quote. rationale = ONE short auditor-register sentence on WHY this promise is evidenced / not evidenced / contradicted (distinct from the quote), or "" if you cannot state a reason beyond the quote — do not pad. chunkId = the single primary chunk ID the quote came from, or "". Empty array only when the line has no promises.
 - chunkIds: exact chunk ID(s) (e.g. "C001") from evidence document headers supporting the line verdict. Empty if none.
 - evidenceQuote: for Met/Partial ONLY, the ONE exact sentence (or short clause) copied VERBATIM from the cited evidence chunk that most directly proves implementation for this line — character-for-character, so it can be located in the source. If no single sentence captures it, or the verdict is Not met, return an empty string "" — never paraphrase, summarise, or invent a quote.
 
 Respond with JSON only:
-{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[], "quote": string}], "chunkIds": string[], "evidenceQuote": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
+{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[], "quote": string, "rationale": string, "chunkId": string}], "chunkIds": string[], "evidenceQuote": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   const windows = noEvidence ? [] : buildDocWindows(evidenceDocText);
 
@@ -2372,6 +2397,10 @@ Respond with JSON only:
                   // scoped to the individual promise, not the whole line.
                   const rawQuote = typeof p.quote === "string" ? p.quote.trim() : "";
                   const quote = rawQuote && quoteExistsInSource(rawQuote, win.text) ? rawQuote : undefined;
+                  // Rationale is reasoning (like the line comment), not a
+                  // quotation — stored as-is when non-empty, never padded.
+                  const rationale = typeof p.rationale === "string" && p.rationale.trim() ? p.rationale.trim() : undefined;
+                  const chunkId = typeof p.chunkId === "string" && p.chunkId.trim() ? p.chunkId.trim() : undefined;
                   return {
                     promiseText: p.promiseText as string,
                     verdict: p.verdict as PromiseCheck["verdict"],
@@ -2379,6 +2408,8 @@ Respond with JSON only:
                     evidence: typeof p.evidence === "string" ? flagUnverifiedQuotes(p.evidence, win.text) : "",
                     chunkIds: Array.isArray(p.chunkIds) ? (p.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [],
                     quote,
+                    rationale,
+                    chunkId,
                   };
                 })
             : [];
