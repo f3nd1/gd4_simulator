@@ -154,25 +154,35 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
   if (!sub) return null;
   return (
     <>
-      {/* Pre-run mode banner — Option A runs (PPD review / evidence assessment)
-          are triggered from this content, so the offline/live state is shown
-          before the run begins here too (page + Evidence Folder modal). */}
-      <div style={{ marginBottom: 8 }}><RunModeBanner compact /></div>
+      {/* Consolidated status bar — one bordered container for what used to be
+          three stacked banners (LIVE AI/OFFLINE mode, saved-state summary,
+          next-step guidance). Same information, same per-line semantic color,
+          just one visual container instead of three nested boxes. Each piece
+          keeps its own show/hide logic (RunModeBanner's ephemeral dismiss,
+          NextStepBanner's persisted per-tip dismiss, the saved-state line's
+          `savedResult` guard) — an absent piece simply contributes no row, no
+          empty divider. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>
+        {/* Pre-run mode banner — Option A runs (PPD review / evidence assessment)
+            are triggered from this content, so the offline/live state is shown
+            before the run begins here too (page + Evidence Folder modal). */}
+        <RunModeBanner compact bare />
 
-      {/* Saved-state banner: proves the results are saved and current, and
-          points at where the same verdicts also live (checklist + scoring). */}
-      {savedResult && (
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 11.5, color: "#334155", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "7px 11px", marginBottom: 8 }}>
-          <span><b>Last reviewed {new Date(savedResult.runAt).toLocaleString("en-SG", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</b> · {savedSummary.adequate} adequate / {savedSummary.partial} partial / {savedSummary.gaps} gaps{savedSummary.notAssessed ? ` / ${savedSummary.notAssessed} not assessed` : ""}</span>
-          <span style={{ marginLeft: "auto", color: "#64748b" }}>
-            Also reflected in the{" "}
-            <Link to={`/sub-checklist?item=${requirementItems[0]?.id ?? ""}`} style={{ color: "#4338ca", fontWeight: 600 }}>Sub-Criterion Checklist</Link>{" "}&amp;{" "}
-            <Link to="/scorecard" style={{ color: "#4338ca", fontWeight: 600 }}>Scorecard</Link>.
-          </span>
-        </div>
-      )}
+        {/* Saved-state line: proves the results are saved and current, and
+            points at where the same verdicts also live (checklist + scoring). */}
+        {savedResult && (
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 11.5, color: "#334155" }}>
+            <span><b>Last reviewed {new Date(savedResult.runAt).toLocaleString("en-SG", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</b> · {savedSummary.adequate} adequate / {savedSummary.partial} partial / {savedSummary.gaps} gaps{savedSummary.notAssessed ? ` / ${savedSummary.notAssessed} not assessed` : ""}</span>
+            <span style={{ marginLeft: "auto", color: "#64748b" }}>
+              Also reflected in the{" "}
+              <Link to={`/sub-checklist?item=${requirementItems[0]?.id ?? ""}`} style={{ color: "#4338ca", fontWeight: 600 }}>Sub-Criterion Checklist</Link>{" "}&amp;{" "}
+              <Link to="/scorecard" style={{ color: "#4338ca", fontWeight: 600 }}>Scorecard</Link>.
+            </span>
+          </div>
+        )}
 
-      <PpdNextStep selectedId={selectedId} />
+        <PpdNextStep selectedId={selectedId} bare />
+      </div>
 
       {/* Jump straight to the Checklist or Findings for this sub-criterion,
           plus CSV export for troubleshooting the PPD + evidence run. */}
@@ -275,7 +285,7 @@ function PreCheckTab({ selectedId, onContinue }: { selectedId: string; onContinu
 }
 
 // State-aware next-step banner for this sub-criterion.
-function PpdNextStep({ selectedId }: { selectedId: string }) {
+function PpdNextStep({ selectedId, bare }: { selectedId: string; bare?: boolean }) {
   const auditMode = useWorkspaceStore((s) => s.auditMode);
   const ppd = useWorkspaceStore((s) => s.ppdReviewResults[selectedId]);
   const ev = useWorkspaceStore((s) => s.evidenceAssessments[selectedId]);
@@ -287,6 +297,7 @@ function PpdNextStep({ selectedId }: { selectedId: string }) {
         evidenceRun: !!ev && ev.rows.length > 0,
         findingsCompiled: !!ev && ev.rows.some((r) => r.savedFindingId),
       })}
+      bare={bare}
     />
   );
 }
@@ -344,6 +355,13 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
     const id = `ppdline-${normalizeAuditRef(ref)}`;
     requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" }));
   };
+  // The lineage map (below) already covers "which file/section backs this
+  // line" via its per-sub-part highlighted-source expansion — this prose
+  // summary and the full per-line table are secondary detail, so both default
+  // collapsed. Nothing inside is removed; a click reopens the exact same
+  // content that rendered here before.
+  const [assessmentOpen, setAssessmentOpen] = useState(false);
+  const [tableOpen, setTableOpen] = useState(false);
 
   // Old-format results (pre per-line refactor) keyed rows per whole item and
   // lack `ref`; force a re-run rather than render the collapsed single row.
@@ -463,28 +481,40 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
             const weakRows = liveResult.rows.filter((r) => r.verdict === "Partial" || r.verdict === "Not documented");
             return (
               <div style={{ background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 10, padding: "11px 14px", marginBottom: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => setAssessmentOpen((o) => !o)}
+                  style={{ cursor: "pointer", width: "100%", textAlign: "left", border: "none", background: "transparent", padding: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+                >
                   <span style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>Overall PPD assessment</span>
                   <Pill s={overallVerdictTone(liveResult.overallVerdict)}>{liveResult.overallVerdict}</Pill>
-                  {liveResult.overallSummary && <span style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>{liveResult.overallSummary}</span>}
-                </div>
-                {liveResult.overallNarrative && (
-                  <p style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.5, margin: "0 0 6px", whiteSpace: "pre-line" }}>{liveResult.overallNarrative}</p>
-                )}
-                {weakRows.length > 0 && (
-                  <div style={{ fontSize: 12, color: "#374151" }}>
-                    <span style={{ fontWeight: 700 }}>Gaps:</span>
-                    <ul style={{ margin: "3px 0 0", paddingLeft: 18 }}>
-                      {weakRows.map((r) => (
-                        <li key={r.ref} style={{ marginBottom: 1 }}>
-                          <span style={{ fontFamily: "ui-monospace,monospace", fontWeight: 700, color: "#4338ca" }}>{r.ref}</span>
-                          {" — "}
-                          <span>{r.requirementText.length > 80 ? `${r.requirementText.slice(0, 80)}…` : r.requirementText}</span>
-                          {" "}<Pill s={ppdVerdictTone(r.verdict)}>{r.verdict}</Pill>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                  {/* Compact summary reuses the already-computed overallSummary
+                      string (adequate/partial/not-documented counts) — no
+                      recomputation, same data the expanded view shows. */}
+                  {liveResult.overallSummary && <span style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>{liveResult.overallSummary}{!assessmentOpen ? " — click to expand full assessment" : ""}</span>}
+                  <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#64748b" }}>{assessmentOpen ? "Hide ▲" : "Show ▼"}</span>
+                </button>
+                {assessmentOpen && (
+                  <>
+                    {liveResult.overallNarrative && (
+                      <p style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.5, margin: "8px 0 6px", whiteSpace: "pre-line" }}>{liveResult.overallNarrative}</p>
+                    )}
+                    {weakRows.length > 0 && (
+                      <div style={{ fontSize: 12, color: "#374151", marginTop: liveResult.overallNarrative ? 0 : 8 }}>
+                        <span style={{ fontWeight: 700 }}>Gaps:</span>
+                        <ul style={{ margin: "3px 0 0", paddingLeft: 18 }}>
+                          {weakRows.map((r) => (
+                            <li key={r.ref} style={{ marginBottom: 1 }}>
+                              <span style={{ fontFamily: "ui-monospace,monospace", fontWeight: 700, color: "#4338ca" }}>{r.ref}</span>
+                              {" — "}
+                              <span>{r.requirementText.length > 80 ? `${r.requirementText.slice(0, 80)}…` : r.requirementText}</span>
+                              {" "}<Pill s={ppdVerdictTone(r.verdict)}>{r.verdict}</Pill>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             );
@@ -519,16 +549,32 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
             {" · "}{liveResult.rows.filter((r) => r.verdict === "Adequate").length} Adequate, {liveResult.rows.filter((r) => r.verdict === "Partial").length} Partial, {liveResult.rows.filter((r) => r.verdict === "Not documented").length} Not documented
           </div>
 
-          {/* Requirement → PPD lineage map (reuses this run's row data). */}
+          {/* Requirement → PPD lineage map (reuses this run's row data) — the
+              primary, always-visible view: per-sub-part expand-to-highlighted-
+              source already answers "which file/section backs this line". */}
           <LineageDiagram mode="ppd" ppd={liveResult} onOpenLine={openLine} />
 
-          <div style={{ display: "grid", gridTemplateColumns: PPD_GRID, gap: 10, position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px 8px 0 0", padding: "6px 12px", marginBottom: -1 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>GD4 requirement</span>
-            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>PPD procedure (AI-matched)</span>
-            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>AI verdict</span>
-          </div>
+          {/* Full per-line table below is secondary detail (same rows the map
+              already summarises), so it defaults collapsed. Every row, every
+              action (thumbs, "show full comment + rewrite") is unchanged and
+              intact underneath — this only changes default visibility. */}
+          <button
+            type="button"
+            onClick={() => setTableOpen((o) => !o)}
+            style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155", marginBottom: 10 }}
+          >
+            {tableOpen ? "Hide full requirement table ▲" : "Show full requirement table ▾"}
+          </button>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {tableOpen && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: PPD_GRID, gap: 10, position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px 8px 0 0", padding: "6px 12px", marginBottom: -1 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>GD4 requirement</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>PPD procedure (AI-matched)</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>AI verdict</span>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {liveResult.rows.map((row) => {
               const expanded = expandedRows.has(row.ref);
               const sourceRef = row.chunkIds.length > 0
@@ -609,7 +655,9 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
                 </div>
               );
             })}
-          </div>
+              </div>
+            </>
+          )}
         </>
       )}
       <FeedbackModal
@@ -1127,6 +1175,11 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
 
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [compileMsg, setCompileMsg] = useState<string | null>(null);
+  // The lineage map (below) already covers "which file/section backs this
+  // line" via its per-sub-part highlighted-source expansion, so the full
+  // per-line table is secondary detail and defaults collapsed — same as the
+  // PPD tab's table. Nothing inside is removed; a click reopens it intact.
+  const [tableOpen, setTableOpen] = useState(false);
   const toggleExpanded = (ref: string) =>
     setExpandedRows((prev) => {
       const next = new Set(prev);
@@ -1257,17 +1310,34 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
           chunk quotes and contradictions that produced it. */}
       <HybridGatePanel subCriterionId={selectedId} />
 
-      {/* Requirement → PPD → Evidence lineage map (reuses stored row data). */}
+      {/* Requirement → PPD → Evidence lineage map (reuses stored row data) —
+          the primary, always-visible view: per-sub-part expand-to-highlighted-
+          source already answers "which file/section backs this line". */}
       <LineageDiagram mode="evidence" evidence={assessment} ppd={ppd} onOpenLine={openLine} />
 
-      <div style={{ display: "grid", gridTemplateColumns: EV_GRID, gap: 10, position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px 8px 0 0", padding: "6px 12px", marginBottom: -1 }}>
-        <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>GD4 requirement</span>
-        <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>PPD</span>
-        <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>Evidence</span>
-        <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>AI verdict</span>
-      </div>
+      {/* Full per-line table below is secondary detail (same rows the map
+          already summarises), so it defaults collapsed. Every row, every
+          action (thumbs, Accept/Reject via the gate above, "show comment")
+          is unchanged and intact underneath — this only changes default
+          visibility. */}
+      <button
+        type="button"
+        onClick={() => setTableOpen((o) => !o)}
+        style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155", marginBottom: 10 }}
+      >
+        {tableOpen ? "Hide full requirement table ▲" : "Show full requirement table ▾"}
+      </button>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {tableOpen && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: EV_GRID, gap: 10, position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px 8px 0 0", padding: "6px 12px", marginBottom: -1 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>GD4 requirement</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>PPD</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>Evidence</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>AI verdict</span>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {rows.map((row) => {
           const expanded = expandedRows.has(row.gdRef);
           const border = row.assessmentFailed ? "#9ca3af" : row.verdict ? evVerdictBorderColor(row.verdict) : "#e2e8f0";
@@ -1391,7 +1461,9 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
             </div>
           );
         })}
-      </div>
+          </div>
+        </>
+      )}
       <FeedbackModal
         open={!!lineFeedback}
         aiOutput={lineFeedback?.text ?? ""}

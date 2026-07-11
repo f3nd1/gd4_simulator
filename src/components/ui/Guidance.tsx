@@ -38,14 +38,18 @@ function tipSlug(text: string): string {
 // Slim, friendly "what to do now" strip. One per page, top of the content.
 // Instructional only (no compliance/trust content), so its ✕ dismissal PERSISTS
 // (keyed by the tip text) — a different next-step instruction still appears.
-export function NextStepBanner({ text, dismissKey }: { text: string; dismissKey?: string }) {
+// bare: strip this banner's own border/background/padding/margin so it can be
+// stacked inside a caller's shared container (see PPDReview.tsx's
+// consolidated status bar) without a nested box-in-a-box look. Opt-in only —
+// every existing call site keeps its own bordered box unless it passes bare.
+export function NextStepBanner({ text, dismissKey, bare = false }: { text: string; dismissKey?: string; bare?: boolean }) {
   const enabled = useGuidanceStore((s) => s.enabled);
   const key = dismissKey ?? tipSlug(text);
   const dismissed = useGuidanceStore((s) => !!s.dismissedTips[key]);
   const dismissTip = useGuidanceStore((s) => s.dismissTip);
   if (!enabled || !text || dismissed) return null;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#eef6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "7px 12px", marginBottom: 10 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, ...(bare ? {} : { background: "#eef6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "7px 12px", marginBottom: 10 }) }}>
       <span aria-hidden style={{ fontSize: 13 }}>👉</span>
       <span style={{ fontSize: 12.5, color: "#1e40af", lineHeight: 1.45 }}>{text}</span>
       <DismissX onClick={() => dismissTip(key)} title="Hide this tip (it won't show again)" color="#3b6fb5" />
