@@ -800,6 +800,16 @@ export type PPDSubClause = {
   // cited file's text for the quote. Undefined on older runs → the map falls
   // back to quote-search attribution.
   chunkId?: string;
+  // When this sub-clause is documented but no SINGLE sentence captures it
+  // (support is spread across several statements), the actual verbatim
+  // passages found — each independently verified against source the same way
+  // `quote` is (a passage that fails verification is dropped, never shown).
+  // Lets the lineage map show real evidence for a "spread across the
+  // document" verdict instead of only asserting it. Undefined/empty means
+  // either a single `quote` was found (this field doesn't apply) or genuinely
+  // no cleanly extractable passage exists at all — the true diffuse-mention
+  // fallback the UI keeps as an italic note.
+  spreadQuotes?: { quote: string; chunkId?: string }[];
 };
 
 // A specific, verifiable commitment the PPD makes for a requirement line

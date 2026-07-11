@@ -3,6 +3,7 @@ import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
 import { excerptAround, findQuoteSpan } from "./quoteMatch";
 import { downloadLineageCsv, openLineagePdf, type LineageExportRow, type LineageExportMeta } from "../../lib/lineageExport";
+import { ppdVerdictLabel, evVerdictLabel } from "../../lib/verdictTone";
 import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, AuditFileRecord, PPDVerdict, EvidenceVerdict } from "../../types";
 
 // Requirement coverage MATRIX — one tab-specific five-column table per Option A
@@ -56,7 +57,11 @@ type SpineItem = {
   clause?: string;         // policy: the SOURCE document's clause reference
   found: boolean;
   quote?: string;
-  noExactQuote?: boolean;  // covered but no single locatable passage (honest, NOT a failure)
+  // Real matched passages for a "covered but spread across the document"
+  // sub-part — shown INSTEAD of (never alongside) noExactQuote, so the
+  // honest state has actual evidence behind it, not just an assertion.
+  spreadQuotes?: { quote: string; sourceFile?: CitedFile }[];
+  noExactQuote?: boolean;  // covered, no single passage AND no spreadQuotes either (the true diffuse-mention fallback)
   contradicted?: boolean;  // evidence-only: the passage contradicts the promise
   sourceFile?: CitedFile;
   rationale?: string;      // per-clause / per-promise "why"
@@ -98,8 +103,6 @@ function evCoverage(v: EvidenceVerdict): Coverage {
   return v === "Met" ? "covered" : v === "Partial" ? "partial" : v === "Not assessed" ? "not-checked" : "not-covered";
 }
 
-const POLICY_LABEL: Record<Coverage, string> = { covered: "Documented", partial: "Partly", "not-covered": "Not covered", "not-checked": "Not checked" };
-const EVID_LABEL: Record<Coverage, string> = { covered: "Evidenced", partial: "Partly", "not-covered": "No evidence", "not-checked": "Not checked" };
 // The single coverage colour scale, reused by the left bar and the verdict dots.
 const COV_DOT: Record<Coverage, string> = { covered: "#16a34a", partial: "#d97706", "not-covered": "#94a3b8", "not-checked": "#94a3b8" };
 function coverageBar(c: Coverage): string {
@@ -151,9 +154,16 @@ function policySpine(row: PPDReviewRow, files: CitedFile[], chunkFileNames: Reco
     return subs.map((sc) => {
       const sourceFile = resolveSourceFile(sc.chunkId, sc.quote, files, chunkFileNames, resolveText);
       if (sc.verdict === "documented") {
-        return sc.quote
-          ? { name: sc.text, clause: sc.clause, found: true, quote: sc.quote, sourceFile, rationale: sc.rationale }
-          : { name: sc.text, clause: sc.clause, found: true, noExactQuote: true, sourceFile, rationale: sc.rationale };
+        if (sc.quote) return { name: sc.text, clause: sc.clause, found: true, quote: sc.quote, sourceFile, rationale: sc.rationale };
+        // No single quote — show the real matched passages behind "spread
+        // across the document" instead of only asserting it (Task 4).
+        const spreadQuotes = (sc.spreadQuotes ?? []).map((sq) => ({
+          quote: sq.quote,
+          sourceFile: resolveSourceFile(sq.chunkId, sq.quote, files, chunkFileNames, resolveText),
+        }));
+        if (spreadQuotes.length > 0) return { name: sc.text, clause: sc.clause, found: true, spreadQuotes, sourceFile, rationale: sc.rationale };
+        // True fallback: documented, but genuinely no extractable passage at all.
+        return { name: sc.text, clause: sc.clause, found: true, noExactQuote: true, sourceFile, rationale: sc.rationale };
       }
       return { name: sc.text, clause: sc.clause, found: false, sourceFile, rationale: sc.rationale };
     });
@@ -195,7 +205,7 @@ function buildPpdLines(ppd: PPDReviewResult, resolveText: ResolveText): MatrixLi
     const expandable = coverage === "covered" || coverage === "partial";
     const items = expandable ? policySpine(r, files, ppd.chunkFileNames, resolveText) : [];
     return {
-      ref: r.ref, reqLabel: r.requirementText, coverage, expandable, verdictLabel: POLICY_LABEL[coverage],
+      ref: r.ref, reqLabel: r.requirementText, coverage, expandable, verdictLabel: ppdVerdictLabel(r.verdict),
       files, clauses: uniqStrings(items.map((it) => it.clause)), rowRationale: r.shortComment || undefined, items,
     };
   });
@@ -208,7 +218,7 @@ function buildEvidenceLines(ev: EvidenceAssessmentResult, resolveText: ResolveTe
     const expandable = coverage === "covered" || coverage === "partial";
     const items = expandable ? evidenceSpine(r, files, ev.chunkFileNames, resolveText) : [];
     return {
-      ref: r.gdRef, reqLabel: r.requirementText, coverage, expandable, verdictLabel: EVID_LABEL[coverage],
+      ref: r.gdRef, reqLabel: r.requirementText, coverage, expandable, verdictLabel: evVerdictLabel(r.verdict),
       files, clauses: [], passagePreview: items.find((it) => it.found && it.quote)?.quote ?? (r.evidenceQuote || undefined),
       rowRationale: r.comment || undefined, items,
     };
@@ -322,6 +332,31 @@ function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: Re
           “{shorten(item.quote!, 220)}” <span style={{ color: "#94a3b8", fontStyle: "italic" }}>(context unavailable — re-run to refresh the cache)</span>
         </div>
       )}
+      {/* "Spread across the document" shows the ACTUAL matched passages, not
+          just the claim — up to 5, each with its own file attribution; only
+          the true diffuse-mention fallback (below) has nothing to show. */}
+      {item.found && item.spreadQuotes && item.spreadQuotes.length > 0 && (
+        <div style={{ marginTop: 3, display: "flex", flexDirection: "column", gap: 5 }}>
+          <div style={{ fontSize: 10.5, color: "#64748b", fontStyle: "italic" }}>Covered — spread across {item.spreadQuotes.length > 1 ? "these" : "this"} passage{item.spreadQuotes.length > 1 ? "s" : ""} rather than one:</div>
+          {item.spreadQuotes.slice(0, 5).map((sq, i) => (
+            <div key={i} style={{ fontSize: 11, color: "#475569", lineHeight: 1.5, paddingLeft: 8, borderLeft: "2px solid #e2e8f0" }}>
+              “{shorten(sq.quote, 180)}”
+              {sq.sourceFile?.name && (
+                <div style={{ fontSize: 10.5, marginTop: 2 }}>
+                  {sq.sourceFile.url
+                    ? <a href={sq.sourceFile.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#4338ca", textDecoration: "none" }}>from {sq.sourceFile.name} ↗</a>
+                    : <span style={{ color: "#64748b" }}>from {sq.sourceFile.name}</span>}
+                </div>
+              )}
+            </div>
+          ))}
+          {item.spreadQuotes.length > 5 && (
+            <div style={{ fontSize: 10.5, color: "#94a3b8", fontStyle: "italic", paddingLeft: 8 }}>
+              …and {item.spreadQuotes.length - 5} more spread across the document.
+            </div>
+          )}
+        </div>
+      )}
       {item.found && item.noExactQuote && (
         <div style={{ fontSize: 11.5, color: "#64748b", fontStyle: "italic", fontFamily: "Georgia, 'Times New Roman', serif", marginTop: 3 }}>
           Covered, but spread across the document rather than one passage.
@@ -362,6 +397,12 @@ function RowDetail({ line, resolveText, onOpenLine }: { line: MatrixLine; resolv
 
   return (
     <div style={{ margin: "2px 0 8px 26px", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 8, padding: "10px 12px" }}>
+      {/* Unconditional — every expanded covered/partial row gets this caption,
+          never just some (a prior version dropped it for some row shapes). */}
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>Clause by clause</div>
+        <div style={{ fontSize: 10.5, color: "#94a3b8" }}>Each clause shows the exact wording, the file it came from, and why it does or doesn't satisfy the requirement.</div>
+      </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 12, borderLeft: "1px solid #cbd5e1", marginLeft: 4, paddingLeft: 16 }}>
         {line.items.map((it, i) => <SpineItemView key={i} item={it} resolveText={resolveText} />)}
       </div>

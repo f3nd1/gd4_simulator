@@ -23,7 +23,7 @@ import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
-import { ppdVerdictTone, ppdVerdictBorderColor, evVerdictTone, evVerdictBorderColor } from "../lib/verdictTone";
+import { ppdVerdictTone, ppdVerdictBorderColor, evVerdictTone, evVerdictBorderColor, ppdVerdictLabel, evVerdictLabel } from "../lib/verdictTone";
 import { excerptAround } from "../components/ui/quoteMatch";
 import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, EvidenceLineRunStatus, EvidenceRunLogLine, PPDReviewRow, EvidenceRunIssue } from "../types";
 
@@ -570,7 +570,7 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
           <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
             Last run {new Date(liveResult.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
             {" · "}{liveResult.live ? "Live AI" : "Offline"}
-            {" · "}{liveResult.rows.filter((r) => r.verdict === "Adequate").length} Adequate, {liveResult.rows.filter((r) => r.verdict === "Partial").length} Partial, {liveResult.rows.filter((r) => r.verdict === "Not documented").length} Not documented
+            {" · "}{liveResult.rows.filter((r) => r.verdict === "Adequate").length} {ppdVerdictLabel("Adequate")}, {liveResult.rows.filter((r) => r.verdict === "Partial").length} {ppdVerdictLabel("Partial")}, {liveResult.rows.filter((r) => r.verdict === "Not documented").length} {ppdVerdictLabel("Not documented")}
           </div>
 
           {/* Requirement → PPD lineage map (reuses this run's row data) — the
@@ -630,7 +630,7 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
                       </div>
                     </div>
                     <div>
-                      <Pill s={ppdVerdictTone(row.verdict)}>{row.verdict}</Pill>
+                      <Pill s={ppdVerdictTone(row.verdict)}>{ppdVerdictLabel(row.verdict)}</Pill>
                       <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.4, margin: "5px 0" }}>{row.shortComment}</div>
                       <button
                         onClick={() => toggleExpanded(row.ref)}
@@ -1134,7 +1134,7 @@ function EvidenceArrivalPanel({
   } else if (state.kind === "existing") {
     message = (
       <>
-        An evidence assessment already exists: <b>{state.met} Met, {state.partial} Partial, {state.notMet} Not met</b> (run {fmtRunAt(state.runAt)}).
+        An evidence assessment already exists: <b>{state.met} {evVerdictLabel("Met")}, {state.partial} {evVerdictLabel("Partial")}, {state.notMet} {evVerdictLabel("Not met")}</b> (run {fmtRunAt(state.runAt)}).
         {state.caveat && <span style={{ display: "block", marginTop: 3, fontStyle: "italic", color: "#92400e" }}>⚠ {state.caveat}</span>}
       </>
     );
@@ -1339,7 +1339,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
         {assessment && (
           <div style={{ fontSize: 11.5, color: "#6b7280" }}>
             {assessment.derivedFromAudit ? "Reused from Evidence Folder audit" : "Last run"} {new Date(assessment.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
-            {" · "}{assessment.rows.filter((r) => r.verdict === "Met").length} Met, {assessment.rows.filter((r) => r.verdict === "Partial").length} Partial, {assessment.rows.filter((r) => r.verdict === "Not met").length} Not met
+            {" · "}{assessment.rows.filter((r) => r.verdict === "Met").length} {evVerdictLabel("Met")}, {assessment.rows.filter((r) => r.verdict === "Partial").length} {evVerdictLabel("Partial")}, {assessment.rows.filter((r) => r.verdict === "Not met").length} {evVerdictLabel("Not met")}
           </div>
         )}
         <button
@@ -1513,7 +1513,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
                     </div>
                   ) : row.verdict ? (
                     <>
-                      <Pill s={evVerdictTone(row.verdict)}>{row.verdict}</Pill>
+                      <Pill s={evVerdictTone(row.verdict)}>{evVerdictLabel(row.verdict)}</Pill>
                       {row.comment && (
                         <button
                           onClick={() => toggleExpanded(row.gdRef)}

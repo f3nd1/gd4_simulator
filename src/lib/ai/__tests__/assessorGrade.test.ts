@@ -229,6 +229,80 @@ Q1 manpower review held 12 Feb; HR Manager present; staffing gaps logged.`;
   });
 });
 
+describe("shortComment is required for EVERY verdict, not just negatives (empty-rationale-on-met-rows investigation)", () => {
+  it("the system prompt's shortComment instruction explicitly requires a reason for Adequate, not only for negatives", async () => {
+    const capturedSystems: string[] = [];
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      capturedSystems.push(system);
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{ ref: "1.1.1.DS1", subClauses: [], verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }],
+      });
+    });
+    await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], `[CHUNK:C001] --- hr.docx ---\nThe HR Manager reviews staffing quarterly.`, SETTINGS, {});
+    const mainSystem = capturedSystems.find((s) => s.includes("shortComment"))!;
+    // Old wording only told the model what to do for negatives, leaving the
+    // positive branch unspecified — the real root cause of "Documented" rows
+    // returning a blank rationale. New wording is explicit and unconditional.
+    expect(mainSystem).toContain("MANDATORY for every verdict, never blank");
+    expect(mainSystem).toContain("Documented, because");
+  });
+});
+
+describe("'spread across the document' shows real evidence, not just an assertion (Task 4)", () => {
+  it("verifies each proposed spreadQuotes passage independently — keeps the real ones, drops a fabricated one", async () => {
+    const SRC = `[CHUNK:C001] --- ppd.docx ---
+The Compliance Officer reviews the register monthly. Deputy Principal signs off quarterly. All findings are logged in the shared tracker.`;
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{
+          ref: "6.1.1.DS1",
+          subClauses: [{
+            text: "Compliance monitoring", verdict: "documented", quote: "",
+            spreadQuotes: [
+              { quote: "The Compliance Officer reviews the register monthly.", chunkId: "C001" },
+              { quote: "Deputy Principal signs off quarterly.", chunkId: "C001" },
+              { quote: "This sentence was never in the source document at all.", chunkId: "C001" },
+            ],
+            clause: "", rationale: "Monitoring is split across two named roles.", chunkId: "",
+          }],
+          verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+        }],
+      });
+    });
+    const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], SRC, SETTINGS, {});
+    const sq = result.rows[0].subClauses![0].spreadQuotes!;
+    expect(sq).toHaveLength(2); // the fabricated third quote is dropped
+    expect(sq.map((s) => s.quote)).toEqual([
+      "The Compliance Officer reviews the register monthly.",
+      "Deputy Principal signs off quarterly.",
+    ]);
+  });
+
+  it("spreadQuotes is undefined when the model returns none (single quote or true diffuse-mention case) — never fabricated", async () => {
+    const SRC = `[CHUNK:C001] --- ppd.docx ---\nThe HR Manager reviews staffing quarterly.`;
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      return JSON.stringify({
+        results: [{
+          ref: "1.1.1.DS1",
+          subClauses: [{ text: "Manpower planning", verdict: "documented", quote: "The HR Manager reviews staffing quarterly.", clause: "", rationale: "", chunkId: "C001" }],
+          verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+        }],
+      });
+    });
+    const result = await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], SRC, SETTINGS, {});
+    expect(result.rows[0].subClauses![0].spreadQuotes).toBeUndefined();
+  });
+});
+
 describe("clause capture includes the source's own leading number/bullet (Task 4)", () => {
   it("keeps the number when the numbered heading is verbatim in the source", async () => {
     const SRC = `[CHUNK:C001] --- audit-manual.docx ---
