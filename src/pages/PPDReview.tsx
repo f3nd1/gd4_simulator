@@ -161,6 +161,14 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
 
   const savedResult = ppdReviewResults[selectedId];
   const savedSummary = ppdResultSummary(savedResult?.rows);
+  // Evidence counts for the saved-state line — the SAME rows the Evidence
+  // tab's coverage table renders, so the header can never contradict it.
+  // The PPD counts alone read as wrong on the Evidence tab (e.g. a PPD pass
+  // whose extraction collapsed shows "7 not assessed" above a fully-verdicted
+  // evidence table), so each pass's counts are now labelled with its name.
+  const savedEvidence = useWorkspaceStore((s) => s.evidenceAssessments[selectedId]);
+  const evRows = savedEvidence?.rows ?? [];
+  const evCount = (v: EvidenceVerdict) => evRows.filter((r) => r.verdict === v).length;
 
   if (!sub) return null;
   return (
@@ -183,7 +191,13 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
             points at where the same verdicts also live (checklist + scoring). */}
         {savedResult && (
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 11.5, color: "#334155" }}>
-            <span><b>Last reviewed {new Date(savedResult.runAt).toLocaleString("en-SG", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</b> · {savedSummary.adequate} adequate / {savedSummary.partial} partial / {savedSummary.gaps} gaps{savedSummary.notAssessed ? ` / ${savedSummary.notAssessed} not assessed` : ""}</span>
+            <span>
+              <b>Last reviewed {new Date(savedResult.runAt).toLocaleString("en-SG", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</b>
+              {" · Policy (PPD): "}{savedSummary.adequate} adequate / {savedSummary.partial} partial / {savedSummary.gaps} gaps{savedSummary.notAssessed ? ` / ${savedSummary.notAssessed} not assessed` : ""}
+              {evRows.length > 0 && (
+                <>{" · Evidence: "}{evCount("Met")} {evVerdictLabel("Met").toLowerCase()} / {evCount("Partial")} {evVerdictLabel("Partial").toLowerCase()} / {evCount("Not met")} {evVerdictLabel("Not met").toLowerCase()}{evCount("Not assessed") ? ` / ${evCount("Not assessed")} ${evVerdictLabel("Not assessed").toLowerCase()}` : ""}</>
+              )}
+            </span>
             <span style={{ marginLeft: "auto", color: "#64748b" }}>
               Also reflected in the{" "}
               <Link to={`/sub-checklist?item=${requirementItems[0]?.id ?? ""}`} style={{ color: "#4338ca", fontWeight: 600 }}>Sub-Criterion Checklist</Link>{" "}&amp;{" "}
@@ -300,13 +314,18 @@ function PpdNextStep({ selectedId, bare }: { selectedId: string; bare?: boolean 
   const auditMode = useWorkspaceStore((s) => s.auditMode);
   const ppd = useWorkspaceStore((s) => s.ppdReviewResults[selectedId]);
   const ev = useWorkspaceStore((s) => s.evidenceAssessments[selectedId]);
+  // While hybrid gates are still queued the sub-criterion is NOT compiled —
+  // without this check, one accepted verdict (some savedFindingId) flipped
+  // the banner to "assessed and compiled" while the remaining gates were
+  // still awaiting review.
+  const gatesPending = useWorkspaceStore((s) => (s.pendingCommits[selectedId]?.items.length ?? 0) > 0);
   return (
     <NextStepBanner
       text={nextStepText("ppd-review", {
         mode: auditMode,
         ppdRun: !!ppd && ppd.rows.length > 0,
         evidenceRun: !!ev && ev.rows.length > 0,
-        findingsCompiled: !!ev && ev.rows.some((r) => r.savedFindingId),
+        findingsCompiled: !gatesPending && !!ev && ev.rows.some((r) => r.savedFindingId),
       })}
       bare={bare}
     />

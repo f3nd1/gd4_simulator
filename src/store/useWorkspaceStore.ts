@@ -1899,6 +1899,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const k = findingKeyOf(f);
           if (k && !existingByKey.has(k)) existingByKey.set(k, f.id);
         }
+        // Rows whose verdicts are still queued at the hybrid approval gate are
+        // NOT compiled — accepting one gate calls this for the whole
+        // sub-criterion, and compiling the still-pending rows would create
+        // their checklist lines and findings from verdicts the human hasn't
+        // accepted yet (the gate-bypass regression this guard fixes). Each
+        // pending row compiles when its own accept applies the write and
+        // re-runs this; callers must dequeue an accepted item BEFORE calling.
+        // Empty in full-auto/manual (nothing ever queues), so no change there.
+        const pendingLineRefs = new Set<string>();
+        for (const item of get().pendingCommits[subCriterionId]?.items ?? []) {
+          const w = item.write;
+          const ref = w.newLine
+            ? w.newLine.sourceRef ?? w.newLine.clause
+            : (() => {
+                const l = useChecklistModuleStore.getState().entries[w.gd4ItemId]?.specific.find((x) => x.id === w.existingLineId);
+                return l?.sourceRef ?? l?.clause;
+              })();
+          if (ref) pendingLineRefs.add(`${w.gd4ItemId}|${normalizeAuditRef(ref)}`);
+        }
         const rows = result.rows.map((row) => {
           // "Not assessed" rows raise nothing — no audit result ever matched
           // this line, so there is no verdict to base a finding on.
@@ -1917,6 +1936,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // line and create a second one) — so the finding is confirmed
           // through the one shared checklist path.
           const normRef = normalizeAuditRef(row.gdRef);
+          if (pendingLineRefs.has(`${row.gd4ItemId}|${normRef}`)) return row; // still at the gate — not approved, not compiled
           const findLine = () =>
             useChecklistModuleStore.getState().entries[row.gd4ItemId]?.specific.find(
               (l) =>
@@ -2232,6 +2252,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const run = get().pendingCommits[subCriterionId];
         const item = run?.items.find((i) => i.id === itemId);
         if (!run || !item) return;
+        // Dequeue the resolved item FIRST: compileEvidenceFindings (below)
+        // skips rows still queued at the gate, so the accepted item must be
+        // out of the queue before compile runs or it would skip itself.
+        const dequeue = () =>
+          set((s) => {
+            const cur = s.pendingCommits[subCriterionId];
+            if (!cur) return {};
+            const items = cur.items.filter((i) => i.id !== itemId);
+            if (items.length === 0) {
+              const { [subCriterionId]: _done, ...rest } = s.pendingCommits;
+              return { pendingCommits: rest };
+            }
+            return { pendingCommits: { ...s.pendingCommits, [subCriterionId]: { ...cur, items } } };
+          });
         if (decision === "accept") {
           // Commit through the SAME write path both engines use; an edited
           // status remaps the evidence sufficiency and records the override.
@@ -2247,6 +2281,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               }
             : item.write;
           useChecklistModuleStore.getState().applyOptionAWrites([write]);
+          dequeue();
           try {
             useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId, { subCriterionId });
             // Option A parity with full-auto: raiseAllUnmetFindings only covers
@@ -2279,23 +2314,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             decisionType: "Dismissed",
             reason: item.reason ?? "",
           });
+          dequeue();
         }
-        set((s) => {
-          const cur = s.pendingCommits[subCriterionId];
-          if (!cur) return {};
-          const items = cur.items.filter((i) => i.id !== itemId);
-          if (items.length === 0) {
-            const { [subCriterionId]: _done, ...rest } = s.pendingCommits;
-            return { pendingCommits: rest };
-          }
-          return { pendingCommits: { ...s.pendingCommits, [subCriterionId]: { ...cur, items } } };
-        });
       },
 
       acceptAllPending: (subCriterionId) => {
         const run = get().pendingCommits[subCriterionId];
         if (!run || run.items.length === 0) return;
         useChecklistModuleStore.getState().applyOptionAWrites(run.items.map((i) => i.write));
+        // Clear the queue BEFORE compiling — compileEvidenceFindings skips
+        // gate-pending rows, and every row here was just accepted.
+        set((s) => {
+          const { [subCriterionId]: _done, ...rest } = s.pendingCommits;
+          return { pendingCommits: rest };
+        });
         try {
           useChecklistModuleStore.getState().raiseAllUnmetFindings(run.runId, { subCriterionId });
           // See resolvePendingItem: Option A parity with full-auto (Partial→OFI
@@ -2313,10 +2345,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           changed: false,
           decisionType: "Accepted",
           reason: "",
-        });
-        set((s) => {
-          const { [subCriterionId]: _done, ...rest } = s.pendingCommits;
-          return { pendingCommits: rest };
         });
       },
 

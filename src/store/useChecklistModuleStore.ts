@@ -14,7 +14,7 @@ import type {
 } from "../types";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildDraftFinding, lineSufficiency, lineApsr } from "../lib/checklistBanding";
-import { findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
+import { findingDedupeKey, findingKeyOf, normalizeAuditRef } from "../lib/gd4Refs";
 import type { OptionALineWrite } from "../lib/optionAChecklistWrite";
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
@@ -418,9 +418,23 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           const entries = { ...s.entries };
           for (const w of writes) {
             const entry = entries[w.gd4ItemId] ?? emptyEntry(w.gd4ItemId);
-            if (w.existingLineId) {
+            // A newLine write can race a line created AFTER it was built — a
+            // hybrid write queued at the gate, then a line for the same ref
+            // landing first (compile, a manual add). Blindly appending then
+            // duplicated the line on accept, so match by the same normalized
+            // sourceRef-or-clause rule buildOptionALineWrites uses and update
+            // the existing line instead.
+            const newRef = w.newLine ? normalizeAuditRef(w.newLine.sourceRef ?? w.newLine.clause ?? "") : "";
+            const targetLineId =
+              w.existingLineId ??
+              (newRef
+                ? entry.specific.find(
+                    (l) => (l.sourceRef && normalizeAuditRef(l.sourceRef) === newRef) || (l.clause && normalizeAuditRef(l.clause) === newRef)
+                  )?.id
+                : undefined);
+            if (targetLineId) {
               const specific = entry.specific.map((l) =>
-                l.id === w.existingLineId
+                l.id === targetLineId
                   ? {
                       ...l,
                       status: w.status,
