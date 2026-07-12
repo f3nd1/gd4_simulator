@@ -193,16 +193,3 @@ textarea:focus {
 @media (max-width: 900px) {
   .option-a-run-cols { grid-template-columns: 1fr; }
 }
-
-/* LineageDiagram.tsx expanded-row detail: "What the policy says" / "What the
-   evidence shows" side by side on the Evidence tab, stacking vertically below
-   ~900px — same "2 columns, stack below a breakpoint" idea as .ef-card-cols. */
-.lineage-detail-cols {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .lineage-detail-cols { grid-template-columns: 1fr; }
-}

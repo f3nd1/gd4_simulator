@@ -18,6 +18,10 @@ export type LineageExportRow = {
   // gap reasoning — undefined on the policy tab and on Met rows. Additive/
   // optional so older exported code paths / stored rows without it still work.
   suggestedAction?: string;
+  // Evidence tab only: the PPD side's finding for this same ref (the matrix's
+  // lead "Policy promise/clause" column) — undefined on the policy tab and on
+  // very old stored runs predating the ppdExtract merge step (→ "—").
+  policyPromise?: string;
   barColor: string;          // the row's own left-edge coverage colour, reused as-is (not re-derived)
 };
 
@@ -52,13 +56,54 @@ function formatRunAt(iso: string): string {
   return d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-// Evidence tab gets one extra trailing column — "what would make this Met" —
-// so a later "add to Findings" step can pull it straight from the export;
-// the policy tab has no such field and keeps its original 6 columns.
-const CSV_HEADERS: Record<LineageExportMeta["tab"], string[]> = {
-  policy: ["GD4 Requirement", "Ref", "Policy Verdict", "Policy File(s)", "Policy Clause", "Rationale"],
-  evidence: ["GD4 Requirement", "Ref", "Evidence Verdict", "Evidence File(s)", "Supporting Passage", "Rationale", "Suggested Action"],
+// ── Column registry ─────────────────────────────────────────────────────────
+// One pickable column = one on-screen matrix column, in matrix order. The
+// export column picker (LineageDiagram's export flow, BOTH tabs, CSV and PDF
+// alike) works off this SAME registry, so the picker, the CSV and the PDF
+// can never disagree about what a column is. A single matrix column can span
+// more than one exported column: "requirement" carries the Ref alongside the
+// text, and the evidence tab's "rationale" carries the Suggested Action
+// (rendered inside the same Rationale cell on screen) — so unticking a
+// picker column drops exactly what that on-screen column shows, no more.
+export type LineageColumnKey = "requirement" | "policyPromise" | "verdict" | "files" | "clauseOrPassage" | "rationale";
+
+export type LineageColumnDef = {
+  key: LineageColumnKey;
+  label: string;                             // picker label — matches the on-screen header
+  headers: string[];                         // exported header cell(s)
+  cells: (r: LineageExportRow) => string[];  // exported value cell(s), same length as headers
+  mono?: boolean[];                          // per-sub-column: render monospace in the PDF (the Ref)
 };
+
+// Matrix order per tab. Evidence leads requirement → policy promise → verdict
+// (the approved Policy → Evidence reframe); policy keeps its original order.
+export function lineageColumnsFor(tab: LineageExportMeta["tab"]): LineageColumnDef[] {
+  const ev = tab === "evidence";
+  return [
+    { key: "requirement", label: "GD4 requirement", headers: ["GD4 Requirement", "Ref"], cells: (r) => [r.requirementText, r.ref], mono: [false, true] },
+    ...(ev ? [{ key: "policyPromise" as const, label: "Policy promise/clause", headers: ["Policy Promise/Clause"], cells: (r: LineageExportRow) => [r.policyPromise || "—"] }] : []),
+    { key: "verdict", label: ev ? "Evidence verdict" : "Policy verdict", headers: [ev ? "Evidence Verdict" : "Policy Verdict"], cells: (r) => [r.verdictLabel] },
+    { key: "files", label: ev ? "Evidence file(s)" : "Policy file(s)", headers: [ev ? "Evidence File(s)" : "Policy File(s)"], cells: (r) => [r.fileNames.join("; ") || "—"] },
+    { key: "clauseOrPassage", label: ev ? "Supporting passage" : "Policy clause", headers: [ev ? "Supporting Passage" : "Policy Clause"], cells: (r) => [r.clauseOrPassage || "—"] },
+    {
+      key: "rationale",
+      label: ev ? "Rationale (+ suggested action)" : "Rationale",
+      headers: ["Rationale", ...(ev ? ["Suggested Action"] : [])],
+      cells: (r) => [r.rationale || "—", ...(ev ? [r.suggestedAction || "—"] : [])],
+    },
+  ];
+}
+
+// The tab's columns filtered to a picker selection, still in matrix order
+// (the selection can never reorder). No selection — or a selection that
+// matches nothing — means every column: the picker UI blocks a zero-column
+// export, so an empty list reaching here is a caller bug best handled by
+// exporting everything rather than an empty file.
+function selectedColumns(tab: LineageExportMeta["tab"], selected?: LineageColumnKey[]): LineageColumnDef[] {
+  const all = lineageColumnsFor(tab);
+  const chosen = selected ? all.filter((c) => selected.includes(c.key)) : all;
+  return chosen.length > 0 ? chosen : all;
+}
 
 // Pure builder — exported for unit testing (column order/content, full
 // untruncated multi-file "; " join, CSV escaping via the shared csvCell/toCsv
@@ -66,24 +111,20 @@ const CSV_HEADERS: Record<LineageExportMeta["tab"], string[]> = {
 // browser download. Genuinely-empty cells show "—", matching the on-screen
 // matrix's own convention (and buildLineagePdfHtml below) rather than a bare
 // empty CSV cell an external auditor could misread as a data glitch.
-export function buildLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[]): string {
-  const csvRows = rows.map((r) => [
-    r.requirementText,
-    r.ref,
-    r.verdictLabel,
-    r.fileNames.join("; ") || "—",
-    r.clauseOrPassage || "—",
-    r.rationale || "—",
-    ...(meta.tab === "evidence" ? [r.suggestedAction || "—"] : []),
-  ]);
-  const csv = toCsv(CSV_HEADERS[meta.tab], csvRows);
+// `selected` (optional) trims to the picker's chosen columns; content within
+// a selected column is never truncated — selection controls WHICH columns,
+// never how much of one.
+export function buildLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[]): string {
+  const cols = selectedColumns(meta.tab, selected);
+  const csvRows = rows.map((r) => cols.flatMap((c) => c.cells(r)));
+  const csv = toCsv(cols.flatMap((c) => c.headers), csvRows);
   // Sampling basis as a trailing note row — the export travels without the
   // app, so the caveat must travel with it. Always quoted for CSV safety.
   return meta.caveat ? `${csv}\r\n"Sampling basis: ${meta.caveat.replace(/"/g, '""')}"` : csv;
 }
 
-export function downloadLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[]): void {
-  downloadCsv(buildLineageCsv(meta, rows), `${filenameBase(meta)}.csv`);
+export function downloadLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[]): void {
+  downloadCsv(buildLineageCsv(meta, rows, selected), `${filenameBase(meta)}.csv`);
 }
 
 // Escapes text for safe interpolation into the generated HTML document —
@@ -94,19 +135,16 @@ function escapeHtml(s: string): string {
 
 // Exported for unit testing (asserts real <table> markup, full untruncated
 // text, and the colour-preservation directive) without needing to actually
-// open a browser window.
-export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExportRow[]): string {
-  const headers = CSV_HEADERS[meta.tab];
+// open a browser window. Same optional `selected` column trimming as
+// buildLineageCsv — one registry, one selection semantics for both formats.
+export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[]): string {
+  const cols = selectedColumns(meta.tab, selected);
+  const headers = cols.flatMap((c) => c.headers);
+  const monoFlags = cols.flatMap((c) => c.mono ?? c.headers.map(() => false));
   const title = `${filenameBase(meta)}`;
   const rowsHtml = rows.map((r) => `
     <tr style="border-left:4px solid ${escapeHtml(r.barColor)};">
-      <td>${escapeHtml(r.requirementText)}</td>
-      <td class="mono">${escapeHtml(r.ref)}</td>
-      <td>${escapeHtml(r.verdictLabel)}</td>
-      <td>${escapeHtml(r.fileNames.join("; ") || "—")}</td>
-      <td>${escapeHtml(r.clauseOrPassage || "—")}</td>
-      <td>${escapeHtml(r.rationale || "—")}</td>
-      ${meta.tab === "evidence" ? `<td>${escapeHtml(r.suggestedAction || "—")}</td>` : ""}
+      ${cols.flatMap((c) => c.cells(r)).map((cell, i) => `<td${monoFlags[i] ? ' class="mono"' : ""}>${escapeHtml(cell)}</td>`).join("\n      ")}
     </tr>`).join("");
 
   return `<!doctype html>
@@ -148,8 +186,8 @@ export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExport
 // print-to-PDF renders real HTML text (never rasterised), so the output is
 // selectable/searchable by construction. Setting `document.title` in the new
 // window makes the browser's Save-as-PDF dialog default to the right filename.
-export function openLineagePdf(meta: LineageExportMeta, rows: LineageExportRow[]): void {
-  const html = buildLineagePdfHtml(meta, rows);
+export function openLineagePdf(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[]): void {
+  const html = buildLineagePdfHtml(meta, rows, selected);
   const win = window.open("", "_blank");
   if (!win) return; // popup blocked — nothing else to fall back to client-side
   win.document.open();

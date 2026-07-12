@@ -2,16 +2,26 @@ import { useCallback, useMemo, useState } from "react";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
 import { excerptAround, findQuoteSpan, type QuoteExcerpt } from "./quoteMatch";
-import { downloadLineageCsv, openLineagePdf, type LineageExportRow, type LineageExportMeta } from "../../lib/lineageExport";
+import { downloadLineageCsv, openLineagePdf, lineageColumnsFor, type LineageExportRow, type LineageExportMeta, type LineageColumnKey } from "../../lib/lineageExport";
 import { ppdVerdictLabel, evVerdictLabel } from "../../lib/verdictTone";
 import { samplingCaveat } from "../../lib/samplingCaveat";
 import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, AuditFileRecord, PPDVerdict, EvidenceVerdict } from "../../types";
 
-// Requirement coverage MATRIX — one tab-specific five-column table per Option A
-// tab, scannable straight down each column without expanding anything.
+// Requirement coverage MATRIX — one tab-specific table per Option A tab
+// (five columns on the policy tab, six on the evidence tab), scannable
+// straight down each column without expanding anything.
 //
 //   Policy tab:   GD4 requirement | Policy verdict | Policy file(s) | Policy clause | Rationale
-//   Evidence tab: GD4 requirement | Evidence verdict | Evidence file(s) | Supporting passage | Rationale
+//   Evidence tab: GD4 requirement (secondary) | Policy promise/clause | Evidence verdict | Evidence file(s) | Supporting passage | Rationale
+//
+// The evidence tab leads with POLICY → EVIDENCE (the approved reframe): the
+// PPD tab already owns Requirement → Policy, so repeating the requirement as
+// the evidence tab's widest lead column showed the same mapping twice while
+// hiding the tab's real relationship. "Policy promise/clause" surfaces what
+// the PPD side found for this same ref (row.ppdExtract/ppdVerdict, populated
+// verbatim at evidence-run merge time — never a new AI call) beside what the
+// evidence shows; the requirement shrinks to a muted secondary cell so the
+// reader still knows which line they're on without it being the emphasis.
 //
 // A read-only view of data ALREADY computed per requirement line — no recompute,
 // no re-fetch, no change to any verdict/quote/scoring logic.
@@ -91,6 +101,13 @@ type MatrixLine = {
   // Only ever set for Partial/Not met rows; undefined on Met rows and on any
   // run recorded before this field existed.
   suggestedAction?: string;
+  // Evidence tab only (the lead "Policy promise/clause" column): what the PPD
+  // review found for this SAME ref — row.ppdExtract reused verbatim from the
+  // PPD pass at evidence-run merge time, never a new AI call — plus its PPD
+  // verdict's coverage for the cell's dot. Undefined on very old stored runs
+  // predating those fields → the cell shows an em-dash, never an error.
+  policyPromise?: string;
+  policyCoverage?: Coverage;
   items: SpineItem[];      // spine, only for expandable rows
 };
 
@@ -239,12 +256,22 @@ function buildEvidenceLines(ev: EvidenceAssessmentResult, resolveText: ResolveTe
     // there's exactly one candidate — guessing among several would be a
     // fabricated attribution, so leave it unresolved and fall back to plain text.
     const passageSourceFile = passageItem ? passageItem.sourceFile : (files.length === 1 ? files[0] : undefined);
+    // Policy promise/clause: the PPD pass's own extract for this same ref —
+    // already on the row (populated verbatim at merge time), never re-derived
+    // or re-fetched. Both fields are typed required but very old stored runs
+    // predate them, so both reads are guarded: empty extract falls back to a
+    // short verdict summary; no verdict either → undefined → em-dash.
+    const ppdV = r.ppdVerdict as PPDVerdict | undefined;
+    const policyPromise = r.ppdExtract?.trim()
+      || (ppdV ? `PPD verdict: ${ppdVerdictLabel(ppdV)} — no PPD extract recorded for this line.` : undefined);
     return {
       ref: r.gdRef, reqLabel: r.requirementText, coverage, expandable, verdictLabel: evVerdictLabel(r.verdict),
       files, clauses: [], passagePreview: passageQuote,
       passageSource: passageQuote ? { quote: passageQuote, sourceFile: passageSourceFile } : undefined,
       rowRationale: r.comment || undefined,
       suggestedAction: r.suggestedAction || undefined,
+      policyPromise,
+      policyCoverage: ppdV ? ppdCoverage(ppdV) : undefined,
       items,
     };
   });
@@ -260,6 +287,39 @@ function VerdictCell({ coverage, label }: { coverage: Coverage; label: string })
       <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: hollow ? "transparent" : color, border: `1.5px solid ${color}` }} />
       {label}
     </span>
+  );
+}
+
+// Policy promise/clause column — the evidence tab's lead pairing: what the
+// PPD review found for this SAME ref, so "policy said X" reads directly
+// beside "evidence shows Y" without flipping to the PPD tab. The dot reuses
+// the ONE coverage colour scale (COV_DOT, hollow for not-checked — same
+// convention as VerdictCell); the text is the row's own ppdExtract (or the
+// verdict-summary fallback built in buildEvidenceLines). Long text expands
+// in place with the same Show more/less control RationaleCell uses. An
+// em-dash means a very old stored run predating the ppdExtract/ppdVerdict
+// fields — honest absence, never an error.
+function PolicyPromiseCell({ promise, coverage }: { promise?: string; coverage?: Coverage }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!promise) return <span style={{ color: "#94a3b8" }}>—</span>;
+  const long = promise.length > 220;
+  const shown = long && !expanded ? `${promise.slice(0, 220).trimEnd()}…` : promise;
+  const hollow = coverage === "not-checked";
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
+        {coverage && <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: hollow ? "transparent" : COV_DOT[coverage], border: `1.5px solid ${COV_DOT[coverage]}` }} />}
+        <span style={{ fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>From PPD review</span>
+      </div>
+      <span style={{ display: "block", fontSize: 11, color: "#475569", lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }}>
+        {shown}
+        {long && (
+          <button type="button" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} style={{ marginLeft: 4, fontSize: 10.5, fontWeight: 600, color: "#4338ca", background: "transparent", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>
+            {expanded ? "Show less" : "Show more"}
+          </button>
+        )}
+      </span>
+    </div>
   );
 }
 
@@ -560,6 +620,11 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
 }) {
   const [open, setOpen] = useState(true);
   const [openRef, setOpenRef] = useState<string | null>(null);
+  // Export column picker state — hooks live above the empty-lines early
+  // return; the handlers that use them are defined further down with the
+  // export meta/rows they operate on.
+  const [exportPicker, setExportPicker] = useState<"csv" | "pdf" | null>(null);
+  const [exportCols, setExportCols] = useState<Set<LineageColumnKey>>(new Set());
   const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
   const resolveText = useCallback<ResolveText>(
     (f) => (f.driveFileId ? fileTextCache[`${f.driveFileId}:${f.driveModifiedTime ?? ""}`]?.text : undefined),
@@ -575,12 +640,16 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
   const gaps = lines.filter((l) => l.coverage === "not-covered" || l.coverage === "not-checked").length;
   const isEv = mode === "evidence";
   // Header + every row share this template so columns line up down the matrix.
-  // The file column got a wider share (1.1fr → 1.6fr) plus a 170px floor —
-  // full filenames now wrap instead of clipping (FileListCell), so this
-  // column needs real room; Requirement and Clause/Passage were trimmed
-  // slightly to compensate rather than letting the row overflow.
+  // Evidence tab (approved Policy → Evidence reframe): the NEW Policy
+  // promise/clause column takes the lead 1.6fr share the requirement used to
+  // hold, the requirement shrinks to a 1.1fr secondary cell, and the verdict/
+  // files/passage/rationale columns each give back a little width so all six
+  // fit without overflow at the same breakpoints the old five-column layout
+  // supported. Policy tab: untouched — its file column keeps the wider share
+  // (1.1fr → 1.6fr) plus a 170px floor so full filenames wrap instead of
+  // clipping (FileListCell).
   const gridCols = isEv
-    ? "minmax(0,2fr) 118px minmax(170px,1.6fr) minmax(0,1.5fr) minmax(0,1.6fr)"
+    ? "minmax(0,1.1fr) minmax(0,1.6fr) 108px minmax(150px,1.4fr) minmax(0,1.3fr) minmax(0,1.4fr)"
     : "minmax(0,2fr) 118px minmax(170px,1.6fr) minmax(0,1.3fr) minmax(0,1.6fr)";
   const headerCell: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 };
   const col4Header = isEv ? "Supporting passage" : "Policy clause";
@@ -610,9 +679,32 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
     clauseOrPassage: isEv ? (l.passagePreview || "") : l.clauses.join("; "),
     rationale: l.rowRationale || "",
     suggestedAction: isEv ? l.suggestedAction : undefined,
+    policyPromise: isEv ? l.policyPromise : undefined,
     barColor: COV_DOT[l.coverage], // same solid colour scale the verdict dot uses (border-left can't take the on-screen gradient)
   }));
   const exportBtnStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#0f766e", padding: "4px 9px", border: "1px solid #99f6e4", borderRadius: 6, background: "#f0fdfa", whiteSpace: "nowrap", cursor: "pointer" };
+
+  // Export column picker — ONE picker serving both formats (CSV and PDF pick
+  // from the SAME lineageColumnsFor registry the builders use). Opens with
+  // every column checked, so confirming without touching anything exports
+  // exactly what the fixed export always did; unchecking trims columns only —
+  // content within a kept column is never truncated. Zero columns can't be
+  // exported (the button disables), so the file can never come out empty.
+  const exportTab: LineageExportMeta["tab"] = isEv ? "evidence" : "policy";
+  const openExportPicker = (format: "csv" | "pdf") => {
+    setExportCols(new Set(lineageColumnsFor(exportTab).map((c) => c.key))); // all checked by default
+    setExportPicker(format);
+  };
+  const toggleExportCol = (key: LineageColumnKey) =>
+    setExportCols((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  const runExport = () => {
+    // Filter the registry (not the Set) so the export keeps matrix order.
+    const keys = lineageColumnsFor(exportTab).map((c) => c.key).filter((k) => exportCols.has(k));
+    if (keys.length === 0) return;
+    if (exportPicker === "csv") downloadLineageCsv(exportMeta, exportRows, keys);
+    else openLineagePdf(exportMeta, exportRows, keys);
+    setExportPicker(null);
+  };
 
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, background: "#fff", marginBottom: 12, overflow: "hidden" }}>
@@ -634,14 +726,38 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
           </span>
         </span>
         {/* Export the rows exactly as rendered above — this tab only, full
-            untruncated file/clause lists (no "+N more"). stopPropagation so
-            clicking an export button doesn't also collapse the panel. */}
+            untruncated file/clause lists (no "+N more"). Each button opens
+            the column picker (all columns pre-checked) rather than exporting
+            immediately. stopPropagation so clicking an export button doesn't
+            also collapse the panel. */}
         <span style={{ display: "inline-flex", gap: 6 }}>
-          <button type="button" onClick={(e) => { e.stopPropagation(); downloadLineageCsv(exportMeta, exportRows); }} style={exportBtnStyle} title="Every row above, full file lists, as a CSV">⬇ CSV</button>
-          <button type="button" onClick={(e) => { e.stopPropagation(); openLineagePdf(exportMeta, exportRows); }} style={exportBtnStyle} title="Every row above as a printable/PDF table (opens a new tab)">⬇ PDF</button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); openExportPicker("csv"); }} style={exportBtnStyle} title="Choose columns, then download every row above (full file lists) as a CSV">⬇ CSV</button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); openExportPicker("pdf"); }} style={exportBtnStyle} title="Choose columns, then open every row above as a printable/PDF table (new tab)">⬇ PDF</button>
         </span>
         <span style={{ color: "#94a3b8", fontSize: 12 }}>{open ? "▲" : "▼"}</span>
       </div>
+
+      {/* Column picker — shown for whichever format was clicked, even while
+          the matrix itself is collapsed (the export buttons work either way).
+          All columns start checked = exact parity with the old fixed export. */}
+      {exportPicker && (
+        <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "8px 12px", background: "#f0fdfa", borderBottom: "1px solid #f1f5f9" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#0f766e" }}>Columns to include in the {exportPicker === "csv" ? "CSV" : "PDF"}:</span>
+          {lineageColumnsFor(exportTab).map((c) => (
+            <label key={c.key} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#334155", cursor: "pointer", whiteSpace: "nowrap" }}>
+              <input type="checkbox" checked={exportCols.has(c.key)} onChange={() => toggleExportCol(c.key)} />
+              {c.label}
+            </label>
+          ))}
+          <span style={{ display: "inline-flex", gap: 6, marginLeft: "auto" }}>
+            <button type="button" disabled={exportCols.size === 0} onClick={runExport} style={{ ...exportBtnStyle, opacity: exportCols.size === 0 ? 0.5 : 1, cursor: exportCols.size === 0 ? "not-allowed" : "pointer" }}>
+              Export {exportPicker === "csv" ? "CSV" : "PDF"}
+            </button>
+            <button type="button" onClick={() => setExportPicker(null)} style={{ fontSize: 11, fontWeight: 600, color: "#64748b", padding: "4px 9px", border: "1px solid #cbd5e1", borderRadius: 6, background: "#fff", cursor: "pointer" }}>Cancel</button>
+          </span>
+          {exportCols.size === 0 && <span style={{ fontSize: 10.5, color: "#b45309", width: "100%" }}>Select at least one column to export.</span>}
+        </div>
+      )}
 
       {open && (
         <div style={{ maxHeight: 560, overflowY: "auto" }}>
@@ -652,6 +768,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
             <div style={{ width: 3, flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "7px 12px 7px 8px", alignItems: "center" }}>
               <span style={headerCell}>GD4 requirement</span>
+              {isEv && <span style={headerCell}>Policy promise/clause</span>}
               <span style={headerCell}>{isEv ? "Evidence verdict" : "Policy verdict"}</span>
               <span style={headerCell}>{isEv ? "Evidence file(s)" : "Policy file(s)"}</span>
               <span style={headerCell}>{col4Header}</span>
@@ -670,14 +787,17 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
                     onClick={line.expandable ? () => setOpenRef(isOpen ? null : line.ref) : undefined}
                     style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "8px 12px 8px 8px", alignItems: "start", cursor: line.expandable ? "pointer" : "default" }}
                   >
-                    {/* GD4 requirement (chevron slot reserved so refs align on every row) */}
+                    {/* GD4 requirement (chevron slot reserved so refs align on every row).
+                        Evidence tab: secondary/muted treatment — smaller, greyer — the
+                        line's identity, not its emphasis (that's the Policy promise). */}
                     <div style={{ minWidth: 0, display: "flex", gap: 6 }}>
                       <span aria-hidden style={{ width: 9, flexShrink: 0, color: "#94a3b8", fontSize: 9, marginTop: 2 }}>{line.expandable ? (isOpen ? "▾" : "▸") : ""}</span>
                       <span style={{ minWidth: 0 }}>
-                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, fontWeight: 700, color: "#4338ca" }}>{line.ref}</span>
-                        <span style={{ fontSize: 12, color: "#334155", marginLeft: 6 }} title={line.reqLabel}>{shorten(line.reqLabel, 90)}</span>
+                        <span style={{ fontFamily: "ui-monospace,monospace", fontSize: isEv ? 10 : 10.5, fontWeight: 700, color: isEv ? "#64748b" : "#4338ca" }}>{line.ref}</span>
+                        <span style={{ fontSize: isEv ? 11 : 12, color: isEv ? "#64748b" : "#334155", marginLeft: isEv ? 5 : 6 }} title={line.reqLabel}>{shorten(line.reqLabel, 90)}</span>
                       </span>
                     </div>
+                    {isEv && <PolicyPromiseCell promise={line.policyPromise} coverage={line.policyCoverage} />}
                     <VerdictCell coverage={line.coverage} label={line.verdictLabel} />
                     <FileListCell files={line.files} muted={!line.expandable} />
                     {isEv

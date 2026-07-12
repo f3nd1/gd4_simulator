@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildLineageCsv, buildLineagePdfHtml, type LineageExportMeta, type LineageExportRow } from "../lineageExport";
+import { buildLineageCsv, buildLineagePdfHtml, lineageColumnsFor, type LineageExportMeta, type LineageExportRow } from "../lineageExport";
 
 function policyMeta(overrides: Partial<LineageExportMeta> = {}): LineageExportMeta {
   return { tab: "policy", runLabel: "6.2 Management Review", runAt: "2026-07-01T00:00:00.000Z", statusLine: "2 Documented · 1 Not covered", ...overrides };
@@ -19,13 +19,27 @@ function multiFileRow(overrides: Partial<LineageExportRow> = {}): LineageExportR
 }
 
 describe("buildLineageCsv", () => {
-  it("uses the exact requested column order per tab", () => {
+  it("uses the exact matrix column order per tab — evidence leads Policy Promise/Clause after the requirement (the approved reframe)", () => {
     const csv = buildLineageCsv(policyMeta(), [multiFileRow()]);
     const headerLine = csv.split("\r\n")[0];
     expect(headerLine).toBe("GD4 Requirement,Ref,Policy Verdict,Policy File(s),Policy Clause,Rationale");
 
     const evCsv = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow()]);
-    expect(evCsv.split("\r\n")[0]).toBe("GD4 Requirement,Ref,Evidence Verdict,Evidence File(s),Supporting Passage,Rationale,Suggested Action");
+    expect(evCsv.split("\r\n")[0]).toBe("GD4 Requirement,Ref,Policy Promise/Clause,Evidence Verdict,Evidence File(s),Supporting Passage,Rationale,Suggested Action");
+  });
+
+  it("Policy Promise/Clause: evidence tab only — exports the PPD-side text, em-dash when absent (old stored run)", () => {
+    const withPromise = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow({ policyPromise: "Internal assessors must not review a unit they manage." })]);
+    expect(withPromise).toContain("Internal assessors must not review a unit they manage.");
+
+    // Old stored run predating ppdExtract/ppdVerdict → em-dash, never an error/blank.
+    const noPromise = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow({ requirementText: "Plain req.", clauseOrPassage: "", rationale: "", fileNames: [] })]);
+    expect(noPromise.split("\r\n")[1]).toBe("Plain req.,6.2.1.DS1.a,—,Partly,—,—,—,—");
+
+    // Policy tab has no Policy Promise column at all, even if the field were set.
+    const policyCsv = buildLineageCsv(policyMeta(), [multiFileRow({ policyPromise: "Should not appear on the policy tab." })]);
+    expect(policyCsv).not.toContain("Should not appear on the policy tab");
+    expect(policyCsv.split("\r\n")[0]).not.toContain("Policy Promise");
   });
 
   it("includes the Suggested Action column on the evidence tab only, and shows an em-dash when unset", () => {
@@ -77,6 +91,60 @@ describe("buildLineageCsv", () => {
     const csv = buildLineageCsv(policyMeta(), [row]);
     const dataLine = csv.split("\r\n")[1];
     expect(dataLine).toBe("Simple requirement text.,6.2.1.DS1.a,Partly,—,—,—");
+  });
+});
+
+describe("export column selection (the picker) — one registry drives picker, CSV and PDF alike", () => {
+  it("no selection = every column: full parity with the old fixed export", () => {
+    expect(buildLineageCsv(policyMeta(), [multiFileRow()])).toBe(buildLineageCsv(policyMeta(), [multiFileRow()], lineageColumnsFor("policy").map((c) => c.key)));
+    expect(buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [multiFileRow()])).toBe(
+      buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [multiFileRow()], lineageColumnsFor("evidence").map((c) => c.key)));
+  });
+
+  it("a subset selection exports exactly those columns' headers and cells, nothing else", () => {
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow({ policyPromise: "promise text" })], ["requirement", "verdict"]);
+    expect(csv.split("\r\n")[0]).toBe("GD4 Requirement,Ref,Evidence Verdict");
+    expect(csv).not.toContain("promise text");
+    expect(csv).not.toContain("Handbook.pdf"); // files column unchecked → its content is gone too
+    expect(csv.split("\r\n")[1]).toContain("Partly");
+  });
+
+  it("selection can only TRIM, never reorder — keys given out of matrix order still export in matrix order", () => {
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow()], ["rationale", "requirement", "policyPromise"]);
+    expect(csv.split("\r\n")[0]).toBe("GD4 Requirement,Ref,Policy Promise/Clause,Rationale,Suggested Action");
+  });
+
+  it("unchecking a matrix column drops ALL its exported sub-columns (requirement drops Ref; evidence rationale drops Suggested Action)", () => {
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow({ suggestedAction: "fix it" })], ["verdict", "files"]);
+    expect(csv.split("\r\n")[0]).toBe("Evidence Verdict,Evidence File(s)");
+    expect(csv).not.toContain("Ref");
+    expect(csv).not.toContain("fix it");
+  });
+
+  it("the PDF honours the same selection: only the chosen <th>/<td> columns render", () => {
+    const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [multiFileRow({ policyPromise: "promise text" })], ["policyPromise", "verdict"]);
+    expect(html).toContain("<th>Policy Promise/Clause</th>");
+    expect(html).toContain("<th>Evidence Verdict</th>");
+    expect(html).not.toContain("<th>GD4 Requirement</th>");
+    expect(html).not.toContain("<th>Supporting Passage</th>");
+    expect(html).toContain("promise text");
+    expect(html).not.toContain("Handbook.pdf");
+  });
+
+  it("selected content is never truncated — selection controls WHICH columns, not how much of one", () => {
+    const longRationale = "R".repeat(3000);
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow({ rationale: longRationale })], ["rationale"]);
+    expect(csv).toContain(longRationale);
+  });
+
+  it("an empty selection falls back to every column (the picker UI blocks it; the builder must not emit an empty file)", () => {
+    const csv = buildLineageCsv(policyMeta(), [multiFileRow()], []);
+    expect(csv.split("\r\n")[0]).toBe("GD4 Requirement,Ref,Policy Verdict,Policy File(s),Policy Clause,Rationale");
+  });
+
+  it("lineageColumnsFor: evidence has 6 pickable columns incl. policyPromise; policy has 5 without it", () => {
+    expect(lineageColumnsFor("evidence").map((c) => c.key)).toEqual(["requirement", "policyPromise", "verdict", "files", "clauseOrPassage", "rationale"]);
+    expect(lineageColumnsFor("policy").map((c) => c.key)).toEqual(["requirement", "verdict", "files", "clauseOrPassage", "rationale"]);
   });
 });
 
