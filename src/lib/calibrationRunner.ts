@@ -320,11 +320,18 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
       const evByRef = new Map(ev.rows.map((r) => [r.ref, r]));
       lines = ppd.rows.map((r) => {
         const e = evByRef.get(r.ref);
-        // null = neither stage produced a verdict for this line (call failed
-        // / Not assessed) — missing data, never counted as a gap.
+        // The evidence stage RAN for this sub-criterion, so the line's status
+        // is the evidence verdict — OR null ("Not assessed") when the evidence
+        // side could not produce one (its call failed/timed out → e.failed, or
+        // it returned "Not assessed"). It must NEVER fall back to the PPD
+        // documentation verdict here: a line documented in the PPD (Adequate)
+        // whose EVIDENCE call timed out would otherwise be recorded as "Met" —
+        // a fabricated positive manufactured from an evidence-side failure
+        // (the real 6.1.1.DS1.b bug). The PPD verdict is the right status ONLY
+        // in the else branch below, where no evidence folder was read at all.
         const status: ScratchStatus | null = e && !e.failed && (e.verdict === "Met" || e.verdict === "Partial" || e.verdict === "Not met")
           ? e.verdict
-          : ppdVerdictToStatus(r.verdict);
+          : null;
         // Pass 1 visibility per run: how many candidate passages each pass
         // extracted vs verified for this line — the number that tells
         // "correctly found nothing" (0 raw) apart from "wrongly found

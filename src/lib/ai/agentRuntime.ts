@@ -3024,7 +3024,13 @@ Respond with JSON only:
       return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks, evidenceQuote: best.evidenceQuote, suggestedAction: best.suggestedAction || undefined, extractionStats };
     }
     if (failedRefs.has(inp.ref)) {
-      return { ref: inp.ref, evidenceSummary: "Assessment failed — retry.", verdict: "Not met", comment: "The AI call for this line failed or timed out. Re-run the evidence assessment to retry.", chunkIds: [], failed: true };
+      // A failed/timed-out call is MISSING DATA, not a negative finding — the
+      // honest verdict is "Not assessed" (matching the stoppedEarly and
+      // extraction-defect branches below), NEVER "Not met". Returning "Not
+      // met" here fabricated a negative for any consumer reading .verdict
+      // without also checking .failed; "Not assessed" is neutral (excluded
+      // from the findings compile and from consistency gap/band counts).
+      return { ref: inp.ref, evidenceSummary: "Assessment failed — retry.", verdict: "Not assessed", comment: "The AI call for this line failed or timed out. Re-run the evidence assessment to retry.", chunkIds: [], failed: true };
     }
     // A line never put in front of the AI because the run stopped early is
     // "Not assessed" — NOT a fabricated "Not met".
