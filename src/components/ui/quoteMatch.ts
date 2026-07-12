@@ -63,19 +63,74 @@ function findQuoteSpanFrom(text: string, segment: string, from: number): [number
   return null;
 }
 
+// A sentence terminator: .!? optionally followed by a closing quote/paren,
+// followed by whitespace or end-of-string — deliberately conservative (never
+// treats a mid-sentence period like "Mr." or "e.g." specially; a slightly
+// early real boundary is fine, a fabricated one is not).
+const SENTENCE_END = /[.!?]["'”’)]*(?=\s|$)/g;
+
+// The REAL sentence-start boundary at or before `pos`: the position right
+// after the nearest preceding terminator (or paragraph break) within
+// `maxBack` characters of `pos`. Never fabricated — only ever a position
+// findable in `text`. Falls back to `pos - maxBack` (clamped to 0) when no
+// boundary exists in range, so a punctuation-free block still gets a BOUNDED
+// window rather than growing unboundedly (the exact failure mode a run-on,
+// no-punctuation source produced before this existed).
+function sentenceStart(text: string, pos: number, maxBack: number): number {
+  const floor = Math.max(0, pos - maxBack);
+  SENTENCE_END.lastIndex = floor;
+  let best = floor;
+  let m: RegExpExecArray | null;
+  while ((m = SENTENCE_END.exec(text))) {
+    const after = m.index + m[0].length;
+    if (after > pos) break;
+    best = after;
+  }
+  const para = text.lastIndexOf("\n\n", pos - 1);
+  if (para >= floor && para + 2 > best) best = para + 2;
+  while (best < pos && /\s/.test(text[best])) best++; // don't start on a stray space/newline
+  return best;
+}
+
+// The REAL sentence-end boundary at or after `pos`: the position right after
+// the nearest following terminator (or paragraph break) within `maxForward`
+// characters. Same bounded-fallback rule as sentenceStart.
+function sentenceEnd(text: string, pos: number, maxForward: number): number {
+  const ceil = Math.min(text.length, pos + maxForward);
+  SENTENCE_END.lastIndex = pos;
+  const m = SENTENCE_END.exec(text);
+  let best = ceil;
+  if (m && m.index + m[0].length <= ceil) best = m.index + m[0].length;
+  const para = text.indexOf("\n\n", pos);
+  if (para >= 0 && para < ceil && para < best) best = para;
+  return best;
+}
+
 // A short, located excerpt around a quote — the "relevant passage", not the
 // whole document. Returns null when the quote can't be located in `text`
-// (never fabricates a position/context). `radius` bounds how much
-// surrounding text is included on each side, so the caller can render a
-// tight, scannable snippet instead of dumping the full source.
+// (never fabricates a position/context). SENTENCE-BOUNDARY AWARE: `before`
+// extends back to the start of the sentence CONTAINING the match, and
+// `after` extends forward to the end of the sentence containing the match —
+// real boundaries in the source text, never a fixed character cut that can
+// land mid-sentence (the excerpt-cutoff regression this fixed). `radius` is
+// now the MAX distance the search may look for a boundary, not the exact
+// window size: a well-punctuated match typically ends up shorter than
+// radius (stopping at the real sentence end); a punctuation-free run of text
+// with no boundary in range is still capped at radius, so a single run-on
+// chunk can't balloon to "almost the whole document" (the extraction-quality
+// case investigated separately — this is a legitimate, honest cap, not a
+// truncation of a real sentence). When the match itself spans more than one
+// sentence (an elided "start … end" quote, or a quote that simply runs
+// across a period), the window naturally covers every sentence it touches,
+// start to end — never fragments to "just the first".
 export type QuoteExcerpt = { before: string; match: string; after: string; clippedStart: boolean; clippedEnd: boolean };
 
 export function excerptAround(text: string, quote: string, radius = 220): QuoteExcerpt | null {
   const span = findQuoteSpan(text, quote);
   if (!span) return null;
   const [s, e] = span;
-  const start = Math.max(0, s - radius);
-  const end = Math.min(text.length, e + radius);
+  const start = sentenceStart(text, s, radius);
+  const end = sentenceEnd(text, e, radius);
   return {
     before: text.slice(start, s),
     match: text.slice(s, e),

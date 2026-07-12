@@ -195,25 +195,34 @@ textarea:focus {
 }
 
 /* LineageDiagram.tsx clause-by-clause detail matrix (both Option A tabs):
-   PPD tab: Clause requirement | Policy clause & quote | File | Rationale,
-   roughly equal widths. Evidence tab (.cm-ev modifier): the File column now
-   carries the found/not-found badge AND the located evidence passage (Task 1
-   of the "File and Supporting passage" rename) — it legitimately holds more
-   content than the other three cells, so it gets ~50% of the row; Clause
-   requirement and PPD clause/extract stay narrow (this is context, not the
-   emphasis — the reader already has both from the outer matrix), and Remarks
-   is narrower than before but still wider than the two narrow columns. Below
-   900px both variants stack to one column — same convention as
+   Clause requirement | col2 | col3 | col4. Neither variant clamps its
+   excerpt text — a longer, sentence-complete passage (see excerptAround in
+   quoteMatch.ts) makes the ROW taller, never clips content, so these
+   proportions are about SCAN priority, not a truncation budget.
+
+   PPD tab (default): Policy clause & quote is the reader's actual evidence
+   for the sub-part — it gets AT LEAST 50% of the row (13/51/16/20%); Clause
+   requirement narrows to a light identifier, File and Rationale split the
+   remainder.
+
+   Evidence tab (.cm-ev): File and Supporting passage still leads (this
+   column carries the found/not-found badge AND the located evidence
+   excerpt), but PPD clause/extract — the linked policy promise, shown once
+   per sub-part — gained ~10 points of width taken from it: 15/25/40/20%
+   (previously 15/15/50/20%). 40% remains comfortably wide enough for a full
+   sentence excerpt now that nothing clamps it (row height simply grows).
+
+   Below 900px both variants stack to one column — same convention as
    .option-a-run-cols — and each cell shows its own field label (.cm-cell-label,
    hidden on desktop where the header row already labels the columns). */
 .clause-matrix-head,
 .clause-matrix-row {
   display: grid;
-  grid-template-columns: 1.5fr 1.5fr 1.1fr 1.6fr;
+  grid-template-columns: 0.8fr 3.1fr 1fr 1.2fr;
 }
 .clause-matrix-head.cm-ev,
 .clause-matrix-row.cm-ev {
-  grid-template-columns: 0.9fr 0.9fr 3fr 1.2fr;
+  grid-template-columns: 0.9fr 1.5fr 2.4fr 1.2fr;
 }
 .cm-cell-label { display: none; }
 @media (max-width: 900px) {

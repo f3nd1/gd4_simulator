@@ -509,35 +509,33 @@ function VisionProvenanceTag({ record }: { record?: AuditFileRecord }) {
 function LocatedPassage({ item, resolveText }: { item: SpineItem; resolveText: ResolveText }) {
   const text = item.sourceFile?.record ? resolveText(item.sourceFile.record) : undefined;
   const quoted = (item.found || item.contradicted) && item.quote;
-  // SAME windowing as PassageCell (the outer matrix's Supporting Passage
-  // column) — radius=90, not the excerptAround default of 220 — reused
-  // exactly, not reinvented. This was the excerpt-scoping regression: the
-  // default 220-char radius on each side of the match, with no line-clamp,
-  // rendered the near-entirety of a run-on source block. Note this radius
-  // only bounds the FADED CONTEXT before/after the match — the highlighted
-  // `match` itself is exactly the source span findQuoteSpan located for
-  // item.quote, which for a genuinely elided ("start … end") quote spans
-  // from the first segment to the last. On a source with clean sentence
-  // boundaries that's a tight span; on a raw table/agenda dump with no
-  // punctuation between fields (the reported case), the model's elided
-  // quote can span a wide run of unrelated text with nothing to break it
-  // up. That is an EXTRACTION-QUALITY issue in the source read, not a
-  // display bug — the 2-line clamp below bounds how much of it is ever
-  // visible, but does not (and must not) silently crop the actual match.
-  const excerpt = quoted && typeof text === "string" ? excerptAround(text, item.quote!, 90) : null;
+  // Sentence-boundary-aware windowing (excerptAround itself extends to the
+  // nearest REAL sentence start/end, never a fixed character cut) — radius
+  // is now the max distance it may search for that boundary, not the exact
+  // excerpt length, so a well-punctuated match ends up shorter than this on
+  // its own. Raised from the outer matrix's tighter 90 (PassageCell, a
+  // 2-line-clamped summary cell — out of scope here) to 400: this column is
+  // the reader's actual evidence, so it is allowed to run longer to show a
+  // complete sentence rather than compress one to a fixed length. No visual
+  // line-clamp on the rendered excerpt below — the row grows taller instead,
+  // never clipping real content. A punctuation-free run of text (a raw
+  // table/agenda dump with nothing to break it up — the extraction-quality
+  // case investigated separately) still caps at this radius rather than
+  // growing unboundedly; that is an honest, bounded fallback, not a cut.
+  const excerpt = quoted && typeof text === "string" ? excerptAround(text, item.quote!, 400) : null;
   const hasSpread = item.found && item.spreadQuotes && item.spreadQuotes.length > 0;
   const nothingToShow = !quoted && !hasSpread && !(item.found && item.noExactQuote) && !(item.found && item.quoteUnverified);
   if (nothingToShow) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       {quoted && excerpt && (
-        <div title={item.quote} style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+        <div title={item.quote} style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
           <ExcerptSpan excerpt={excerpt} />
         </div>
       )}
       {quoted && !excerpt && (
         <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.5 }}>
-          “{shorten(item.quote!, 220)}” <span style={{ color: "#94a3b8", fontStyle: "italic" }}>(context unavailable — re-run to refresh the cache)</span>
+          “{shorten(item.quote!, 600)}” <span style={{ color: "#94a3b8", fontStyle: "italic" }}>(context unavailable — re-run to refresh the cache)</span>
         </div>
       )}
       {/* "Spread across the document" shows the ACTUAL matched passages, not
@@ -548,7 +546,7 @@ function LocatedPassage({ item, resolveText }: { item: SpineItem; resolveText: R
           <div style={{ fontSize: 10.5, color: "#64748b", fontStyle: "italic" }}>Covered — spread across {item.spreadQuotes!.length > 1 ? "these" : "this"} passage{item.spreadQuotes!.length > 1 ? "s" : ""} rather than one:</div>
           {item.spreadQuotes!.slice(0, 5).map((sq, i) => (
             <div key={i} style={{ fontSize: 11, color: "#475569", lineHeight: 1.5, paddingLeft: 8, borderLeft: "2px solid #e2e8f0" }}>
-              “{shorten(sq.quote, 180)}”
+              “{shorten(sq.quote, 600)}”
               {sq.sourceFile?.name && (
                 <div style={{ fontSize: 10.5, marginTop: 2 }}>
                   {sq.sourceFile.url
