@@ -195,8 +195,15 @@ textarea:focus {
 }
 
 /* LineageDiagram.tsx clause-by-clause detail matrix (both Option A tabs):
-   Clause requirement | policy clause-or-extract | File | Remarks. Below 900px
-   the four columns stack to one — same stacking convention as
+   PPD tab: Clause requirement | Policy clause & quote | File | Rationale,
+   roughly equal widths. Evidence tab (.cm-ev modifier): the File column now
+   carries the found/not-found badge AND the located evidence passage (Task 1
+   of the "File and Supporting passage" rename) — it legitimately holds more
+   content than the other three cells, so it gets ~50% of the row; Clause
+   requirement and PPD clause/extract stay narrow (this is context, not the
+   emphasis — the reader already has both from the outer matrix), and Remarks
+   is narrower than before but still wider than the two narrow columns. Below
+   900px both variants stack to one column — same convention as
    .option-a-run-cols — and each cell shows its own field label (.cm-cell-label,
    hidden on desktop where the header row already labels the columns). */
 .clause-matrix-head,
@@ -204,10 +211,15 @@ textarea:focus {
   display: grid;
   grid-template-columns: 1.5fr 1.5fr 1.1fr 1.6fr;
 }
+.clause-matrix-head.cm-ev,
+.clause-matrix-row.cm-ev {
+  grid-template-columns: 0.9fr 0.9fr 3fr 1.2fr;
+}
 .cm-cell-label { display: none; }
 @media (max-width: 900px) {
   .clause-matrix-head { display: none; }
-  .clause-matrix-row { grid-template-columns: 1fr; }
+  .clause-matrix-row,
+  .clause-matrix-row.cm-ev { grid-template-columns: 1fr; }
   .cm-cell-label {
     display: block;
     font-size: 9.5px;

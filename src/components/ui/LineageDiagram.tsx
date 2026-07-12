@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
 import { excerptAround, findQuoteSpan, type QuoteExcerpt } from "./quoteMatch";
-import { downloadLineageCsv, openLineagePdf, lineageColumnsFor, type LineageExportRow, type LineageExportMeta, type LineageColumnKey } from "../../lib/lineageExport";
+import { downloadLineageCsv, openLineagePdf, lineageColumnsFor, type LineageExportRow, type LineageExportMeta, type LineageColumnKey, type LineageClauseDetailItem } from "../../lib/lineageExport";
 import { ppdVerdictLabel, evVerdictLabel } from "../../lib/verdictTone";
 import { samplingCaveat } from "../../lib/samplingCaveat";
 import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, AuditFileRecord, PPDVerdict, EvidenceVerdict } from "../../types";
@@ -120,6 +120,50 @@ function uniqStrings(arr: (string | undefined)[]): string[] {
   const out: string[] = [];
   for (const s of arr) if (s && !out.includes(s)) out.push(s);
   return out;
+}
+
+// Plain-text rendering of a sub-part's located passage / honest fallback —
+// the SAME states LocatedPassage renders on screen (exact quote, "spread
+// across these passages", the non-failure "spread across the document"
+// note, the quote-unverified warning), as export text with NO truncation
+// (export's own no-crop rule — the on-screen version windows/clamps for
+// display only). Used for the PPD tab's column-2 quote AND the evidence
+// tab's File-and-Supporting-passage column, so both stay consistent with
+// what LocatedPassage actually shows in-app.
+function passageText(item: SpineItem): string | undefined {
+  if ((item.found || item.contradicted) && item.quote) return `"${item.quote}"`;
+  if (item.found && item.spreadQuotes && item.spreadQuotes.length > 0) {
+    return `Covered — spread across these passages: ${item.spreadQuotes.map((sq) => `"${sq.quote}"${sq.sourceFile?.name ? ` (from ${sq.sourceFile.name})` : ""}`).join(" / ")}`;
+  }
+  if (item.found && item.noExactQuote && !item.quoteUnverified) return "Covered, but spread across the document rather than one passage.";
+  if (item.found && item.quoteUnverified) return "The AI cited a supporting passage, but it could not be verified word-for-word against the source document, so it is not shown.";
+  return undefined;
+}
+
+// PPD tab's export column 2: "§ clause\n\"quote\"" (or the honest fallback
+// from passageText) — the plain-text equivalent of what ClauseRow's column 2
+// renders for the policy tab.
+function clauseCol2Text(item: SpineItem): string {
+  const parts: string[] = [];
+  if (item.clause) parts.push(`§ ${item.clause}`);
+  const p = passageText(item);
+  if (p) parts.push(p);
+  return parts.join("\n") || "—";
+}
+
+// Builds one line's clause-by-clause detail for export — mirrors ClauseRow's
+// per-tab column semantics exactly, computed once from the SAME line.items
+// already built for on-screen rendering (no new data, no re-derivation).
+function buildClauseDetailExport(line: MatrixLine, isEv: boolean): LineageClauseDetailItem[] {
+  return line.items.map((it) => ({
+    name: it.name,
+    found: it.found,
+    contradicted: it.contradicted,
+    col2: isEv ? (line.policyPromise || "—") : clauseCol2Text(it),
+    fileName: it.sourceFile?.name,
+    passage: isEv ? passageText(it) : undefined,
+    remarks: it.rationale || "",
+  }));
 }
 
 // Same Drive-link pattern used across the app (FileLedger, PreAnalysisChecklistPanel).
@@ -465,14 +509,29 @@ function VisionProvenanceTag({ record }: { record?: AuditFileRecord }) {
 function LocatedPassage({ item, resolveText }: { item: SpineItem; resolveText: ResolveText }) {
   const text = item.sourceFile?.record ? resolveText(item.sourceFile.record) : undefined;
   const quoted = (item.found || item.contradicted) && item.quote;
-  const excerpt = quoted && typeof text === "string" ? excerptAround(text, item.quote!) : null;
+  // SAME windowing as PassageCell (the outer matrix's Supporting Passage
+  // column) — radius=90, not the excerptAround default of 220 — reused
+  // exactly, not reinvented. This was the excerpt-scoping regression: the
+  // default 220-char radius on each side of the match, with no line-clamp,
+  // rendered the near-entirety of a run-on source block. Note this radius
+  // only bounds the FADED CONTEXT before/after the match — the highlighted
+  // `match` itself is exactly the source span findQuoteSpan located for
+  // item.quote, which for a genuinely elided ("start … end") quote spans
+  // from the first segment to the last. On a source with clean sentence
+  // boundaries that's a tight span; on a raw table/agenda dump with no
+  // punctuation between fields (the reported case), the model's elided
+  // quote can span a wide run of unrelated text with nothing to break it
+  // up. That is an EXTRACTION-QUALITY issue in the source read, not a
+  // display bug — the 2-line clamp below bounds how much of it is ever
+  // visible, but does not (and must not) silently crop the actual match.
+  const excerpt = quoted && typeof text === "string" ? excerptAround(text, item.quote!, 90) : null;
   const hasSpread = item.found && item.spreadQuotes && item.spreadQuotes.length > 0;
   const nothingToShow = !quoted && !hasSpread && !(item.found && item.noExactQuote) && !(item.found && item.quoteUnverified);
   if (nothingToShow) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       {quoted && excerpt && (
-        <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
+        <div title={item.quote} style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
           <ExcerptSpan excerpt={excerpt} />
         </div>
       )}
@@ -589,7 +648,7 @@ function ClauseRow({ item, isEv, resolveText, headers, policyPromise, policyCove
   const cellStyle: React.CSSProperties = { padding: "11px 14px", borderLeft: "1px solid #f1f5f9", minWidth: 0 };
   const passage = <LocatedPassage item={item} resolveText={resolveText} />;
   return (
-    <div className="clause-matrix-row" style={{ borderTop: "1px solid #f1f5f9", borderLeft: `3px solid ${barColor}` }}>
+    <div className={`clause-matrix-row${isEv ? " cm-ev" : ""}`} style={{ borderTop: "1px solid #f1f5f9", borderLeft: `3px solid ${barColor}` }}>
       {/* Col 1 — Clause requirement (dot + name, muted when not found) */}
       <div style={{ ...cellStyle, borderLeft: "none" }}>
         <span className="cm-cell-label">{headers[0]}</span>
@@ -647,13 +706,19 @@ function ClauseRow({ item, isEv, resolveText, headers, policyPromise, policyCove
 // is per-tab (see ClauseRow). Passes the line's linked PPD promise down so the
 // evidence tab's col 2 can show it on every sub-part row.
 function ClauseMatrix({ line, isEv, resolveText }: { line: MatrixLine; isEv: boolean; resolveText: ResolveText }) {
+  // Evidence tab: "File" → "File and Supporting passage" — this column now
+  // legitimately carries the filename, the working Drive link, the found/
+  // not-found badge, AND the located evidence excerpt (Task 1's column-
+  // width rebalance gives it ~50% of the row to match). PPD tab keeps its
+  // narrower, unchanged "File" column — its own located quote already lives
+  // in column 2 ("Policy clause & quote"), so column 3 there is filename-only.
   const headers: [string, string, string, string] = isEv
-    ? ["Clause requirement", "PPD clause / extract", "File", "Remarks"]
+    ? ["Clause requirement", "PPD clause / extract", "File and Supporting passage", "Remarks"]
     : ["Clause requirement", "Policy clause & quote", "File", "Rationale"];
   const headerCell: React.CSSProperties = { padding: "7px 14px", fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.4, borderLeft: "1px solid #eef2f6" };
   return (
     <div style={{ border: "1px solid #eef2f6", borderRadius: 6, overflow: "hidden", background: "#fff" }}>
-      <div className="clause-matrix-head" style={{ background: "#f8fafc", borderBottom: "1px solid #eef2f6" }}>
+      <div className={`clause-matrix-head${isEv ? " cm-ev" : ""}`} style={{ background: "#f8fafc", borderBottom: "1px solid #eef2f6" }}>
         <span style={{ ...headerCell, borderLeft: "none" }}>{headers[0]}</span>
         <span style={headerCell}>{headers[1]}</span>
         <span style={headerCell}>{headers[2]}</span>
@@ -748,6 +813,10 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
   // export meta/rows they operate on.
   const [exportPicker, setExportPicker] = useState<"csv" | "pdf" | null>(null);
   const [exportCols, setExportCols] = useState<Set<LineageColumnKey>>(new Set());
+  // Clause-by-clause detail is a separate toggle from the column checkboxes
+  // (it isn't a flat-matrix column at all) — defaults to included per row,
+  // resetting to true every time the picker opens.
+  const [includeClauseDetail, setIncludeClauseDetail] = useState(true);
   const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
   const resolveText = useCallback<ResolveText>(
     (f) => (f.driveFileId ? fileTextCache[`${f.driveFileId}:${f.driveModifiedTime ?? ""}`]?.text : undefined),
@@ -804,6 +873,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
     suggestedAction: isEv ? l.suggestedAction : undefined,
     policyPromise: isEv ? l.policyPromise : undefined,
     barColor: COV_DOT[l.coverage], // same solid colour scale the verdict dot uses (border-left can't take the on-screen gradient)
+    clauseDetail: l.expandable && l.items.length > 0 ? buildClauseDetailExport(l, isEv) : undefined,
   }));
   const exportBtnStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#0f766e", padding: "4px 9px", border: "1px solid #99f6e4", borderRadius: 6, background: "#f0fdfa", whiteSpace: "nowrap", cursor: "pointer" };
 
@@ -816,6 +886,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
   const exportTab: LineageExportMeta["tab"] = isEv ? "evidence" : "policy";
   const openExportPicker = (format: "csv" | "pdf") => {
     setExportCols(new Set(lineageColumnsFor(exportTab).map((c) => c.key))); // all checked by default
+    setIncludeClauseDetail(true); // defaults to included
     setExportPicker(format);
   };
   const toggleExportCol = (key: LineageColumnKey) =>
@@ -824,8 +895,8 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
     // Filter the registry (not the Set) so the export keeps matrix order.
     const keys = lineageColumnsFor(exportTab).map((c) => c.key).filter((k) => exportCols.has(k));
     if (keys.length === 0) return;
-    if (exportPicker === "csv") downloadLineageCsv(exportMeta, exportRows, keys);
-    else openLineagePdf(exportMeta, exportRows, keys);
+    if (exportPicker === "csv") downloadLineageCsv(exportMeta, exportRows, keys, includeClauseDetail);
+    else openLineagePdf(exportMeta, exportRows, keys, includeClauseDetail);
     setExportPicker(null);
   };
 
@@ -872,6 +943,14 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
               {c.label}
             </label>
           ))}
+          {/* Not a flat-matrix column — a separate toggle for whether each
+              covered/partial line's clause-by-clause sub-parts are exported
+              at all (CSV: a flattened row per sub-part; PDF: a nested
+              4-column table beneath the line). Defaults to included. */}
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#334155", cursor: "pointer", whiteSpace: "nowrap", borderLeft: "1px solid #99f6e4", paddingLeft: 12 }}>
+            <input type="checkbox" checked={includeClauseDetail} onChange={() => setIncludeClauseDetail((v) => !v)} />
+            Clause-by-clause detail
+          </label>
           <span style={{ display: "inline-flex", gap: 6, marginLeft: "auto" }}>
             <button type="button" disabled={exportCols.size === 0} onClick={runExport} style={{ ...exportBtnStyle, opacity: exportCols.size === 0 ? 0.5 : 1, cursor: exportCols.size === 0 ? "not-allowed" : "pointer" }}>
               Export {exportPicker === "csv" ? "CSV" : "PDF"}

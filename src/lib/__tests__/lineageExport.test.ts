@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildLineageCsv, buildLineagePdfHtml, lineageColumnsFor, type LineageExportMeta, type LineageExportRow } from "../lineageExport";
+import { buildLineageCsv, buildLineagePdfHtml, lineageColumnsFor, type LineageExportMeta, type LineageExportRow, type LineageClauseDetailItem } from "../lineageExport";
 
 function policyMeta(overrides: Partial<LineageExportMeta> = {}): LineageExportMeta {
   return { tab: "policy", runLabel: "6.2 Management Review", runAt: "2026-07-01T00:00:00.000Z", statusLine: "2 Documented · 1 Not covered", ...overrides };
@@ -157,12 +157,15 @@ describe("buildLineagePdfHtml", () => {
     expect(html).not.toContain("<img");
   });
 
-  it("includes the run header, date, overall status line, and the in-app-expand caption", () => {
+  it("includes the run header, date, overall status line, and the (now honest, detail-aware) caption", () => {
     const html = buildLineagePdfHtml(policyMeta(), [multiFileRow()]);
     expect(html).toContain("6.2 Management Review");
     expect(html).toContain("2 Documented");
     expect(html).toContain("Not covered");
-    expect(html).toContain("Expand rows in-app for quoted passages and per-clause rationale.");
+    // The old static "Expand rows in-app for quoted passages..." caption no
+    // longer applies now that detail CAN be included in the export itself —
+    // the caption is now conditional on includeClauseDetail (see below).
+    expect(html).toContain("Clause-by-clause detail for covered/partial lines is included beneath each line below.");
   });
 
   it("shows the full untruncated file list and clause text, not a '+N more' summary", () => {
@@ -203,5 +206,159 @@ describe("buildLineagePdfHtml", () => {
     const policyHtml = buildLineagePdfHtml(policyMeta(), [multiFileRow({ suggestedAction: "Should not appear on the policy tab." })]);
     expect(policyHtml).not.toContain("Suggested Action");
     expect(policyHtml).not.toContain("Should not appear on the policy tab");
+  });
+});
+
+// Task 4: clause-by-clause detail in the export (previously flat-matrix only).
+// Approach decided here (no pre-existing nested-CSV convention in this
+// codebase to follow): CSV flattens each sub-part into its own row, prefixed
+// "↳ ", reusing the SAME columns as the parent (no new columns); PDF nests a
+// real 4-column table beneath the parent row, matching the in-app ClauseMatrix.
+function evFoundItem(overrides: Partial<LineageClauseDetailItem> = {}): LineageClauseDetailItem {
+  return {
+    name: "Stakeholders from different functions are present and actively engaged",
+    found: true,
+    col2: "To foster a culture of innovation, key stakeholders are actively engaged at every level of planning.",
+    fileName: "SQ Division Meeting Minutes.pdf",
+    passage: '"Present: Felix (Principal, Chairman), Renzo (IT Manager), Irene (HR Officer)."',
+    remarks: "Meeting minutes list cross-functional attendance with assigned roles.",
+    ...overrides,
+  };
+}
+function evNotFoundItem(overrides: Partial<LineageClauseDetailItem> = {}): LineageClauseDetailItem {
+  return {
+    name: "Stakeholder input is incorporated into the Vision, Mission and Long-term Goals",
+    found: false,
+    col2: "To foster a culture of innovation, key stakeholders are actively engaged at every level of planning.",
+    remarks: "None of the provided records mention stakeholder input used to set or revise Vision/Mission.",
+    ...overrides,
+  };
+}
+function ppdClauseItem(overrides: Partial<LineageClauseDetailItem> = {}): LineageClauseDetailItem {
+  return {
+    name: "Stakeholders are actively engaged in planning",
+    found: true,
+    col2: '§ 4. Approach\n"key stakeholders are actively engaged at every level of the organisation\'s planning and execution processes"',
+    fileName: "PPD-SGL-SQ-6.3.1 Innovation.pdf",
+    remarks: "Clause 4 names stakeholder engagement explicitly.",
+    ...overrides,
+  };
+}
+
+describe("buildLineageCsv — clause-by-clause detail (Task 4)", () => {
+  it("defaults to included (no 4th arg) and emits one flattened, ↳-prefixed row per sub-part directly after its parent", () => {
+    const row = multiFileRow({ clauseDetail: [evFoundItem(), evNotFoundItem()] });
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [row]);
+    const lines = csv.split("\r\n").filter(Boolean);
+    expect(lines).toHaveLength(4); // header + parent + 2 sub-parts
+    expect(lines[2]).toContain("↳ Stakeholders from different functions are present");
+    expect(lines[2]).toContain("6.2.1.DS1.a"); // ref repeated for grouping
+    expect(lines[3]).toContain("↳ Stakeholder input is incorporated");
+  });
+
+  it("evidence sub-part row: Verdict=Found/Not found, File(s)=the ONE attributed file, Supporting Passage=the sub-part's own full passage, Policy Promise/Clause=col2 repeated", () => {
+    const row = multiFileRow({ clauseDetail: [evFoundItem()] });
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [row]);
+    const detailLine = csv.split("\r\n")[2];
+    expect(detailLine).toContain("Found");
+    expect(detailLine).toContain("SQ Division Meeting Minutes.pdf");
+    expect(detailLine).toContain("Present: Felix (Principal, Chairman)");
+    expect(detailLine).toContain("To foster a culture of innovation");
+  });
+
+  it('not-found sub-part row shows "Not found" and no fabricated passage/file', () => {
+    const row = multiFileRow({ clauseDetail: [evNotFoundItem()] });
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [row]);
+    const detailLine = csv.split("\r\n")[2];
+    expect(detailLine).toContain("Not found");
+    expect(detailLine).toContain("↳ Stakeholder input is incorporated");
+    expect(detailLine).not.toContain("Present: Felix"); // no passage fabricated for a not-found sub-part
+  });
+
+  it("PPD tab sub-part row: Policy Clause column carries the sub-part's OWN clause+quote (not the row-level clause list)", () => {
+    const row = multiFileRow({ clauseOrPassage: "4.2 Row-level clause list", clauseDetail: [ppdClauseItem()] });
+    const csv = buildLineageCsv(policyMeta({ tab: "policy" }), [row]);
+    const lines = csv.split("\r\n");
+    expect(lines[1]).toContain("4.2 Row-level clause list"); // parent row unaffected
+    expect(lines[2]).toContain("§ 4. Approach");
+    expect(lines[2]).toContain("key stakeholders are actively engaged");
+    expect(lines[2]).toContain("PPD-SGL-SQ-6.3.1 Innovation.pdf");
+  });
+
+  it("includeClauseDetail=false omits every sub-part row, leaving only the flat parent rows", () => {
+    const row = multiFileRow({ clauseDetail: [evFoundItem(), evNotFoundItem()] });
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [row], undefined, false);
+    const lines = csv.split("\r\n").filter(Boolean);
+    expect(lines).toHaveLength(2); // header + parent only
+    expect(csv).not.toContain("↳");
+  });
+
+  it("a row with no clauseDetail (flat gap/not-checked line) adds nothing extra regardless of the flag", () => {
+    const row = multiFileRow({ clauseDetail: undefined });
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [row], undefined, true);
+    expect(csv.split("\r\n").filter(Boolean)).toHaveLength(2); // header + parent only
+  });
+
+  it("column selection applies to sub-part rows too — deselecting files hides the sub-part's attributed file", () => {
+    const row = multiFileRow({ clauseDetail: [evFoundItem()] });
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [row], ["requirement", "verdict"]);
+    expect(csv).not.toContain("SQ Division Meeting Minutes.pdf");
+  });
+
+  it("no truncation: a long sub-part passage exports in full", () => {
+    const longPassage = `"${"P".repeat(3000)}"`;
+    const row = multiFileRow({ clauseDetail: [evFoundItem({ passage: longPassage })] });
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [row]);
+    expect(csv).toContain("P".repeat(3000));
+  });
+});
+
+describe("buildLineagePdfHtml — clause-by-clause detail (Task 4)", () => {
+  it("defaults to included and nests a REAL 4-column table beneath the parent row, matching the in-app ClauseMatrix headers", () => {
+    const row = multiFileRow({ clauseDetail: [evFoundItem(), evNotFoundItem()] });
+    const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [row]);
+    expect(html).toContain("Clause by clause");
+    expect(html).toContain("<th>Clause requirement</th>");
+    expect(html).toContain("<th>PPD clause / extract</th>");
+    expect(html).toContain("<th>File and Supporting passage</th>");
+    expect(html).toContain("<th>Remarks</th>");
+    expect(html).toContain("Stakeholders from different functions are present");
+    expect(html).toContain("Stakeholder input is incorporated");
+  });
+
+  it("PPD tab nested table uses the PPD-specific headers (Policy clause & quote / File / Rationale)", () => {
+    const row = multiFileRow({ clauseDetail: [ppdClauseItem()] });
+    const html = buildLineagePdfHtml(policyMeta({ tab: "policy" }), [row]);
+    expect(html).toContain("<th>Policy clause &amp; quote</th>");
+    expect(html).toContain("<th>File</th>");
+    expect(html).toContain("<th>Rationale</th>");
+  });
+
+  it("includeClauseDetail=false renders no nested table and the caption says so honestly", () => {
+    const row = multiFileRow({ clauseDetail: [evFoundItem()] });
+    const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [row], undefined, false);
+    expect(html).not.toContain("Clause by clause");
+    expect(html).not.toContain("Stakeholders from different functions are present");
+    expect(html).toContain("Clause-by-clause detail was excluded from this export");
+  });
+
+  it("nested detail content is never truncated", () => {
+    const longRemark = "R".repeat(3000);
+    const row = multiFileRow({ clauseDetail: [evFoundItem({ remarks: longRemark })] });
+    const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [row]);
+    expect(html).toContain("R".repeat(3000));
+  });
+
+  it("a row with no clauseDetail renders no nested table beneath it", () => {
+    const row = multiFileRow({ clauseDetail: undefined });
+    const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [row]);
+    expect(html).not.toContain("Clause by clause");
+  });
+
+  it("escapes HTML in nested detail content", () => {
+    const row = multiFileRow({ clauseDetail: [evFoundItem({ remarks: "Covers <script>alert(1)</script>" })] });
+    const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [row]);
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
   });
 });
