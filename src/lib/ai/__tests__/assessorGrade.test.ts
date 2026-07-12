@@ -7,7 +7,7 @@ vi.mock("../aiClient", async (importOriginal) => {
 });
 
 import { chatComplete } from "../aiClient";
-import { runPPDRequirementsReview, runEvidenceAssessment, quoteExistsInSource, clauseAppearsInSource, verifyClauseRef, type PPDRequirementInput, type EvidenceAssessmentInput } from "../agentRuntime";
+import { runPPDRequirementsReview, runEvidenceAssessment, quoteExistsInSource, clauseAppearsInSource, verifyClauseRef, PPD_BOUNDARY_RULES, EVIDENCE_BOUNDARY_RULES, type PPDRequirementInput, type EvidenceAssessmentInput } from "../agentRuntime";
 
 const mockChat = vi.mocked(chatComplete);
 const SETTINGS: AISettings = { provider: "openai", apiKey: "test-key", model: "m", utilityModel: "m", enabled: true };
@@ -24,10 +24,35 @@ function ppdInputs(): PPDRequirementInput[] {
 // chatComplete() with no args after every test.
 beforeEach(() => { mockChat.mockReset(); });
 
+// ── Two-pass mock dispatch helpers ─────────────────────────────────────────
+// The PPD flow makes 4 kinds of calls (extract / contradiction hunt / judge /
+// narrative roll-up); the evidence flow 2 (extract / judge). Dispatch on the
+// system-prompt markers each pass carries.
+type Dispatch = {
+  ppdExtract?: (user: string) => string;
+  ppdJudge?: (user: string) => string;
+  evExtract?: (user: string) => string;
+  evJudge?: (user: string) => string;
+};
+function mockTwoPass(d: Dispatch) {
+  mockChat.mockImplementation(async (messages) => {
+    const system = String(messages?.[0]?.content ?? "");
+    const user = String(messages?.[1]?.content ?? "");
+    if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+    if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+    if (system.includes("EXTRACTION pass of a two-pass SSG EduTrust review")) return d.ppdExtract!(user);
+    if (system.includes("EXTRACTION pass of a two-pass SSG EduTrust evidence assessment")) return d.evExtract!(user);
+    if (system.includes("STEP 1 — DECOMPOSE")) return d.ppdJudge!(user);
+    return d.evJudge!(user);
+  });
+}
+const extractResult = (ref: string, quote: string, extra: Record<string, unknown> = {}) =>
+  JSON.stringify({ results: [{ ref, candidates: [{ aspect: "relevant passage", quote, clause: "", chunkId: "C001" }], promises: [], ...extra }] });
+
 describe("assessor-grade PPD review (Techniques 1-3)", () => {
-  it("parses sub-clause verdicts, verified promises, and window contradictions into the result", async () => {
+  it("parses sub-clause verdicts, verified promises (pooled from extraction), and window contradictions into the result", async () => {
     mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
+      const system = String(messages?.[0]?.content ?? "");
       if (system.includes("INTERNAL CONTRADICTIONS")) {
         return JSON.stringify({
           contradictions: [{
@@ -40,6 +65,20 @@ describe("assessor-grade PPD review (Techniques 1-3)", () => {
         });
       }
       if (system.includes("roll-up")) return JSON.stringify({ narrative: "One line partial." });
+      if (system.includes("EXTRACTION pass")) {
+        return JSON.stringify({
+          results: [{
+            ref: "4.4.1.DS1",
+            candidates: [{ aspect: "refund processing", quote: "Refunds are processed within 5 working days by the Finance Manager.", clause: "", chunkId: "C001" }],
+            // One verified promise quote, one fabricated — the fabricated one
+            // must be annotated (not dropped), same rule as the single pass.
+            promises: [
+              { promiseText: "Refunds processed within 5 working days", sourceQuote: "Refunds are processed within 5 working days by the Finance Manager", chunkId: "C001" },
+              { promiseText: "The Principal signs quarterly attestations", sourceQuote: "the Principal signs a quarterly compliance attestation form each term", chunkId: "C001" },
+            ],
+          }],
+        });
+      }
       return JSON.stringify({
         results: [{
           ref: "4.4.1.DS1",
@@ -50,10 +89,6 @@ describe("assessor-grade PPD review (Techniques 1-3)", () => {
           verdict: "Partial",
           shortComment: "Sub-clause (b) — refund timeline communicated to students — is not addressed in any PPD passage.",
           fullComment: 'It was not evident that the PEI had documented sub-clause (b). "Refunds are processed within 5 working days by the Finance Manager" (C001)',
-          promises: [
-            { promiseText: "Refunds processed within 5 working days", sourceQuote: "Refunds are processed within 5 working days by the Finance Manager", chunkId: "C001" },
-            { promiseText: "The Principal signs quarterly attestations", sourceQuote: "the Principal signs a quarterly compliance attestation form each term", chunkId: "C001" },
-          ],
           suggestedRewrite: "Add: the refund timeline is published to students…",
           chunkIds: ["C001"],
         }],
@@ -90,21 +125,25 @@ Refund log 2025: request 12 Jan, paid 15 Jan (3 working days). Peer review sched
       ],
     }];
   }
+  const EV_RECORD_QUOTE = "Refund log 2025: request 12 Jan, paid 15 Jan (3 working days).";
 
   it("a Met verdict with an unevidenced promise is capped at Partial with the SSG phrasing", async () => {
-    mockChat.mockImplementation(async () => JSON.stringify({
-      results: [{
-        ref: "4.4.1.DS1",
-        evidenceSummary: "Refund register sighted.",
-        verdict: "Met",
-        comment: "Refund register shows compliance (C001).",
-        promiseChecks: [
-          { promiseText: "Refunds processed within 5 working days", verdict: "evidenced", evidence: "Refund paid in 3 working days (C001).", chunkIds: ["C001"] },
-          { promiseText: "Annual peer reviews covering all part-time academic staff", verdict: "not evidenced", evidence: "No record found in the evidence documents.", chunkIds: [] },
-        ],
-        chunkIds: ["C001"],
-      }],
-    }));
+    mockTwoPass({
+      evExtract: () => JSON.stringify({ results: [{ ref: "4.4.1.DS1", candidates: [{ aspect: "promise 1: refund record", quote: EV_RECORD_QUOTE, kind: "record", chunkId: "C001" }] }] }),
+      evJudge: () => JSON.stringify({
+        results: [{
+          ref: "4.4.1.DS1",
+          evidenceSummary: "Refund register sighted.",
+          verdict: "Met",
+          comment: "Refund register shows compliance (C001).",
+          promiseChecks: [
+            { promiseText: "Refunds processed within 5 working days", verdict: "evidenced", evidence: "Refund paid in 3 working days (C001).", chunkIds: ["C001"] },
+            { promiseText: "Annual peer reviews covering all part-time academic staff", verdict: "not evidenced", evidence: "No record found in the evidence documents.", chunkIds: [] },
+          ],
+          chunkIds: ["C001"],
+        }],
+      }),
+    });
 
     const result = await runEvidenceAssessment(evInputs(), EV_SOURCE, SETTINGS, {});
     const row = result.rows[0];
@@ -114,52 +153,66 @@ Refund log 2025: request 12 Jan, paid 15 Jan (3 working days). Peer review sched
     expect(row.promiseChecks![1].verdict).toBe("not evidenced");
   });
 
-  it("promises are fed into the prompt as named checks", async () => {
-    mockChat.mockImplementation(async (messages) => {
-      const user = String(messages[1]?.content ?? "");
-      expect(user).toContain("PPD promises to verify:");
-      expect(user).toContain("Annual peer reviews covering all part-time academic staff");
-      return JSON.stringify({ results: [] });
+  it("promises are fed into BOTH passes' prompts as named checks", async () => {
+    mockTwoPass({
+      evExtract: () => JSON.stringify({ results: [{ ref: "4.4.1.DS1", candidates: [{ aspect: "refund record", quote: EV_RECORD_QUOTE, kind: "record", chunkId: "C001" }] }] }),
+      evJudge: () => JSON.stringify({ results: [{ ref: "4.4.1.DS1", evidenceSummary: "x", verdict: "Partial", comment: "x", promiseChecks: [], chunkIds: ["C001"] }] }),
     });
     await runEvidenceAssessment(evInputs(), EV_SOURCE, SETTINGS, {});
-    expect(mockChat).toHaveBeenCalled();
+    const users = mockChat.mock.calls.map((c) => String(c[0].find((m) => m.role === "user")?.content ?? ""));
+    expect(users.length).toBeGreaterThanOrEqual(2);
+    for (const user of users) {
+      expect(user).toContain("PPD promises to verify:");
+      expect(user).toContain("Annual peer reviews covering all part-time academic staff");
+    }
   });
 
-  it("keeps window 1's real comment when a later window upgrades the verdict but returns one blank (the same merge bug as the PPD side)", async () => {
-    // > WINDOW_SIZE (55,000 chars) forces two windows over the evidence text.
-    const LONG_EV_SOURCE = `[CHUNK:C001] --- refund-register.xlsx ---\n${"Filler evidence text. ".repeat(2500)}`;
-    let callCount = 0;
-    mockChat.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) {
-        return JSON.stringify({
-          results: [{
-            ref: "4.4.1.DS1", evidenceSummary: "Partial register sighted.", verdict: "Partial",
-            comment: "The refund register shows timely payment but no peer-review record.",
-            promiseChecks: [], chunkIds: ["C001"],
-          }],
-        });
-      }
-      // Window 2 upgrades to Met (a real, higher verdict) but its comment
-      // comes back blank — the exact reported failure mode.
-      return JSON.stringify({
-        results: [{
-          ref: "4.4.1.DS1", evidenceSummary: "Full register sighted.", verdict: "Met",
-          comment: "", promiseChecks: [], chunkIds: ["C001"],
-        }],
-      });
+  it("zero verified passages → the deterministic decision procedure decides in code (no AI coin-flip on empty input)", async () => {
+    // Extraction succeeds but finds NOTHING for this line: with PPD Adequate
+    // and promises present, rule 4a with E=0 gives "Not met" — and no judge
+    // call is made at all.
+    mockTwoPass({
+      evExtract: () => JSON.stringify({ results: [{ ref: "4.4.1.DS1", candidates: [] }] }),
+      evJudge: () => { throw new Error("judge must not be called for a zero-candidate line"); },
     });
-    const result = await runEvidenceAssessment(evInputs(), LONG_EV_SOURCE, SETTINGS, {});
+    const result = await runEvidenceAssessment(evInputs(), EV_SOURCE, SETTINGS, {});
     const row = result.rows[0];
-    expect(row.verdict).toBe("Met"); // the later, higher verdict still wins
-    expect(row.comment).not.toBe(""); // but its real justification must not be discarded for a blank one
-    expect(row.comment).toContain("no peer-review record");
+    expect(row.verdict).toBe("Not met");
+    expect(row.promiseChecks).toHaveLength(2);
+    expect(row.promiseChecks!.every((p) => p.verdict === "not evidenced")).toBe(true);
+    expect(row.comment).toContain("It was not evident that the PEI had implemented");
+    // Only extraction was called (plus no judge, no narrative on evidence side).
+    const systems = mockChat.mock.calls.map((c) => String(c[0].find((m) => m.role === "system")?.content ?? ""));
+    expect(systems.every((s) => s.includes("EXTRACTION pass"))).toBe(true);
+  });
+
+  it("zero passages with PPD Adequate and NO promises → deterministic Partial (approach documented, nothing evidenced)", async () => {
+    mockTwoPass({
+      evExtract: () => JSON.stringify({ results: [{ ref: "4.4.1.DS1", candidates: [] }] }),
+    });
+    const result = await runEvidenceAssessment(
+      [{ ref: "4.4.1.DS1", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [] }],
+      EV_SOURCE, SETTINGS, {}
+    );
+    expect(result.rows[0].verdict).toBe("Partial");
+  });
+
+  it("zero passages with PPD Not documented → deterministic Not met", async () => {
+    mockTwoPass({
+      evExtract: () => JSON.stringify({ results: [{ ref: "4.4.1.DS1", candidates: [] }] }),
+    });
+    const result = await runEvidenceAssessment(
+      [{ ref: "4.4.1.DS1", requirementText: "x", ppdVerdict: "Not documented", ppdExtract: "", promises: [] }],
+      EV_SOURCE, SETTINGS, {}
+    );
+    expect(result.rows[0].verdict).toBe("Not met");
   });
 });
 
 describe("suggestedAction — grounded 'what would make this Met' (Task 3)", () => {
   const EV_SOURCE = `[CHUNK:C001] --- mrm-minutes.docx ---
 Management review meeting held 12 Jan 2026. 17 of 24 action items have no assigned owner or due date.`;
+  const MRM_QUOTE = "17 of 24 action items have no assigned owner or due date.";
 
   function evInputs(): EvidenceAssessmentInput[] {
     return [{
@@ -170,20 +223,24 @@ Management review meeting held 12 Jan 2026. 17 of 24 action items have no assign
       promises: [],
     }];
   }
+  const evExtract = () => JSON.stringify({ results: [{ ref: "6.2.1.DS1.a", candidates: [{ aspect: "MRM minutes", quote: MRM_QUOTE, kind: "record", chunkId: "C001" }] }] });
 
   it("carries a Partial verdict's grounded suggestion through to the row", async () => {
-    mockChat.mockImplementation(async () => JSON.stringify({
-      results: [{
-        ref: "6.2.1.DS1.a",
-        evidenceSummary: "MRM minutes sighted but most actions lack owners.",
-        verdict: "Partial",
-        comment: "17 of 24 action items in the MRM minutes have no assigned owner or due date.",
-        promiseChecks: [],
-        chunkIds: ["C001"],
-        evidenceQuote: "",
-        suggestedAction: "Add owner and timeline fields to the remaining 17 unassigned actions in the Management Review Meeting minutes.",
-      }],
-    }));
+    mockTwoPass({
+      evExtract,
+      evJudge: () => JSON.stringify({
+        results: [{
+          ref: "6.2.1.DS1.a",
+          evidenceSummary: "MRM minutes sighted but most actions lack owners.",
+          verdict: "Partial",
+          comment: "17 of 24 action items in the MRM minutes have no assigned owner or due date.",
+          promiseChecks: [],
+          chunkIds: ["C001"],
+          evidenceQuote: "",
+          suggestedAction: "Add owner and timeline fields to the remaining 17 unassigned actions in the Management Review Meeting minutes.",
+        }],
+      }),
+    });
 
     const result = await runEvidenceAssessment(evInputs(), EV_SOURCE, SETTINGS, {});
     const row = result.rows[0];
@@ -192,30 +249,34 @@ Management review meeting held 12 Jan 2026. 17 of 24 action items have no assign
   });
 
   it("leaves suggestedAction undefined for a Met verdict (honesty rule: no suggestion needed)", async () => {
-    mockChat.mockImplementation(async () => JSON.stringify({
-      results: [{
-        ref: "6.2.1.DS1.a",
-        evidenceSummary: "All 24 action items have an assigned owner and due date.",
-        verdict: "Met",
-        comment: "All MRM action items are fully assigned.",
-        promiseChecks: [],
-        chunkIds: ["C001"],
-        evidenceQuote: "",
-        suggestedAction: "",
-      }],
-    }));
+    mockTwoPass({
+      evExtract,
+      evJudge: () => JSON.stringify({
+        results: [{
+          ref: "6.2.1.DS1.a",
+          evidenceSummary: "All 24 action items have an assigned owner and due date.",
+          verdict: "Met",
+          comment: "All MRM action items are fully assigned.",
+          promiseChecks: [],
+          chunkIds: ["C001"],
+          evidenceQuote: "",
+          suggestedAction: "",
+        }],
+      }),
+    });
 
     const result = await runEvidenceAssessment(evInputs(), EV_SOURCE, SETTINGS, {});
     expect(result.rows[0].verdict).toBe("Met");
     expect(result.rows[0].suggestedAction).toBeUndefined();
   });
 
-  it("keeps window 1's grounded suggestion when a later window upgrades the verdict but returns none (same merge protection as comment)", async () => {
-    const LONG_EV_SOURCE = `[CHUNK:C001] --- mrm-minutes.docx ---\n${"Filler evidence text. ".repeat(2500)}`;
-    let callCount = 0;
-    mockChat.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) {
+  it("with multiple windows the suggestion comes from ONE judge decision — there is no cross-window merge left to lose it", async () => {
+    const LONG_EV_SOURCE = `[CHUNK:C001] --- mrm-minutes.docx ---\n${MRM_QUOTE}\n${"Filler evidence text. ".repeat(2500)}`;
+    let judgeCalls = 0;
+    mockTwoPass({
+      evExtract: () => JSON.stringify({ results: [{ ref: "6.2.1.DS1.a", candidates: [{ aspect: "MRM minutes", quote: MRM_QUOTE, kind: "record", chunkId: "C001" }] }] }),
+      evJudge: () => {
+        judgeCalls++;
         return JSON.stringify({
           results: [{
             ref: "6.2.1.DS1.a", evidenceSummary: "Partial minutes sighted.", verdict: "Partial",
@@ -224,20 +285,12 @@ Management review meeting held 12 Jan 2026. 17 of 24 action items have no assign
             promiseChecks: [], chunkIds: ["C001"],
           }],
         });
-      }
-      return JSON.stringify({
-        results: [{
-          ref: "6.2.1.DS1.a", evidenceSummary: "Full minutes sighted.", verdict: "Partial",
-          comment: "Some action items remain unassigned.", suggestedAction: "",
-          promiseChecks: [], chunkIds: ["C001"],
-        }],
-      });
+      },
     });
     const result = await runEvidenceAssessment(evInputs(), LONG_EV_SOURCE, SETTINGS, {});
+    expect(judgeCalls).toBe(1); // two windows extracted, ONE judgement
     const row = result.rows[0];
     expect(row.verdict).toBe("Partial");
-    // Verdict tie: the better-grounded window wins per-field, falling back to
-    // the previous value rather than discarding a real suggestion for a blank one.
     expect(row.suggestedAction).toBeTruthy();
   });
 });
@@ -306,24 +359,23 @@ describe("verifyClauseRef — bare list markers are bullet fragments, not clause
 describe("clause / rationale / chunkId are parsed with honesty (Phase 2)", () => {
   const PPD_SRC = `[CHUNK:C001] --- hr-manual.docx ---
 4.2 Competency-Based Recruitment and Selection Strategy. Step 1: Manpower Planning and Deployment. The HR Manager reviews staffing needs quarterly and records them in the manpower plan.`;
+  const HR_QUOTE = "The HR Manager reviews staffing needs quarterly and records them in the manpower plan.";
 
   it("keeps a real clause + rationale + chunkId, and DROPS an invented clause to undefined", async () => {
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
+    mockTwoPass({
+      ppdExtract: () => extractResult("1.1.1.DS1", HR_QUOTE),
+      ppdJudge: () => JSON.stringify({
         results: [{
           ref: "1.1.1.DS1",
           subClauses: [
             // Real clause present verbatim in the source → kept.
-            { text: "Manpower planning", verdict: "documented", quote: "The HR Manager reviews staffing needs quarterly and records them in the manpower plan.", clause: "4.2 Competency-Based Recruitment and Selection Strategy, Step 1: Manpower Planning and Deployment", rationale: "The manpower plan names the HR Manager and a quarterly cadence.", chunkId: "C001" },
+            { text: "Manpower planning", verdict: "documented", quote: HR_QUOTE, clause: "4.2 Competency-Based Recruitment and Selection Strategy, Step 1: Manpower Planning and Deployment", rationale: "The manpower plan names the HR Manager and a quarterly cadence.", chunkId: "C001" },
             // Invented clause not in the source → dropped to undefined (honest em-dash in UI).
             { text: "Succession planning", verdict: "not documented", quote: "", clause: "9.9 Succession & Talent Pipeline Policy", rationale: "", chunkId: "" },
           ],
-          verdict: "Partial", shortComment: "Succession planning not documented.", fullComment: "x", promises: [], suggestedRewrite: "y", chunkIds: ["C001"], supportQuote: "",
+          verdict: "Partial", shortComment: "Succession planning not documented.", fullComment: "x", suggestedRewrite: "y", chunkIds: ["C001"], supportQuote: "",
         }],
-      });
+      }),
     });
     const result = await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "Manpower and succession planning documented." }], PPD_SRC, SETTINGS, {});
     const sc = result.rows[0].subClauses!;
@@ -336,15 +388,18 @@ describe("clause / rationale / chunkId are parsed with honesty (Phase 2)", () =>
   it("carries promiseCheck rationale + chunkId through the evidence parse", async () => {
     const EV_SRC = `[CHUNK:C001] --- attendance.xlsx ---
 Q1 manpower review held 12 Feb; HR Manager present; staffing gaps logged.`;
-    mockChat.mockImplementation(async () => JSON.stringify({
-      results: [{
-        ref: "1.1.1.DS1", evidenceSummary: "Review record sighted.", verdict: "Met", comment: "Record confirms the quarterly review ran (C001).",
-        promiseChecks: [
-          { promiseText: "Quarterly manpower review", verdict: "evidenced", evidence: "Q1 review record (C001).", chunkIds: ["C001"], quote: "Q1 manpower review held 12 Feb", rationale: "A dated Q1 record shows the review actually ran.", chunkId: "C001" },
-        ],
-        chunkIds: ["C001"],
-      }],
-    }));
+    mockTwoPass({
+      evExtract: () => JSON.stringify({ results: [{ ref: "1.1.1.DS1", candidates: [{ aspect: "promise 1: review record", quote: "Q1 manpower review held 12 Feb; HR Manager present; staffing gaps logged.", kind: "record", chunkId: "C001" }] }] }),
+      evJudge: () => JSON.stringify({
+        results: [{
+          ref: "1.1.1.DS1", evidenceSummary: "Review record sighted.", verdict: "Met", comment: "Record confirms the quarterly review ran (C001).",
+          promiseChecks: [
+            { promiseText: "Quarterly manpower review", verdict: "evidenced", evidence: "Q1 review record (C001).", chunkIds: ["C001"], quote: "Q1 manpower review held 12 Feb", rationale: "A dated Q1 record shows the review actually ran.", chunkId: "C001" },
+          ],
+          chunkIds: ["C001"],
+        }],
+      }),
+    });
     const result = await runEvidenceAssessment([{ ref: "1.1.1.DS1", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [{ promiseText: "Quarterly manpower review", sourceQuote: "", chunkId: "C001" }] }], EV_SRC, SETTINGS, {});
     const pc = result.rows[0].promiseChecks![0];
     expect(pc.rationale).toContain("Q1 record");
@@ -352,25 +407,58 @@ Q1 manpower review held 12 Feb; HR Manager present; staffing gaps logged.`;
   });
 });
 
-describe("shortComment is required for EVERY verdict, not just negatives (empty-rationale-on-met-rows investigation)", () => {
-  it("the system prompt's shortComment instruction explicitly requires a reason for Adequate, not only for negatives", async () => {
-    const capturedSystems: string[] = [];
+describe("judge prompts carry the Phase 2 verdict framework", () => {
+  const HR_SOURCE = `[CHUNK:C001] --- hr.docx ---\nThe HR Manager reviews staffing quarterly.`;
+  const capture = () => {
+    const systems: string[] = [];
     mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      capturedSystems.push(system);
+      const system = String(messages?.[0]?.content ?? "");
+      systems.push(system);
       if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
       if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
-        results: [{ ref: "1.1.1.DS1", subClauses: [], verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }],
-      });
+      if (system.includes("EXTRACTION pass")) return extractResult("1.1.1.DS1", "The HR Manager reviews staffing quarterly.");
+      return JSON.stringify({ results: [{ ref: "1.1.1.DS1", subClauses: [], verdict: "Adequate", shortComment: "x", fullComment: "x", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }] });
     });
-    await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], `[CHUNK:C001] --- hr.docx ---\nThe HR Manager reviews staffing quarterly.`, SETTINGS, {});
-    const mainSystem = capturedSystems.find((s) => s.includes("shortComment"))!;
-    // Old wording only told the model what to do for negatives, leaving the
-    // positive branch unspecified — the real root cause of "Documented" rows
-    // returning a blank rationale. New wording is explicit and unconditional.
-    expect(mainSystem).toContain("MANDATORY for every verdict, never blank");
-    expect(mainSystem).toContain("Documented, because");
+    return systems;
+  };
+
+  it("shortComment is required for EVERY verdict, not just negatives (empty-rationale-on-met-rows investigation)", async () => {
+    const systems = capture();
+    await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], HR_SOURCE, SETTINGS, {});
+    const judgeSystem = systems.find((s) => s.includes("STEP 1 — DECOMPOSE"))!;
+    expect(judgeSystem).toContain("MANDATORY for every verdict, never blank");
+    expect(judgeSystem).toContain("Documented, because");
+  });
+
+  it("the deterministic boundary rules for the flip-flopping line patterns are injected, and the core rubric is repeated at the very END of the prompt", async () => {
+    const systems = capture();
+    await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], HR_SOURCE, SETTINGS, {});
+    const judgeSystem = systems.find((s) => s.includes("STEP 1 — DECOMPOSE"))!;
+    // The rules block (review lines / contract-content / register-field /
+    // mechanism / multi-part) is present verbatim.
+    expect(judgeSystem).toContain(PPD_BOUNDARY_RULES);
+    expect(judgeSystem).toContain("DETERMINISTIC BOUNDARY RULES");
+    // Rubric recency: the FINAL block of the prompt (after all skill/domain
+    // injections) restates the decision rule.
+    const tail = judgeSystem.slice(-700);
+    expect(tail).toContain("Final verdict rubric");
+    expect(tail).toContain("Ties resolve DOWN");
+  });
+
+  it("the evidence judge prompt carries the deterministic evidence rules and the repeated decision procedure at the END", async () => {
+    const systems: string[] = [];
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages?.[0]?.content ?? "");
+      systems.push(system);
+      if (system.includes("EXTRACTION pass")) return JSON.stringify({ results: [{ ref: "1.1.1.DS1", candidates: [{ aspect: "x", quote: "The HR Manager reviews staffing quarterly.", kind: "record", chunkId: "C001" }] }] });
+      return JSON.stringify({ results: [{ ref: "1.1.1.DS1", evidenceSummary: "x", verdict: "Met", comment: "x", promiseChecks: [], chunkIds: ["C001"] }] });
+    });
+    await runEvidenceAssessment([{ ref: "1.1.1.DS1", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [] }], HR_SOURCE, SETTINGS, {});
+    const judgeSystem = systems.find((s) => !s.includes("EXTRACTION pass"))!;
+    expect(judgeSystem).toContain(EVIDENCE_BOUNDARY_RULES);
+    const tail = judgeSystem.slice(-700);
+    expect(tail).toContain("Final decision procedure");
+    expect(tail).toContain("Ties resolve DOWN");
   });
 });
 
@@ -378,11 +466,9 @@ describe("'spread across the document' shows real evidence, not just an assertio
   it("verifies each proposed spreadQuotes passage independently — keeps the real ones, drops a fabricated one", async () => {
     const SRC = `[CHUNK:C001] --- ppd.docx ---
 The Compliance Officer reviews the register monthly. Deputy Principal signs off quarterly. All findings are logged in the shared tracker.`;
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
+    mockTwoPass({
+      ppdExtract: () => extractResult("6.1.1.DS1", "The Compliance Officer reviews the register monthly."),
+      ppdJudge: () => JSON.stringify({
         results: [{
           ref: "6.1.1.DS1",
           subClauses: [{
@@ -394,9 +480,9 @@ The Compliance Officer reviews the register monthly. Deputy Principal signs off 
             ],
             clause: "", rationale: "Monitoring is split across two named roles.", chunkId: "",
           }],
-          verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+          verdict: "Adequate", shortComment: "x", fullComment: "x", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
         }],
-      });
+      }),
     });
     const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], SRC, SETTINGS, {});
     const sq = result.rows[0].subClauses![0].spreadQuotes!;
@@ -409,17 +495,15 @@ The Compliance Officer reviews the register monthly. Deputy Principal signs off 
 
   it("spreadQuotes is undefined when the model returns none (single quote or true diffuse-mention case) — never fabricated", async () => {
     const SRC = `[CHUNK:C001] --- ppd.docx ---\nThe HR Manager reviews staffing quarterly.`;
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
+    mockTwoPass({
+      ppdExtract: () => extractResult("1.1.1.DS1", "The HR Manager reviews staffing quarterly."),
+      ppdJudge: () => JSON.stringify({
         results: [{
           ref: "1.1.1.DS1",
           subClauses: [{ text: "Manpower planning", verdict: "documented", quote: "The HR Manager reviews staffing quarterly.", clause: "", rationale: "", chunkId: "C001" }],
-          verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+          verdict: "Adequate", shortComment: "x", fullComment: "x", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
         }],
-      });
+      }),
     });
     const result = await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], SRC, SETTINGS, {});
     expect(result.rows[0].subClauses![0].spreadQuotes).toBeUndefined();
@@ -427,47 +511,34 @@ The Compliance Officer reviews the register monthly. Deputy Principal signs off 
 });
 
 describe("clause capture includes the source's own leading number/bullet (Task 4)", () => {
+  const judgeWithClause = (clause: string, quote: string) => JSON.stringify({
+    results: [{
+      ref: "6.1.1.DS1",
+      subClauses: [{ text: "Audit reporting", verdict: "documented", quote, clause, rationale: "", chunkId: "C001" }],
+      verdict: "Adequate", shortComment: "x", fullComment: "x", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+    }],
+  });
+  const AUDIT_QUOTE = "The Internal Audit Unit issues a report to the Board within 10 working days.";
+
   it("keeps the number when the numbered heading is verbatim in the source", async () => {
     const SRC = `[CHUNK:C001] --- audit-manual.docx ---
 7.3(a) Audit Report. The Internal Audit Unit issues a report to the Board within 10 working days.`;
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
-        results: [{
-          ref: "6.1.1.DS1",
-          subClauses: [{ text: "Audit reporting", verdict: "documented", quote: "The Internal Audit Unit issues a report to the Board within 10 working days.", clause: "7.3(a) Audit Report", rationale: "", chunkId: "C001" }],
-          verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
-        }],
-      });
+    mockTwoPass({
+      ppdExtract: () => extractResult("6.1.1.DS1", AUDIT_QUOTE),
+      ppdJudge: () => judgeWithClause("7.3(a) Audit Report", AUDIT_QUOTE),
     });
     const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], SRC, SETTINGS, {});
     expect(result.rows[0].subClauses![0].clause).toBe("7.3(a) Audit Report");
   });
 
-  it("falls back to the heading alone when the numbered form isn't a contiguous verbatim match — never drops a clause the unnumbered heading would have shown before this change", async () => {
-    // The number and heading are on separate lines in the source (a real
-    // document layout), so joining them into one string as the prompt now
-    // asks for won't verify verbatim — the fallback must still surface the
-    // heading, exactly as it would have before Task 4. The heading itself is
-    // kept long (>20 chars) so this genuinely exercises verbatim matching
-    // rather than quoteExistsInSource's short-string always-pass rule.
+  it("falls back to the heading alone when the numbered form isn't a contiguous verbatim match — never drops a clause the unnumbered heading would have shown", async () => {
     const SRC = `[CHUNK:C001] --- audit-manual.docx ---
 7.3
 (a) Detailed Audit Reporting Requirements
 The Internal Audit Unit issues a report to the Board within 10 working days.`;
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
-        results: [{
-          ref: "6.1.1.DS1",
-          subClauses: [{ text: "Audit reporting", verdict: "documented", quote: "The Internal Audit Unit issues a report to the Board within 10 working days.", clause: "7.3(a) Detailed Audit Reporting Requirements", rationale: "", chunkId: "C001" }],
-          verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
-        }],
-      });
+    mockTwoPass({
+      ppdExtract: () => extractResult("6.1.1.DS1", AUDIT_QUOTE),
+      ppdJudge: () => judgeWithClause("7.3(a) Detailed Audit Reporting Requirements", AUDIT_QUOTE),
     });
     const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], SRC, SETTINGS, {});
     expect(result.rows[0].subClauses![0].clause).toBe("Detailed Audit Reporting Requirements");
@@ -476,48 +547,39 @@ The Internal Audit Unit issues a report to the Board within 10 working days.`;
   it("never invents a number — a wholly fabricated numbered clause is dropped to undefined", async () => {
     const SRC = `[CHUNK:C001] --- audit-manual.docx ---
 The Internal Audit Unit issues a report to the Board within 10 working days.`;
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
-        results: [{
-          ref: "6.1.1.DS1",
-          subClauses: [{ text: "Audit reporting", verdict: "documented", quote: "The Internal Audit Unit issues a report to the Board within 10 working days.", clause: "9.9(z) Wholly Invented Compliance Section", rationale: "", chunkId: "C001" }],
-          verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
-        }],
-      });
+    mockTwoPass({
+      ppdExtract: () => extractResult("6.1.1.DS1", AUDIT_QUOTE),
+      ppdJudge: () => judgeWithClause("9.9(z) Wholly Invented Compliance Section", AUDIT_QUOTE),
     });
     const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], SRC, SETTINGS, {});
     expect(result.rows[0].subClauses![0].clause).toBeUndefined();
   });
 });
 
-describe("3.1 investigation fixes — bullet clauses, unverified-quote honesty, cross-window quote survival, PPD skill gating", () => {
+describe("3.1 investigation fixes — bullet clauses, unverified-quote honesty, extraction pooling, PPD skill gating", () => {
   const SRC = `[CHUNK:C001] --- ppd-ses-sl-3.1.1.docx ---
 5. Responsibilities
 The Recruitment Manager oversees agent onboarding. The contract period with each agent shall be stated in the agency agreement.`;
-
-  function mockPpdReply(subClauses: unknown[]) {
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
-        results: [{ ref: "3.1.1.DS2.a", subClauses, verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }],
-      });
-    });
-  }
+  const CONTRACT_QUOTE = "The contract period with each agent shall be stated in the agency agreement.";
   const reqs = [{ ref: "3.1.1.DS2.a", gd4ItemId: "3.1.1", requirementText: "Contract period stated." }];
 
+  function mockPpdReply(subClauses: unknown[]) {
+    mockTwoPass({
+      ppdExtract: () => extractResult("3.1.1.DS2.a", CONTRACT_QUOTE),
+      ppdJudge: () => JSON.stringify({
+        results: [{ ref: "3.1.1.DS2.a", subClauses, verdict: "Adequate", shortComment: "x", fullComment: "x", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }],
+      }),
+    });
+  }
+
   it("a '- Responsibilities' bullet clause is stripped to the verified heading, never shown with the marker", async () => {
-    mockPpdReply([{ text: "Contract period", verdict: "documented", quote: "The contract period with each agent shall be stated in the agency agreement.", clause: "- Responsibilities", rationale: "", chunkId: "C001" }]);
+    mockPpdReply([{ text: "Contract period", verdict: "documented", quote: CONTRACT_QUOTE, clause: "- Responsibilities", rationale: "", chunkId: "C001" }]);
     const result = await runPPDRequirementsReview(reqs, SRC, SETTINGS, {});
     expect(result.rows[0].subClauses![0].clause).toBe("Responsibilities");
   });
 
   it("a bullet-fragment clause with no matching heading in the source is dropped to undefined", async () => {
-    mockPpdReply([{ text: "Contract period", verdict: "documented", quote: "The contract period with each agent shall be stated in the agency agreement.", clause: "- Renewal Provisions", rationale: "", chunkId: "C001" }]);
+    mockPpdReply([{ text: "Contract period", verdict: "documented", quote: CONTRACT_QUOTE, clause: "- Renewal Provisions", rationale: "", chunkId: "C001" }]);
     const result = await runPPDRequirementsReview(reqs, SRC, SETTINGS, {});
     expect(result.rows[0].subClauses![0].clause).toBeUndefined();
   });
@@ -546,68 +608,90 @@ The Recruitment Manager oversees agent onboarding. The contract period with each
     expect(sc.quoteUnverified).toBeUndefined();
   });
 
-  it("cross-window merge keeps window 1's verified quote when window 2 upgrades the verdict but returns the same sub-clause without one", async () => {
-    // > WINDOW_SIZE forces two windows; put the quotable text in the padding
-    // header so it exists in the full policyDocText both windows verify against.
-    const LONG_SRC = `[CHUNK:C001] --- ppd.docx ---\nThe contract period with each agent shall be stated in the agency agreement.\n${"Filler policy text. ".repeat(3000)}`;
-    let assessCall = 0;
+  it("a passage extracted in window 1 reaches the judge even when window 2's extraction returns nothing (pooling replaces the old cross-window merge)", async () => {
+    // > WINDOW_SIZE forces two windows; the quotable text lives at the start,
+    // so only window 1's extraction can quote it.
+    const LONG_SRC = `[CHUNK:C001] --- ppd.docx ---\n${CONTRACT_QUOTE}\n${"Filler policy text. ".repeat(3000)}`;
+    let extractCall = 0;
+    const judgeUsers: string[] = [];
     mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
+      const system = String(messages?.[0]?.content ?? "");
+      const user = String(messages?.[1]?.content ?? "");
       if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
       if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      assessCall++;
-      if (assessCall === 1) {
-        return JSON.stringify({
-          results: [{
-            ref: "3.1.1.DS2.a",
-            subClauses: [{ text: "Contract period", verdict: "documented", quote: "The contract period with each agent shall be stated in the agency agreement.", clause: "", rationale: "Names the agency agreement.", chunkId: "C001" }],
-            verdict: "Partial", shortComment: "Partial in window 1.", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
-          }],
-        });
+      if (system.includes("EXTRACTION pass")) {
+        extractCall++;
+        if (extractCall === 1) return extractResult("3.1.1.DS2.a", CONTRACT_QUOTE);
+        return JSON.stringify({ results: [{ ref: "3.1.1.DS2.a", candidates: [], promises: [] }] });
       }
-      // Window 2 upgrades to Adequate but its copy of the SAME sub-clause has
-      // no quote (window 2 never saw that passage).
+      judgeUsers.push(user);
       return JSON.stringify({
         results: [{
           ref: "3.1.1.DS2.a",
-          subClauses: [{ text: "Contract period", verdict: "documented", quote: "", clause: "", rationale: "", chunkId: "" }],
-          verdict: "Adequate", shortComment: "Adequate in window 2.", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
+          subClauses: [{ text: "Contract period", verdict: "documented", quote: CONTRACT_QUOTE, clause: "", rationale: "Names the agency agreement.", chunkId: "C001" }],
+          verdict: "Adequate", shortComment: "Documented.", fullComment: "x", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
         }],
       });
     });
     const result = await runPPDRequirementsReview(reqs, LONG_SRC, SETTINGS, {});
+    expect(extractCall).toBe(2); // both windows extracted
+    expect(judgeUsers).toHaveLength(1); // one judge decision
+    expect(judgeUsers[0]).toContain(CONTRACT_QUOTE); // window 1's passage reached it
     const row = result.rows[0];
-    expect(row.verdict).toBe("Adequate"); // higher verdict still wins — merge never changes verdicts
-    expect(row.subClauses![0].quote).toBe("The contract period with each agent shall be stated in the agency agreement."); // window 1's verified quote survives
+    expect(row.verdict).toBe("Adequate");
+    expect(row.subClauses![0].quote).toBe(CONTRACT_QUOTE);
     expect(row.subClauses![0].rationale).toBe("Names the agency agreement.");
   });
 
-  it("PPD prompts use the ppdReview skill module: evidence-retrieval.md is gated out, regulatory-references stays, and the bullet-marker rule is present", async () => {
+  it("PPD prompts use the ppdReview skill module: evidence-retrieval gated out, regulatory-references stays, policy-documentation BASE replaces the contradicting evidence-first skills", async () => {
     const capturedSystems: string[] = [];
     mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
+      const system = String(messages?.[0]?.content ?? "");
       capturedSystems.push(system);
       if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
       if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({ results: [{ ref: "3.1.1.DS2.a", subClauses: [], verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }] });
+      if (system.includes("EXTRACTION pass")) return extractResult("3.1.1.DS2.a", CONTRACT_QUOTE);
+      return JSON.stringify({ results: [{ ref: "3.1.1.DS2.a", subClauses: [], verdict: "Adequate", shortComment: "x", fullComment: "x", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }] });
     });
     await runPPDRequirementsReview(reqs, SRC, SETTINGS, {});
-    const mainSystem = capturedSystems.find((s) => s.includes("STEP 1 — DECOMPOSE"))!;
-    expect(mainSystem).not.toContain("=== SKILL: evidence-retrieval.md");
-    expect(mainSystem).toContain("=== SKILL: regulatory-references.md");
-    expect(mainSystem).toContain("NOT a clause identifier");
+    const judgeSystem = capturedSystems.find((s) => s.includes("STEP 1 — DECOMPOSE"))!;
+    const extractSystem = capturedSystems.find((s) => s.includes("EXTRACTION pass"))!;
+    for (const sys of [judgeSystem, extractSystem]) {
+      expect(sys).not.toContain("=== SKILL: evidence-retrieval.md");
+      expect(sys).toContain("=== SKILL: regulatory-references.md");
+      // The BASE-skill contradiction fix: a documentation-only pass must not
+      // receive "if the records are absent, the process is unverified"
+      // (external-auditor.md) or the implementation-record rules
+      // (evidence-standards.md) — it gets the policy-documentation posture.
+      expect(sys).not.toContain("=== SKILL: external-auditor.md");
+      expect(sys).not.toContain("=== SKILL: evidence-standards.md");
+      expect(sys).not.toContain("If the records are absent");
+      expect(sys).toContain("=== SKILL: policy-documentation-review.md");
+    }
+    // The bullet-marker clause rule lives with the pass that captures clauses.
+    expect(extractSystem).toContain("not a clause identifier");
+  });
+
+  it("the evidence prompts still use the full evidence BASE (external-auditor stays where records ARE the question)", async () => {
+    const capturedSystems: string[] = [];
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages?.[0]?.content ?? "");
+      capturedSystems.push(system);
+      if (system.includes("EXTRACTION pass")) return JSON.stringify({ results: [{ ref: "3.1.1.DS2.a", candidates: [{ aspect: "x", quote: CONTRACT_QUOTE, kind: "record", chunkId: "C001" }] }] });
+      return JSON.stringify({ results: [{ ref: "3.1.1.DS2.a", evidenceSummary: "x", verdict: "Met", comment: "x", promiseChecks: [], chunkIds: ["C001"] }] });
+    });
+    await runEvidenceAssessment([{ ref: "3.1.1.DS2.a", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [] }], SRC, SETTINGS, {});
+    const judgeSystem = capturedSystems.find((s) => !s.includes("EXTRACTION pass"))!;
+    expect(judgeSystem).toContain("=== SKILL: external-auditor.md");
+    expect(judgeSystem).toContain("=== SKILL: evidence-standards.md");
   });
 });
 
 describe("live-run visibility: window-start carries chunk IDs, batch-failed carries a real error (stall diagnosis)", () => {
   it("PPD: window-start.chunkIds names the chunk(s) actually in this window's text", async () => {
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
-        results: [{ ref: "1.1.1.DS1", subClauses: [], verdict: "Adequate", shortComment: "x", fullComment: "x", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }],
-      });
+    mockTwoPass({
+      ppdExtract: () => extractResult("1.1.1.DS1", "The HR Manager reviews staffing quarterly."),
+      ppdJudge: () => JSON.stringify({ results: [{ ref: "1.1.1.DS1", subClauses: [], verdict: "Adequate", shortComment: "x", fullComment: "x", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }] }),
     });
     const events: unknown[] = [];
     await runPPDRequirementsReview(
@@ -633,7 +717,7 @@ describe("live-run visibility: window-start carries chunk IDs, batch-failed carr
 
   it("PPD: batch-failed carries an honest reason when the reply parses but has no verdicts (not a generic label either)", async () => {
     mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
+      const system = String(messages?.[0]?.content ?? "");
       if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
       if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
       return "not valid json";
@@ -650,9 +734,10 @@ describe("live-run visibility: window-start carries chunk IDs, batch-failed carr
   });
 
   it("Evidence: window-start.chunkIds names the chunk(s) actually in this window's text", async () => {
-    mockChat.mockImplementation(async () => JSON.stringify({
-      results: [{ ref: "4.4.1.DS1", evidenceSummary: "x", verdict: "Met", comment: "x", promiseChecks: [], chunkIds: ["C001"] }],
-    }));
+    mockTwoPass({
+      evExtract: () => JSON.stringify({ results: [{ ref: "4.4.1.DS1", candidates: [{ aspect: "x", quote: "Refund log 2025: request 12 Jan, paid 15 Jan.", kind: "record", chunkId: "C001" }] }] }),
+      evJudge: () => JSON.stringify({ results: [{ ref: "4.4.1.DS1", evidenceSummary: "x", verdict: "Met", comment: "x", promiseChecks: [], chunkIds: ["C001"] }] }),
+    });
     const events: unknown[] = [];
     await runEvidenceAssessment(
       [{ ref: "4.4.1.DS1", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [] }],
@@ -681,17 +766,15 @@ describe("rationale placeholder honesty (a real verdict must never claim 'no ver
 The HR Manager reviews staffing quarterly.`;
 
   it("a real Adequate verdict with an empty shortComment/fullComment is left blank, not fabricated as 'No verdict returned'", async () => {
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
+    mockTwoPass({
+      ppdExtract: () => extractResult("1.1.1.DS1", "The HR Manager reviews staffing quarterly."),
+      ppdJudge: () => JSON.stringify({
         results: [{
           ref: "1.1.1.DS1",
           subClauses: [{ text: "Manpower planning", verdict: "documented", quote: "The HR Manager reviews staffing quarterly." }],
-          verdict: "Adequate", shortComment: "", fullComment: "", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "The HR Manager reviews staffing quarterly.",
+          verdict: "Adequate", shortComment: "", fullComment: "", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "The HR Manager reviews staffing quarterly.",
         }],
-      });
+      }),
     });
     const result = await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], HR_SOURCE, SETTINGS, {});
     const row = result.rows[0];
@@ -702,73 +785,48 @@ The HR Manager reviews staffing quarterly.`;
     expect(row.fullComment).not.toContain("No verdict returned");
   });
 
-  it("a line the model silently drops from a successfully-parsed batch is honestly blank, not falsely explained", async () => {
-    // Two lines requested; the model returns only one — the batch still
-    // parses (results.length > 0), so this is NOT the "no parseable
-    // results" failure path (that path IS accurate: it records a
-    // windowError and the line surfaces as "Not assessed", tested
-    // elsewhere in partialCoverage.test.ts). The dropped ref instead falls
-    // through the per-item loop's own "Not documented" default.
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      return JSON.stringify({
-        results: [{ ref: "1.1.1.DS1", subClauses: [], verdict: "Adequate", shortComment: "Covered.", fullComment: "Covered.", promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }],
-      });
+  it("a line the judge silently drops from a successfully-parsed batch is 'Not assessed' — not a fabricated 'Not documented'", async () => {
+    // Two lines with candidates go to the judge; the reply covers only one.
+    // The dropped ref must NOT default to a fabricated "Not documented" (the
+    // old behaviour) — the honest state is "Not assessed", retryable.
+    mockTwoPass({
+      ppdExtract: (user) => JSON.stringify({
+        results: [...user.matchAll(/\[(1\.1\.1\.DS\d)\]/g)].map((m) => ({
+          ref: m[1],
+          candidates: [{ aspect: "policy review", quote: "The HR Manager reviews staffing quarterly.", clause: "", chunkId: "C001" }],
+          promises: [],
+        })),
+      }),
+      ppdJudge: () => JSON.stringify({
+        results: [{ ref: "1.1.1.DS1", subClauses: [], verdict: "Adequate", shortComment: "Covered.", fullComment: "Covered.", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }],
+      }),
     });
     const result = await runPPDRequirementsReview(
       [{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }, { ref: "1.1.1.DS2", gd4ItemId: "1.1.1", requirementText: "y" }],
       HR_SOURCE, SETTINGS, {}
     );
+    expect(result.rows.find((r) => r.ref === "1.1.1.DS1")!.verdict).toBe("Adequate");
     const dropped = result.rows.find((r) => r.ref === "1.1.1.DS2")!;
-    expect(dropped.verdict).toBe("Not documented");
-    // Not the false "No verdict returned" claim — and not fabricated text either.
-    expect(dropped.shortComment).toBe("");
-    expect(dropped.fullComment).toBe("");
+    expect(dropped.verdict).toBe("Not assessed");
+    expect(dropped.verdict).not.toBe("Not documented");
+    expect(dropped.shortComment).toContain("Not assessed");
   });
-});
 
-describe("multi-window merge must not discard a real comment for a blank one (empty Rationale investigation)", () => {
-  // > WINDOW_SIZE (55,000 chars) forces buildDocWindows to split this into
-  // two windows, reproducing the exact mechanism a large real PPD (several
-  // policy documents combined) hits in production.
-  const LONG_SOURCE = `[CHUNK:C001] --- ppd.docx ---\n${"Filler compliance text. ".repeat(2500)}`;
-
-  it("keeps window 1's real shortComment/fullComment when a later window upgrades the verdict but returns them blank", async () => {
-    let reqCallCount = 0;
+  it("a line whose extraction cleanly found nothing is a deterministic 'Not documented' with an honest reason — no judge call, no coin-flip", async () => {
+    let judgeCalled = false;
     mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
+      const system = String(messages?.[0]?.content ?? "");
       if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
       if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
-      reqCallCount++;
-      if (reqCallCount === 1) {
-        // Window 1 sees only a section that partially covers the line.
-        return JSON.stringify({
-          results: [{
-            ref: "6.1.1.DS1", subClauses: [], verdict: "Partial",
-            shortComment: "Only the annual review cadence is documented; the reporting line is missing.",
-            fullComment: "The PPD names an annual review but does not name who it reports to.",
-            promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
-          }],
-        });
-      }
-      // Window 2 sees the section that fully covers the line (a real,
-      // higher verdict) but its shortComment/fullComment come back blank —
-      // the exact failure mode reported as "Rationale empty on every line".
-      return JSON.stringify({
-        results: [{
-          ref: "6.1.1.DS1", subClauses: [], verdict: "Adequate",
-          shortComment: "", fullComment: "",
-          promises: [], suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "",
-        }],
-      });
+      if (system.includes("EXTRACTION pass")) return JSON.stringify({ results: [{ ref: "1.1.1.DS1", candidates: [], promises: [] }] });
+      judgeCalled = true;
+      return JSON.stringify({ results: [] });
     });
-    const result = await runPPDRequirementsReview([{ ref: "6.1.1.DS1", gd4ItemId: "6.1.1", requirementText: "x" }], LONG_SOURCE, SETTINGS, {});
+    const result = await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], HR_SOURCE, SETTINGS, {});
+    expect(judgeCalled).toBe(false);
     const row = result.rows[0];
-    expect(row.verdict).toBe("Adequate"); // the later, higher verdict still wins — verdict logic unchanged
-    expect(row.shortComment).not.toBe(""); // but its real justification must not be discarded for a blank one
-    expect(row.shortComment).toContain("annual review cadence");
-    expect(row.fullComment).toContain("does not name who it reports to");
+    expect(row.verdict).toBe("Not documented");
+    expect(row.shortComment).toContain("no relevant passage was found");
+    expect(row.fullComment).toContain("found no passage addressing this requirement");
   });
 });

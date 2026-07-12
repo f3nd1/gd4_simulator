@@ -36,11 +36,20 @@ function auditPoints(n = 9): FlatAuditPoint[] {
   return Array.from({ length: n }, (_, i) => ({ ref: `1.1.1.DS${i + 1}`, gd4ItemId: "1.1.1", sourceType: "describeShow", text: `Point ${i + 1}`, sourceText: `Point ${i + 1}`, originalIndex: i }));
 }
 
-function ppdBatchResponse(refs: string[]): string {
+// Two-pass responses: the extractor returns one VERIFIED candidate per ref
+// (so the judge pass runs for every line), the judge returns the verdicts.
+const PPD_QUOTE = "the institution reviews its policies annually and records minutes";
+function ppdExtractResponse(refs: string[]): string {
+  return JSON.stringify({
+    results: refs.map((ref) => ({ ref, candidates: [{ aspect: "policy review", quote: PPD_QUOTE, clause: "", chunkId: "C001" }], promises: [] })),
+  });
+}
+function ppdJudgeResponse(refs: string[]): string {
   return JSON.stringify({
     results: refs.map((ref) => ({ ref, verdict: "Adequate", shortComment: "ok", fullComment: "Documented. \"the institution reviews its policies annually and records minutes\" (C001)", suggestedRewrite: "", chunkIds: ["C001"] })),
   });
 }
+const refsIn = (user: string) => [...user.matchAll(/\[(1\.1\.1\.DS\d+)\]/g)].map((m) => m[1]);
 
 const SOURCE_TEXT = "[CHUNK:C001] --- ppd.docx ---\nThe institution reviews its policies annually and records minutes of each review.";
 
@@ -49,18 +58,20 @@ beforeEach(() => {
 });
 
 describe("PPD review — stopped runs do not fabricate results (Batch 4)", () => {
-  it("stop after the first batch: assessed lines keep verdicts, the rest are 'Not assessed', fullCoverage=false", async () => {
+  it("stop after the first JUDGE batch: judged lines keep verdicts, the rest are 'Not assessed', fullCoverage=false", async () => {
     let stop = false;
     mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
       const user = String(messages[1]?.content ?? "");
-      const refs = [...user.matchAll(/\[(1\.1\.1\.DS\d+)\]/g)].map((m) => m[1]);
-      stop = true; // request stop AFTER the first successful call
-      return ppdBatchResponse(refs);
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("EXTRACTION pass")) return ppdExtractResponse(refsIn(user));
+      // First judge batch succeeds, then the run is stopped.
+      stop = true;
+      return ppdJudgeResponse(refsIn(user));
     });
 
     const result = await runPPDRequirementsReview(ppdInputs(9), SOURCE_TEXT, SETTINGS, { shouldStop: () => stop });
 
-    expect(mockChat).toHaveBeenCalledTimes(1); // batch 2 and the narrative never ran
     const assessed = result.rows.filter((r) => r.verdict === "Adequate");
     const notAssessed = result.rows.filter((r) => r.verdict === "Not assessed");
     expect(assessed).toHaveLength(8);
@@ -98,15 +109,22 @@ describe("PPD review — stopped runs do not fabricate results (Batch 4)", () =>
     const result = await runPPDRequirementsReview(ppdInputs(5), SOURCE_TEXT, SETTINGS, {});
     expect(result.rows.every((r) => r.verdict === "Not assessed")).toBe(true);
     expect(result.rows.some((r) => r.verdict === "Not documented")).toBe(false);
-    expect(result.windowErrors!.some((e) => /no parseable verdicts/i.test(e))).toBe(true);
+    expect(result.windowErrors!.some((e) => /no parseable/i.test(e))).toBe(true);
   });
 
-  it("positional recovery: results in order but WITHOUT a ref field still match their lines", async () => {
+  it("positional recovery: results in order but WITHOUT a ref field still match their lines (both passes)", async () => {
     // Some models keep the requirement order but drop the per-result "ref".
-    // The batch must still be assessed by position, not zeroed to Not documented.
+    // Both the extract and judge batches must still match by position, not
+    // zero out to Not documented / Not assessed.
     mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
       const user = String(messages[1]?.content ?? "");
-      const n = [...user.matchAll(/\[(1\.1\.1\.DS\d+)\]/g)].length;
+      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+      if (system.includes("roll-up")) return JSON.stringify({ narrative: "ok" });
+      const n = refsIn(user).length;
+      if (system.includes("EXTRACTION pass")) {
+        return JSON.stringify({ results: Array.from({ length: n }, () => ({ candidates: [{ aspect: "policy review", quote: PPD_QUOTE, clause: "", chunkId: "C001" }], promises: [] })) });
+      }
       return JSON.stringify({
         results: Array.from({ length: n }, () => ({ verdict: "Adequate", shortComment: "ok", fullComment: "Documented. \"the institution reviews its policies annually and records minutes\" (C001)", chunkIds: ["C001"] })),
       });
@@ -263,30 +281,47 @@ describe("Batch 1 — ref normalization at the AI-reply join", () => {
   });
 });
 
-describe("Batch 1 — a contradicted promise is sticky across windows", () => {
-  it("'contradicted' in one window survives 'evidenced' in another; line capped at Partial", async () => {
-    // Force two windows by exceeding WINDOW_SIZE (55k chars).
-    const bigDoc = `[CHUNK:C001] --- a.docx ---\n${"evidence text ".repeat(4600)}`;
+describe("Batch 1 — a contradicting record from ANY window reaches the judge and caps the line", () => {
+  it("a contradiction extracted in a later window is judged alongside the earlier supporting record; the promise hard-gate caps Met at Partial", async () => {
+    // Force two windows by exceeding WINDOW_SIZE (55k chars). The supporting
+    // record sits in window 0's text, the contradicting record past 55k.
+    const SUPPORTING = "Receipt R-88 issued 20 Mar 2026 after contract signature 10 Mar 2026.";
+    const CONTRADICTING = "Contract CT-102 signed 14 Mar 2026, after receipt R-90 dated 5 Jan 2026.";
+    const bigDoc = `[CHUNK:C001] --- a.docx ---\n${SUPPORTING} ${"evidence text ".repeat(4600)}\n[CHUNK:C002] --- b.docx ---\n${CONTRADICTING}`;
     const input: EvidenceAssessmentInput[] = [{
       ref: "4.2.1.DS1", requirementText: "Contracts signed before fee collection", ppdVerdict: "Adequate", ppdExtract: "ok",
       promises: [{ promiseText: "Contracts are signed before any fee is collected", sourceQuote: "contracts shall be signed before fee collection", chunkId: "C001" }],
     }];
-    let call = 0;
-    mockChat.mockImplementation(async () => {
-      call++;
-      const verdictForWindow = call === 1 ? "evidenced" : "contradicted";
+    let extractCall = 0;
+    const judgeUsers: string[] = [];
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      const user = String(messages[1]?.content ?? "");
+      if (system.includes("EXTRACTION pass")) {
+        extractCall++;
+        const cand = extractCall === 1
+          ? { aspect: "promise 1: compliant receipt", quote: SUPPORTING, kind: "record", chunkId: "C001" }
+          : { aspect: "promise 1: contradicting contract", quote: CONTRADICTING, kind: "record", chunkId: "C002" };
+        return JSON.stringify({ results: [{ ref: "4.2.1.DS1", candidates: [cand] }] });
+      }
+      judgeUsers.push(user);
+      // The judge, seeing BOTH records at once, reports the contradiction —
+      // and (wrongly) says Met; the code-level promise hard-gate must cap it.
       return JSON.stringify({
         results: [{
           ref: "4.2.1.DS1", evidenceSummary: "records reviewed", verdict: "Met",
-          comment: "checked", chunkIds: ["C001"],
-          promiseChecks: [{ promiseText: "Contracts are signed before any fee is collected", verdict: verdictForWindow, evidence: call === 1 ? "receipt matches" : "contract dated AFTER the receipt", chunkIds: ["C001"] }],
+          comment: "checked", chunkIds: ["C001", "C002"],
+          promiseChecks: [{ promiseText: "Contracts are signed before any fee is collected", verdict: "contradicted", evidence: "contract dated AFTER the receipt", chunkIds: ["C002"] }],
         }],
       });
     });
     const result = await runEvidenceAssessment(input, bigDoc, SETTINGS, {});
-    expect(call).toBeGreaterThanOrEqual(2); // sanity: really two windows
+    expect(extractCall).toBeGreaterThanOrEqual(2); // sanity: really two windows
+    expect(judgeUsers).toHaveLength(1); // one judge decision over the pooled records
+    expect(judgeUsers[0]).toContain(SUPPORTING);
+    expect(judgeUsers[0]).toContain(CONTRADICTING);
     const row = result.rows[0];
-    expect(row.promiseChecks?.[0].verdict).toBe("contradicted"); // sticky — not erased by the evidenced window
+    expect(row.promiseChecks?.[0].verdict).toBe("contradicted");
     // The promise hard-gate then caps the Met line at Partial.
     expect(row.verdict).toBe("Partial");
   });

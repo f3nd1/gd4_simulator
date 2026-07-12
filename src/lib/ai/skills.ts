@@ -56,6 +56,7 @@ export type SkillCalibrationMemory = {
 import externalAuditorSkill        from "../../data/skills/external-auditor.md?raw";
 import evidenceStandardsSkill      from "../../data/skills/evidence-standards.md?raw";
 import apsrRubricSkill             from "../../data/skills/apsr-rubric.md?raw";
+import policyDocumentationSkill    from "../../data/skills/policy-documentation-review.md?raw";
 
 import benchmarkingSkill           from "../../data/skills/benchmarking-and-good-practice.md?raw";
 import bandCalibrationSkill        from "../../data/skills/band-calibration.md?raw";
@@ -88,6 +89,7 @@ export {
   externalAuditorSkill,
   evidenceStandardsSkill,
   apsrRubricSkill,
+  policyDocumentationSkill,
   benchmarkingSkill,
   bandCalibrationSkill,
   evidenceRetrievalSkill,
@@ -180,6 +182,20 @@ const MODULE_SKILLS: Record<SkillModule, { capped: string[]; uncapped: string[] 
 // context every assessment needs, so it lives in BASE, not a module.
 const BASE_SKILLS: string[] = [externalAuditorSkill, evidenceStandardsSkill, apsrRubricSkill, sgPeiContextSkill];
 
+// Module-specific BASE overrides. The PPD review is a DOCUMENTATION-ONLY
+// pass, but the default BASE injected external-auditor.md ("if the records
+// are absent, the process is unverified regardless of how detailed the
+// policy is") and evidence-standards.md (implementation-record rules) —
+// instructions that directly contradict a policy-only task and pushed its
+// verdicts to flip-flop between "documented" and "records missing".
+// policy-documentation-review.md carries the same assessor posture scoped
+// to documentation; sg-pei-context stays (SSG hard requirements apply to
+// what the PPD must SAY). apsr-rubric is omitted: band calibration across
+// four dimensions is meaningless when only Approach documentation is read.
+const MODULE_BASE_OVERRIDES: Partial<Record<SkillModule, string[]>> = {
+  ppdReview: [policyDocumentationSkill, sgPeiContextSkill],
+};
+
 // Per-skill character cap — keeps total token spend predictable.
 // regulatoryReferences is exempt (uncapped) — see note at top of file.
 // Raised from 3000: at 3000 the base apsr-rubric.md (~4.5k chars) was cut
@@ -194,6 +210,7 @@ const SEP = "\n\n---\n\n";
 // wrap each block with a labelled header and footer for traceability.
 const SKILL_NAMES = new Map<string, string>([
   [externalAuditorSkill,        "external-auditor.md"],
+  [policyDocumentationSkill,    "policy-documentation-review.md"],
   [evidenceStandardsSkill,      "evidence-standards.md"],
   [apsrRubricSkill,             "apsr-rubric.md"],
   [benchmarkingSkill,           "benchmarking-and-good-practice.md"],
@@ -241,7 +258,7 @@ export function buildSystemPrompt(module: SkillModule, fileType?: FileType | nul
   const moduleSkills = MODULE_SKILLS[module];
 
   // Capped skills: BASE + module capped skills, each truncated to SKILL_CAP chars.
-  const cappedDocs = [...BASE_SKILLS, ...moduleSkills.capped]
+  const cappedDocs = [...(MODULE_BASE_OVERRIDES[module] ?? BASE_SKILLS), ...moduleSkills.capped]
     .map((d) => labelSkill(d, d.trim().slice(0, SKILL_CAP)));
 
   // File-type bonus skills — also capped.

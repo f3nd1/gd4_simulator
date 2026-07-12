@@ -58,24 +58,6 @@ const FOLDER_AUDIT_SCHEMA: ChatSchema = { name: "folder_audit_batch", schema: sO
   folderWarnings: sArr(sStr),
 }) };
 
-const PPD_REVIEW_SCHEMA: ChatSchema = { name: "ppd_requirements_review", schema: sObj({
-  results: sArr(sObj({
-    ref: sStr,
-    subClauses: sArr(sObj({
-      text: sStr, clause: sStr, quote: sStr,
-      spreadQuotes: sArr(sObj({ quote: sStr, chunkId: sStr })),
-      rationale: sStr, chunkId: sStr,
-      verdict: sEnum("documented", "not documented"),
-    })),
-    shortComment: sStr, fullComment: sStr,
-    verdict: sEnum("Adequate", "Partial", "Not documented"),
-    promises: sArr(sObj({ promiseText: sStr, sourceQuote: sStr, chunkId: sStr })),
-    suggestedRewrite: sStr,
-    chunkIds: sArr(sStr),
-    supportQuote: sStr,
-  })),
-}) };
-
 const PPD_CONTRADICTION_SCHEMA: ChatSchema = { name: "ppd_contradictions", schema: sObj({
   contradictions: sArr(sObj({ description: sStr, quoteA: sStr, chunkA: sStr, quoteB: sStr, chunkB: sStr })),
 }) };
@@ -91,6 +73,68 @@ const EVIDENCE_ASSESSMENT_SCHEMA: ChatSchema = { name: "evidence_assessment", sc
     chunkIds: sArr(sStr), evidenceQuote: sStr, suggestedAction: sStr,
   })),
 }) };
+
+// ─── Two-pass extract-then-judge (Phase 2) ───────────────────────────────────
+// Option A's PPD review and evidence assessment each run as TWO calls instead
+// of one: Pass 1 (EXTRACT) reads the document and returns candidate passages
+// only — no verdicts; every candidate is then verified deterministically
+// (quoteExistsInSource / verifyClauseRef) and pooled across sliding windows.
+// Pass 2 (JUDGE) never sees the document — it decides each line's verdict
+// from the verified passages alone, ONCE per line (not once per window), so
+// the old cross-window best-verdict merge and its ordering artifacts are gone.
+
+const PPD_EXTRACT_SCHEMA: ChatSchema = { name: "ppd_extract", schema: sObj({
+  results: sArr(sObj({
+    ref: sStr,
+    candidates: sArr(sObj({ aspect: sStr, quote: sStr, clause: sStr, chunkId: sStr })),
+    promises: sArr(sObj({ promiseText: sStr, sourceQuote: sStr, chunkId: sStr })),
+  })),
+}) };
+
+// Judge output = the old single-pass row shape minus promises (extracted in
+// Pass 1, not judged). Reasoning fields still precede verdicts (schema order).
+const PPD_JUDGE_SCHEMA: ChatSchema = { name: "ppd_judge", schema: sObj({
+  results: sArr(sObj({
+    ref: sStr,
+    subClauses: sArr(sObj({
+      text: sStr, clause: sStr, quote: sStr,
+      spreadQuotes: sArr(sObj({ quote: sStr, chunkId: sStr })),
+      rationale: sStr, chunkId: sStr,
+      verdict: sEnum("documented", "not documented"),
+    })),
+    shortComment: sStr, fullComment: sStr,
+    verdict: sEnum("Adequate", "Partial", "Not documented"),
+    suggestedRewrite: sStr,
+    chunkIds: sArr(sStr),
+    supportQuote: sStr,
+  })),
+}) };
+
+const EVIDENCE_EXTRACT_SCHEMA: ChatSchema = { name: "evidence_extract", schema: sObj({
+  results: sArr(sObj({
+    ref: sStr,
+    candidates: sArr(sObj({ aspect: sStr, quote: sStr, kind: sEnum("record", "policy"), chunkId: sStr })),
+  })),
+}) };
+
+// Deterministic Met/Partial boundary rules for the requirement-line patterns
+// the consistency baseline showed flip-flopping (3.1.1.DS1, 3.1.1.DS2.a/.f/.g,
+// 3.1.1.DS3.a/.b, 3.1.1.DS4, 6.3.1.DS1/.DS2/.DS3/.DS5, 6.1.1.DS2). Each rule
+// generalises the requirement WORDING pattern — never any school's specific
+// evidence, per the Tuning Advisor's own instruction. Exported so tests can
+// pin their presence in the judge prompts.
+export const PPD_BOUNDARY_RULES = `DETERMINISTIC BOUNDARY RULES — fixed rules for recurring line patterns. They OVERRIDE general judgement: identical passages must always produce the identical verdict.
+1. REVIEW lines ("Review the [X] process/procedures for continual improvement"): "Adequate" ONLY when a passage names (i) who reviews THAT specific process (role/committee) AND (ii) a frequency or trigger for the review. A generic whole-of-PPD review clause ("all policies are reviewed annually") that does not name this process = "Partial". No review passage at all = "Not documented".
+2. CONTRACT-CONTENT lines (one named term the agent contract must cover — e.g. contract period, service performance indicators, actions on breach and termination conditions): "Adequate" ONLY when a passage explicitly requires or states THAT term. The term addressed but incompletely (e.g. actions on breach without termination conditions; "performance will be monitored" without named indicators) = "Partial". Passages about agent contracts that never state the term (e.g. "agreements will be signed with all agents") = "Not documented" for that term.
+3. REGISTER/LIST-FIELD lines (one named field an agent list/register must record — e.g. countries of recruitment, contract start and end dates): "Adequate" ONLY when a passage requires the register/list to record THAT field. A register/list requirement that omits the field = "Partial". No register/list requirement at all = "Not documented".
+4. MECHANISM lines ("Encourage/facilitate…", "Implement…", "Invest in…"): "Adequate" ONLY when a passage names a concrete mechanism (WHAT is done), an owner (WHO), and — where the obligation is recurring — a frequency. Stated intent without a named mechanism ("the PEI is committed to continual improvement") = "Partial". Nothing on the topic = "Not documented".
+5. MULTI-PART lines (several obligations joined in one line, e.g. "identify, select and appoint agents… including setting selection criteria and Management approval"): decompose into ALL named parts and verdict each; "Adequate" requires EVERY part documented — including any named approval authority (a selection process whose approver is not the named authority level leaves that part missing). Any missing part = "Partial", naming it.`;
+
+export const EVIDENCE_BOUNDARY_RULES = `DETERMINISTIC EVIDENCE RULES for recurring line patterns — they fix what "an actual implementation record supports the requirement" means (rule 4b): identical records must always produce the identical verdict.
+- REVIEW lines: only a dated record OF a review of that specific process (minutes, or a review report with decisions/changes) counts. A policy stating that reviews happen counts for nothing here.
+- CONTRACT-CONTENT lines: only an executed contract (or contract register entry) actually showing that term counts.
+- REGISTER/LIST-FIELD lines: only a current register/list actually showing that field populated counts.
+- MECHANISM lines: only a dated record of the mechanism having run (minutes, log entries, completed forms, published outputs) counts.`;
 
 export { AIClientError };
 
@@ -1848,10 +1892,6 @@ export type PPDRequirementsReviewResult = {
   stoppedEarly?: boolean;
 };
 
-// "Not assessed" ranks below everything: it is a placeholder, never an AI
-// verdict, so any real verdict replaces it in the cross-window merge.
-const PPD_VERDICT_ORDER: Record<PPDVerdict, number> = { "Not assessed": -1, "Not documented": 0, "Partial": 1, "Adequate": 2 };
-
 // Fix for the PPD-quote hallucination channel: the prompt asks for verbatim
 // excerpts in double quotes, but nothing checked they exist in the source.
 // This deterministic verifier extracts every substantial quoted span from a
@@ -2010,38 +2050,68 @@ export async function runPPDRequirementsReview(
   const domainSkill = domainExpertiseFor(opts.criterionId);
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
 
-  // Built per actual AI call (inside the window/batch loop below) — see the
-  // comment on the equivalent pattern in runStagedPolicyAudit: buildSystemPrompt()
-  // has a dev-only AI Debug Log side effect, and every real chatComplete() call
-  // should get its own debug-log entry.
-  const buildSystem = (label: string) => `You are an SSG EduTrust assessor reviewing ONLY the Policy & Procedure Document (PPD) for a GD4 sub-criterion, requirement by requirement — not implementation evidence, not outcomes. Work the way a real assessor works: decompose, check each obligation, and report specific gaps with named examples — never summarise.
+  // ── Pass 1 (EXTRACT) system prompt: find + copy passages, NO verdicts. ──
+  // Built per actual AI call (inside the loops below): buildSystemPrompt() has
+  // a dev-only AI Debug Log side effect, and every real chatComplete() call
+  // should get its own debug-log entry. Extraction gets the skills/domain
+  // blocks (they aid recall and verbatim discipline) but NOT the calibration/
+  // memories/rule injections — those shape VERDICTS, which are the judge's.
+  const extractSystem = (label: string) => `You are the EXTRACTION pass of a two-pass SSG EduTrust review of a PEI's Policy & Procedure Document (PPD). Your ONLY job is to find and copy out the PPD passages relevant to each GD4 requirement line below. You give NO verdicts — a separate judge decides from what you extract, and a passage you miss is invisible to it, so include every passage that even partially addresses a line.
 
-STEP 1 — DECOMPOSE. For each GD4 requirement line, first break it into its constituent sub-clauses: the explicit (a)/(b)/(c) parts if present, otherwise each distinct obligation in the sentence (e.g. "documented (a) a code of conduct AND (b) non-collection of monies" = two sub-clauses). Then give a per-sub-clause verdict: "documented" or "not documented" in the PPD, AND — independently for each sub-clause — the ONE exact sentence copied VERBATIM from the cited chunk that documents THAT specific sub-clause (not the whole line). A sub-clause that is "not documented" gets an empty quote — never invent one to fill the gap, and never reuse one sub-clause's quote for another. If the sub-clause IS documented but its support is spread across SEVERAL statements rather than one single sentence, leave quote empty and instead list those actual statements (up to 8, each copied VERBATIM, each with its own chunk ID) in spreadQuotes — real evidence the reader can check, never a bare "spread across the document" assertion with nothing behind it; only leave BOTH quote and spreadQuotes empty when there is truly no cleanly extractable passage at all. For each sub-clause ALSO record: (i) clause — the FULL section/clause reference of the SOURCE document where you found it, COPIED EXACTLY from a heading that actually appears in the cited chunk text, INCLUDING its leading number identifier if the document numbers that heading (e.g. "4.2 Competency-Based Recruitment and Selection Strategy, Step 1: Manpower Planning and Deployment", or "7.3(a) Audit Report" when the document itself labels the heading that way) — copy the number exactly as written, never renumber one or add a number that is not there; a bare list dash/bullet ("- ", "• ", "* ") in front of a line is a list marker, NOT a clause identifier — never include it, and never cite a bullet list item as if it were a heading; if the document does not number this heading, give the heading text alone as usual; if the cited chunk shows no identifiable heading for this passage, return "" — NEVER construct, infer, tidy up or guess a clause reference, because an assessor will try to navigate to it and an invented one is worse than none; (ii) rationale — ONE short auditor-register sentence stating WHY this sub-clause is or is not documented (distinct from the quote), or "" if you cannot state a reason beyond the quote itself; (iii) chunkId — the single chunk ID the quote came from, or "" if none.
+For each requirement line return:
+- candidates: one entry per relevant passage —
+  - quote: ONE sentence (or short contiguous passage) copied VERBATIM, character-for-character. Never paraphrase, tidy, merge or invent text.
+  - clause: the section/clause heading the passage sits under, copied exactly as printed, INCLUDING its leading number if the document prints one (e.g. "7.3(a) Audit Report"); "" when no identifiable heading exists. Never construct, renumber or tidy a reference. A bare list dash/bullet ("- ", "• ") is a list marker, not a clause identifier — never include it.
+  - chunkId: the chunk ID from the document header the quote came from (e.g. "C001").
+  - aspect: 3-8 words naming which part of the requirement this passage addresses.
+- promises: every specific, verifiable commitment the PPD makes for this line — named mechanisms ("peer reviews"), frequencies ("annually", "within 5 working days"), scopes ("all part-time academic staff"), named roles, named records — each with its VERBATIM sourceQuote and chunkId. These are verified against implementation records in a later pass; extract only what the PPD actually commits to, never invent.
 
-STEP 2 — DERIVE the line verdict from the sub-clauses:
-"Adequate" = EVERY sub-clause is documented clearly, specifically and sustainably (named responsible role, what they do, when/how often, what record is produced).
-"Partial" = some sub-clauses documented, others missing or vague — the comment MUST name exactly which sub-clauses are missing, e.g. "Sub-clause (b) — non-collection of monies from students — is not addressed in any PPD passage."
-"Not documented" = no sub-clause is addressed at all.
-
-STEP 3 — EXTRACT PROMISES. List every specific, verifiable commitment the PPD makes for this requirement: named mechanisms ("peer reviews"), frequencies ("annually", "within 5 working days"), scopes ("all part-time academic staff"), named roles, named records. Each promise needs its verbatim source quote and chunk ID. These are verified against implementation records in a later pass — extract only what the PPD actually commits to, never invent.
-
-PHRASING REGISTER (mandatory):
-- Negative verdicts use the official SSG register: "It was not evident that the PEI had documented [the specific process/sub-clause(s)] in its PPD…" — name the specific missing obligations, listing sub-clauses where multiple.
-- Every Partial or Not documented verdict MUST cite at least one concrete example from the documents — the specific document name, section, version or passage that demonstrates the gap (or, for a wholly absent topic, name the documents searched). A negative verdict without a concrete example is unsupported and unacceptable.
-- Positive verdicts stay factual and specific (what is documented, in which document/section) — no praise adjectives, no "good"/"structured framework"/"comprehensive".
-
-For each requirement return:
-- subClauses: [{text: string, verdict: "documented"|"not documented", quote: string, spreadQuotes: [{quote: string, chunkId: string}], clause: string, rationale: string, chunkId: string}] — the STEP 1 decomposition. One entry per sub-clause, text naming that obligation tightly (by what it IS, e.g. "Manpower planning"). quote = the exact verbatim sentence supporting THAT sub-clause specifically (empty string "" for "not documented" sub-clauses, or when no single sentence captures it) — never the whole line's quote, never invented. spreadQuotes = when documented but no single quote captures it, the actual verbatim statements (up to 8) that TOGETHER support it, each with its own chunkId — empty array [] when quote is set, or when genuinely nothing extractable exists. clause = the source document's own section heading for this sub-clause, copied verbatim from the cited chunk INCLUDING its leading number identifier if the document numbers that heading (e.g. "7.3(a) Audit Report"), or the heading text alone if the document does not number it, or "" if the chunk shows no identifiable heading — never invented or tidied, never a number that isn't actually printed next to that heading, and never a bare list dash/bullet ("- ", "• ") — a list marker is not a clause identifier. rationale = one short auditor-register sentence on why it is/isn't documented, or "" if none distinct from the quote. chunkId = the chunk ID the quote came from, or "".
-- verdict: "Adequate" | "Partial" | "Not documented" — derived per STEP 2.
-- shortComment: MANDATORY for every verdict, never blank — one sentence stating WHY this verdict was reached. For "Adequate" state specifically what makes it adequate (the named owner, mechanism, frequency, or record that satisfies it) — "Documented, because…" is exactly as required as a negative's reason. For "Partial"/"Not documented" use the SSG register and name the missing sub-clause(s).
-- fullComment: (1) the justification — for Adequate state specifically WHAT makes it adequate (named owner, frequency, record and where documented); for Partial/Not documented use the SSG register, name each missing sub-clause, and give the concrete example. (2) a verbatim quoted excerpt from the PPD in double quotes followed by its chunk ID, e.g. "...auditors must be independent of the area they audit..." (C001). For "Not documented" state that no PPD passage addresses this requirement instead of inventing a quote. Factual and neutral throughout.
-- promises: [{promiseText: string, sourceQuote: string, chunkId: string}] — the STEP 3 extraction. Empty array if the PPD makes no specific commitment for this line.
-- suggestedRewrite: for Partial or Not documented ONLY — a concrete, institution-ready PPD paragraph closing the gap (responsible role, frequency, record). Empty string for Adequate.
-- chunkIds: exact chunk ID(s) (e.g. "C001") supporting the verdict. Empty if none — never invent a chunk ID.
-- supportQuote: for Adequate/Partial ONLY, the ONE exact sentence (or short clause) copied VERBATIM from the cited chunk text that most directly documents this requirement — character-for-character, so it can be located in the source. If no single sentence captures it (support is spread across the passage) or the verdict is Not documented, return an empty string "" — never paraphrase, summarise, or invent a quote.
+An empty candidates array is the correct answer when nothing in this window addresses the line.
 
 Respond with JSON only:
-{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented", "quote": string, "spreadQuotes": [{"quote": string, "chunkId": string}], "clause": string, "rationale": string, "chunkId": string}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}], "suggestedRewrite": string, "chunkIds": string[], "supportQuote": string}]}${buildSystemPrompt("ppdReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
+{"results": [{"ref": string, "candidates": [{"aspect": string, "quote": string, "clause": string, "chunkId": string}], "promises": [{"promiseText": string, "sourceQuote": string, "chunkId": string}]}]}${buildSystemPrompt("ppdReview", null, label, opts.criterionId, domainSkill)}${domainBlock}`;
+
+  // ── Pass 2 (JUDGE) system prompt: verdicts from VERIFIED extracts only. ──
+  // The rubric is stated ONCE, and its core is REPEATED at the very end of the
+  // prompt (after the knowledge-base/domain injections) — recency measurably
+  // improves instruction-following on long prompts.
+  const judgeSystem = (label: string) => `You are an SSG EduTrust assessor deciding whether a PEI's Policy & Procedure Document (PPD) documents each GD4 requirement line. You are NOT given the document. For each line you are given the complete set of VERIFIED passages an extraction pass found in the PPD — every quote is a confirmed verbatim excerpt (shown with its section heading and chunk ID where identified). Decide strictly from these passages: if support for an obligation is not among them, that obligation is NOT documented — never assume unshown text exists, and never soften a gap because the document "probably" covers it elsewhere.
+
+DECIDE EACH LINE IN THREE STEPS:
+
+STEP 1 — DECOMPOSE the line into its sub-clauses: the explicit (a)/(b)/(c) parts if present, otherwise each distinct obligation in the sentence.
+
+STEP 2 — VERDICT each sub-clause "documented" or "not documented". "Documented" ONLY when at least one given passage establishes that obligation clearly, specifically and sustainably (named responsible role, what they do, when/how often, what record is produced). For a documented sub-clause: quote = the ONE best supporting passage copied EXACTLY as given (or, when several passages together support it, leave quote empty and list them in spreadQuotes, each copied exactly with its chunkId); clause and chunkId = that passage's heading and chunk ID as given ("" where none was shown); rationale = one short auditor-register sentence on WHY. A "not documented" sub-clause gets an empty quote — never invent one or reuse another sub-clause's.
+
+STEP 3 — LINE VERDICT from the sub-clauses:
+- "Adequate" = EVERY sub-clause documented (per STEP 2's bar).
+- "Partial" = some sub-clauses documented, others missing or vague — the comment MUST name exactly which are missing (e.g. "Sub-clause (b) — non-collection of monies from students — is not addressed in any PPD passage.").
+- "Not documented" = no sub-clause is addressed at all.
+When unsure between two adjacent verdicts, choose the LOWER one.
+
+${PPD_BOUNDARY_RULES}
+
+PHRASING REGISTER (mandatory):
+- Negatives use the official SSG register: "It was not evident that the PEI had documented [the specific process/sub-clause(s)] in its PPD…" — name the specific missing obligations, listing sub-clauses where multiple.
+- Positives stay factual and specific (what is documented, in which clause) — no praise adjectives.
+
+For each line return:
+- subClauses: the STEP 1-2 decomposition, one entry per sub-clause, text naming that obligation tightly (by what it IS, e.g. "Manpower planning").
+- verdict: "Adequate" | "Partial" | "Not documented" — per STEP 3.
+- shortComment: MANDATORY for every verdict, never blank — one sentence stating WHY ("Documented, because…" is exactly as required as a negative's reason).
+- fullComment: (1) the justification — for Adequate, the named owner, mechanism, frequency or record that satisfies it; for Partial/Not documented, the SSG register naming each missing sub-clause; then (2) a verbatim quoted excerpt in double quotes with its chunk ID, e.g. "...auditors must be independent of the area they audit..." (C001) — for Not documented, state that no PPD passage addresses this requirement instead.
+- suggestedRewrite: for Partial/Not documented ONLY — a concrete, institution-ready PPD paragraph closing the gap (responsible role, frequency, record). Empty string for Adequate.
+- chunkIds: the chunk IDs of the passages the verdict relies on. Empty if none — never invent a chunk ID.
+- supportQuote: for Adequate/Partial ONLY — the single given passage that most directly documents the line, copied exactly, or "" when none/spread.
+
+Respond with JSON only:
+{"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented", "quote": string, "spreadQuotes": [{"quote": string, "chunkId": string}], "clause": string, "rationale": string, "chunkId": string}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "suggestedRewrite": string, "chunkIds": string[], "supportQuote": string}]}${buildSystemPrompt("ppdReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
+
+## Final verdict rubric (repeated last so it is freshest — this is the decision rule)
+- "Adequate" = EVERY sub-clause documented clearly, specifically and sustainably (named role, what, when/how often, what record) by the verified passages given.
+- "Partial" = some sub-clauses documented, others missing or vague — name the missing ones.
+- "Not documented" = no sub-clause addressed by any given passage.
+- Judge ONLY from the verified passages. Ties resolve DOWN. The DETERMINISTIC BOUNDARY RULES override general judgement.`;
 
   // Technique 2 — internal contradiction hunt. Run as its OWN pass per
   // window (not folded into the per-requirement prompt) so the requirement
@@ -2058,28 +2128,26 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
 
   const windows = buildDocWindows(policyDocText);
 
-  type BestPPD = { verdict: PPDVerdict; shortComment: string; fullComment: string; suggestedRewrite?: string; chunkIds: string[]; subClauses?: PPDSubClause[]; promises?: PPDPromise[]; supportQuote?: string };
-  const bestByRef = new Map<string, BestPPD>();
+  // ── Pass 1 state: verified candidates + promises, pooled across windows. ──
+  type PPDCandidate = { aspect: string; quote: string; clause?: string; chunkId?: string };
+  const candByRef = new Map<string, PPDCandidate[]>();
+  const candKeys = new Set<string>(); // "ref::normalised-quote" — cross-window dedupe
+  const promisesByRef = new Map<string, PPDPromise[]>();
+  // Refs an extraction call actually covered successfully at least once, vs.
+  // refs covered ONLY by failed calls — for the latter, "no candidates" is
+  // missing data, never a real absence.
+  const extractedOk = new Set<string>();
+  const extractFailedRefs = new Set<string>();
 
-  // Cross-window sub-clause merge. A later window that upgrades the verdict
-  // used to replace the previous window's subClauses WHOLESALE — discarding
-  // verified quotes/spreadQuotes/clauses window 1 had already located when
-  // window 2's copy of the same sub-clause arrived without them (window 2
-  // cannot quote text it never saw). Carry the previous window's
-  // presentational fields onto a same-text documented sub-clause that lacks
-  // them; verdicts are NEVER changed by this merge.
-  const mergeSubClauses = (next: PPDSubClause[], prev?: PPDSubClause[]): PPDSubClause[] => {
-    if (!prev?.length) return next;
-    const byText = new Map(prev.map((p) => [p.text.trim().toLowerCase(), p]));
-    return next.map((n) => {
-      const p = byText.get(n.text.trim().toLowerCase());
-      if (!p || p.verdict !== "documented" || n.verdict !== "documented") return n;
-      if (!n.quote && !n.spreadQuotes && (p.quote || p.spreadQuotes)) {
-        return { ...n, quote: p.quote, spreadQuotes: p.spreadQuotes, chunkId: n.chunkId ?? p.chunkId, clause: n.clause ?? p.clause, rationale: n.rationale ?? p.rationale, quoteUnverified: undefined };
-      }
-      return { ...n, clause: n.clause ?? p.clause, rationale: n.rationale ?? p.rationale };
-    });
+  const addCandidate = (ref: string, cand: PPDCandidate) => {
+    const key = `${ref}::${normaliseForQuoteMatch(cand.quote)}`;
+    if (candKeys.has(key)) return;
+    candKeys.add(key);
+    const list = candByRef.get(ref) ?? [];
+    list.push(cand);
+    candByRef.set(ref, list);
   };
+
   // Contradictions merged across windows, deduped on the two quotes.
   const contradictions: PPDContradiction[] = [];
   const contradictionKeys = new Set<string>();
@@ -2098,164 +2166,91 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     batches.push(requirements.slice(i, i + REQ_BATCH_SIZE));
   }
 
+  // ── Pass 1 — EXTRACT: window × batch; verify and pool candidates. ──
   for (const win of windows) {
     if (stopRequested()) { stoppedEarly = true; break; }
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()}]` : "";
 
     for (const [bi, batch] of batches.entries()) {
       if (stopRequested()) { stoppedEarly = true; break; }
-      opts.onProgress?.(`PPD requirements review — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
+      opts.onProgress?.(`PPD extraction — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
       opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((r) => r.ref), chunkIds: chunkIdsInWindow(win.text) });
       const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText}`).join("\n");
-      const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess PPD documentation for each GD4 requirement line:\n${pointsBlock}`;
-      const system = buildSystem(windows.length > 1 ? `runPPDRequirementsReview (window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview");
-      if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
+      const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nExtract the relevant PPD passages and promises for each GD4 requirement line:\n${pointsBlock}`;
+      const system = extractSystem(windows.length > 1 ? `runPPDRequirementsReview (extract, window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview (extract)");
+      if (!firstPromptSent) firstPromptSent = `SYSTEM (extract):\n${system}\n\nUSER:\n${user}`;
       try {
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { schema: PPD_REVIEW_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: PPD_EXTRACT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-        // The call RETURNED but nothing parseable came back — truncated or
-        // malformed JSON (parseJSONObject yields {}), or a literal empty
-        // results array. Per "never fabricate verdicts from failures", record
-        // this as a FAILURE so the affected lines become "Not assessed", NOT a
-        // fabricated "Not documented" gap that reads as a real finding. Another
-        // window may still fill these lines. (Previously this silently produced
-        // a full set of empty "Not documented" verdicts — see the PPD review
-        // showing 5 "No verdict returned by the AI" gaps.)
+        // The call RETURNED but nothing parseable came back — a failure per
+        // "never fabricate from failures" (same rule as the old single pass),
+        // never silently treated as "nothing found".
         if (results.length === 0) {
-          const label = windows.length > 1 ? `PPD window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD batch ${bi + 1}/${batches.length}`;
-          windowErrors.push(`${label} returned no parseable verdicts — the AI reply was empty or not valid JSON.`);
+          const label = windows.length > 1 ? `PPD extraction window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD extraction batch ${bi + 1}/${batches.length}`;
+          windowErrors.push(`${label} returned no parseable passages — the AI reply was empty or not valid JSON.`);
           console.error("[PPDRequirementsReview]", label, "no parseable results");
-          opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no verdicts could be parsed from it." });
+          for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
+          opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it." });
           continue;
         }
-        const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
-        const batchVerdicts: { ref: string; verdict: PPDVerdict }[] = [];
+        const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
         for (const [idx, r] of batch.entries()) {
-          // Positional recovery: some models keep the requirement order but drop
-          // or rename the per-result "ref". When the result count matches the
-          // batch, fall back to position so a missing ref never zeroes out an
-          // otherwise-good batch.
+          // Positional recovery: some models keep the order but drop "ref" —
+          // same fallback as the old single pass.
           const res = byRef.get(normalizeAuditRef(r.ref)) ?? (results.length === batch.length ? results[idx] : undefined);
-          const verdict = (["Adequate", "Partial", "Not documented"] as PPDVerdict[]).includes(res?.verdict as PPDVerdict)
-            ? (res!.verdict as PPDVerdict) : "Not documented";
-          batchVerdicts.push({ ref: r.ref, verdict });
-          const shortComment = typeof res?.shortComment === "string" ? res.shortComment : "";
-          const fullComment = typeof res?.fullComment === "string" ? res.fullComment : "";
-          const suggestedRewrite = typeof res?.suggestedRewrite === "string" && res.suggestedRewrite.trim() ? res.suggestedRewrite : undefined;
-          const chunkIds = Array.isArray(res?.chunkIds) ? (res!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
-          // Exact supporting quote — stored ONLY when it verifies as a real
-          // verbatim excerpt of the policy text (same anti-hallucination check as
-          // the fullComment/promise quotes). A paraphrase or invention is dropped
-          // to undefined ("no exact quote identified"), never stored as a match.
-          const rawSupportQuote = typeof res?.supportQuote === "string" ? res.supportQuote.trim() : "";
-          const supportQuote = rawSupportQuote && quoteExistsInSource(rawSupportQuote, policyDocText) ? rawSupportQuote : undefined;
-          // Per-sub-clause quote: verified against the SAME window text as the
-          // whole-line supportQuote — a sub-clause quote that isn't a real
-          // verbatim substring is dropped to undefined ("no exact quote
-          // identified for this sub-part"), never stored as a fabricated match.
-          const subClauses: PPDSubClause[] = Array.isArray(res?.subClauses)
-            ? (res!.subClauses as Array<Record<string, unknown>>)
-                .filter((c) => typeof c?.text === "string" && (c?.verdict === "documented" || c?.verdict === "not documented"))
-                .map((c) => {
-                  const rawQuote = typeof c.quote === "string" ? c.quote.trim() : "";
-                  const quote = rawQuote && quoteExistsInSource(rawQuote, policyDocText) ? rawQuote : undefined;
-                  // "Spread across the document" must show real evidence, not
-                  // just assert it — verify each proposed passage the SAME way
-                  // `quote` is (drop anything that isn't a genuine verbatim
-                  // substring); a passage that fails verification is silently
-                  // omitted, never shown as if it were real.
-                  const spreadQuotes: PPDSubClause["spreadQuotes"] = Array.isArray(c.spreadQuotes)
-                    ? (c.spreadQuotes as Array<Record<string, unknown>>)
-                        .map((sq) => ({
-                          quote: typeof sq?.quote === "string" ? sq.quote.trim() : "",
-                          chunkId: typeof sq?.chunkId === "string" && sq.chunkId.trim() ? sq.chunkId.trim() : undefined,
-                        }))
-                        .filter((sq) => sq.quote && quoteExistsInSource(sq.quote, policyDocText))
-                    : [];
-                  // Clause is verified against source the same way quotes are:
-                  // a reference that isn't really in the document is dropped to
-                  // undefined ("no clause identified"), never shown — an invented
-                  // clause an assessor would chase is worse than an em-dash.
-                  // verifyClauseRef also strips bare list markers ("- X") and
-                  // falls back to the number-stripped heading when the numbered
-                  // form isn't a contiguous verbatim match.
-                  const rawClause = typeof c.clause === "string" ? c.clause.trim() : "";
-                  const clause = rawClause ? verifyClauseRef(rawClause, policyDocText) : undefined;
-                  // Rationale is reasoning (like shortComment), not a quotation —
-                  // stored as-is when non-empty, never verified/padded.
-                  const rationale = typeof c.rationale === "string" && c.rationale.trim() ? c.rationale.trim() : undefined;
-                  const chunkId = typeof c.chunkId === "string" && c.chunkId.trim() ? c.chunkId.trim() : undefined;
-                  // The model DID cite support but none of it verified — that is
-                  // a materially different state from "the model itself said no
-                  // single passage exists", and the UI must not present it as
-                  // the honest "spread across the document" note (a factual
-                  // claim nothing supports when the truth is "cited passage
-                  // failed verification").
-                  const rawSpreadCount = Array.isArray(c.spreadQuotes) ? (c.spreadQuotes as unknown[]).length : 0;
-                  const quoteUnverified = (!!rawQuote || rawSpreadCount > 0) && !quote && spreadQuotes.length === 0 ? true : undefined;
-                  return { text: c.text as string, verdict: c.verdict as PPDSubClause["verdict"], quote, spreadQuotes: spreadQuotes.length > 0 ? spreadQuotes : undefined, clause, rationale, chunkId, quoteUnverified };
-                })
-            : [];
-          // Promises carry verbatim source quotes — verify each against the
-          // window that produced it (same anti-hallucination rule as
-          // fullComment quotes) and annotate failures instead of dropping.
-          const promises: PPDPromise[] = Array.isArray(res?.promises)
-            ? (res!.promises as Array<Record<string, unknown>>)
-                .filter((p) => typeof p?.promiseText === "string" && p.promiseText)
-                .map((p) => {
-                  const sourceQuote = typeof p.sourceQuote === "string" ? p.sourceQuote : "";
-                  return {
-                    promiseText: p.promiseText as string,
-                    sourceQuote: sourceQuote && !quoteExistsInSource(sourceQuote, policyDocText) ? `${sourceQuote}${UNVERIFIED_QUOTE_NOTE}` : sourceQuote,
-                    chunkId: typeof p.chunkId === "string" ? p.chunkId : "",
-                  };
-                })
-            : [];
-          const prev = bestByRef.get(r.ref);
-          if (!prev || PPD_VERDICT_ORDER[verdict] > PPD_VERDICT_ORDER[prev.verdict]) {
-            bestByRef.set(r.ref, {
-              verdict,
-              // A higher-verdict window replaces the summary fields — but
-              // only when it actually returned them. Falling back to prev's
-              // shortComment/fullComment when THIS window's came back blank
-              // matches the fallback already applied to every other field
-              // here (subClauses, supportQuote below) and fixes the exact
-              // "Rationale empty on every Adequate line" bug: a later window
-              // upgrading Partial->Adequate with a blank comment was
-              // unconditionally overwriting a real justification an earlier
-              // window had already returned for this same ref.
-              shortComment: shortComment || prev?.shortComment || "",
-              fullComment: fullComment || prev?.fullComment || "",
-              suggestedRewrite,
-              chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])],
-              subClauses: subClauses.length > 0 ? mergeSubClauses(subClauses, prev?.subClauses) : prev?.subClauses,
-              // Union promises across windows (different windows see
-              // different PPD sections), deduped on promiseText.
-              promises: [...(prev?.promises ?? []), ...promises.filter((p) => !(prev?.promises ?? []).some((q) => q.promiseText === p.promiseText))],
-              supportQuote: supportQuote ?? prev?.supportQuote,
-            });
-          } else {
-            bestByRef.set(r.ref, {
-              ...prev,
-              chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])],
-              promises: [...(prev.promises ?? []), ...promises.filter((p) => !(prev.promises ?? []).some((q) => q.promiseText === p.promiseText))],
-              supportQuote: prev.supportQuote ?? supportQuote,
+          if (!res) continue;
+          extractedOk.add(r.ref);
+          extractFailedRefs.delete(r.ref);
+          // A candidate survives ONLY when its quote verifies as a real
+          // verbatim excerpt — the judge must never see a passage that is not
+          // actually in the PPD (deterministic gate, not an AI opinion).
+          const rawCands = Array.isArray(res.candidates) ? res.candidates as Array<Record<string, unknown>> : [];
+          for (const c of rawCands) {
+            const quote = typeof c.quote === "string" ? c.quote.trim() : "";
+            if (!quote || !quoteExistsInSource(quote, policyDocText)) continue;
+            const rawClause = typeof c.clause === "string" ? c.clause.trim() : "";
+            addCandidate(r.ref, {
+              aspect: typeof c.aspect === "string" ? c.aspect.trim() : "",
+              quote,
+              // Clause verified the same way as before (verifyClauseRef strips
+              // list markers, falls back to the number-stripped heading).
+              clause: rawClause ? verifyClauseRef(rawClause, policyDocText) : undefined,
+              chunkId: typeof c.chunkId === "string" && c.chunkId.trim() ? c.chunkId.trim() : undefined,
             });
           }
+          // Promises: verified/annotated exactly as before, pooled + deduped
+          // on promiseText. A promise whose sourceQuote verifies is ALSO
+          // pooled as a candidate — a line carrying a verified commitment
+          // quote cannot honestly be scored "no passage found".
+          const rawPromises = Array.isArray(res.promises) ? res.promises as Array<Record<string, unknown>> : [];
+          const pooled = promisesByRef.get(r.ref) ?? [];
+          for (const pr of rawPromises) {
+            if (typeof pr?.promiseText !== "string" || !pr.promiseText) continue;
+            if (pooled.some((q) => q.promiseText === pr.promiseText)) continue;
+            const sourceQuote = typeof pr.sourceQuote === "string" ? pr.sourceQuote : "";
+            const verified = !!sourceQuote && quoteExistsInSource(sourceQuote, policyDocText);
+            pooled.push({
+              promiseText: pr.promiseText,
+              sourceQuote: sourceQuote && !verified ? `${sourceQuote}${UNVERIFIED_QUOTE_NOTE}` : sourceQuote,
+              chunkId: typeof pr.chunkId === "string" ? pr.chunkId : "",
+            });
+            if (verified) addCandidate(r.ref, { aspect: "PPD commitment", quote: sourceQuote.trim(), chunkId: typeof pr.chunkId === "string" && pr.chunkId.trim() ? pr.chunkId.trim() : undefined });
+          }
+          promisesByRef.set(r.ref, pooled);
         }
-        opts.onEvent?.({ type: "batch-done", verdicts: batchVerdicts });
       } catch (err) {
         // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
         if (stopRequested()) { stoppedEarly = true; break; }
         const msg = err instanceof Error ? err.message : String(err);
-        const label = windows.length > 1 ? `PPD window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD batch ${bi + 1}/${batches.length}`;
+        const label = windows.length > 1 ? `PPD extraction window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD extraction batch ${bi + 1}/${batches.length}`;
         windowErrors.push(`${label} failed — ${msg}`);
         console.error("[PPDRequirementsReview]", label, msg);
+        for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
         opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg });
       }
     }
@@ -2300,42 +2295,152 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     windowsCompleted++;
   }
 
+  // ── Pass 2 — JUDGE: verdicts from the verified pool, ONCE per line. ──
+  type JudgedPPD = { verdict: PPDVerdict; shortComment: string; fullComment: string; suggestedRewrite?: string; chunkIds: string[]; subClauses?: PPDSubClause[]; supportQuote?: string };
+  const judgedByRef = new Map<string, JudgedPPD>();
+  const judgeFailedRefs = new Set<string>();
+
+  // Only lines with at least one verified passage go to the judge. A line
+  // with NO verified passages is decided deterministically below ("Not
+  // documented") — asking a model to judge empty input invites invention.
+  const judgeInputs = requirements.filter((r) => (candByRef.get(r.ref)?.length ?? 0) > 0);
+  const judgeBatches: PPDRequirementInput[][] = [];
+  for (let i = 0; i < judgeInputs.length; i += REQ_BATCH_SIZE) judgeBatches.push(judgeInputs.slice(i, i + REQ_BATCH_SIZE));
+
+  for (const [bi, batch] of judgeBatches.entries()) {
+    if (stopRequested()) { stoppedEarly = true; break; }
+    opts.onProgress?.(`PPD verdicts — batch ${bi + 1}/${judgeBatches.length} (judging verified extracts)`);
+    const pointsBlock = batch.map((r, i) => {
+      const cands = candByRef.get(r.ref) ?? [];
+      const candLines = cands.map((c, ci) => `   (${ci + 1}) [${c.chunkId ?? "no chunk"}${c.clause ? ` · ${c.clause}` : ""}]${c.aspect ? ` (${c.aspect})` : ""} "${c.quote}"`).join("\n");
+      return `[${r.ref}] (${i + 1}) ${r.requirementText}\n  Verified PPD passages:\n${candLines}`;
+    }).join("\n\n");
+    const user = `Requirement lines with the verified PPD passages found for each:\n\n${pointsBlock}\n\nDecide each line's PPD documentation verdict strictly from its verified passages.`;
+    const system = judgeSystem(judgeBatches.length > 1 ? `runPPDRequirementsReview (judge, batch ${bi + 1}/${judgeBatches.length})` : "runPPDRequirementsReview (judge)");
+    if (firstPromptSent && !firstPromptSent.includes("SYSTEM (judge):")) firstPromptSent += `\n\n════════ SECOND PASS (judge) ════════\n\nSYSTEM (judge):\n${system}\n\nUSER:\n${user}`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        settings,
+        { schema: PPD_JUDGE_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+      );
+      const parsed = parseJSONObject(content);
+      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+      if (results.length === 0) {
+        windowErrors.push(`PPD judge batch ${bi + 1}/${judgeBatches.length} returned no parseable verdicts — the AI reply was empty or not valid JSON.`);
+        console.error("[PPDRequirementsReview]", `judge batch ${bi + 1}`, "no parseable results");
+        for (const r of batch) judgeFailedRefs.add(r.ref);
+        opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no verdicts could be parsed from it." });
+        continue;
+      }
+      const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
+      const batchVerdicts: { ref: string; verdict: PPDVerdict }[] = [];
+      for (const [idx, r] of batch.entries()) {
+        const res = byRef.get(normalizeAuditRef(r.ref)) ?? (results.length === batch.length ? results[idx] : undefined);
+        if (!res) {
+          // Nothing came back for this specific ref — honest "Not assessed"
+          // (the old code defaulted this to a fabricated "Not documented").
+          judgeFailedRefs.add(r.ref);
+          continue;
+        }
+        const verdict = (["Adequate", "Partial", "Not documented"] as PPDVerdict[]).includes(res.verdict as PPDVerdict)
+          ? (res.verdict as PPDVerdict) : "Not documented";
+        const shortComment = typeof res.shortComment === "string" ? res.shortComment : "";
+        const fullComment = typeof res.fullComment === "string" ? res.fullComment : "";
+        const suggestedRewrite = typeof res.suggestedRewrite === "string" && res.suggestedRewrite.trim() ? res.suggestedRewrite : undefined;
+        const chunkIds = Array.isArray(res.chunkIds) ? (res.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        // Exact supporting quote — stored ONLY when it verifies as a real
+        // verbatim excerpt of the policy text (the judge is instructed to copy
+        // candidates exactly, but defence in depth stays).
+        const rawSupportQuote = typeof res.supportQuote === "string" ? res.supportQuote.trim() : "";
+        const supportQuote = rawSupportQuote && quoteExistsInSource(rawSupportQuote, policyDocText) ? rawSupportQuote : undefined;
+        // Per-sub-clause quote/spreadQuotes/clause: verified against the full
+        // policy text — a sub-clause quote that isn't a real verbatim substring
+        // is dropped to undefined, never stored as a fabricated match.
+        const subClauses: PPDSubClause[] = Array.isArray(res.subClauses)
+          ? (res.subClauses as Array<Record<string, unknown>>)
+              .filter((c) => typeof c?.text === "string" && (c?.verdict === "documented" || c?.verdict === "not documented"))
+              .map((c) => {
+                const rawQuote = typeof c.quote === "string" ? c.quote.trim() : "";
+                const quote = rawQuote && quoteExistsInSource(rawQuote, policyDocText) ? rawQuote : undefined;
+                const spreadQuotes: PPDSubClause["spreadQuotes"] = Array.isArray(c.spreadQuotes)
+                  ? (c.spreadQuotes as Array<Record<string, unknown>>)
+                      .map((sq) => ({
+                        quote: typeof sq?.quote === "string" ? sq.quote.trim() : "",
+                        chunkId: typeof sq?.chunkId === "string" && sq.chunkId.trim() ? sq.chunkId.trim() : undefined,
+                      }))
+                      .filter((sq) => sq.quote && quoteExistsInSource(sq.quote, policyDocText))
+                  : [];
+                const rawClause = typeof c.clause === "string" ? c.clause.trim() : "";
+                const clause = rawClause ? verifyClauseRef(rawClause, policyDocText) : undefined;
+                const rationale = typeof c.rationale === "string" && c.rationale.trim() ? c.rationale.trim() : undefined;
+                const chunkId = typeof c.chunkId === "string" && c.chunkId.trim() ? c.chunkId.trim() : undefined;
+                // The model DID cite support but none of it verified — a
+                // materially different state from "no single passage exists";
+                // the UI must not present it as the honest "spread across the
+                // document" note.
+                const rawSpreadCount = Array.isArray(c.spreadQuotes) ? (c.spreadQuotes as unknown[]).length : 0;
+                const quoteUnverified = (!!rawQuote || rawSpreadCount > 0) && !quote && spreadQuotes.length === 0 ? true : undefined;
+                return { text: c.text as string, verdict: c.verdict as PPDSubClause["verdict"], quote, spreadQuotes: spreadQuotes.length > 0 ? spreadQuotes : undefined, clause, rationale, chunkId, quoteUnverified };
+              })
+          : [];
+        judgedByRef.set(r.ref, { verdict, shortComment, fullComment, suggestedRewrite, chunkIds, subClauses: subClauses.length > 0 ? subClauses : undefined, supportQuote });
+        batchVerdicts.push({ ref: r.ref, verdict });
+      }
+      opts.onEvent?.({ type: "batch-done", verdicts: batchVerdicts });
+    } catch (err) {
+      if (stopRequested()) { stoppedEarly = true; break; }
+      const msg = err instanceof Error ? err.message : String(err);
+      windowErrors.push(`PPD judge batch ${bi + 1}/${judgeBatches.length} failed — ${msg}`);
+      console.error("[PPDRequirementsReview]", "judge batch failed", msg);
+      for (const r of batch) judgeFailedRefs.add(r.ref);
+      opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg });
+    }
+  }
+
   const rows: PPDReviewRow[] = requirements.map((r) => {
-    const best = bestByRef.get(r.ref);
-    // A line never put in front of the AI (run stopped early, or every call
-    // that covered it failed) gets the neutral "Not assessed" — NOT a
-    // fabricated "Not documented" gap.
-    if (!best && (stoppedEarly || windowErrors.length > 0)) {
+    const judged = judgedByRef.get(r.ref);
+    const pooledPromises = promisesByRef.get(r.ref);
+    if (!judged) {
+      const hadCandidates = (candByRef.get(r.ref)?.length ?? 0) > 0;
+      // A line never decided: its judge call failed / the run stopped (it had
+      // candidates), or extraction never covered it. Honest "Not assessed" —
+      // NOT a fabricated "Not documented" gap.
+      if (hadCandidates || judgeFailedRefs.has(r.ref) || extractFailedRefs.has(r.ref) || stoppedEarly) {
+        const stopped = stoppedEarly && !judgeFailedRefs.has(r.ref) && !extractFailedRefs.has(r.ref);
+        return {
+          ref: r.ref,
+          gd4ItemId: r.gd4ItemId,
+          requirementText: r.requirementText,
+          verdict: "Not assessed" as PPDVerdict,
+          shortComment: stopped ? "Not assessed — the run was stopped before this line was reviewed." : "Not assessed — the AI call covering this line failed.",
+          fullComment: stopped
+            ? "Not assessed — the run was stopped before this requirement line was reviewed. Re-run the PPD review to assess it."
+            : "Not assessed — the AI call covering this requirement line failed. Re-run the PPD review to assess it.",
+          chunkIds: [],
+        };
+      }
+      // Extraction covered this line cleanly and found NOTHING — a
+      // deterministic "Not documented", not an AI coin-flip on empty input.
       return {
         ref: r.ref,
         gd4ItemId: r.gd4ItemId,
         requirementText: r.requirementText,
-        verdict: "Not assessed" as PPDVerdict,
-        shortComment: stoppedEarly ? "Not assessed — the run was stopped before this line was reviewed." : "Not assessed — the AI call covering this line failed.",
-        fullComment: stoppedEarly
-          ? "Not assessed — the run was stopped before this requirement line was reviewed. Re-run the PPD review to assess it."
-          : "Not assessed — the AI call covering this requirement line failed. Re-run the PPD review to assess it.",
+        verdict: "Not documented" as PPDVerdict,
+        shortComment: "It was not evident that the PEI had documented this requirement in its PPD — no relevant passage was found.",
+        fullComment: "It was not evident that the PEI had documented this requirement in its PPD. The extraction pass read every provided Policy & Procedure document and found no passage addressing this requirement.",
         chunkIds: [],
+        promises: pooledPromises?.length ? pooledPromises : undefined,
       };
     }
     // An "Adequate" verdict that cannot point at any supporting PPD chunk is
     // downgraded to "Partial" — same uncited-positive rule as buildStagedApsr.
-    const uncitedAdequate = best?.verdict === "Adequate" && (best.chunkIds?.length ?? 0) === 0;
-    const verdict: PPDVerdict = uncitedAdequate ? "Partial" : (best?.verdict ?? "Not documented");
-    // "No verdict returned by the AI…" is only TRUE when `best` itself is
-    // undefined — nothing at all came back for this ref. When `best` exists
-    // (a real verdict was returned), that placeholder would be a false claim
-    // even if this specific comment field happened to come back blank (the
-    // model skipped it, or a later higher-verdict window's merge overwrote a
-    // populated comment with an empty one — see the bestByRef.set() above).
-    // In that case leave it genuinely blank rather than fabricate a reason.
-    const fullComment = best
-      ? (best.fullComment || "")
-      : "No verdict returned by the AI for this requirement — treat as undocumented until re-run.";
+    const uncitedAdequate = judged.verdict === "Adequate" && judged.chunkIds.length === 0;
+    const verdict: PPDVerdict = uncitedAdequate ? "Partial" : judged.verdict;
     // Quote verification: annotate any quoted excerpt that does not exist
     // verbatim in the source, so hallucinated "quotes" can't pass as real.
     const verifiedComment = flagUnverifiedQuotes(
-      uncitedAdequate ? `${fullComment}\n\n${UNCITED_DOWNGRADE_NOTE}` : fullComment,
+      uncitedAdequate ? `${judged.fullComment || ""}\n\n${UNCITED_DOWNGRADE_NOTE}` : (judged.fullComment || ""),
       policyDocText
     );
     return {
@@ -2343,17 +2448,15 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       gd4ItemId: r.gd4ItemId,
       requirementText: r.requirementText,
       verdict,
-      // Same honesty split as fullComment above — never claim "no verdict
-      // returned" when a verdict plainly WAS returned.
-      shortComment: best ? (best.shortComment || "") : "No verdict returned by the AI for this requirement.",
+      shortComment: judged.shortComment || "",
       fullComment: verifiedComment,
-      suggestedRewrite: best?.suggestedRewrite,
-      chunkIds: best?.chunkIds ?? [],
-      subClauses: best?.subClauses,
-      promises: best?.promises?.length ? best.promises : undefined,
+      suggestedRewrite: judged.suggestedRewrite,
+      chunkIds: judged.chunkIds,
+      subClauses: judged.subClauses,
+      promises: pooledPromises?.length ? pooledPromises : undefined,
       // Only carry the exact quote for a positive, cited verdict — a downgraded
       // or Not-documented line shows the passage without a (stale) highlight.
-      supportQuote: (verdict === "Adequate" || verdict === "Partial") ? best?.supportQuote : undefined,
+      supportQuote: (verdict === "Adequate" || verdict === "Partial") ? judged.supportQuote : undefined,
     };
   });
 
@@ -2452,13 +2555,6 @@ export type EvidenceAssessmentRunResult = {
   fullCoverage?: boolean;
 };
 
-// A found > partial > not-found ranking so the best result across sliding
-// windows wins (an earlier window finding nothing must not overwrite a later
-// window that found implementation evidence). "Not assessed" is a UI-only
-// state (unmatched derive rows) that the AI never returns — ranked lowest so
-// any real verdict would replace it if it ever entered a merge.
-const EVIDENCE_VERDICT_ORDER: Record<EvidenceVerdict, number> = { "Not assessed": -1, "Not met": 0, "Partial": 1, "Met": 2 };
-
 // Purely-observational live events emitted as the assessment proceeds, so the
 // UI can show a detailed activity view. Emitting them changes no assessment
 // behaviour — they mirror the window/batch loop the run already performs.
@@ -2482,79 +2578,88 @@ export async function runEvidenceAssessment(
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
   const noEvidence = !evidenceDocText.trim();
 
-  const buildSystem = (label: string) => `You are an SSG EduTrust assessor testing whether a PEI IMPLEMENTS its documented policies. For each requirement line you are given: (1) the PPD verdict already decided (whether the requirement is documented), (2) the specific PROMISES the PPD makes for that line (named mechanisms, frequencies, scopes, roles, records), and (3) the ACTUAL EVIDENCE documents below. Audit like a real assessor: verify each promise against the records, compare dates, and name specifics — never summarise.
+  // ── Pass 1 (EXTRACT) system prompt: find implementation-record passages. ──
+  // Extraction gets the skills/domain blocks (recall + verbatim discipline)
+  // but NOT the calibration/memories/rule injections — those shape VERDICTS,
+  // which belong to the judge pass.
+  const extractSystem = (label: string) => `You are the EXTRACTION pass of a two-pass SSG EduTrust evidence assessment. Your ONLY job is to find and copy out passages from the PEI's ACTUAL EVIDENCE documents that bear on each requirement line or on any of its listed PPD promises. You give NO verdicts — a separate judge decides from what you extract, and a passage you miss is invisible to it, so include every passage that even partially bears on a line or promise, INCLUDING passages that appear to CONTRADICT a promise (e.g. a record dated after the deadline the PPD commits to) — contradictions are exactly what the judge must see.
 
-PROMISE VERIFICATION (the core task). Each promise listed under a requirement is a NAMED CHECK. For each one verdict:
-- "evidenced" — a record in the evidence documents shows the promise being carried out; cite the chunk.
-- "not evidenced" — no record shows it. Phrase the finding: "It was not evident that the PEI had [promise], in accordance with its documented PPD."
-- "contradicted" — the records show the OPPOSITE of the promise (e.g. the PPD promises contracts signed before fee collection and a contract is dated after the receipt). Quote the contradicting record.
+For each requirement line return candidates, one entry per relevant passage:
+- quote: ONE sentence (or short contiguous passage, e.g. a log/register row) copied VERBATIM, character-for-character. Never paraphrase, tidy, merge or invent text.
+- kind: "record" when the passage is from an actual implementation record (a completed/signed form, a dated log or register entry, minutes, a report, a filled checklist); "policy" when it is from a policy/SOP/manual/handbook that merely describes the process.
+- chunkId: the chunk ID from the document header the quote came from (e.g. "C001").
+- aspect: 3-8 words naming what the passage evidences (name the promise number where one applies, e.g. "promise 2: peer review record").
 
-COMBINED LINE VERDICT — apply this decision procedure IN ORDER and stop at the first rule that matches. This is deterministic: the same PPD verdict and the same promise-check counts must ALWAYS yield the same line verdict (do not use "feels thin/strong" judgement — count the promise checks).
-1. If ANY promise is "contradicted" by the records → "Not met". (A contradiction is a hard fail regardless of everything else.)
-2. Else if the PPD verdict is "Not documented" → "Not met". (No documented approach; the APSR Approach hard-gate floors the line.)
-3. Else if the PPD verdict is "Partial" → "Partial". (A weak documented approach caps the whole line at Partial, no matter how complete the evidence — never "Met".)
-4. Else (PPD verdict is "Adequate"), decide by the promise checks:
-   a. If there were extractable promises: let E = number "evidenced", T = total promises. Then "Met" if E === T (every promise evidenced); "Partial" if 0 < E < T (some but not all); "Not met" if E === 0 (none evidenced).
-   b. If there were NO extractable promises for this line: "Met" if at least one actual implementation record supports the requirement; "Partial" if the approach is documented but no implementation record is present.
-Ties/borderline cases resolve DOWN, never up: if you are unsure between two adjacent verdicts, choose the lower one. "Met" requires every applicable promise evidenced with a cited record — it is never awarded on partial or ambiguous evidence.
-
-PRE-CHECK FLAGS: some lines carry a "Pre-check flags" note — a concern the app's own pattern-scan (or the reviewer) noted before your assessment (e.g. a possible date-sequencing issue, a record-count shortfall). Treat it as a prompt to look closer at that specific concern in the evidence, nothing more — it is NOT a verdict, and it must never override what you actually find in the documents. Confirm, refute or find it moot from the evidence itself; do not defer to it.
-
-EVIDENCE RULES:
-- A policy/SOP/procedure filed in the evidence folder does NOT count as implementation evidence — only actual records of doing something count.
-- IMPLEMENTATION RECORD OVER POLICY DOCUMENT: When BOTH a policy/approach document (staff handbook, manual, SOP, framework) AND a dedicated implementation record (a completed/signed form, a dated log or register entry, minutes, a filled checklist) are present for the same requirement, cite the RECORD as the evidence — the policy only proves the approach exists on paper, while the record proves the process actually ran. Never accept a handbook/manual/SOP as implementation evidence when an actual record of the activity is available; treat "cited a policy document as proof it was done" as an ungrounded citation.
-- CITE EVERY ON-POINT RECORD, IN EVERY WINDOW: Cite ALL of the concrete implementation records that directly evidence the line — not just the first one you find, and do not stop citing once the line already looks Met. This document is one window of the evidence; the strongest, most specific record for a line may appear here even if weaker support appeared elsewhere, so always cite the on-point record present in THIS window rather than assuming it is already captured.
-- NAMED EXAMPLES ARE MANDATORY on every negative: each "Partial"/"Not met" line verdict and each "not evidenced"/"contradicted" promise MUST cite at least one concrete example — the specific document name, version, date or record entry that demonstrates the gap, quoted with its chunk ID; or, where nothing exists, name what was searched and absent. Where dates or versions can be compared (a record dated after the period it governs; documents that never move past V0), PERFORM the comparison and state it explicitly. A negative verdict without a concrete example is unsupported and unacceptable.
-- SSG REGISTER on negatives: "It was not evident that the PEI had [implemented/established]…, in accordance with its documented PPD. Example: …". Positive verdicts stay factual and specific (which record, where) — no praise adjectives.
-
-For each line return:
-- evidenceSummary: 1-2 sentences on what implementation evidence was found (or that none was found), factual and neutral.
-- verdict: "Met" | "Partial" | "Not met"
-- comment: justification referencing the PPD state, the promise checks and the named example(s), in the register above.
-- promiseChecks: [{promiseText: string, verdict: "evidenced"|"not evidenced"|"contradicted", evidence: string, chunkIds: string[], quote: string, rationale: string, chunkId: string}] — one entry PER promise given for the line, promiseText copied exactly. evidence = the citation/description or "No record found in the evidence documents." quote = the ONE exact sentence copied VERBATIM from the cited evidence chunk that proves (or, for "contradicted", disproves) THIS specific promise — character-for-character, independent of any other promise's quote. Empty string "" for "not evidenced" (nothing to quote) or when no single sentence captures it — never invent one, never reuse another promise's quote. rationale = ONE short auditor-register sentence on WHY this promise is evidenced / not evidenced / contradicted (distinct from the quote), or "" if you cannot state a reason beyond the quote — do not pad. chunkId = the single primary chunk ID the quote came from, or "". Empty array only when the line has no promises.
-- chunkIds: exact chunk ID(s) (e.g. "C001") from evidence document headers supporting the line verdict. Empty if none.
-- evidenceQuote: for Met/Partial ONLY, the ONE exact sentence (or short clause) copied VERBATIM from the cited evidence chunk that most directly proves implementation for this line — character-for-character, so it can be located in the source. If no single sentence captures it, or the verdict is Not met, return an empty string "" — never paraphrase, summarise, or invent a quote.
-- suggestedAction: for Partial or Not met ONLY — one or two sentences on the SPECIFIC evidence or action that would move this line to Met, grounded in the SAME gap you already identified in comment/promiseChecks (name the specific record, how many items, which document/register — e.g. "Add owner and timeline fields to the remaining 17 unassigned actions in the Management Review Meeting minutes"), never generic advice like "add more evidence" or "improve documentation". If you cannot state something concrete beyond generic advice, return empty string "" — do not pad. Empty string for Met.
+An empty candidates array is the correct answer when nothing in this window bears on the line.
 
 Respond with JSON only:
-{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[], "quote": string, "rationale": string, "chunkId": string}], "chunkIds": string[], "evidenceQuote": string, "suggestedAction": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
+{"results": [{"ref": string, "candidates": [{"aspect": string, "quote": string, "kind": "record"|"policy", "chunkId": string}]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill)}${domainBlock}`;
+
+  // ── Pass 2 (JUDGE) system prompt: verdicts from VERIFIED extracts only. ──
+  // The decision procedure is stated ONCE, and repeated at the very end of
+  // the prompt (after the knowledge-base/domain injections) — recency
+  // measurably improves instruction-following on long prompts.
+  const judgeSystem = (label: string) => `You are an SSG EduTrust assessor deciding whether a PEI IMPLEMENTS its documented policies. You are NOT given the evidence documents. For each requirement line you are given: (1) the PPD verdict already decided (whether the requirement is documented), (2) the specific PROMISES the PPD makes for that line, and (3) the complete set of VERIFIED passages an extraction pass found in the evidence documents — every quote is a confirmed verbatim excerpt, labelled "record" (an actual implementation record) or "policy" (process description only). Decide strictly from these passages: if a record is not among them, it was not found — never assume unshown records exist.
+
+PROMISE VERIFICATION (the core task). Each promise listed under a requirement is a NAMED CHECK. For each one verdict:
+- "evidenced" — a given RECORD passage shows the promise being carried out; cite its chunk.
+- "not evidenced" — no given passage shows it. Phrase the finding: "It was not evident that the PEI had [promise], in accordance with its documented PPD."
+- "contradicted" — a given passage shows the OPPOSITE of the promise (e.g. the PPD promises contracts signed before fee collection and a contract is dated after the receipt). Quote the contradicting passage.
+Only "record" passages count as implementation evidence; a "policy" passage proves the approach exists on paper, never that it ran — and reclassify a mislabelled passage from its content when needed.
+
+COMBINED LINE VERDICT — apply this decision procedure IN ORDER and stop at the first rule that matches. It is deterministic: the same PPD verdict and the same promise-check counts must ALWAYS yield the same line verdict (count the checks — never "feels thin/strong").
+1. If ANY promise is "contradicted" → "Not met". (A contradiction is a hard fail regardless of everything else.)
+2. Else if the PPD verdict is "Not documented" → "Not met".
+3. Else if the PPD verdict is "Partial" → "Partial". (A weak documented approach caps the whole line, no matter how complete the evidence — never "Met".)
+4. Else (PPD verdict is "Adequate"), decide by the promise checks:
+   a. With extractable promises: let E = number "evidenced", T = total. "Met" if E === T; "Partial" if 0 < E < T; "Not met" if E === 0.
+   b. With NO promises for this line: "Met" if at least one given RECORD passage directly evidences the requirement; "Partial" if only "policy" passages (or nothing concrete) were given.
+When unsure between two adjacent verdicts, choose the LOWER one. "Met" requires every applicable promise evidenced with a cited record — it is never awarded on partial or ambiguous evidence.
+
+${EVIDENCE_BOUNDARY_RULES}
+
+PRE-CHECK FLAGS: some lines carry a "Pre-check flags" note — a concern the app's own pattern-scan (or the reviewer) noted before your assessment. Treat it as a prompt to look closer at that specific concern in the given passages, nothing more — it is NOT a verdict, and it must never override what the passages actually show. Confirm, refute or find it moot; do not defer to it.
+
+NAMED EXAMPLES ARE MANDATORY on every negative: each "Partial"/"Not met" line verdict and each "not evidenced"/"contradicted" promise MUST cite at least one concrete example — a given passage (quoted, with its chunk ID) demonstrating the gap, or a plain statement that no given passage shows the record. Where dates or versions in the given passages can be compared (a record dated after the period it governs), PERFORM the comparison and state it explicitly. SSG REGISTER on negatives: "It was not evident that the PEI had [implemented/established]…, in accordance with its documented PPD. Example: …". Positive verdicts stay factual and specific (which record, where) — no praise adjectives.
+
+For each line return:
+- evidenceSummary: 1-2 sentences on what implementation evidence the passages show (or that none was found), factual and neutral.
+- verdict: "Met" | "Partial" | "Not met" — per the decision procedure.
+- comment: justification referencing the PPD state, the promise checks and the named example(s), in the register above.
+- promiseChecks: one entry PER promise given for the line, promiseText copied exactly. evidence = the citation/description or "No record found in the evidence documents." quote = the ONE given passage that proves (or, for "contradicted", disproves) THIS specific promise, copied exactly as given — "" for "not evidenced" (nothing to quote), never invented, never another promise's quote. rationale = ONE short auditor-register sentence on WHY (distinct from the quote), or "" — do not pad. chunkId = that passage's chunk ID, or "". Empty array only when the line has no promises.
+- chunkIds: the chunk IDs of the passages the line verdict relies on. Empty if none.
+- evidenceQuote: for Met/Partial ONLY — the single given passage that most directly proves implementation for this line, copied exactly, or "".
+- suggestedAction: for Partial or Not met ONLY — one or two sentences on the SPECIFIC evidence or action that would move this line to Met, grounded in the SAME gap you identified in comment/promiseChecks (name the specific record, how many items, which document/register — e.g. "Add owner and timeline fields to the remaining 17 unassigned actions in the Management Review Meeting minutes"), never generic advice like "add more evidence". If you cannot state something concrete, return "" — do not pad. "" for Met.
+
+Respond with JSON only:
+{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[], "quote": string, "rationale": string, "chunkId": string}], "chunkIds": string[], "evidenceQuote": string, "suggestedAction": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
+
+## Final decision procedure (repeated last so it is freshest — apply IN ORDER, stop at the first match)
+1. Any promise contradicted → "Not met".
+2. PPD "Not documented" → "Not met".
+3. PPD "Partial" → "Partial".
+4. PPD "Adequate": with promises → "Met" (all evidenced) / "Partial" (some) / "Not met" (none); with no promises → "Met" (a record passage evidences it) / "Partial" (only policy passages).
+- Judge ONLY from the given verified passages. Ties resolve DOWN. The DETERMINISTIC EVIDENCE RULES override general judgement.`;
 
   const windows = noEvidence ? [] : buildDocWindows(evidenceDocText);
 
-  // groundScore = how well the HELD summary/comment is grounded in cited
-  // evidence: verified promises that carry a citation dominate, then the number
-  // of chunks cited. Used ONLY to break verdict TIES between windows — see the
-  // merge below (F1). It is not a verdict input.
-  type BestEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[]; groundScore: number; evidenceQuote?: string; suggestedAction?: string };
-  const groundScoreOf = (cids: string[], checks: PromiseCheck[]): number => {
-    const citedPromises = checks.filter((p) => p.verdict === "evidenced" && p.chunkIds.length > 0).length;
-    return citedPromises * 1000 + cids.length;
-  };
-  const bestByRef = new Map<string, BestEv>();
-  // Per-promise best verdict across sliding windows: evidence found in ANY
-  // window proves the promise over a bare "no record" — but a CONTRADICTION is
-  // STICKY and outranks everything. A record showing the opposite of the PPD
-  // promise (found in one window) must not be erased by a supporting record in
-  // another window: "evidenced somewhere AND contradicted somewhere" is itself
-  // the finding, and erasing it would also bypass the promise hard-gate cap.
-  const PROMISE_VERDICT_ORDER: Record<PromiseCheck["verdict"], number> = { "not evidenced": 0, "evidenced": 1, "contradicted": 2 };
-  const mergePromiseChecks = (prev: PromiseCheck[] | undefined, next: PromiseCheck[]): PromiseCheck[] => {
-    const out = [...(prev ?? [])];
-    for (const n of next) {
-      const i = out.findIndex((p) => p.promiseText === n.promiseText);
-      if (i === -1) out.push(n);
-      // A strictly better verdict adopts this window's evidence/quote, but
-      // falls back to the prior window's quote if this one didn't find one —
-      // never regress a located quote just because a later window's verdict won.
-      else if (PROMISE_VERDICT_ORDER[n.verdict] > PROMISE_VERDICT_ORDER[out[i].verdict]) out[i] = { ...n, chunkIds: [...new Set([...out[i].chunkIds, ...n.chunkIds])], quote: n.quote ?? out[i].quote };
-      else out[i] = { ...out[i], chunkIds: [...new Set([...out[i].chunkIds, ...n.chunkIds])], quote: out[i].quote ?? n.quote };
-    }
-    return out;
-  };
-  // Refs whose AI call failed/timed out at least once and never succeeded —
-  // surfaced per line as "Assessment failed — retry" so one stuck call cannot
-  // hang the whole tab or silently vanish.
+  // ── Pass 1 state: verified candidates pooled across windows. ──
+  type EvCandidate = { aspect: string; quote: string; kind: "record" | "policy"; chunkId?: string };
+  const candByRef = new Map<string, EvCandidate[]>();
+  const candKeys = new Set<string>(); // "ref::normalised-quote" — cross-window dedupe
+  const extractedOk = new Set<string>();
+  // Refs whose AI calls failed and never succeeded — surfaced per line as
+  // "Assessment failed — retry" so one stuck call cannot silently vanish.
   const failedRefs = new Set<string>();
+
+  const addCandidate = (ref: string, cand: EvCandidate) => {
+    const key = `${ref}::${normaliseForQuoteMatch(cand.quote)}`;
+    if (candKeys.has(key)) return;
+    candKeys.add(key);
+    const list = candByRef.get(ref) ?? [];
+    list.push(cand);
+    candByRef.set(ref, list);
+  };
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
@@ -2567,9 +2672,25 @@ Respond with JSON only:
   const batches: EvidenceAssessmentInput[][] = [];
   for (let i = 0; i < inputs.length; i += REQ_BATCH_SIZE) batches.push(inputs.slice(i, i + REQ_BATCH_SIZE));
 
-  const totalUnits = Math.max(1, (windows.length || 1) * batches.length);
+  // Progress accounting (cosmetic): extraction units + judge units.
+  const totalUnits = Math.max(1, (windows.length || 1) * batches.length + batches.length);
   let unitsDone = 0;
 
+  // Per-line context block shared by BOTH passes: the extractor uses promises
+  // and pre-check flags to target its search; the judge uses them to decide.
+  const lineBlock = (r: EvidenceAssessmentInput, i: number): string => {
+    const promisesBlock = (r.promises ?? []).length > 0
+      ? `\n  PPD promises to verify:${(r.promises ?? []).map((p, pi) => `\n    (${pi + 1}) ${p.promiseText}`).join("")}`
+      : "";
+    // Advisory only — a flag is a prompt to look closer, not a verdict to
+    // adopt; form your own independent judgement from the evidence.
+    const preCheckBlock = (r.preCheckFlags ?? []).length > 0
+      ? `\n  Pre-check flags (for your consideration, not a directive — form your own independent judgement from the evidence):${(r.preCheckFlags ?? []).map((f, fi) => `\n    (${fi + 1}) ${f}`).join("")}`
+      : "";
+    return `[${r.ref}] (${i + 1}) ${r.requirementText} [PPD verdict: ${r.ppdVerdict}${r.ppdExtract ? ` — "${r.ppdExtract.slice(0, 100)}"` : ""}]${promisesBlock}${preCheckBlock}`;
+  };
+
+  // ── Pass 1 — EXTRACT: window × batch; verify and pool candidates. ──
   for (const win of windows) {
     if (stopRequested()) { stoppedEarly = true; break; }
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()}]` : "";
@@ -2579,118 +2700,59 @@ Respond with JSON only:
       const lastLine = Math.min(inputs.length, firstLine + batch.length - 1);
       const lineLabel = inputs.length === 1 ? "line 1 of 1" : `lines ${firstLine}–${lastLine} of ${inputs.length}`;
       const winLabel = windows.length > 1 ? ` · window ${win.index + 1}/${win.total}` : "";
-      opts.onProgress?.(`Assessing ${lineLabel}${winLabel}…`, Math.round((unitsDone / totalUnits) * 100));
+      opts.onProgress?.(`Extracting evidence for ${lineLabel}${winLabel}…`, Math.round((unitsDone / totalUnits) * 100));
       opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((b) => b.ref), firstLine, lastLine, chunkIds: chunkIdsInWindow(win.text) });
-      const pointsBlock = batch.map((r, i) => {
-        const promisesBlock = (r.promises ?? []).length > 0
-          ? `\n  PPD promises to verify:${(r.promises ?? []).map((p, pi) => `\n    (${pi + 1}) ${p.promiseText}`).join("")}`
-          : "";
-        // Advisory only — a flag is a prompt to look closer, not a verdict to
-        // adopt; form your own independent judgement from the evidence.
-        const preCheckBlock = (r.preCheckFlags ?? []).length > 0
-          ? `\n  Pre-check flags (for your consideration, not a directive — form your own independent judgement from the evidence):${(r.preCheckFlags ?? []).map((f, fi) => `\n    (${fi + 1}) ${f}`).join("")}`
-          : "";
-        return `[${r.ref}] (${i + 1}) ${r.requirementText} [PPD verdict: ${r.ppdVerdict}${r.ppdExtract ? ` — "${r.ppdExtract.slice(0, 100)}"` : ""}]${promisesBlock}${preCheckBlock}`;
-      }).join("\n");
-      const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each requirement line: verify each listed PPD promise against the records, then give the COMBINED PPD-plus-evidence verdict:\n${pointsBlock}`;
-      const system = buildSystem(windows.length > 1 ? `runEvidenceAssessment (window ${win.index + 1}/${win.total})` : "runEvidenceAssessment");
-      if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
+      const pointsBlock = batch.map((r, i) => lineBlock(r, i)).join("\n");
+      const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nExtract every passage that bears on each requirement line or its PPD promises:\n${pointsBlock}`;
+      const system = extractSystem(windows.length > 1 ? `runEvidenceAssessment (extract, window ${win.index + 1}/${win.total})` : "runEvidenceAssessment (extract)");
+      if (!firstPromptSent) firstPromptSent = `SYSTEM (extract):\n${system}\n\nUSER:\n${user}`;
       try {
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { schema: EVIDENCE_ASSESSMENT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: EVIDENCE_EXTRACT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-        const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
-        const batchVerdicts: { ref: string; verdict: EvidenceVerdict }[] = [];
-        for (const inp of batch) {
-          const res = byRef.get(normalizeAuditRef(inp.ref));
-          const verdict = (["Met", "Partial", "Not met"] as EvidenceVerdict[]).includes(res?.verdict as EvidenceVerdict)
-            ? (res!.verdict as EvidenceVerdict) : "Not met";
-          const evidenceSummary = typeof res?.evidenceSummary === "string" ? res.evidenceSummary : "";
-          const comment = typeof res?.comment === "string" ? res.comment : "";
-          const chunkIds = Array.isArray(res?.chunkIds) ? (res!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
-          // Exact evidence quote — stored ONLY when it verifies as a real verbatim
-          // excerpt of this window's evidence text; a paraphrase/invention is
-          // dropped to undefined ("no exact quote identified"), never a false match.
-          const rawEvidenceQuote = typeof res?.evidenceQuote === "string" ? res.evidenceQuote.trim() : "";
-          const evidenceQuote = rawEvidenceQuote && quoteExistsInSource(rawEvidenceQuote, win.text) ? rawEvidenceQuote : undefined;
-          // Task 3 — "what would make this Met": reasoning text, not a
-          // quotation, so stored as-is (no source verification) like comment/
-          // rationale — but only ever meaningful for Partial/Not met, so a
-          // Met verdict naturally carries "" per the prompt's own honesty rule.
-          const suggestedAction = typeof res?.suggestedAction === "string" ? res.suggestedAction.trim() : "";
-          const promiseChecks: PromiseCheck[] = Array.isArray(res?.promiseChecks)
-            ? (res!.promiseChecks as Array<Record<string, unknown>>)
-                .filter((p) => typeof p?.promiseText === "string" && ["evidenced", "not evidenced", "contradicted"].includes(p?.verdict as string))
-                .map((p) => {
-                  // Per-promise quote: verified against THIS window's evidence
-                  // text — same anti-hallucination rule as evidenceQuote, but
-                  // scoped to the individual promise, not the whole line.
-                  const rawQuote = typeof p.quote === "string" ? p.quote.trim() : "";
-                  const quote = rawQuote && quoteExistsInSource(rawQuote, win.text) ? rawQuote : undefined;
-                  // Rationale is reasoning (like the line comment), not a
-                  // quotation — stored as-is when non-empty, never padded.
-                  const rationale = typeof p.rationale === "string" && p.rationale.trim() ? p.rationale.trim() : undefined;
-                  const chunkId = typeof p.chunkId === "string" && p.chunkId.trim() ? p.chunkId.trim() : undefined;
-                  return {
-                    promiseText: p.promiseText as string,
-                    verdict: p.verdict as PromiseCheck["verdict"],
-                    // Quote verification on the cited evidence — same rule as comments.
-                    evidence: typeof p.evidence === "string" ? flagUnverifiedQuotes(p.evidence, win.text) : "",
-                    chunkIds: Array.isArray(p.chunkIds) ? (p.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [],
-                    quote,
-                    rationale,
-                    chunkId,
-                  };
-                })
-            : [];
-          const prev = bestByRef.get(inp.ref);
-          const thisGround = groundScoreOf(chunkIds, promiseChecks);
-          if (!prev || EVIDENCE_VERDICT_ORDER[verdict] > EVIDENCE_VERDICT_ORDER[prev.verdict]) {
-            // Strictly higher verdict wins outright — adopt its summary/comment,
-            // but only when this window actually returned a comment. The same
-            // "Rationale empty on every Adequate/Met line" bug fixed in
-            // runPPDRequirementsReview above applies here: a later window
-            // upgrading the verdict with a blank comment must not discard a
-            // real one an earlier window already returned for this ref — the
-            // lineage matrix's evidence Rationale column reads `comment`.
-            bestByRef.set(inp.ref, { evidenceSummary, verdict, comment: comment || prev?.comment || "", groundScore: thisGround, chunkIds: [...new Set([...(prev?.chunkIds ?? []), ...chunkIds])], promiseChecks: mergePromiseChecks(prev?.promiseChecks, promiseChecks), evidenceQuote: evidenceQuote ?? prev?.evidenceQuote, suggestedAction });
-          } else if (EVIDENCE_VERDICT_ORDER[verdict] === EVIDENCE_VERDICT_ORDER[prev.verdict]) {
-            // F1 — verdict TIE. Reading order must NOT decide which justification
-            // survives: keep the summary/comment from the better-grounded window
-            // (more citation-backed verified promises, then more cited chunks),
-            // not simply the first. The verdict is unchanged (same rank) and the
-            // citation list still accumulates across BOTH windows, so neither the
-            // verdict nor the cited-evidence list regresses — only the displayed
-            // reasoning improves.
-            const better = thisGround > prev.groundScore;
-            bestByRef.set(inp.ref, {
-              ...prev,
-              ...(better ? { evidenceSummary, comment, groundScore: thisGround, evidenceQuote: evidenceQuote ?? prev.evidenceQuote, suggestedAction: suggestedAction || prev.suggestedAction } : { evidenceQuote: prev.evidenceQuote ?? evidenceQuote }),
-              chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])],
-              promiseChecks: mergePromiseChecks(prev.promiseChecks, promiseChecks),
-            });
-          } else {
-            // Strictly lower verdict — keep prev's verdict/summary/comment; only
-            // accumulate this window's citations and promise checks.
-            bestByRef.set(inp.ref, { ...prev, chunkIds: [...new Set([...prev.chunkIds, ...chunkIds])], promiseChecks: mergePromiseChecks(prev.promiseChecks, promiseChecks), evidenceQuote: prev.evidenceQuote ?? evidenceQuote });
-          }
-          failedRefs.delete(inp.ref); // a later window recovered this line
-          batchVerdicts.push({ ref: inp.ref, verdict });
+        // Empty/unparseable reply = a failure per "never fabricate from
+        // failures" — never treated as "no evidence exists".
+        if (results.length === 0) {
+          const label = windows.length > 1 ? `window ${win.index + 1}/${win.total}` : "extraction call";
+          for (const r of batch) if (!extractedOk.has(r.ref)) failedRefs.add(r.ref);
+          opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it." });
+          console.error("[EvidenceAssessment]", label, "no parseable results");
+          unitsDone++;
+          continue;
         }
-        opts.onEvent?.({ type: "batch-done", verdicts: batchVerdicts, usage });
+        const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
+        for (const [idx, r] of batch.entries()) {
+          const res = byRef.get(normalizeAuditRef(r.ref)) ?? (results.length === batch.length ? results[idx] : undefined);
+          if (!res) continue;
+          extractedOk.add(r.ref);
+          failedRefs.delete(r.ref);
+          // A candidate survives ONLY when its quote verifies as a real
+          // verbatim excerpt of the evidence text (deterministic gate).
+          const rawCands = Array.isArray(res.candidates) ? res.candidates as Array<Record<string, unknown>> : [];
+          for (const c of rawCands) {
+            const quote = typeof c.quote === "string" ? c.quote.trim() : "";
+            if (!quote || !quoteExistsInSource(quote, evidenceDocText)) continue;
+            addCandidate(r.ref, {
+              aspect: typeof c.aspect === "string" ? c.aspect.trim() : "",
+              quote,
+              // Default "policy" on a missing/invalid label — the safer class:
+              // it can only understate evidence (rule 4b), never inflate "Met".
+              kind: c.kind === "record" ? "record" : "policy",
+              chunkId: typeof c.chunkId === "string" && c.chunkId.trim() ? c.chunkId.trim() : undefined,
+            });
+          }
+        }
       } catch (err) {
         // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
         if (stopRequested()) { stoppedEarly = true; break; }
-        // Mark the batch's lines as failed and CONTINUE — one stuck/timed-out
-        // call must not abort the rest of the assessment.
         const msg = err instanceof Error ? err.message : String(err);
-        for (const inp of batch) if (!bestByRef.has(inp.ref)) failedRefs.add(inp.ref);
+        for (const r of batch) if (!extractedOk.has(r.ref)) failedRefs.add(r.ref);
         opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: msg });
-        console.error("[EvidenceAssessment]", windows.length > 1 ? `window ${win.index + 1}/${win.total}` : "call failed", msg);
+        console.error("[EvidenceAssessment]", windows.length > 1 ? `extract window ${win.index + 1}/${win.total}` : "extract call failed", msg);
       }
       unitsDone++;
     }
@@ -2698,8 +2760,97 @@ Respond with JSON only:
     windowsCompleted++;
   }
 
+  // ── Pass 2 — JUDGE: verdicts from the verified pool, ONCE per line. ──
+  type JudgedEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[]; evidenceQuote?: string; suggestedAction?: string };
+  const judgedByRef = new Map<string, JudgedEv>();
+
+  // Only lines with at least one verified passage go to the judge; a line
+  // with NO passages is decided deterministically below by the same decision
+  // procedure — asking a model to judge empty input invites invention.
+  const judgeInputs = inputs.filter((r) => (candByRef.get(r.ref)?.length ?? 0) > 0);
+  const judgeBatches: EvidenceAssessmentInput[][] = [];
+  for (let i = 0; i < judgeInputs.length; i += REQ_BATCH_SIZE) judgeBatches.push(judgeInputs.slice(i, i + REQ_BATCH_SIZE));
+
+  for (const [bi, batch] of judgeBatches.entries()) {
+    if (stopRequested()) { stoppedEarly = true; break; }
+    opts.onProgress?.(`Judging verified evidence — batch ${bi + 1}/${judgeBatches.length}…`, Math.round((unitsDone / totalUnits) * 100));
+    const pointsBlock = batch.map((r, i) => {
+      const cands = candByRef.get(r.ref) ?? [];
+      const candLines = cands.map((c, ci) => `   (${ci + 1}) [${c.chunkId ?? "no chunk"} · ${c.kind}]${c.aspect ? ` (${c.aspect})` : ""} "${c.quote}"`).join("\n");
+      return `${lineBlock(r, i)}\n  Verified evidence passages:\n${candLines}`;
+    }).join("\n\n");
+    const user = `Requirement lines with the verified evidence passages found for each:\n\n${pointsBlock}\n\nVerify each listed PPD promise against the given passages, then give the COMBINED PPD-plus-evidence verdict per the decision procedure.`;
+    const system = judgeSystem(judgeBatches.length > 1 ? `runEvidenceAssessment (judge, batch ${bi + 1}/${judgeBatches.length})` : "runEvidenceAssessment (judge)");
+    if (firstPromptSent && !firstPromptSent.includes("SYSTEM (judge):")) firstPromptSent += `\n\n════════ SECOND PASS (judge) ════════\n\nSYSTEM (judge):\n${system}\n\nUSER:\n${user}`;
+    try {
+      const content = await chatComplete(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        settings,
+        { schema: EVIDENCE_ASSESSMENT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+      );
+      const parsed = parseJSONObject(content);
+      const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+      const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
+      const batchVerdicts: { ref: string; verdict: EvidenceVerdict }[] = [];
+      for (const [idx, inp] of batch.entries()) {
+        const res = byRef.get(normalizeAuditRef(inp.ref)) ?? (results.length === batch.length ? results[idx] : undefined);
+        if (!res) {
+          // Nothing came back for this ref — honest failure, never a
+          // fabricated "Not met".
+          failedRefs.add(inp.ref);
+          continue;
+        }
+        const verdict = (["Met", "Partial", "Not met"] as EvidenceVerdict[]).includes(res.verdict as EvidenceVerdict)
+          ? (res.verdict as EvidenceVerdict) : "Not met";
+        const evidenceSummary = typeof res.evidenceSummary === "string" ? res.evidenceSummary : "";
+        const comment = typeof res.comment === "string" ? res.comment : "";
+        const chunkIds = Array.isArray(res.chunkIds) ? (res.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+        // Exact evidence quote — stored ONLY when it verifies as a real
+        // verbatim excerpt; a paraphrase/invention is dropped to undefined.
+        const rawEvidenceQuote = typeof res.evidenceQuote === "string" ? res.evidenceQuote.trim() : "";
+        const evidenceQuote = rawEvidenceQuote && quoteExistsInSource(rawEvidenceQuote, evidenceDocText) ? rawEvidenceQuote : undefined;
+        // "What would make this Met": reasoning text, stored as-is (no source
+        // verification) — only meaningful for Partial/Not met per the prompt.
+        const suggestedAction = typeof res.suggestedAction === "string" ? res.suggestedAction.trim() : "";
+        const promiseChecks: PromiseCheck[] = Array.isArray(res.promiseChecks)
+          ? (res.promiseChecks as Array<Record<string, unknown>>)
+              .filter((p) => typeof p?.promiseText === "string" && ["evidenced", "not evidenced", "contradicted"].includes(p?.verdict as string))
+              .map((p) => {
+                // Per-promise quote: verified against the evidence text — same
+                // anti-hallucination rule as evidenceQuote, per promise.
+                const rawQuote = typeof p.quote === "string" ? p.quote.trim() : "";
+                const quote = rawQuote && quoteExistsInSource(rawQuote, evidenceDocText) ? rawQuote : undefined;
+                const rationale = typeof p.rationale === "string" && p.rationale.trim() ? p.rationale.trim() : undefined;
+                const chunkId = typeof p.chunkId === "string" && p.chunkId.trim() ? p.chunkId.trim() : undefined;
+                return {
+                  promiseText: p.promiseText as string,
+                  verdict: p.verdict as PromiseCheck["verdict"],
+                  // Quote verification on the cited evidence — same rule as comments.
+                  evidence: typeof p.evidence === "string" ? flagUnverifiedQuotes(p.evidence, evidenceDocText) : "",
+                  chunkIds: Array.isArray(p.chunkIds) ? (p.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [],
+                  quote,
+                  rationale,
+                  chunkId,
+                };
+              })
+          : [];
+        judgedByRef.set(inp.ref, { evidenceSummary, verdict, comment, chunkIds, promiseChecks: promiseChecks.length > 0 ? promiseChecks : undefined, evidenceQuote, suggestedAction });
+        failedRefs.delete(inp.ref);
+        batchVerdicts.push({ ref: inp.ref, verdict });
+      }
+      opts.onEvent?.({ type: "batch-done", verdicts: batchVerdicts, usage });
+    } catch (err) {
+      if (stopRequested()) { stoppedEarly = true; break; }
+      const msg = err instanceof Error ? err.message : String(err);
+      for (const inp of batch) if (!judgedByRef.has(inp.ref)) failedRefs.add(inp.ref);
+      opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: msg });
+      console.error("[EvidenceAssessment]", "judge batch failed", msg);
+    }
+    unitsDone++;
+  }
+
   const rows: EvidenceAssessmentLineResult[] = inputs.map((inp) => {
-    const best = bestByRef.get(inp.ref);
+    const best = judgedByRef.get(inp.ref);
     if (best) {
       const verifiedComment = flagUnverifiedQuotes(best.comment || "", evidenceDocText);
       // Code-level APSR Approach hard-gate: a line whose PPD verdict is not
@@ -2762,16 +2913,33 @@ Respond with JSON only:
         chunkIds: [],
       };
     }
-    // No evidence documents at all, or the AI returned nothing: fall back to a
-    // deterministic verdict driven by the PPD state alone.
+    // No evidence documents at all: deterministic verdict from the PPD state.
+    if (noEvidence) {
+      return {
+        ref: inp.ref,
+        evidenceSummary: "No Actual Evidence documents were found for this sub-criterion.",
+        verdict: "Not met",
+        comment: `PPD verdict was "${inp.ppdVerdict}", but no implementation evidence was available to assess.`,
+        chunkIds: [],
+      };
+    }
+    // Extraction covered this line cleanly and found NOTHING relevant —
+    // decided deterministically by the SAME decision procedure the judge
+    // applies, with zero evidence (replaces the old AI coin-flip on empty
+    // support, one of the measured flip-flop sources).
+    const promises = inp.promises ?? [];
+    const promiseChecks: PromiseCheck[] = promises.map((p) => ({ promiseText: p.promiseText, verdict: "not evidenced" as const, evidence: "No record found in the evidence documents.", chunkIds: [] }));
+    let verdict: EvidenceVerdict;
+    if (inp.ppdVerdict === "Not documented") verdict = "Not met";
+    else if (inp.ppdVerdict === "Adequate") verdict = promises.length > 0 ? "Not met" : "Partial";
+    else verdict = "Partial"; // PPD "Partial" (or an unassessed PPD) caps the line
     return {
       ref: inp.ref,
-      evidenceSummary: noEvidence ? "No Actual Evidence documents were found for this sub-criterion." : "No implementation evidence found for this requirement.",
-      verdict: "Not met",
-      comment: noEvidence
-        ? `PPD verdict was "${inp.ppdVerdict}", but no implementation evidence was available to assess.`
-        : `No implementation evidence found; PPD verdict was "${inp.ppdVerdict}".`,
+      evidenceSummary: "No implementation evidence found for this requirement.",
+      verdict,
+      comment: `It was not evident that the PEI had implemented this requirement, in accordance with its documented PPD. The extraction pass read every provided evidence document and found no record addressing this line${promises.length > 0 ? ` or its ${promises.length} PPD promise${promises.length === 1 ? "" : "s"}` : ""}. PPD verdict was "${inp.ppdVerdict}".`,
       chunkIds: [],
+      promiseChecks: promiseChecks.length > 0 ? promiseChecks : undefined,
     };
   });
 

@@ -5,7 +5,8 @@ import type { AISettings } from "../../../types";
 // check (Evidence side) gets its OWN verified quote — not one quote standing
 // in for the whole line. A quote that isn't a real verbatim substring of the
 // source must be dropped for THAT sub-part specifically, without touching
-// any other sub-part's quote.
+// any other sub-part's quote. Under the two-pass flow the verdicts come from
+// the JUDGE call, whose output goes through the same verification parse.
 vi.mock("../aiClient", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../aiClient")>();
   return { ...actual, chatComplete: vi.fn() };
@@ -19,6 +20,20 @@ const SETTINGS: AISettings = { provider: "openai", apiKey: "k", model: "m", util
 
 beforeEach(() => { mockChat.mockReset(); });
 
+// Two-pass mock dispatch: extraction returns one verified candidate so the
+// judge pass runs; the judge returns the per-test verdict payload.
+function mockPpdTwoPass(ref: string, candidateQuote: string, judgeResult: unknown) {
+  mockChat.mockImplementation(async (messages) => {
+    const system = String(messages[0]?.content ?? "");
+    if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
+    if (system.includes("roll-up")) return JSON.stringify({ narrative: "x" });
+    if (system.includes("EXTRACTION pass")) {
+      return JSON.stringify({ results: [{ ref, candidates: [{ aspect: "relevant passage", quote: candidateQuote, clause: "", chunkId: "C001" }], promises: [] }] });
+    }
+    return JSON.stringify({ results: [judgeResult] });
+  });
+}
+
 describe("PPD review — per-sub-clause quotes", () => {
   const PPD_SOURCE = `[CHUNK:C001] --- ppd.docx ---
 The Code of Conduct for all agents is published on the intranet and reviewed annually by HR. Commission structures are set by Management.`;
@@ -28,25 +43,17 @@ The Code of Conduct for all agents is published on the intranet and reviewed ann
   }
 
   it("each sub-clause carries its OWN verified quote; a fabricated one is dropped without affecting the other", async () => {
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "x" });
-      return JSON.stringify({
-        results: [{
-          ref: "3.1.1.DS1",
-          subClauses: [
-            { text: "(a) code of conduct", verdict: "documented", quote: "The Code of Conduct for all agents is published on the intranet and reviewed annually by HR." },
-            { text: "(b) non-collection of monies from students", verdict: "not documented", quote: "" },
-          ],
-          verdict: "Partial",
-          shortComment: "Sub-clause (b) is not addressed.",
-          fullComment: "It was not evident that the PEI had documented sub-clause (b).",
-          promises: [],
-          chunkIds: ["C001"],
-          supportQuote: "",
-        }],
-      });
+    mockPpdTwoPass("3.1.1.DS1", "The Code of Conduct for all agents is published on the intranet and reviewed annually by HR.", {
+      ref: "3.1.1.DS1",
+      subClauses: [
+        { text: "(a) code of conduct", verdict: "documented", quote: "The Code of Conduct for all agents is published on the intranet and reviewed annually by HR." },
+        { text: "(b) non-collection of monies from students", verdict: "not documented", quote: "" },
+      ],
+      verdict: "Partial",
+      shortComment: "Sub-clause (b) is not addressed.",
+      fullComment: "It was not evident that the PEI had documented sub-clause (b).",
+      chunkIds: ["C001"],
+      supportQuote: "",
     });
 
     const result = await runPPDRequirementsReview(inputs(), PPD_SOURCE, SETTINGS, {});
@@ -59,26 +66,18 @@ The Code of Conduct for all agents is published on the intranet and reviewed ann
   });
 
   it("a sub-clause quote that is NOT a real substring of the source is dropped to undefined (never fabricated)", async () => {
-    mockChat.mockImplementation(async (messages) => {
-      const system = String(messages[0]?.content ?? "");
-      if (system.includes("INTERNAL CONTRADICTIONS")) return JSON.stringify({ contradictions: [] });
-      if (system.includes("roll-up")) return JSON.stringify({ narrative: "x" });
-      return JSON.stringify({
-        results: [{
-          ref: "3.1.1.DS1",
-          subClauses: [
-            { text: "(a) code of conduct", verdict: "documented", quote: "The Code of Conduct for all agents is published on the intranet and reviewed annually by HR." },
-            // Invented — not present anywhere in PPD_SOURCE, despite a "documented" verdict.
-            { text: "(b) non-collection of monies from students", verdict: "documented", quote: "Agents are strictly prohibited from collecting any monies whatsoever from students under any circumstance." },
-          ],
-          verdict: "Adequate",
-          shortComment: "Both sub-clauses documented.",
-          fullComment: "Both are documented.",
-          promises: [],
-          chunkIds: ["C001"],
-          supportQuote: "",
-        }],
-      });
+    mockPpdTwoPass("3.1.1.DS1", "The Code of Conduct for all agents is published on the intranet and reviewed annually by HR.", {
+      ref: "3.1.1.DS1",
+      subClauses: [
+        { text: "(a) code of conduct", verdict: "documented", quote: "The Code of Conduct for all agents is published on the intranet and reviewed annually by HR." },
+        // Invented — not present anywhere in PPD_SOURCE, despite a "documented" verdict.
+        { text: "(b) non-collection of monies from students", verdict: "documented", quote: "Agents are strictly prohibited from collecting any monies whatsoever from students under any circumstance." },
+      ],
+      verdict: "Adequate",
+      shortComment: "Both sub-clauses documented.",
+      fullComment: "Both are documented.",
+      chunkIds: ["C001"],
+      supportQuote: "",
     });
 
     const result = await runPPDRequirementsReview(inputs(), PPD_SOURCE, SETTINGS, {});
@@ -107,20 +106,28 @@ Peer review conducted 14 Jan 2026 covering all part-time academic staff, signed 
     }];
   }
 
+  function mockEvTwoPass(judgeResult: unknown) {
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages[0]?.content ?? "");
+      if (system.includes("EXTRACTION pass")) {
+        return JSON.stringify({ results: [{ ref: "2.1.1.DS1", candidates: [{ aspect: "promise 1: peer review record", quote: "Peer review conducted 14 Jan 2026 covering all part-time academic staff, signed off by HOD.", kind: "record", chunkId: "C001" }] }] });
+      }
+      return JSON.stringify({ results: [judgeResult] });
+    });
+  }
+
   it("an evidenced promise carries its own verified quote; a not-evidenced promise carries none", async () => {
-    mockChat.mockImplementation(async () => JSON.stringify({
-      results: [{
-        ref: "2.1.1.DS1",
-        evidenceSummary: "Peer review record found; no reward record found.",
-        verdict: "Partial",
-        comment: "One promise evidenced, one not.",
-        promiseChecks: [
-          { promiseText: "Annual peer reviews covering all part-time academic staff", verdict: "evidenced", evidence: "Peer review register C001", chunkIds: ["C001"], quote: "Peer review conducted 14 Jan 2026 covering all part-time academic staff, signed off by HOD." },
-          { promiseText: "Rewards linked to performance ratings", verdict: "not evidenced", evidence: "No record found in the evidence documents.", chunkIds: [], quote: "" },
-        ],
-        chunkIds: ["C001"],
-      }],
-    }));
+    mockEvTwoPass({
+      ref: "2.1.1.DS1",
+      evidenceSummary: "Peer review record found; no reward record found.",
+      verdict: "Partial",
+      comment: "One promise evidenced, one not.",
+      promiseChecks: [
+        { promiseText: "Annual peer reviews covering all part-time academic staff", verdict: "evidenced", evidence: "Peer review register C001", chunkIds: ["C001"], quote: "Peer review conducted 14 Jan 2026 covering all part-time academic staff, signed off by HOD." },
+        { promiseText: "Rewards linked to performance ratings", verdict: "not evidenced", evidence: "No record found in the evidence documents.", chunkIds: [], quote: "" },
+      ],
+      chunkIds: ["C001"],
+    });
 
     const result = await runEvidenceAssessment(evInputs(), EV_SOURCE, SETTINGS, {});
     const row = result.rows[0];
@@ -132,20 +139,18 @@ Peer review conducted 14 Jan 2026 covering all part-time academic staff, signed 
   });
 
   it("a fabricated promise-check quote (not a real substring) is dropped to undefined for that promise only", async () => {
-    mockChat.mockImplementation(async () => JSON.stringify({
-      results: [{
-        ref: "2.1.1.DS1",
-        evidenceSummary: "x",
-        verdict: "Partial",
-        comment: "x",
-        promiseChecks: [
-          { promiseText: "Annual peer reviews covering all part-time academic staff", verdict: "evidenced", evidence: "C001", chunkIds: ["C001"], quote: "Peer review conducted 14 Jan 2026 covering all part-time academic staff, signed off by HOD." },
-          // Invented text — not present in EV_SOURCE at all.
-          { promiseText: "Rewards linked to performance ratings", verdict: "evidenced", evidence: "C001", chunkIds: ["C001"], quote: "Bonus payments of $500 were disbursed to all top-rated academic staff in December." },
-        ],
-        chunkIds: ["C001"],
-      }],
-    }));
+    mockEvTwoPass({
+      ref: "2.1.1.DS1",
+      evidenceSummary: "x",
+      verdict: "Partial",
+      comment: "x",
+      promiseChecks: [
+        { promiseText: "Annual peer reviews covering all part-time academic staff", verdict: "evidenced", evidence: "C001", chunkIds: ["C001"], quote: "Peer review conducted 14 Jan 2026 covering all part-time academic staff, signed off by HOD." },
+        // Invented text — not present in EV_SOURCE at all.
+        { promiseText: "Rewards linked to performance ratings", verdict: "evidenced", evidence: "C001", chunkIds: ["C001"], quote: "Bonus payments of $500 were disbursed to all top-rated academic staff in December." },
+      ],
+      chunkIds: ["C001"],
+    });
 
     const result = await runEvidenceAssessment(evInputs(), EV_SOURCE, SETTINGS, {});
     const row = result.rows[0];
