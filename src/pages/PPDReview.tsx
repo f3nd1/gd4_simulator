@@ -994,6 +994,9 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
   const deriveEvidenceAssessmentFromAudit = useWorkspaceStore((s) => s.deriveEvidenceAssessmentFromAudit);
   const checkEvidenceDrift = useWorkspaceStore((s) => s.checkEvidenceDrift);
   const compileEvidenceFindings = useWorkspaceStore((s) => s.compileEvidenceFindings);
+  // Verdicts queued at this sub-criterion's hybrid approval gate — gates the
+  // Compile button below (same selector the tab badge uses).
+  const pendingGateCount = useWorkspaceStore((s) => s.pendingCommits[selectedId]?.items.length ?? 0);
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
   const progress = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
@@ -1093,6 +1096,12 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
   // Mirrors compileEvidenceFindings' exclusions: already-saved, failed, and
   // "Not assessed" rows raise nothing, so they don't count as compilable.
   const compilable = assessment ? assessment.rows.filter((r) => !r.savedFindingId && !r.assessmentFailed && r.verdict !== "Not assessed").length : 0;
+  // Hybrid gate: while verdicts for this sub-criterion are still queued for
+  // approval (HybridGatePanel below), Compile is disabled — compiling before
+  // the gate would raise findings from unapproved verdicts and skip the
+  // checklist write-back (approval itself re-runs the compile, so nothing is
+  // lost by waiting). Full-auto/manual never queue, so they are unaffected.
+  const compileDisabled = !assessment || compilable === 0 || pendingGateCount > 0;
   // Lines whose AI call failed/timed out and never recovered — see
   // assessmentFailed's doc comment. Retry re-submits ONLY these refs, but
   // still against the FULL evidence file set (runEvidenceAssessment always
@@ -1159,15 +1168,22 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
         )}
         <button
           onClick={handleCompile}
-          disabled={!assessment || compilable === 0}
-          title="Raise a finding (Not met→NC, Partial→OFI, Met→OBS) for every line that doesn't already have one"
+          disabled={compileDisabled}
+          title={pendingGateCount > 0
+            ? `Approve or reject the ${pendingGateCount} queued verdict${pendingGateCount === 1 ? "" : "s"} in the review gate below first — approval compiles findings automatically`
+            : "Raise a finding (Not met→NC, Partial→OFI, Met→OBS) for every line that doesn't already have one"}
           style={{
-            marginLeft: "auto", cursor: (!assessment || compilable === 0) ? "not-allowed" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "6px 14px", borderRadius: 8, border: "1px solid #4338ca",
-            background: (!assessment || compilable === 0) ? "#eef2ff" : "#4338ca", color: (!assessment || compilable === 0) ? "#a5b4fc" : "#fff", whiteSpace: "nowrap",
+            marginLeft: "auto", cursor: compileDisabled ? "not-allowed" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "6px 14px", borderRadius: 8, border: "1px solid #4338ca",
+            background: compileDisabled ? "#eef2ff" : "#4338ca", color: compileDisabled ? "#a5b4fc" : "#fff", whiteSpace: "nowrap",
           }}
         >
           Compile findings → {assessment && compilable > 0 ? `(${compilable})` : ""}
         </button>
+        {pendingGateCount > 0 && (
+          <span style={{ fontSize: 11.5, color: "#92400e" }}>
+            ⏸ Compile unlocks after the {pendingGateCount} queued verdict{pendingGateCount === 1 ? "" : "s"} below {pendingGateCount === 1 ? "is" : "are"} reviewed.
+          </span>
+        )}
         <Link to={`/findings?item=${selectedId}`} style={{ fontSize: 12, color: "#4a5a8a", fontWeight: 600, textDecoration: "none", padding: "6px 10px", border: "1px solid #cbd5e1", borderRadius: 8 }}>
           Findings register →
         </Link>

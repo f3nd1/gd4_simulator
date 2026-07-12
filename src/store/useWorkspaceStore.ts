@@ -54,7 +54,7 @@ import { selectLineStatusMemories, selectLineStatusCalibration } from "../lib/la
 import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine, EvidenceDriftCheck } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck } from "../types";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
 import { computePanelConclusion } from "../lib/panelConclusion";
@@ -1911,90 +1911,61 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             changed = true;
             return { ...row, savedFindingId: existingByKey.get(key) };
           }
-          // Prefer the real checklist line for this ref (same match rule as
-          // deriveEvidenceAssessmentFromAudit) so the finding is confirmed
-          // through the one shared checklist path; fall back to a synthetic
-          // line built from the row when no checklist line exists yet.
+          // Prefer the real checklist line for this ref — the same sourceRef-
+          // or-clause match rule buildOptionALineWrites uses on the write side
+          // (the old sourceRef-only lookup here could miss a clause-matched
+          // line and create a second one) — so the finding is confirmed
+          // through the one shared checklist path.
           const normRef = normalizeAuditRef(row.gdRef);
-          const checklist = useChecklistModuleStore.getState();
-          const line = checklist.entries[row.gd4ItemId]?.specific.find(
-            (l) => l.sourceRef && normalizeAuditRef(l.sourceRef) === normRef
-          );
+          const findLine = () =>
+            useChecklistModuleStore.getState().entries[row.gd4ItemId]?.specific.find(
+              (l) =>
+                (l.sourceRef && normalizeAuditRef(l.sourceRef) === normRef) ||
+                (l.clause && normalizeAuditRef(l.clause) === normRef)
+            );
+          let line = findLine();
+          if (!line) {
+            // No checklist line yet — manual mode never commits the run's
+            // write-back, and hybrid may not have been approved. Create the
+            // line NOW through the same machinery the full-auto/hybrid paths
+            // use (buildOptionALineWrites → applyOptionAWrites), so
+            // computeChecklistOverrides fires for this item and its dashboard
+            // band reflects this Option A result instead of silently staying
+            // on the legacy evidence-matrix fallback (a real gap: the finding
+            // was raised but the score never moved). The finding is then
+            // confirmed through the normal checklist path below — no more
+            // synthetic store-less branch.
+            const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
+            const checklist = useChecklistModuleStore.getState();
+            const writes = buildOptionALineWrites(
+              [row],
+              { [row.gd4ItemId]: (checklist.entries[row.gd4ItemId]?.specific ?? []).map((l) => ({ id: l.id, sourceRef: l.sourceRef, clause: l.clause })) },
+              get().ppdReviewResults[subCriterionId]?.rows ?? [],
+              { runId: result.runId ?? `EV-${subCriterionId}-COMPILE`, folderName: folder?.folderName, drive: folder?.folderLink || folder?.policyLink, owner: folder?.owner }
+            );
+            if (writes.length > 0) checklist.applyOptionAWrites(writes);
+            line = findLine();
+          }
+          if (!line) return row; // write couldn't land — never raise an unanchored finding
           let findingId: string | undefined;
-          if (line) {
-            if (line.draftFinding?.savedFindingId) {
-              findingId = line.draftFinding.savedFindingId;
-            } else {
-              // Type the draft off the ROW's verdict, not the checklist line's
-              // possibly-stale status — when Compile runs before the checklist
-              // write-back (manual/hybrid), line.status can still hold the old
-              // value, which typed the finding differently from the dedupe key
-              // built at the top of this loop and produced duplicates later.
-              const draft = buildDraftFinding(req, { ...line, status: rowStatus });
-              const before = get().customFindings.length;
-              checklist.confirmDraftFinding(row.gd4ItemId, line.id, draft);
-              findingId = useChecklistModuleStore
-                .getState()
-                .entries[row.gd4ItemId]?.specific.find((l) => l.id === line.id)?.draftFinding?.savedFindingId;
-              if (findingId && get().customFindings.length > before) {
-                get().seedClosure(findingId, { root: draft.rootCause, corr: draft.corrective, prev: draft.preventive });
-                raised++;
-              }
-            }
+          if (line.draftFinding?.savedFindingId) {
+            findingId = line.draftFinding.savedFindingId;
           } else {
-            const synthetic: SpecificChecklistLine = {
-              id: `EVROW-${row.gdRef}`,
-              text: row.requirementText,
-              clause: row.gdRef,
-              sourceRef: row.gdRef,
-              status: rowStatus,
-              generatedBy: "ai",
-              evidence: row.evidenceFiles.map((f, i) => ({
-                id: `EVROW-${row.gdRef}-E${i}`,
-                title: f.name,
-                type: "Document",
-                owner: "",
-                date: "",
-                approved: false,
-                reviewed: false,
-                sufficiency: "Present" as const,
-              })),
-            };
-            const draft = buildDraftFinding(req, synthetic);
-            const finding: Finding = {
-              id: `EV-${Date.now().toString(36).toUpperCase()}-${raised}`,
-              auditCycleId: s.cycle.id,
-              gd4ItemId: row.gd4ItemId,
-              issue: draft.issue,
-              type: draft.findingType === "OBS" ? "Observation" : "AFI",
-              severity: draft.severity,
-              owner: "SQ",
-              dueDate: "",
-              repeatFinding: false,
-              overdue: false,
-              managementDecisionNeeded: draft.ncSeverity === "Major",
-              status: "Open",
-              source: "PPD Review",
-              createdAt: new Date().toISOString(),
-              dimension: draft.dimension,
-              riskCategory: draft.riskCategory,
-              clause: row.gdRef,
-              observation: row.comment || row.evidenceSummary || draft.observation,
-              criteria: draft.criteria,
-              effect: draft.effect,
-              rootCause: draft.rootCause,
-              corrective: draft.corrective,
-              preventive: draft.preventive,
-              findingType: draft.findingType,
-              ncSeverity: draft.ncSeverity,
-              linkedSourceRefs: [row.gdRef],
-            };
-            get().addCustomFinding(finding);
-            if (draft.rootCause || draft.corrective || draft.preventive) {
-              get().seedClosure(finding.id, { root: draft.rootCause, corr: draft.corrective, prev: draft.preventive });
+            // Type the draft off the ROW's verdict, not the checklist line's
+            // possibly-stale status — when Compile runs before the checklist
+            // write-back (manual/hybrid), line.status can still hold the old
+            // value, which typed the finding differently from the dedupe key
+            // built at the top of this loop and produced duplicates later.
+            const draft = buildDraftFinding(req, { ...line, status: rowStatus });
+            const before = get().customFindings.length;
+            useChecklistModuleStore.getState().confirmDraftFinding(row.gd4ItemId, line.id, draft);
+            findingId = useChecklistModuleStore
+              .getState()
+              .entries[row.gd4ItemId]?.specific.find((l) => l.id === line!.id)?.draftFinding?.savedFindingId;
+            if (findingId && get().customFindings.length > before) {
+              get().seedClosure(findingId, { root: draft.rootCause, corr: draft.corrective, prev: draft.preventive });
+              raised++;
             }
-            findingId = finding.id;
-            raised++;
           }
           if (!findingId) return row;
           if (key) existingByKey.set(key, findingId);
