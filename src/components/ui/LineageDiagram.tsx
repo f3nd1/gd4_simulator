@@ -132,7 +132,7 @@ function uniqStrings(arr: (string | undefined)[]): string[] {
 // what LocatedPassage actually shows in-app.
 function passageText(item: SpineItem): string | undefined {
   if ((item.found || item.contradicted) && item.quote) return `"${item.quote}"`;
-  if (item.found && item.spreadQuotes && item.spreadQuotes.length > 0) {
+  if (item.found && item.spreadQuotes && item.spreadQuotes.length > 1) {
     return `Covered — spread across these passages: ${item.spreadQuotes.map((sq) => `"${sq.quote}"${sq.sourceFile?.name ? ` (from ${sq.sourceFile.name})` : ""}`).join(" / ")}`;
   }
   if (item.found && item.noExactQuote && !item.quoteUnverified) return "Covered, but spread across the document rather than one passage.";
@@ -236,7 +236,13 @@ function policySpine(row: PPDReviewRow, files: CitedFile[], chunkFileNames: Reco
           quote: sq.quote,
           sourceFile: resolveSourceFile(sq.chunkId, sq.quote, files, chunkFileNames, resolveText),
         }));
-        if (spreadQuotes.length > 0) return { name: sc.text, clause: sc.clause, found: true, spreadQuotes, sourceFile, rationale: sc.rationale };
+        // "Spread across ... rather than one" only makes sense with 2+ real
+        // passages — exactly one verified passage IS one passage, so it
+        // renders through the ordinary single-quote path instead (never a
+        // self-contradictory "spread across... rather than one" claim
+        // backed by a single quote).
+        if (spreadQuotes.length > 1) return { name: sc.text, clause: sc.clause, found: true, spreadQuotes, sourceFile, rationale: sc.rationale };
+        if (spreadQuotes.length === 1) return { name: sc.text, clause: sc.clause, found: true, quote: spreadQuotes[0].quote, sourceFile: spreadQuotes[0].sourceFile ?? sourceFile, rationale: sc.rationale };
         // No verified passage. Distinguish "the AI cited support that failed
         // verification" (suspicious — say so) from the true fallback of
         // "documented, but genuinely no extractable passage at all".
@@ -488,7 +494,7 @@ function RationaleCell({ text, suggestedAction }: { text?: string; suggestedActi
 function VisionProvenanceTag({ record }: { record?: AuditFileRecord }) {
   if (record?.readMethod !== "vision") return null;
   return (
-    <span style={{ fontSize: 10, color: "#92400e", marginLeft: 5 }}>
+    <span style={{ fontSize: 10.5, color: "#92400e", marginLeft: 5 }}>
       · text extracted by vision (AI transcription) — not verified against the original
     </span>
   );
@@ -521,18 +527,21 @@ function LocatedPassage({ item, resolveText }: { item: SpineItem; resolveText: R
   // case investigated separately) still caps at this radius rather than
   // growing unboundedly; that is an honest, bounded fallback, not a cut.
   const excerpt = quoted && typeof text === "string" ? excerptAround(text, item.quote!, 400) : null;
-  const hasSpread = item.found && item.spreadQuotes && item.spreadQuotes.length > 0;
+  // 2+ required: a single verified passage is one passage, not "spread
+  // across ... rather than one" — policySpine already resolves the
+  // length===1 case to a plain `quote` instead, this is belt-and-suspenders.
+  const hasSpread = item.found && item.spreadQuotes && item.spreadQuotes.length > 1;
   const nothingToShow = !quoted && !hasSpread && !(item.found && item.noExactQuote) && !(item.found && item.quoteUnverified);
   if (nothingToShow) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       {quoted && excerpt && (
-        <div title={item.quote} style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
+        <div title={item.quote} style={{ fontSize: 11.5, color: "#94a3b8", lineHeight: 1.5 }}>
           <ExcerptSpan excerpt={excerpt} />
         </div>
       )}
       {quoted && !excerpt && (
-        <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.5 }}>
+        <div style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.5 }}>
           “{shorten(item.quote!, 600)}” <span style={{ color: "#94a3b8", fontStyle: "italic" }}>(context unavailable — re-run to refresh the cache)</span>
         </div>
       )}
@@ -541,9 +550,9 @@ function LocatedPassage({ item, resolveText }: { item: SpineItem; resolveText: R
           the true diffuse-mention fallback (below) has nothing to show. */}
       {hasSpread && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-          <div style={{ fontSize: 10.5, color: "#64748b", fontStyle: "italic" }}>Covered — spread across {item.spreadQuotes!.length > 1 ? "these" : "this"} passage{item.spreadQuotes!.length > 1 ? "s" : ""} rather than one:</div>
+          <div style={{ fontSize: 10.5, color: "#64748b", fontStyle: "italic" }}>Covered — spread across these passages rather than one:</div>
           {item.spreadQuotes!.slice(0, 5).map((sq, i) => (
-            <div key={i} style={{ fontSize: 11, color: "#475569", lineHeight: 1.5, paddingLeft: 8, borderLeft: "2px solid #e2e8f0" }}>
+            <div key={i} style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.5, paddingLeft: 8, borderLeft: "2px solid #e2e8f0" }}>
               “{shorten(sq.quote, 600)}”
               {sq.sourceFile?.name && (
                 <div style={{ fontSize: 10.5, marginTop: 2 }}>
@@ -565,7 +574,7 @@ function LocatedPassage({ item, resolveText }: { item: SpineItem; resolveText: R
       {/* Non-failure state — must stay reading as "covered" (neutral slate +
           serif italic), never recoloured to look like a gap in the table. */}
       {item.found && item.noExactQuote && !item.quoteUnverified && (
-        <div style={{ fontSize: 11.5, color: "#64748b", fontStyle: "italic", fontFamily: "Georgia, 'Times New Roman', serif" }}>
+        <div style={{ fontSize: 11.5, color: "#64748b", fontStyle: "italic", fontFamily: "Georgia, 'Times New Roman', serif", lineHeight: 1.5 }}>
           Covered, but spread across the document rather than one passage.
         </div>
       )}
@@ -573,7 +582,7 @@ function LocatedPassage({ item, resolveText }: { item: SpineItem; resolveText: R
           the source — say exactly that, never the "spread across" claim
           (which asserts a fact about the document nothing supports here). */}
       {item.found && item.quoteUnverified && (
-        <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "3px 6px", lineHeight: 1.45 }}>
+        <div style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "3px 6px", lineHeight: 1.5 }}>
           ⚠ The AI cited a supporting passage, but it could not be verified word-for-word against the source document, so it is not shown. Treat this sub-part's coverage with caution — re-running the review may resolve it.
         </div>
       )}
@@ -593,7 +602,7 @@ function FoundBadge({ item }: { item: SpineItem }) {
     ? ["Contradicted", "#fee2e2", "#b91c1c"]
     : ["Not found", "#f1f5f9", "#64748b"];
   return (
-    <span style={{ display: "inline-block", fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 3, background: bg, color: fg }}>{label}</span>
+    <span style={{ display: "inline-block", fontSize: 9.5, fontWeight: 600, padding: "2px 7px", borderRadius: 3, background: bg, color: fg }}>{label}</span>
   );
 }
 
@@ -610,18 +619,18 @@ function FileCell({ item }: { item: SpineItem }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 0 }}>
       {attr ? (
-        <span style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word" }}>
+        <span style={{ fontSize: 11.5, lineHeight: 1.5, overflowWrap: "anywhere", wordBreak: "break-word" }}>
           {attrUrl
             ? <a href={attrUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#4338ca", textDecoration: "none" }}>from {attr} ↗</a>
             : <span style={{ color: "#64748b" }}>from {attr}</span>}
           <VisionProvenanceTag record={item.sourceFile?.record} />
         </span>
       ) : (
-        <span style={{ fontSize: 11, color: "#94a3b8" }}>—</span>
+        <span style={{ fontSize: 10.5, color: "#94a3b8" }}>—</span>
       )}
       <FoundBadge item={item} />
       {!item.found && (
-        <span style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.4 }}>
+        <span style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.5 }}>
           {item.contradicted ? "Contradicted" : "Not found"}{attr ? ` in ${attr}` : ""}.
         </span>
       )}
@@ -650,7 +659,7 @@ function ClauseRow({ item, isEv, resolveText, headers, policyPromise, policyCove
         <span className="cm-cell-label">{headers[0]}</span>
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <span aria-hidden style={{ marginTop: 4, width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: item.found ? "#16a34a" : "transparent", border: item.found ? "none" : "1.5px solid #94a3b8" }} />
-          <span style={{ fontSize: 12, fontWeight: 500, lineHeight: 1.45, color: item.found ? "#1e293b" : "#64748b" }}>{item.name}</span>
+          <span style={{ fontSize: 11.5, fontWeight: 500, lineHeight: 1.5, color: item.found ? "#1e293b" : "#64748b" }}>{item.name}</span>
         </div>
       </div>
 
@@ -663,17 +672,19 @@ function ClauseRow({ item, isEv, resolveText, headers, policyPromise, policyCove
             <div style={{ minWidth: 0 }}>
               <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
                 {policyCoverage && <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: policyCoverage === "not-checked" ? "transparent" : COV_DOT[policyCoverage], border: `1.5px solid ${COV_DOT[policyCoverage]}` }} />}
-                <span style={{ fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>From PPD review</span>
+                <span style={{ fontSize: 9.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>From PPD review</span>
               </div>
-              <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5, fontStyle: "italic", overflowWrap: "anywhere", wordBreak: "break-word" }}>“{shorten(policyPromise, 300)}”</div>
+              <div style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.5, fontStyle: "italic", overflowWrap: "anywhere", wordBreak: "break-word" }}>“{shorten(policyPromise, 300)}”</div>
             </div>
           ) : (
-            <span style={{ fontSize: 11, color: "#94a3b8" }}>—</span>
+            <span style={{ fontSize: 10.5, color: "#94a3b8" }}>—</span>
           )
         ) : (
           <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
-            {item.clause && <div style={{ fontSize: 10.5, fontWeight: 600, color: "#475569" }}>§ {item.clause}</div>}
-            {passage ?? <span style={{ fontSize: 11, color: "#94a3b8" }}>—</span>}
+            {/* Clause reference alone — no "§" prefix: the column header
+                ("Policy clause & quote") already establishes what this is. */}
+            {item.clause && <div style={{ fontSize: 10.5, fontWeight: 600, color: "#475569" }}>{item.clause}</div>}
+            {passage ?? <span style={{ fontSize: 10.5, color: "#94a3b8" }}>—</span>}
           </div>
         )}
       </div>
@@ -691,7 +702,7 @@ function ClauseRow({ item, isEv, resolveText, headers, policyPromise, policyCove
         <span className="cm-cell-label">{headers[3]}</span>
         {item.rationale
           ? <span style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.5, overflowWrap: "anywhere", wordBreak: "break-word" }}>{item.rationale}</span>
-          : <span style={{ fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>—</span>}
+          : <span style={{ fontSize: 10.5, color: "#94a3b8", fontStyle: "italic" }}>—</span>}
       </div>
     </div>
   );
@@ -992,7 +1003,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
                       <span aria-hidden style={{ width: 9, flexShrink: 0, color: "#94a3b8", fontSize: 9, marginTop: 2 }}>{line.expandable ? (isOpen ? "▾" : "▸") : ""}</span>
                       <span style={{ minWidth: 0 }}>
                         <span style={{ fontFamily: "ui-monospace,monospace", fontSize: isEv ? 10 : 10.5, fontWeight: 700, color: isEv ? "#64748b" : "#4338ca" }}>{line.ref}</span>
-                        <span style={{ fontSize: isEv ? 11 : 12, color: isEv ? "#64748b" : "#334155", marginLeft: isEv ? 5 : 6 }} title={line.reqLabel}>{shorten(line.reqLabel, 90)}</span>
+                        <span style={{ fontSize: isEv ? 11 : 12, color: isEv ? "#64748b" : "#334155", marginLeft: isEv ? 5 : 6, lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }}>{line.reqLabel}</span>
                       </span>
                     </div>
                     {isEv && <PolicyPromiseCell promise={line.policyPromise} coverage={line.policyCoverage} />}
