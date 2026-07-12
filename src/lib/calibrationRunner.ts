@@ -18,7 +18,10 @@
 import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
-import { parseFolderId, listFolderFilesRecursive, exportFileText, IMAGE_MIME_TYPES } from "./drive/driveClient";
+import { useRuleTuningStore } from "../store/useRuleTuningStore";
+import { selectLineStatusMemories, selectLineStatusCalibration } from "./labParity";
+import { parseFolderId, listFolderFilesRecursive, exportFileText, IMAGE_MIME_TYPES, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "./drive/driveClient";
+import { sObj, sArr, sStr, sEnum } from "./ai/schemaHelpers";
 import {
   runPPDRequirementsReview, runEvidenceAssessment,
   runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr,
@@ -68,9 +71,9 @@ export function aiReady(): string | null {
 // "[CHUNK:Cnnn] --- path ---" text format the real runs feed the engines.
 // Uses (and fills) the workspace fileTextCache exactly like a normal run;
 // failed reads are skipped and reported, never fabricated.
-async function gatherText(folderLink: string | undefined, label: string, signal: AbortSignal, onProgress: ScratchProgress, chunkStart: { n: number }, chunkFiles: Record<string, string>): Promise<{ text: string; files: number; failed: string[] }> {
+async function gatherText(folderLink: string | undefined, label: string, signal: AbortSignal, onProgress: ScratchProgress, chunkStart: { n: number }, chunkFiles: Record<string, string>): Promise<{ text: string; files: number; failed: string[]; hasSpreadsheet: boolean; hasScanned: boolean }> {
   const folderId = parseFolderId(folderLink || "");
-  if (!folderId) return { text: "", files: 0, failed: [] };
+  if (!folderId) return { text: "", files: 0, failed: [], hasSpreadsheet: false, hasScanned: false };
   const token = useGoogleDriveStore.getState().getValidToken();
   if (!token) throw new Error("Google Drive is not connected — connect it in Settings or on the Evidence Folder page.");
   onProgress(`Listing ${label} folder…`);
@@ -78,6 +81,12 @@ async function gatherText(folderLink: string | undefined, label: string, signal:
   const parts: string[] = [];
   const failed: string[] = [];
   let read = 0;
+  // File-type detection for skill injection — mirrors the staged run's
+  // per-chunk detection (spreadsheet mimes; scanned = a PDF whose extracted
+  // text classifies as suspected-scanned) so the Lab injects the same
+  // file-type bonus skill a real run would.
+  let hasSpreadsheet = false;
+  let hasScanned = false;
   for (const file of files) {
     if (signal.aborted) throw new Error("Cancelled");
     onProgress(`Reading ${label} file ${++read}/${files.length}: ${file.path.split("/").pop()}`);
@@ -99,6 +108,8 @@ async function gatherText(folderLink: string | undefined, label: string, signal:
       }
     }
     if (!body) continue;
+    if (file.mimeType === XLSX_MIME || file.mimeType === XLS_MIME || file.mimeType === "text/csv") hasSpreadsheet = true;
+    if (file.mimeType === "application/pdf" && classifyPdfTextQuality(body).suspectedScannedPdf) hasScanned = true;
     const fileName = file.path.split("/").pop() || file.path;
     const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
     for (let pi = 0; pi < totalParts; pi++) {
@@ -108,7 +119,30 @@ async function gatherText(folderLink: string | undefined, label: string, signal:
       chunkFiles[chunkId] = fileName;
     }
   }
-  return { text: parts.join("\n\n"), files: files.length, failed };
+  return { text: parts.join("\n\n"), files: files.length, failed, hasSpreadsheet, hasScanned };
+}
+
+// PRODUCTION-PARITY PROMPT ASSEMBLY. The Lab must measure the same prompt a
+// real run sends, so scratch runs pass the exact selections production
+// passes per path (see labParity.ts for the shared selectors):
+//   Path A (PPD review + evidence assessment): memories YES, calibration NO.
+//   Path B (staged passes): memories YES, calibration YES, file-type skill.
+//   Both: champion rule injection unless the caller overrides it (the Rule
+//   Tuning tab deliberately overrides to compare a draft against champion).
+// Deliberate differences from production, by design:
+//   - memory usageCount is NOT incremented here — a measurement run must not
+//     inflate the AI Memories page's real usage/effectiveness statistics;
+//   - file reading skips images and vision transcription (measurement reads
+//     text the cheap way; that affects SOURCE TEXT for image-heavy folders,
+//     not prompt assembly — surfaced in the Lab UI note).
+function scratchMemories() {
+  return selectLineStatusMemories(useWorkspaceStore.getState().calibrationMemories);
+}
+function scratchCalibration() {
+  return selectLineStatusCalibration(useWorkspaceStore.getState().calibrationExamples);
+}
+function scratchRules(subCriterionId: string, override?: string) {
+  return override !== undefined ? override : useRuleTuningStore.getState().championInjection(subCriterionId);
 }
 
 function analysisSettings() {
@@ -156,9 +190,11 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
     const policy = await gatherText(folder.policyLink || folder.folderLink, "policy", signal, onProgress, chunkStart, chunkFiles);
     if (!policy.text) return fail("No readable Policy & Procedure text — link/check the policy folder first.");
     const settings = analysisSettings();
+    const memories = scratchMemories();
+    const rules = scratchRules(subCriterionId, ruleInjection);
     onProgress("Option A — PPD requirements review…");
     const ppd = await runPPDRequirementsReview(requirements, policy.text, settings, {
-      criterionId: subCriterionId, ruleInjection, signal, onProgress: (d) => onProgress(`Option A — PPD review: ${d}`),
+      criterionId: subCriterionId, memories, ruleInjection: rules, signal, onProgress: (d) => onProgress(`Option A — PPD review: ${d}`),
     });
     logRun("Calibration · Option A (PPD)", subCriterionId, `${ppd.rows.length} lines reviewed`, ppd.usage);
 
@@ -170,7 +206,7 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
       onProgress("Option A — evidence assessment…");
       const inputs: EvidenceAssessmentInput[] = ppd.rows.map((r) => ({ ref: r.ref, requirementText: r.requirementText, ppdVerdict: r.verdict, ppdExtract: r.fullComment || r.shortComment, promises: r.promises }));
       const ev = await runEvidenceAssessment(inputs, evidence.text, settings, {
-        criterionId: subCriterionId, ruleInjection, signal, onProgress: (d) => onProgress(`Option A — evidence: ${d}`),
+        criterionId: subCriterionId, memories, ruleInjection: rules, signal, onProgress: (d) => onProgress(`Option A — evidence: ${d}`),
       });
       logRun("Calibration · Option A (Evidence)", subCriterionId, `${ev.rows.length} lines assessed`, ev.usage);
       const evByRef = new Map(ev.rows.map((r) => [r.ref, r]));
@@ -208,13 +244,19 @@ export async function runScratchB(subCriterionId: string, signal: AbortSignal, o
     const evidence = await gatherText(folder.folderLink !== folder.policyLink ? folder.folderLink : undefined, "evidence", signal, onProgress, chunkStart, chunkFiles);
     if (!policy.text && !evidence.text) return fail("No readable documents — link/check the folders first.");
     const settings = analysisSettings();
+    const memories = scratchMemories();
+    const calibration = scratchCalibration();
+    const rules = scratchRules(subCriterionId, ruleInjection);
+    // Same detection rule the staged run applies to its EVIDENCE chunks.
+    const fileType: "spreadsheet" | "scanned" | null = evidence.hasSpreadsheet ? "spreadsheet" : evidence.hasScanned ? "scanned" : null;
+    const stagedOpts = { criterionId: subCriterionId, calibration, memories, ruleInjection: rules, fileType } as const;
 
     onProgress("Option B — policy pass…");
-    const pol = await runStagedPolicyAudit(points, policy.text || evidence.text, settings, { criterionId: subCriterionId, ruleInjection, signal, onProgress: (d) => onProgress(`Option B — policy: ${d}`) });
+    const pol = await runStagedPolicyAudit(points, policy.text || evidence.text, settings, { ...stagedOpts, signal, onProgress: (d) => onProgress(`Option B — policy: ${d}`) });
     onProgress("Option B — evidence pass…");
-    const ev = await runStagedEvidenceAudit(points, evidence.text || policy.text, pol.rows, settings, { criterionId: subCriterionId, ruleInjection, signal, onProgress: (d) => onProgress(`Option B — evidence: ${d}`) });
+    const ev = await runStagedEvidenceAudit(points, evidence.text || policy.text, pol.rows, settings, { ...stagedOpts, signal, onProgress: (d) => onProgress(`Option B — evidence: ${d}`) });
     onProgress("Option B — outcome & review pass…");
-    const out = await runStagedOutcomeReviewAudit(points, [policy.text, evidence.text].filter(Boolean).join("\n\n"), settings, { criterionId: subCriterionId, ruleInjection, signal, onProgress: (d) => onProgress(`Option B — outcomes: ${d}`) });
+    const out = await runStagedOutcomeReviewAudit(points, [policy.text, evidence.text].filter(Boolean).join("\n\n"), settings, { ...stagedOpts, signal, onProgress: (d) => onProgress(`Option B — outcomes: ${d}`) });
     logRun("Calibration · Option B (staged)", subCriterionId, `${points.length} audit points, 3 passes`);
 
     const polByRef = new Map(pol.rows.map((r) => [r.ref, r]));
@@ -253,7 +295,8 @@ export async function judgeVsBenchmark(subCriterionId: string, digest: string, s
 Respond with JSON only: {"results": [{"id": string, "status": "caught"|"partial"|"missed"}]}`;
     const user = `REAL assessor findings for sub-criterion ${subCriterionId}:\n${afis.map((a) => `[${a.id}] (${a.findingPattern}) ${a.findingText}`).join("\n\n")}\n\nThe tool's results for sub-criterion ${subCriterionId}:\n${digest}`;
     let usage: AIUsage | undefined;
-    const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], analysisSettings(), { temperature: 0.1, signal, onUsage: (u) => { usage = u; } });
+    const JUDGE_SCHEMA = { name: "benchmark_judge", schema: sObj({ results: sArr(sObj({ id: sStr, status: sEnum("caught", "partial", "missed") })) }) };
+    const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], analysisSettings(), { schema: JUDGE_SCHEMA, temperature: 0.1, signal, onUsage: (u) => { usage = u; } });
     logRun("Calibration · benchmark judge", subCriterionId, `${afis.length} real AFIs judged`, usage);
     const parsed = JSON.parse(content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")) as { results?: Array<{ id?: unknown; status?: unknown }> };
     const results = Array.isArray(parsed.results) ? parsed.results : [];

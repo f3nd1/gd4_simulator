@@ -45,10 +45,14 @@ SUGGESTED IMPROVEMENT THE REVIEWER NOTED: ${args.suggestedImprovement.trim() || 
 WHAT THE CORRECT ANSWER SHOULD HAVE BEEN: ${args.correction.trim() || "(not specified)"}
 WHY THE OUTPUT WAS WRONG: ${args.reason.trim() || "(not specified)"}`;
 
+  // plainText: this call returns a PROMPT (free text), not JSON — and its
+  // messages contain no "json", which OpenAI's json_object mode rejects
+  // outright ("messages must contain the word 'json'"). Text mode is what
+  // this call always wanted.
   const content = await chatComplete(
     [{ role: "system", content: system }, { role: "user", content: user }],
     args.settings,
-    { temperature: 0.3, signal: args.signal }
+    { plainText: true, temperature: 0.3, signal: args.signal }
   );
 
   // Strip any stray code fences the model may wrap around the prompt text.

@@ -76,9 +76,21 @@ export type ConsistencyTestResult = {
   path: "A" | "B";
   runs: number;
   runAt: string; // ISO
-  // Verdict temperature in effect for this test, so a past result is
-  // interpretable ("3 runs at 0.7 — 40%" vs "3 runs at 0.1 — 90%").
+  // Verdict temperature DIAL VALUE at test time. Kept for legacy records —
+  // on gpt-5/o-series models the dial was silently ignored, so this number
+  // was never actually in effect for those runs. New records also carry
+  // effectiveTemperature (below), which is the honest value.
   temperature?: number;
+  // Temperature ACTUALLY in effect: the dial value when the model honours a
+  // temperature parameter, null when it doesn't (gpt-5/o-series decide their
+  // own sampling). undefined = legacy record from before this field existed
+  // — its `temperature` was recorded under the old, incorrect assumption.
+  effectiveTemperature?: number | null;
+  // True when this run used production-identical prompt assembly (same
+  // memories/calibration/rules/file-type skills a real run sends — see
+  // labParity.ts). undefined = legacy pre-parity record measured against a
+  // DIFFERENT pipeline than production; not comparable with new results.
+  pipelineParity?: boolean;
   lines: ConsistencyLine[];
   bands: (number | null)[]; // band estimate per run (null = run failed)
   gapCounts: (number | null)[]; // findings(gaps) count per run
@@ -153,7 +165,10 @@ export type ABPathOutcome = {
 export type ABTestResult = {
   subCriterionId: string;
   runAt: string;
-  temperature?: number; // verdict temperature in effect for this comparison
+  temperature?: number; // verdict temperature DIAL VALUE (see ConsistencyTestResult.temperature)
+  // Same semantics as ConsistencyTestResult.effectiveTemperature / pipelineParity.
+  effectiveTemperature?: number | null;
+  pipelineParity?: boolean;
   benchmarkCount: number; // real AFIs available as truth (0 = raw counts only)
   patterns: string[]; // the benchmark AFIs' finding patterns for this sub-criterion
   a: ABPathOutcome;

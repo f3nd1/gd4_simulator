@@ -11,6 +11,7 @@ import { hasChecklist } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
+import { samplingCaveat } from "../lib/samplingCaveat";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { PpdReviewContent, HybridGatePanel, ResultNavLinks } from "./PPDReview";
@@ -1525,6 +1526,11 @@ function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => v
               <span style={{ fontSize: 10, background: run.status === "completed" ? "#f0fdf4" : "#fef2f2", color: run.status === "completed" ? "#15803d" : "#b91c1c", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>
                 {run.status}
               </span>
+            </div>
+            {/* Sampling basis — audit-standard honesty: conclusions cover only
+                the files the run could actually read, never unseen records. */}
+            <div style={{ fontSize: 11, color: "#92400e", marginTop: 4 }}>
+              {samplingCaveat(run.fileLedger.length, run.endedAt)}
             </div>
           </div>
           <button onClick={onClose} style={{ cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#94a3b8", lineHeight: 1, padding: "0 0 0 8px", marginTop: -2 }}>×</button>

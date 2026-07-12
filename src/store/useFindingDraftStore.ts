@@ -20,6 +20,7 @@ import { groupWeakLines, buildEvidenceStatusSummary, synthesiseApsrFromGroup, is
 import { simulateGroupedFindingWriter, runLiveGroupedFindingWriter } from "../lib/ai/findingWriter";
 import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useWorkspaceStore } from "./useWorkspaceStore";
+import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { effectiveSettings } from "../lib/ai/aiClient";
 
@@ -232,6 +233,12 @@ export const useFindingDraftStore = create<FindingDraftState>()(
                         title: result.title,
                         observation: result.observation,
                         criteria: result.criteria,
+                        // Deterministic check: does the AI-written criteria
+                        // verbatim-quote the official GD4 text this group
+                        // traces to? Only meaningful on the live path — the
+                        // offline simulation builds criteria FROM the source
+                        // texts, so it verifies by construction.
+                        criteriaUnverified: result.criteria ? !criteriaQuotesRequirement(result.criteria, [...group.sourceTexts, req.requirement]) || undefined : undefined,
                         effect: result.effect,
                         rootCause: result.rootCause,
                         corrective: result.corrective,
@@ -337,6 +344,7 @@ export const useFindingDraftStore = create<FindingDraftState>()(
           status: "Open",
           observation: draft.observation ?? "",
           criteria: draft.criteria ?? "",
+          criteriaUnverified: draft.criteriaUnverified,
           effect: draft.effect ?? "",
           riskCategory: draft.group.riskCategory,
           dimension: apsrDimToFindingDim(draft.group.primaryApsrDimension),
@@ -450,7 +458,10 @@ export const useFindingDraftStore = create<FindingDraftState>()(
           draftsBySubCriterion: {
             ...s.draftsBySubCriterion,
             [subCriterionId]: (s.draftsBySubCriterion[subCriterionId] ?? []).map((d) =>
-              d.id === draftId ? { ...d, ...patch } : d
+              // A human editing the criteria takes ownership of its wording -
+              // the "AI text failed the verbatim GD4 check" flag no longer
+              // describes what is stored, so it clears (the human gate).
+              d.id === draftId ? { ...d, ...patch, ...(patch.criteria !== undefined ? { criteriaUnverified: undefined } : {}) } : d
             ),
           },
         })),

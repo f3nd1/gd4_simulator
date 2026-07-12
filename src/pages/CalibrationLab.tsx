@@ -17,7 +17,7 @@ import { useCalibrationStore } from "../store/useCalibrationStore";
 import { useBenchmarkAfiStore } from "../store/useBenchmarkAfiStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
-import { verdictTemp } from "../lib/ai/aiClient";
+import { verdictTemp, effectiveVerdictTemp, supportsTemperature } from "../lib/ai/aiClient";
 import { toCsv, downloadCsv } from "../lib/auditCsvExport";
 import { foldersConnected, aiReady, runScratch, judgeVsBenchmark, type ScratchRunOutput } from "../lib/calibrationRunner";
 import {
@@ -207,6 +207,8 @@ export function ConsistencyTab() {
   const deleteConsistencyTest = useCalibrationStore((s) => s.deleteConsistencyTest);
   const clearConsistencyTests = useCalibrationStore((s) => s.clearConsistencyTests);
   const verdictTemperature = useAISettingsStore((s) => verdictTemp(s));
+  const aiModel = useAISettingsStore((s) => s.model || "gpt-5-mini");
+  const modelIgnoresTemp = !supportsTemperature(aiModel);
   const infos = useSubCritInfo(tests);
   const [selectedId, setSelectedId] = useState("");
   const [path, setPath] = useState<"A" | "B">("B");
@@ -257,6 +259,10 @@ export function ConsistencyTab() {
       const result: ConsistencyTestResult = {
         subCriterionId, path: testPath, runs: outputs.length, runAt: new Date().toISOString(),
         temperature: verdictTemp(useAISettingsStore.getState()),
+        // The HONEST temperature: null when the model ignores the dial.
+        effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()),
+        // Scratch runs now assemble production-identical prompts (labParity).
+        pipelineParity: true,
         lines, bands, gapCounts, failedRuns, agreementPct,
         summary: consistencySummary(agreementPct, bands, gapCounts, failedRuns, outputs.length),
       };
@@ -301,9 +307,15 @@ export function ConsistencyTab() {
           your real audit results are not touched. Any connected sub-criterion works (repeatability needs no benchmark truth).
         </p>
         <CoverageLine label="consistency-tested" infos={infos} testedMap={tests} />
-        <div style={{ fontSize: 11.5, color: "#3730a3", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", marginBottom: 8 }}>
-          Verdict temperature now in effect: <b>{verdictTemperature.toFixed(2)}</b>. Inconsistent results? <Link to="/settings" style={{ color: "#4338ca", fontWeight: 600 }}>Lower the temperature in Settings</Link>, then re-run this test.
-        </div>
+        {modelIgnoresTemp ? (
+          <div style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px", marginBottom: 8 }}>
+            ⚠ The selected model (<b>{aiModel}</b>) ignores the temperature setting — verdict variation on this model comes from the model itself, and the Settings dial cannot reduce it. New test records store this honestly ("temp n/a").
+          </div>
+        ) : (
+          <div style={{ fontSize: 11.5, color: "#3730a3", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "6px 10px", marginBottom: 8 }}>
+            Verdict temperature now in effect: <b>{verdictTemperature.toFixed(2)}</b>. Inconsistent results? <Link to="/settings" style={{ color: "#4338ca", fontWeight: 600 }}>Lower the temperature in Settings</Link>, then re-run this test.
+          </div>
+        )}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
           <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)} style={{ ...inputStyle, width: "auto", minWidth: 340, padding: "5px 8px", fontSize: 12.5 }}>
             <option value="">Select a sub-criterion… (★ = recommended)</option>
@@ -354,7 +366,8 @@ export function ConsistencyTab() {
             <b style={{ fontSize: 12.5 }}>{t.subCriterionId}</b>
             <Pill s="neutral">Option {t.path} × {t.runs}</Pill>
             <span style={{ fontSize: 12, color: "#475569", flex: 1 }}>{t.summary}</span>
-            {t.temperature != null && <span style={{ fontSize: 11, color: "#4338ca", whiteSpace: "nowrap" }}>temp {t.temperature.toFixed(2)}</span>}
+            <TempLabel t={t} />
+            <LegacyRecordBadge t={t} />
             <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>Run on {formatRunOn(t.runAt)}</span>
             <button onClick={() => setSelectedId(t.subCriterionId)} style={{ cursor: "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}>View</button>
             <button disabled={!!running} onClick={() => { setSelectedId(t.subCriterionId); setPath(t.path); runTest(t.subCriterionId, t.path, t.runs); }} style={{ cursor: running ? "not-allowed" : "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #c7d2fe", background: "#eef2ff", color: "#4338ca", fontWeight: 600 }}>Re-run</button>
@@ -363,6 +376,32 @@ export function ConsistencyTab() {
         </Card>
       ))}
     </>
+  );
+}
+
+// Honest temperature chip for a saved measurement record: shows the value
+// actually in effect; "n/a" when the model ignored the dial; and for LEGACY
+// records (no effectiveTemperature stored) the old dial value with a warning
+// that it was recorded under the old, incorrect assumption.
+function TempLabel({ t }: { t: { temperature?: number; effectiveTemperature?: number | null } }) {
+  if (t.effectiveTemperature === null) return <span style={{ fontSize: 11, color: "#92400e", whiteSpace: "nowrap" }}>temp n/a (model ignores it)</span>;
+  if (typeof t.effectiveTemperature === "number") return <span style={{ fontSize: 11, color: "#4338ca", whiteSpace: "nowrap" }}>temp {t.effectiveTemperature.toFixed(2)}</span>;
+  if (t.temperature != null) return <span title="Recorded before the app checked whether the model honours temperature — the value shown is the dial setting, which may not have been in effect." style={{ fontSize: 11, color: "#b45309", whiteSpace: "nowrap" }}>temp {t.temperature.toFixed(2)}?</span>;
+  return null;
+}
+
+// Flags measurement records from before the Lab assembled production-identical
+// prompts (no memories/calibration were injected back then) — those numbers
+// measured a DIFFERENT pipeline and must not be compared against new runs.
+function LegacyRecordBadge({ t }: { t: { pipelineParity?: boolean } }) {
+  if (t.pipelineParity) return null;
+  return (
+    <span
+      title="Measured before the Lab used production-identical prompt assembly (no calibration memories/examples were injected, and the recorded temperature may not have been in effect). Not comparable with new test results — re-run to refresh."
+      style={{ fontSize: 10, fontWeight: 700, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap" }}
+    >
+      ⚠ pre-parity run
+    </span>
   );
 }
 
@@ -375,7 +414,8 @@ function ConsistencyResult({ result, onDelete }: { result: ConsistencyTestResult
     <Card>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Consistency — {result.subCriterionId} · Option {result.path} × {result.runs}</h3>
-        {result.temperature != null && <span style={{ fontSize: 12, fontWeight: 600, color: "#3730a3", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 6, padding: "2px 9px" }}>temperature {result.temperature.toFixed(2)}</span>}
+        <TempLabel t={result} />
+        <LegacyRecordBadge t={result} />
         <span style={{ fontSize: 12, fontWeight: 600, color: "#334155", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 6, padding: "2px 9px" }}>Run on {formatRunOn(result.runAt)}</span>
         <button onClick={onDelete} title="Delete this test record (scratch only — audit results untouched)" style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11.5, padding: "3px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 600 }}>Delete</button>
       </div>
@@ -491,7 +531,9 @@ export function AvsBTab() {
       const benchmarkCount = allAfis.filter((x) => x.subCriterion === subCriterionId && x.kind === "AFI").length;
       const patterns = [...new Set(allAfis.filter((x) => x.subCriterion === subCriterionId && x.kind === "AFI").map((x) => x.findingPattern))];
       const result: ABTestResult = {
-        subCriterionId, runAt: new Date().toISOString(), temperature: verdictTemp(useAISettingsStore.getState()), benchmarkCount, patterns, a, b,
+        subCriterionId, runAt: new Date().toISOString(), temperature: verdictTemp(useAISettingsStore.getState()),
+        effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), pipelineParity: true,
+        benchmarkCount, patterns, a, b,
         winner: abWinner(a, b, benchmarkCount),
         verdictLine: abVerdictLine(subCriterionId, a, b, benchmarkCount),
       };
@@ -618,7 +660,8 @@ function ABResult({ result, onDelete }: { result: ABTestResult; onDelete: () => 
     <Card>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>A vs B — {result.subCriterionId}</h3>
-        {result.temperature != null && <span style={{ fontSize: 12, fontWeight: 600, color: "#3730a3", background: "#eef2ff", border: "1px solid #ddd6fe", borderRadius: 6, padding: "2px 9px" }}>temperature {result.temperature.toFixed(2)}</span>}
+        <TempLabel t={result} />
+        <LegacyRecordBadge t={result} />
         <span style={{ fontSize: 12, fontWeight: 600, color: "#334155", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 6, padding: "2px 9px" }}>Run on {formatRunOn(result.runAt)}</span>
         <button onClick={onDelete} title="Delete this test record (scratch only — audit results untouched)" style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11.5, padding: "3px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 600 }}>Delete</button>
       </div>

@@ -4,6 +4,7 @@ import { ExtractedTextPanel } from "./ExtractedTextPanel";
 import { excerptAround, findQuoteSpan, type QuoteExcerpt } from "./quoteMatch";
 import { downloadLineageCsv, openLineagePdf, type LineageExportRow, type LineageExportMeta } from "../../lib/lineageExport";
 import { ppdVerdictLabel, evVerdictLabel } from "../../lib/verdictTone";
+import { samplingCaveat } from "../../lib/samplingCaveat";
 import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, AuditFileRecord, PPDVerdict, EvidenceVerdict } from "../../types";
 
 // Requirement coverage MATRIX — one tab-specific five-column table per Option A
@@ -377,6 +378,20 @@ function RationaleCell({ text, suggestedAction }: { text?: string; suggestedActi
   );
 }
 
+// Vision-provenance tag on quote attributions. Text read by the vision model
+// is an AI TRANSCRIPTION of an image/scan, not extracted text — so a quote
+// "verified" against it is verified against the transcription, which can
+// itself mishear the original. An auditor citing such a quote must know to
+// check the original document, so the attribution says so explicitly.
+function VisionProvenanceTag({ record }: { record?: AuditFileRecord }) {
+  if (record?.readMethod !== "vision") return null;
+  return (
+    <span style={{ fontSize: 10, color: "#92400e", marginLeft: 5 }}>
+      · text extracted by vision (AI transcription) — not verified against the original
+    </span>
+  );
+}
+
 function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: ResolveText }) {
   const text = item.sourceFile?.record ? resolveText(item.sourceFile.record) : undefined;
   const quoted = (item.found || item.contradicted) && item.quote;
@@ -417,6 +432,7 @@ function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: Re
                   {sq.sourceFile.url
                     ? <a href={sq.sourceFile.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#4338ca", textDecoration: "none" }}>from {sq.sourceFile.name} ↗</a>
                     : <span style={{ color: "#64748b" }}>from {sq.sourceFile.name}</span>}
+                  <VisionProvenanceTag record={sq.sourceFile.record} />
                 </div>
               )}
             </div>
@@ -450,6 +466,7 @@ function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: Re
             {attrUrl
               ? <a href={attrUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#4338ca", textDecoration: "none" }}>from {attr} ↗</a>
               : <span style={{ color: "#64748b" }}>from {attr}</span>}
+            <VisionProvenanceTag record={item.sourceFile?.record} />
           </div>
         )
       ) : (
@@ -572,10 +589,15 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
   // untruncated text (the on-screen "+N more"/2-line clamp is display-only;
   // the underlying strings were never truncated) — and only THIS tab's mode,
   // never the other tab's data.
+  // Sampling basis: this run's conclusions cover only the files it read.
+  const runFileCount = (isEv ? evidence?.fileLedger : ppd?.fileLedger)?.length;
+  const runAtIso = isEv ? evidence?.runAt : ppd?.runAt;
+  const caveat = samplingCaveat(runFileCount, runAtIso);
   const exportMeta: LineageExportMeta = {
     tab: isEv ? "evidence" : "policy",
     runLabel: runLabel || (isEv ? evidence?.subCriterionId : ppd?.subCriterionId) || "lineage",
-    runAt: (isEv ? evidence?.runAt : ppd?.runAt) || new Date(0).toISOString(),
+    runAt: runAtIso || new Date(0).toISOString(),
+    caveat,
     statusLine: Object.entries(
       lines.reduce<Record<string, number>>((acc, l) => { acc[l.verdictLabel] = (acc[l.verdictLabel] ?? 0) + 1; return acc; }, {})
     ).map(([label, n]) => `${n} ${label}`).join(" · "),
@@ -623,6 +645,8 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
 
       {open && (
         <div style={{ maxHeight: 560, overflowY: "auto" }}>
+          {/* Sampling basis — same sentence the CSV/PDF exports carry. */}
+          <div style={{ fontSize: 10.5, color: "#92400e", padding: "5px 12px", borderBottom: "1px solid #f6f7f9", background: "#fffdf5" }}>{caveat}</div>
           {/* Column headers — aligned with the 3px accent-bar offset below. */}
           <div style={{ display: "flex", position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", borderBottom: "1px solid #eef2f6" }}>
             <div style={{ width: 3, flexShrink: 0 }} />

@@ -20,6 +20,7 @@ import { runLiveFindingObservation, AIClientError } from "../lib/ai/agentRuntime
 import { effectiveSettings } from "../lib/ai/aiClient";
 import { lineApsr, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
 import { resolveFindingType, resolveNcSeverity, findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
+import { FINDINGS_SAMPLING_CAVEAT } from "../lib/samplingCaveat";
 
 const TYPES: (FindingType | "All")[] = ["All", "AFI", "Improvement Action", "Observation", "Quality Action", "Critical Readiness Risk"];
 const SEVERITIES: (Severity | "All")[] = ["All", "Critical", "High", "Medium", "Low"];
@@ -702,6 +703,7 @@ export function Findings() {
           <span style={{ color: "#b91c1c" }}><b>{summaryStats.open}</b> open</span>
           <span style={{ color: "#cbd5e1" }}>·</span>
           <span style={{ color: "#15803d" }}><b>{summaryStats.closed}</b> closed</span>
+          <span style={{ fontSize: 11, color: "#92400e", flexBasis: "100%" }}>{FINDINGS_SAMPLING_CAVEAT}</span>
         </div>
       )}
 
@@ -869,6 +871,19 @@ export function Findings() {
   );
 }
 
+// Amber warning shown wherever an AI-written criteria failed the
+// deterministic verbatim check against the official GD4 text it traces to
+// (findingCriteriaCheck) - the same visual convention as unverified quotes.
+// Editing the criteria clears the flag (the human then owns the wording).
+function CriteriaUnverifiedFlag({ flagged }: { flagged?: boolean }) {
+  if (!flagged) return null;
+  return (
+    <span style={{ fontSize: 10.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "1px 6px", fontWeight: 600, marginLeft: 6 }}>
+      ⚠ does not match the official GD4 wording verbatim - verify before use
+    </span>
+  );
+}
+
 type DraftPatch = Partial<Pick<GroupedFindingDraft, "title" | "observation" | "criteria" | "effect" | "rootCause" | "corrective" | "preventive" | "apsrBullets">>;
 
 function GroupedDraftDetail({
@@ -939,8 +954,17 @@ function GroupedDraftDetail({
               style={{ ...inputStyle, marginTop: 3, fontSize: 12 }}
             />
           </div>
-          <TextSection label="Observation — what was found (WHO · WHAT · WHEN · HOW MANY)" field="observation" />
-          <TextSection label="Criteria — what GD4 requires" field="criteria" />
+          {/* The three validated parts of a finding, per certification-audit
+              practice (evidence + exact requirement + statement of the gap).
+              Same editable fields as before, framed and validated as parts. */}
+          <div style={{ fontSize: 10.5, color: "#64748b", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 6, padding: "5px 8px", marginBottom: 8 }}>
+            A well-formed finding has three parts: <b>1. the gap</b> (title + observation, with its concrete example), <b>2. the exact requirement</b> (criteria - GD4's own words, checked below), and <b>3. the evidence cited</b> (the contributing checklist lines underneath).
+          </div>
+          <TextSection label="Part 1 · Observation — what was found (WHO · WHAT · WHEN · HOW MANY)" field="observation" />
+          <div style={{ marginBottom: 0 }}>
+            <CriteriaUnverifiedFlag flagged={draft.criteriaUnverified} />
+          </div>
+          <TextSection label="Part 2 · Criteria — the exact GD4 requirement text" field="criteria" />
           <TextSection label="Effect — regulatory / band consequence" field="effect" />
           <TextSection label="Root cause" field="rootCause" />
           <TextSection label="Corrective action" field="corrective" />
@@ -1019,6 +1043,7 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
         </div>
       )}
       <Section label="Observation — what was found (WHO · WHAT · WHEN · HOW MANY)" text={f.observation} />
+      {f.criteriaUnverified && <div style={{ marginBottom: 2 }}><CriteriaUnverifiedFlag flagged /></div>}
       <Section label="Criteria — what the standard requires" text={f.criteria} />
       <Section label="Effect — regulatory / certification consequence" text={f.effect} />
       {(f.observation || f.criteria || f.effect) && (f.rootCause || f.corrective || f.preventive) && (

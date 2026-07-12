@@ -104,7 +104,11 @@ export function PromptReview() {
     setGenerating(true);
     try {
       const settings = effectiveSettings(aiSettings, { purpose: "analysis" });
-      const content = await chatComplete([{ role: "user", content: selected.text }], settings, { temperature: 0.3 });
+      // plainText: a user-authored prompt may not mention JSON at all, and
+      // OpenAI rejects json_object requests whose messages don't contain the
+      // word "json" — the lab must run ANY prompt, so let the prompt itself
+      // decide the output format.
+      const content = await chatComplete([{ role: "user", content: selected.text }], settings, { plainText: true, temperature: 0.3 });
       setOutput(content.trim());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

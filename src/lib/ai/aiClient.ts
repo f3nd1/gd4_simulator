@@ -47,8 +47,22 @@ export function verdictTemp(settings: Pick<AISettings, "verdictTemperature">): n
 // `temperature` other than the default (1) for them with a 400, which would
 // otherwise silently drop every call back to the offline simulation. Only
 // send a custom temperature to models that actually accept one.
-function supportsTemperature(model: string): boolean {
+//
+// Exported so Settings and the Calibration Lab can say HONESTLY whether the
+// verdict-temperature dial actually applies to the selected model — the dial
+// was silently ignored on the default model while the Lab recorded the dial's
+// value as if it had been in effect.
+export function supportsTemperature(model: string): boolean {
   return !/^(gpt-5|o1|o3|o4)/.test(model);
+}
+
+// The temperature actually IN EFFECT for a verdict call on these settings:
+// the tuned verdictTemp when the model accepts a temperature parameter, or
+// null ("not applicable — the model decides its own sampling") when it
+// doesn't. Run/measurement records store THIS, never the raw dial value.
+export function effectiveVerdictTemp(settings: Pick<AISettings, "verdictTemperature" | "model">): number | null {
+  const model = settings.model || DEFAULT_MODEL;
+  return supportsTemperature(model) ? verdictTemp(settings) : null;
 }
 
 // Why a run cannot use live AI, in words the user can act on — or null when
@@ -170,24 +184,43 @@ export async function listModels(apiKey: string): Promise<string[]> {
   return ids.filter((id) => /^(gpt-|o\d|chatgpt-)/.test(id)).sort();
 }
 
+// A strict Structured Outputs schema for one call: `schema` is a full JSON
+// Schema object (root must be an object; every property required;
+// additionalProperties:false throughout — OpenAI's strict-mode rules).
+// KEY-ORDER MATTERS: constrained decoding emits fields in schema order, so
+// every verdict schema in this app lists its reasoning/rationale fields
+// BEFORE its verdict field — the model must reason before it decides
+// (reversing this measurably degrades judgement quality).
+export type ChatSchema = { name: string; schema: Record<string, unknown> };
+
 export async function chatComplete(
   messages: AIChatMessage[],
   settings: AISettings,
-  opts?: { temperature?: number; onUsage?: (u: AIUsage) => void; timeoutMs?: number; signal?: AbortSignal }
+  opts?: { temperature?: number; onUsage?: (u: AIUsage) => void; timeoutMs?: number; signal?: AbortSignal; schema?: ChatSchema; plainText?: boolean }
 ): Promise<string> {
   if (!settings.enabled) throw new AIClientError("AI integration is disabled in Settings.");
   if (!settings.apiKey) throw new AIClientError("No OpenAI API key configured in Settings.");
 
   const model = settings.model || DEFAULT_MODEL;
-  const body: Record<string, unknown> = {
-    model,
-    messages: withContext(messages, settings),
-    response_format: { type: "json_object" },
+  // Response format: strict json_schema for verdict calls (eliminates
+  // malformed-JSON failures and schema drift), plain text for the two
+  // prompt-lab calls that never wanted JSON (json_object mode REQUIRES the
+  // word "json" somewhere in the messages — OpenAI rejects the request
+  // otherwise, which silently broke the prompt reviser), json_object for
+  // everything else (unchanged legacy behaviour).
+  const buildBody = (format: "schema" | "json" | "text"): Record<string, unknown> => {
+    const body: Record<string, unknown> = { model, messages: withContext(messages, settings) };
+    if (format === "schema" && opts?.schema) {
+      body.response_format = { type: "json_schema", json_schema: { name: opts.schema.name, strict: true, schema: opts.schema.schema } };
+    } else if (format === "json") {
+      body.response_format = { type: "json_object" };
+    }
+    const temp = opts?.temperature ?? 0.2;
+    if (supportsTemperature(model)) body.temperature = temp;
+    return body;
   };
-  const temp = opts?.temperature ?? 0.2;
-  if (supportsTemperature(model)) body.temperature = temp;
 
-  const res = await fetchWithRetry("https://api.openai.com/v1/chat/completions", {
+  const post = (body: Record<string, unknown>) => fetchWithRetry("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -195,6 +228,20 @@ export async function chatComplete(
     },
     body: JSON.stringify(body),
   }, 3, opts?.timeoutMs, opts?.signal);
+
+  let res = await post(buildBody(opts?.plainText ? "text" : opts?.schema ? "schema" : "json"));
+
+  // Older models reject json_schema with a 400 that names response_format —
+  // fall back ONCE to plain json_object so the call still succeeds (the
+  // downstream parse/verification path is unchanged and handles both).
+  if (!res.ok && res.status === 400 && opts?.schema) {
+    const errText = await res.text().catch(() => "");
+    if (/response_format|json_schema|schema/i.test(errText)) {
+      res = await post(buildBody("json"));
+    } else {
+      throw new AIClientError(`OpenAI request failed (400): ${errText.slice(0, 200)}`);
+    }
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");

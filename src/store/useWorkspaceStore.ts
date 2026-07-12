@@ -50,6 +50,8 @@ import { useChecklistModuleStore } from "./useChecklistModuleStore";
 import { useGoogleDriveStore } from "./useGoogleDriveStore";
 import { usePreCheckChecklistStore } from "./usePreCheckChecklistStore";
 import { computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
+import { selectLineStatusMemories, selectLineStatusCalibration } from "../lib/labParity";
+import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, SpecificChecklistLine, EvidenceDriftCheck } from "../types";
@@ -87,7 +89,7 @@ import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Ref
 import { buildOptionALineWrites } from "../lib/optionAChecklistWrite";
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
-import { describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
+import { effectiveVerdictTemp, describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
@@ -1108,7 +1110,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
           set((st) => ({
             ppdReviewResults: rows
-              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger } }
+              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()) } }
               : st.ppdReviewResults,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
             // Guarded: a timed-out run's late finish must not clear the NEXT
@@ -1272,7 +1274,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Active "Line Status" calibration memories feed the PPD assessment as
           // LEARNED CORRECTIONS — the same selection the staged path uses, so a
           // thumbs-down on a PPD line teaches future runs (see PPDReview.tsx).
-          const ppdMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
+          const ppdMemories = selectLineStatusMemories(get().calibrationMemories);
           ppdMemories.forEach((m) => get().incrementMemoryUsage(m.id));
 
           const ppdLineRefs = requirements.map((r) => r.ref);
@@ -1469,7 +1471,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           };
           set((st) => ({
             evidenceAssessments: rows
-              ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger } }
+              ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()) } }
               : st.evidenceAssessments,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
             // Guarded — see runPPDReview's finish.
@@ -1741,7 +1743,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Active "Line Status" calibration memories feed the evidence
           // assessment as LEARNED CORRECTIONS — same selection the staged path
           // uses, so a thumbs-down on an evidence line teaches future runs.
-          const evMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
+          const evMemories = selectLineStatusMemories(get().calibrationMemories);
           evMemories.forEach((m) => get().incrementMemoryUsage(m.id));
           const result = await runEvidenceAssessment(inputs, evidenceDocText, analysisSettings, {
             criterionId: subCriterionId,
@@ -4107,8 +4109,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           try {
             // Run one full audit per document window, then merge best-of across windows.
             let globalBatchDone = 0;
-            const auditCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
-            const auditMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
+            const auditCalibration = selectLineStatusCalibration(get().calibrationExamples);
+            const auditMemories = selectLineStatusMemories(get().calibrationMemories);
             // Record that these examples/memories fed a live audit run so the AI
             // Memories page shows real usage counts (see incrementMemoryUsage /
             // markCalibrationUsed). Once per run, before the per-window loop.
@@ -4503,6 +4505,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           auditorName,
           auditLive: live,
           aiModel: auditUsage?.model,
+          effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()),
           fileLedger: [...fileRecords],
           aiSummary: verdictLines,
           linesAssessed: verdicts.length,
@@ -4558,6 +4561,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   get().updateCustomFinding(finding.id, {
                     observation: result.observation,
                     criteria: result.criteria,
+                    // Deterministic verbatim check against the official GD4
+                    // text this line traces to — a paraphrased "requirement"
+                    // is flagged in the register, never silently accepted.
+                    criteriaUnverified: !criteriaQuotesRequirement(result.criteria, [line.sourceText, req.requirement, ...req.describeShow]) || undefined,
                     effect: result.effect,
                   });
                   get().pushAIReviewLog({
@@ -5144,8 +5151,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const resolveChunkFile = (chunkId: string): string | undefined => chunkFileNames.get(chunkId);
 
         if (aiSettings.enabled && aiSettings.apiKey) {
-          const stagedCalibration = get().calibrationExamples.filter((e) => e.included && e.module === "Line Status").slice(0, 3);
-          const stagedMemories = get().calibrationMemories.filter((m) => m.status === "active" && m.module === "Line Status").sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0)).slice(0, 5);
+          const stagedCalibration = selectLineStatusCalibration(get().calibrationExamples);
+          const stagedMemories = selectLineStatusMemories(get().calibrationMemories);
           // Same usage tracking as the classic path — once per staged run.
           if (stagedCalibration.length) get().markCalibrationUsed(stagedCalibration.map((e) => e.id));
           stagedMemories.forEach((m) => get().incrementMemoryUsage(m.id));
@@ -5614,6 +5621,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           scope, status: auditHadError ? "failed" : "completed",
           startedAt: new Date(auditStartedAt).toISOString(), endedAt: new Date().toISOString(),
           auditorName, auditLive: live, aiModel: auditUsage?.model,
+          effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()),
           fileLedger: [...fileRecords],
           aiSummary: stagedVerdicts.map((v) => {
             // Real citation trail: union the chunk IDs each APSR dimension cited
@@ -5665,7 +5673,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                     { id: req.id, requirement: req.requirement, describeShow: req.describeShow, expectedEvidence: req.expectedEvidence },
                     { text: line.text, status: line.status }, dim, apsr, analysisSettings
                   );
-                  get().updateCustomFinding(finding.id, { observation: result.observation, criteria: result.criteria, effect: result.effect });
+                  get().updateCustomFinding(finding.id, { observation: result.observation, criteria: result.criteria, criteriaUnverified: !criteriaQuotesRequirement(result.criteria, [line.sourceText, req.requirement, ...req.describeShow]) || undefined, effect: result.effect });
                 } catch { /* non-fatal */ }
               }));
             })();

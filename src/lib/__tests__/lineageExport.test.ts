@@ -115,6 +115,18 @@ describe("buildLineagePdfHtml", () => {
     expect(html).toContain("&lt;script&gt;");
   });
 
+  it("prints the sampling-basis caveat on both exports when provided, and omits it cleanly when absent (old callers)", () => {
+    const caveat = "Assessed only the 3 files provided on 11 Jul 2026. Conclusions do not cover records that were not uploaded.";
+    const csv = buildLineageCsv(policyMeta({ caveat }), [multiFileRow()]);
+    expect(csv).toContain(`"Sampling basis: ${caveat}"`);
+    const html = buildLineagePdfHtml(policyMeta({ caveat }), [multiFileRow()]);
+    expect(html).toContain("Sampling basis:");
+    expect(html).toContain("Conclusions do not cover records that were not uploaded.");
+    // No caveat → both exports unchanged.
+    expect(buildLineageCsv(policyMeta(), [multiFileRow()])).not.toContain("Sampling basis");
+    expect(buildLineagePdfHtml(policyMeta(), [multiFileRow()])).not.toContain("Sampling basis");
+  });
+
   it("adds a Suggested Action column+cell on the evidence tab only", () => {
     const evHtml = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [multiFileRow({ suggestedAction: "Add owner and timeline fields to the remaining 17 unassigned actions." })]);
     expect(evHtml).toContain("<th>Suggested Action</th>");

@@ -52,11 +52,25 @@ export function recommendFromConsistency(r: ConsistencyTestResult): Recommendati
       evidence: [r.summary],
     }];
   }
-  const temp = r.temperature ?? 0.1;
+  const temp = r.effectiveTemperature ?? r.temperature ?? 0.1;
   const disagreeing = r.lines.filter((l) => {
     const vs = l.verdicts.filter((v): v is string => v != null);
     return vs.length >= 2 && !vs.every((v) => v === vs[0]);
   });
+  // effectiveTemperature === null means the model IGNORES the temperature
+  // parameter entirely (gpt-5/o-series) — recommending "lower the
+  // temperature" would be a lie, since the dial has no effect on this model.
+  // The variation is the model's own; treat the disagreeing lines as
+  // genuinely needing human review / firmer rule wording instead.
+  if (r.effectiveTemperature === null) {
+    return [{
+      id: `cons-${r.subCriterionId}-model-temp`, severity: "advisory",
+      title: `Agreement ${r.agreementPct}% — the selected model ignores the temperature setting`,
+      reasoning: `This model does not accept a temperature parameter, so the verdict-consistency dial cannot reduce this variation — it comes from the model itself. The ${disagreeing.length} disagreeing line(s) should be flagged for MANDATORY human review, or the Met/Partial rule wording tightened so repeated runs resolve them the same way (advisory — a prompt change, not a one-click apply).`,
+      evidence: disagreeing.map((l) => `${l.ref} — ${l.text.slice(0, 80)}: ${l.verdicts.map((v) => v ?? "—").join(" / ")}`),
+      copyableInstruction: `In the GD4 assessment prompts (src/lib/ai/agentRuntime.ts), the Met/Partial boundary is still ambiguous for these requirement lines on ${r.subCriterionId}: ${disagreeing.map((l) => l.ref).join(", ")}. Review each line's wording and add an explicit, deterministic rule for when it is Met vs Partial so repeated runs resolve it the same way. Do not tune to specific evidence — generalise the rule. Note: the model in use ignores the temperature parameter, so sampling settings cannot fix this.`,
+    }];
+  }
   if (temp > TEMP_FLOOR) {
     return [{
       id: `cons-${r.subCriterionId}-temp`, severity: "action",

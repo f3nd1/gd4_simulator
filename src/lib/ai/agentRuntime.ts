@@ -6,7 +6,8 @@
 // official GD4 scoring engine never depends on a live AI call.
 
 import type { AgentDefinition, ItemEvidence, AISettings, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
-import { chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage } from "./aiClient";
+import { chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage, type ChatSchema } from "./aiClient";
+import { sObj, sArr, sStr, sBool, sEnum } from "./schemaHelpers";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
 import { buildSystemPrompt, buildDomainBlock, type SkillCalibrationExample, type SkillCalibrationMemory } from "./skills";
@@ -14,6 +15,82 @@ import { domainExpertiseFor } from "../../data/skills/domainExpertise";
 import type { AuditorProfile, PanelAuditorReview, PanelCallLog, PanelReviewPosition, PanelReviewResult, PanelSynthesis } from "../../types";
 import { perspectiveOf, perspectiveLabel, perspectiveGuidance, detectPanelDisagreement } from "../reviewPanel";
 import { normalizeAuditRef } from "../gd4Refs";
+
+// ─── Strict Structured Outputs schemas for every verdict-producing call ─────
+// Each mirrors the response shape its prompt already describes — the schema
+// changes HOW the reply is structured (guaranteed valid JSON, no drift),
+// never WHAT the model is asked to assess. Reasoning/rationale fields are
+// listed BEFORE verdict fields at every level (constrained decoding emits
+// fields in schema order — the model must reason before it decides). The
+// existing parse + quote/clause verification stays as defence in depth.
+
+const ITEM_REVIEW_SCHEMA: ChatSchema = { name: "item_review", schema: sObj({
+  justification: sStr, higherBand: sStr, confidence: sEnum("Low", "Medium", "High"),
+}) };
+
+const CLOSURE_REVIEW_SCHEMA: ChatSchema = { name: "closure_review", schema: sObj({
+  reason: sStr, evidenceNeeded: sStr, verdict: sEnum("Acceptable", "Partial", "Maintain Finding", "Escalate"),
+}) };
+
+const PANEL_REVIEW_SCHEMA: ChatSchema = { name: "panel_review", schema: sObj({
+  analysis: sStr, classification: sStr, severity: sStr, rootCauseDirection: sStr,
+}) };
+
+const STAGED_COVERAGE_SCHEMA: ChatSchema = { name: "staged_coverage", schema: sObj({
+  results: sArr(sObj({ ref: sStr, note: sStr, chunkIds: sArr(sStr), covered: sEnum("Yes", "Partial", "No") })),
+}) };
+
+const STAGED_OUTCOME_SCHEMA: ChatSchema = { name: "staged_outcome_review", schema: sObj({
+  results: sArr(sObj({ ref: sStr, note: sStr, chunkIds: sArr(sStr), outcomeEvident: sBool, reviewEvident: sBool })),
+}) };
+
+const apsrDim = (...statuses: string[]) => sObj({ note: sStr, sourceChunkIds: sArr(sStr), status: sEnum(...statuses) });
+const FOLDER_AUDIT_SCHEMA: ChatSchema = { name: "folder_audit_batch", schema: sObj({
+  lines: sArr(sObj({
+    lineId: sStr,
+    approach: apsrDim("Meeting", "Beginning", "Not evident"),
+    processes: apsrDim("Deployed", "Weak", "Not evident"),
+    systemsOutcomes: apsrDim("Evident", "Limited", "Not evident"),
+    review: apsrDim("Evident", "Not evident"),
+    overallReason: sStr,
+    sources: sArr(sStr),
+  })),
+  folderWarnings: sArr(sStr),
+}) };
+
+const PPD_REVIEW_SCHEMA: ChatSchema = { name: "ppd_requirements_review", schema: sObj({
+  results: sArr(sObj({
+    ref: sStr,
+    subClauses: sArr(sObj({
+      text: sStr, clause: sStr, quote: sStr,
+      spreadQuotes: sArr(sObj({ quote: sStr, chunkId: sStr })),
+      rationale: sStr, chunkId: sStr,
+      verdict: sEnum("documented", "not documented"),
+    })),
+    shortComment: sStr, fullComment: sStr,
+    verdict: sEnum("Adequate", "Partial", "Not documented"),
+    promises: sArr(sObj({ promiseText: sStr, sourceQuote: sStr, chunkId: sStr })),
+    suggestedRewrite: sStr,
+    chunkIds: sArr(sStr),
+    supportQuote: sStr,
+  })),
+}) };
+
+const PPD_CONTRADICTION_SCHEMA: ChatSchema = { name: "ppd_contradictions", schema: sObj({
+  contradictions: sArr(sObj({ description: sStr, quoteA: sStr, chunkA: sStr, quoteB: sStr, chunkB: sStr })),
+}) };
+
+const EVIDENCE_ASSESSMENT_SCHEMA: ChatSchema = { name: "evidence_assessment", schema: sObj({
+  results: sArr(sObj({
+    ref: sStr, evidenceSummary: sStr, comment: sStr,
+    promiseChecks: sArr(sObj({
+      promiseText: sStr, evidence: sStr, chunkIds: sArr(sStr), quote: sStr, rationale: sStr, chunkId: sStr,
+      verdict: sEnum("evidenced", "not evidenced", "contradicted"),
+    })),
+    verdict: sEnum("Met", "Partial", "Not met"),
+    chunkIds: sArr(sStr), evidenceQuote: sStr, suggestedAction: sStr,
+  })),
+}) };
 
 export { AIClientError };
 
@@ -66,7 +143,7 @@ export async function runLiveItemReview(
   const content = await chatComplete(
     [{ role: "system", content: system }, { role: "user", content: user }],
     settings,
-    { onUsage: (u) => { usage = u; } }
+    { schema: ITEM_REVIEW_SCHEMA, onUsage: (u) => { usage = u; } }
   );
   const parsed = parseJSONObject(content, ["justification", "higherBand", "confidence"]);
 
@@ -263,7 +340,7 @@ export async function runLiveClosureReview(
   const content = await chatComplete(
     [{ role: "system", content: system }, { role: "user", content: user }],
     settings,
-    { onUsage: (u) => { usage = u; } }
+    { schema: CLOSURE_REVIEW_SCHEMA, onUsage: (u) => { usage = u; } }
   );
   const parsed = parseJSONObject(content);
 
@@ -484,7 +561,7 @@ Respond with JSON only: {"analysis": string, "classification": string, "severity
       const content = await chatComplete(
         [{ role: "system", content: system }, { role: "user", content: findingBlock }],
         settings,
-        { temperature: verdictTemp(settings), onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+        { schema: PANEL_REVIEW_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { callUsage = u; opts.onUsage?.(u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
       );
       const parsed = parseJSONObject(content);
       const analysisRaw = typeof parsed.analysis === "string" && parsed.analysis.trim() ? parsed.analysis.trim() : content.trim();
@@ -740,7 +817,7 @@ For EVERY non-empty positive claim (i.e. status is not "Not evident"), cite the 
   const content = await chatComplete(
     [{ role: "system", content: system }, { role: "user", content: user }],
     settings,
-    { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS },
+    { schema: FOLDER_AUDIT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS },
   );
   const arr = parseJSONArray(content);
   // Extract optional folderWarnings from the same response object (backward
@@ -1265,7 +1342,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: STAGED_COVERAGE_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1424,7 +1501,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: STAGED_COVERAGE_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -1565,7 +1642,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: STAGED_OUTCOME_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -2037,7 +2114,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: PPD_REVIEW_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -2196,7 +2273,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
             { role: "user", content: `Policy & Procedure documents (chunk IDs in headers)${windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}]` : ""}:\n"""\n${win.text}\n"""\n\nList every internal contradiction, or an empty array if there are none.` },
           ],
           settings,
-          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: PPD_CONTRADICTION_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const found = Array.isArray(parsed.contradictions) ? parsed.contradictions as Array<Record<string, unknown>> : [];
@@ -2522,7 +2599,7 @@ Respond with JSON only:
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: EVIDENCE_ASSESSMENT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];

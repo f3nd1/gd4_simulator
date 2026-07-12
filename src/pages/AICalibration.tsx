@@ -10,6 +10,7 @@ import { useAISettingsStore } from "../store/useAISettingsStore";
 import { benchmarkSubCriteria, type BenchmarkAFI, type BenchmarkFindingPattern, type BenchmarkSource } from "../data/benchmarkAFIs";
 import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA, GD4_CRITERIA } from "../data/gd4Requirements";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
+import { sObj, sArr, sStr, sEnum } from "../lib/ai/schemaHelpers";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { ConsistencyTab, AvsBTab, RecommendationsPanel } from "./CalibrationLab";
@@ -217,7 +218,10 @@ function BenchmarkTab() {
 "missed" — the tool rated the area Adequate/Met or did not flag it at all.
 Give a one-line justification naming what matched or what was missed. Respond with JSON only: {"results": [{"id": string, "status": "caught"|"partial"|"missed", "justification": string}]}`;
         const user = `REAL assessor findings for sub-criterion ${sc}:\n${afis.map((a) => `[${a.id}] (${a.findingPattern}) ${a.findingText}`).join("\n\n")}\n\nThe tool's current results for sub-criterion ${sc}:\n${digest}`;
-        const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { temperature: 0.1 });
+        // Strict schema: justification listed BEFORE status so the judge
+        // reasons before it verdicts (same rule as every verdict schema).
+        const MATCH_JUDGE_SCHEMA = { name: "benchmark_match_judge", schema: sObj({ results: sArr(sObj({ id: sStr, justification: sStr, status: sEnum("caught", "partial", "missed") })) }) };
+        const content = await chatComplete([{ role: "system", content: system }, { role: "user", content: user }], settings, { schema: MATCH_JUDGE_SCHEMA, temperature: 0.1 });
         let parsed: unknown;
         try { parsed = JSON.parse(content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { parsed = null; }
         const results = parsed && typeof parsed === "object" && Array.isArray((parsed as { results?: unknown }).results)

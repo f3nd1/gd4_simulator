@@ -26,6 +26,10 @@ export type LineageExportMeta = {
   runLabel: string;   // sub-criterion id + title, e.g. "6.2 Management Review"
   runAt: string;      // ISO date of the run this matrix reflects
   statusLine: string; // e.g. "2 Documented · 1 Partly · 1 Not covered · 1 Not checked"
+  // Sampling-basis caveat (samplingCaveat.ts) — printed on both exports so a
+  // reader away from the app knows the conclusions cover only the files
+  // provided, never unseen records. Optional so older callers still export.
+  caveat?: string;
 };
 
 function timestamp(): string {
@@ -72,7 +76,10 @@ export function buildLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[
     r.rationale || "—",
     ...(meta.tab === "evidence" ? [r.suggestedAction || "—"] : []),
   ]);
-  return toCsv(CSV_HEADERS[meta.tab], csvRows);
+  const csv = toCsv(CSV_HEADERS[meta.tab], csvRows);
+  // Sampling basis as a trailing note row — the export travels without the
+  // app, so the caveat must travel with it. Always quoted for CSV safety.
+  return meta.caveat ? `${csv}\r\n"Sampling basis: ${meta.caveat.replace(/"/g, '""')}"` : csv;
 }
 
 export function downloadLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[]): void {
@@ -125,6 +132,7 @@ export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExport
   <div class="meta">Run date: ${escapeHtml(formatRunAt(meta.runAt))}</div>
   <div class="meta">Overall: ${escapeHtml(meta.statusLine)}</div>
   <div class="caption">Expand rows in-app for quoted passages and per-clause rationale.</div>
+  ${meta.caveat ? `<div class="caption" style="color:#92400e;">Sampling basis: ${escapeHtml(meta.caveat)}</div>` : ""}
   <table>
     <thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead>
     <tbody>${rowsHtml}</tbody>

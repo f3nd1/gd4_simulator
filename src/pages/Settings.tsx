@@ -13,7 +13,7 @@ import { getSupabaseClient, getSupabaseConfig } from "../lib/supabaseClient";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
-import { listModels, verdictTemp } from "../lib/ai/aiClient";
+import { listModels, verdictTemp, supportsTemperature } from "../lib/ai/aiClient";
 import { filterModelSuggestions } from "../lib/modelPicker";
 
 // Re-hydrate every store that uses workspaceStorage so that when Supabase
@@ -111,6 +111,9 @@ function PanelModeSettings() {
 export function Settings() {
   const { apiKey, model, utilityModel, visionModel, enabled, setApiKey, setModel, setUtilityModel, setVisionModel, setEnabled, clearApiKey, setVerdictTemperature } = useAISettingsStore();
   const verdictTemperature = useAISettingsStore((s) => verdictTemp(s));
+  // Verdict calls run on the analysis model — the temperature honesty note
+  // below checks THAT model, not the utility/vision ones.
+  const analysisModel = model || "gpt-5-mini";
   const [draftKey, setDraftKey] = useState(apiKey);
   // apiKey now rehydrates asynchronously (Supabase round-trip, or the
   // timeout fallback), so it can still be the empty default when this
@@ -430,6 +433,11 @@ create policy "anon read/write" on public.workspace_state
             Applies to all assessment calls: staged audit passes, PPD review, evidence assessment, and auditor-panel classification. Generative prose (finding/closure drafting, roll-up narratives) keeps its own fixed setting.
             {" "}Verify the effect with the <Link to="/ai-calibration" style={{ color: "#4338ca", fontWeight: 600 }}>AI Calibration → Consistency</Link> test.
           </span>
+          {!supportsTemperature(analysisModel) && (
+            <div style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px", marginTop: 6, maxWidth: 560 }}>
+              ⚠ Your analysis model (<b>{analysisModel}</b>) <b>ignores this dial</b> — gpt-5 and o-series models do not accept a temperature parameter, so verdict calls on it run with the model's own sampling regardless of the setting. The dial still applies if you switch to a model like gpt-4o-mini. Run records and Calibration Lab tests now store the temperature actually in effect ("n/a" for this model).
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

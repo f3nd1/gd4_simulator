@@ -223,6 +223,12 @@ export type Finding = {
   // and via AI draft / manual entry on the Findings form.
   observation?: string;  // what was found: WHO, WHAT, WHEN, HOW MANY
   criteria?: string;     // what the GD4 standard requires (cited to clause)
+  // True when the AI-written `criteria` failed the deterministic verbatim
+  // check against the official GD4 text it traces to (findingCriteriaCheck)
+  // — flagged in the register like an unverified quote, never silently
+  // accepted. Cleared when a human edits the criteria. undefined on findings
+  // from before this field, and on human-authored criteria.
+  criteriaUnverified?: boolean;
   effect?: string;       // regulatory / certification consequence
   rootCause?: string;
   corrective?: string;
@@ -379,6 +385,10 @@ export type GroupedFindingDraft = {
   title?: string;
   observation?: string;
   criteria?: string;
+  // Same semantics as Finding.criteriaUnverified: the AI-written criteria
+  // failed the deterministic verbatim check against the group's official GD4
+  // source texts. Cleared when a human edits the criteria on the draft.
+  criteriaUnverified?: boolean;
   effect?: string;
   rootCause?: string;
   corrective?: string;
@@ -911,6 +921,10 @@ export type PPDReviewResult = {
   // values/timelines/procedures for the same thing) — flagged sub-criterion-
   // wide and compiled into findings alongside the per-line gaps.
   contradictions?: PPDContradiction[];
+  // Temperature ACTUALLY in effect for this run's verdict calls: the tuned
+  // value when the model honours a temperature parameter, null when it
+  // doesn't (gpt-5/o-series). undefined on runs from before this field.
+  effectiveTemperature?: number | null;
   // Per-file read ledger for the policy files this run read, so the PPD Review
   // tab can show the same clickable/inspectable file list (extracted text) the
   // staged audit shows. Metadata only — the extracted text lives in fileTextCache.
@@ -982,6 +996,10 @@ export type EvidenceAssessmentResult = {
   derivedFromAudit?: boolean;
   // Short audit-run id, shared with the AI Review Log entry from this run.
   runId?: string;
+  // Temperature ACTUALLY in effect for this run's verdict calls: the tuned
+  // value when the model honours a temperature parameter, null when it
+  // doesn't (gpt-5/o-series). undefined on runs from before this field.
+  effectiveTemperature?: number | null;
   // Per-file ledger for this Option A evidence run, in the same AuditFileRecord
   // shape the staged path uses, so the two paths' file-ledger CSVs line up.
   // Undefined when the rows were derived from a prior staged audit (no fresh
@@ -1132,6 +1150,9 @@ export type AuditRunRecord = {
   auditorName?: string;
   auditLive: boolean;
   aiModel?: string;
+  // Temperature ACTUALLY in effect for this run's verdict calls (null = the
+  // model ignores the temperature parameter). undefined on older records.
+  effectiveTemperature?: number | null;
   fileLedger: AuditFileRecord[];
   aiSummary: AuditAISummaryLine[];
   linesAssessed: number;
