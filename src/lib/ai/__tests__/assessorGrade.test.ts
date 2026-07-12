@@ -720,6 +720,101 @@ The Recruitment Manager oversees agent onboarding. The contract period with each
   });
 });
 
+describe("extraction visibility + the all-rejected honesty split (collapse-to-Not-met investigation)", () => {
+  const HR_SOURCE = `[CHUNK:C001] --- hr.docx ---\nThe HR Manager reviews staffing quarterly.`;
+  const REAL_QUOTE = "The HR Manager reviews staffing quarterly.";
+
+  it("PPD: candidates returned but ALL rejected by verification → 'Not assessed', NEVER the false 'nothing addresses this' claim", async () => {
+    // Two fabricated quotes — the model extracted SOMETHING, it just doesn't
+    // verify. The old behaviour fell through to the deterministic "Not
+    // documented" floor whose comment claimed extraction found no passage —
+    // a false statement that fabricated a gap from a pipeline defect.
+    mockTwoPass({
+      ppdExtract: () => JSON.stringify({
+        results: [{ ref: "1.1.1.DS1", candidates: [
+          { aspect: "a", quote: "This paraphrased sentence is not in the source document at all.", clause: "", chunkId: "C001" },
+          { aspect: "b", quote: "Neither is this second reworded passage from the model.", clause: "", chunkId: "C001" },
+        ], promises: [] }],
+      }),
+      ppdJudge: () => { throw new Error("judge must not run — no verified candidates"); },
+    });
+    const result = await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], HR_SOURCE, SETTINGS, {});
+    const row = result.rows[0];
+    expect(row.verdict).toBe("Not assessed");
+    expect(row.verdict).not.toBe("Not documented");
+    expect(row.fullComment).toContain("none could be verified");
+    expect(row.fullComment).toContain("NOT evidence that the requirement is undocumented");
+    expect(row.fullComment).not.toContain("found no passage addressing");
+    expect(row.extractionStats).toEqual({ raw: 2, verified: 0 });
+  });
+
+  it("Evidence: candidates returned but ALL rejected → 'Not assessed', never a fabricated deterministic 'Not met'", async () => {
+    mockTwoPass({
+      evExtract: () => JSON.stringify({
+        results: [{ ref: "3.1.1.DS2.e", candidates: [
+          { aspect: "prohibition clause", quote: "Agents shall never collect any monies whatsoever from any student.", kind: "record", chunkId: "C001" },
+        ] }],
+      }),
+      evJudge: () => { throw new Error("judge must not run — no verified candidates"); },
+    });
+    const result = await runEvidenceAssessment(
+      [{ ref: "3.1.1.DS2.e", requirementText: "Non-collection of monies", ppdVerdict: "Adequate", ppdExtract: "d", promises: [{ promiseText: "No monies collected from students", sourceQuote: "", chunkId: "C001" }] }],
+      HR_SOURCE, SETTINGS, {}
+    );
+    const row = result.rows[0];
+    // Old behaviour: PPD Adequate + promises + zero verified → deterministic
+    // "Not met" (the exact mechanism behind DS2.e's Not met ×5).
+    expect(row.verdict).toBe("Not assessed");
+    expect(row.comment).toContain("none could be verified");
+    expect(row.comment).toContain("NOT evidence that the requirement is unimplemented");
+    expect(row.extractionStats).toEqual({ raw: 1, verified: 0 });
+  });
+
+  it("judged rows carry extraction stats (raw vs verified) for the drill-in", async () => {
+    mockTwoPass({
+      ppdExtract: () => JSON.stringify({
+        results: [{ ref: "1.1.1.DS1", candidates: [
+          { aspect: "real", quote: REAL_QUOTE, clause: "", chunkId: "C001" },
+          { aspect: "fabricated", quote: "A reworded sentence that fails verification against the source.", clause: "", chunkId: "C001" },
+        ], promises: [] }],
+      }),
+      ppdJudge: () => JSON.stringify({ results: [{ ref: "1.1.1.DS1", subClauses: [], verdict: "Adequate", shortComment: "x", fullComment: "x", suggestedRewrite: "", chunkIds: ["C001"], supportQuote: "" }] }),
+    });
+    const result = await runPPDRequirementsReview([{ ref: "1.1.1.DS1", gd4ItemId: "1.1.1", requirementText: "x" }], HR_SOURCE, SETTINGS, {});
+    expect(result.rows[0].verdict).toBe("Adequate");
+    expect(result.rows[0].extractionStats).toEqual({ raw: 2, verified: 1 });
+  });
+
+  it("evidence zero-raw floor still fires deterministically, now with the explicit '(0 extracted)' count and stats", async () => {
+    mockTwoPass({
+      evExtract: () => JSON.stringify({ results: [{ ref: "1.1.1.DS1", candidates: [] }] }),
+    });
+    const result = await runEvidenceAssessment(
+      [{ ref: "1.1.1.DS1", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [{ promiseText: "p", sourceQuote: "", chunkId: "C001" }] }],
+      HR_SOURCE, SETTINGS, {}
+    );
+    const row = result.rows[0];
+    expect(row.verdict).toBe("Not met"); // Adequate + promises, E=0 — unchanged
+    expect(row.comment).toContain("(0 extracted)");
+    expect(row.extractionStats).toEqual({ raw: 0, verified: 0 });
+  });
+
+  it("the evidence EXTRACTION prompt now handles prohibition/negative requirements (the DS2.e blind spot)", async () => {
+    const systems: string[] = [];
+    mockChat.mockImplementation(async (messages) => {
+      const system = String(messages?.[0]?.content ?? "");
+      systems.push(system);
+      if (system.includes("EXTRACTION pass")) return JSON.stringify({ results: [{ ref: "1.1.1.DS1", candidates: [{ aspect: "x", quote: REAL_QUOTE, kind: "record", chunkId: "C001" }] }] });
+      return JSON.stringify({ results: [{ ref: "1.1.1.DS1", evidenceSummary: "x", verdict: "Met", comment: "x", promiseChecks: [], chunkIds: ["C001"] }] });
+    });
+    await runEvidenceAssessment([{ ref: "1.1.1.DS1", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [] }], HR_SOURCE, SETTINGS, {});
+    const extractSystem = systems.find((s) => s.includes("EXTRACTION pass"))!;
+    expect(extractSystem).toContain("PROHIBITION / NEGATIVE requirements");
+    expect(extractSystem).toContain("no record can show an absence");
+    expect(extractSystem).toContain("clause STATING the prohibition");
+  });
+});
+
 describe("live-run visibility: window-start carries chunk IDs, batch-failed carries a real error (stall diagnosis)", () => {
   it("PPD: window-start.chunkIds names the chunk(s) actually in this window's text", async () => {
     mockTwoPass({
@@ -860,6 +955,7 @@ The HR Manager reviews staffing quarterly.`;
     const row = result.rows[0];
     expect(row.verdict).toBe("Not documented");
     expect(row.shortComment).toContain("no relevant passage was found");
-    expect(row.fullComment).toContain("found no passage addressing this requirement");
+    expect(row.fullComment).toContain("returned no candidate passage for this requirement (0 extracted)");
+    expect(row.extractionStats).toEqual({ raw: 0, verified: 0 });
   });
 });

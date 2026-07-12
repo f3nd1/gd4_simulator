@@ -2150,6 +2150,12 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
   // missing data, never a real absence.
   const extractedOk = new Set<string>();
   const extractFailedRefs = new Set<string>();
+  // How many candidates the model RETURNED per ref, before verification —
+  // pooled across windows. "Returned 4, none verified" is an extraction/
+  // verification defect and must never be presented as "nothing in the
+  // document addresses this line" (the silent conflation behind the
+  // measured collapse-to-Not-met investigation).
+  const rawCandidateCount = new Map<string, number>();
 
   const addCandidate = (ref: string, cand: PPDCandidate) => {
     const key = `${ref}::${normaliseForQuoteMatch(cand.quote)}`;
@@ -2222,6 +2228,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           // verbatim excerpt — the judge must never see a passage that is not
           // actually in the PPD (deterministic gate, not an AI opinion).
           const rawCands = Array.isArray(res.candidates) ? res.candidates as Array<Record<string, unknown>> : [];
+          rawCandidateCount.set(r.ref, (rawCandidateCount.get(r.ref) ?? 0) + rawCands.length);
           for (const c of rawCands) {
             const quote = typeof c.quote === "string" ? c.quote.trim() : "";
             if (!quote || !quoteExistsInSource(quote, policyDocText)) continue;
@@ -2413,8 +2420,13 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
   const rows: PPDReviewRow[] = requirements.map((r) => {
     const judged = judgedByRef.get(r.ref);
     const pooledPromises = promisesByRef.get(r.ref);
+    // Pass 1 visibility on every row: how many candidate passages the model
+    // returned for this line vs how many survived verbatim verification.
+    // "N raw → 0 verified" and "0 raw" are different diagnoses and must
+    // never be conflated (see the branches below).
+    const extractionStats = { raw: rawCandidateCount.get(r.ref) ?? 0, verified: candByRef.get(r.ref)?.length ?? 0 };
     if (!judged) {
-      const hadCandidates = (candByRef.get(r.ref)?.length ?? 0) > 0;
+      const hadCandidates = extractionStats.verified > 0;
       // A line never decided: its judge call failed / the run stopped (it had
       // candidates), or extraction never covered it. Honest "Not assessed" —
       // NOT a fabricated "Not documented" gap.
@@ -2430,19 +2442,39 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
             ? "Not assessed — the run was stopped before this requirement line was reviewed. Re-run the PPD review to assess it."
             : "Not assessed — the AI call covering this requirement line failed. Re-run the PPD review to assess it.",
           chunkIds: [],
+          extractionStats,
         };
       }
-      // Extraction covered this line cleanly and found NOTHING — a
-      // deterministic "Not documented", not an AI coin-flip on empty input.
+      // The model DID return passages but NONE verified as verbatim source
+      // text. That is an extraction/verification defect (paraphrased quotes,
+      // OCR-mangled source), NOT proof the requirement is undocumented —
+      // ruling "Not documented" here would fabricate a gap from a pipeline
+      // failure, so the honest verdict is "Not assessed".
+      if (extractionStats.raw > 0) {
+        return {
+          ref: r.ref,
+          gd4ItemId: r.gd4ItemId,
+          requirementText: r.requirementText,
+          verdict: "Not assessed" as PPDVerdict,
+          shortComment: `Not assessed — the extraction pass returned ${extractionStats.raw} passage${extractionStats.raw === 1 ? "" : "s"} for this line but none verified as verbatim source text.`,
+          fullComment: `Not assessed — the extraction pass returned ${extractionStats.raw} candidate passage${extractionStats.raw === 1 ? "" : "s"} for this requirement, but none could be verified as an exact excerpt of the source documents, so no verdict was reached. This usually means the model paraphrased its quotes instead of copying them, or the document text reached the app in a form the verifier cannot match (e.g. OCR/vision artifacts). Re-run the PPD review; if it persists, this is an extraction defect — NOT evidence that the requirement is undocumented.`,
+          chunkIds: [],
+          extractionStats,
+        };
+      }
+      // Extraction covered this line cleanly and the model returned ZERO
+      // candidates — a deterministic "Not documented", not an AI coin-flip
+      // on empty input.
       return {
         ref: r.ref,
         gd4ItemId: r.gd4ItemId,
         requirementText: r.requirementText,
         verdict: "Not documented" as PPDVerdict,
         shortComment: "It was not evident that the PEI had documented this requirement in its PPD — no relevant passage was found.",
-        fullComment: "It was not evident that the PEI had documented this requirement in its PPD. The extraction pass read every provided Policy & Procedure document and found no passage addressing this requirement.",
+        fullComment: "It was not evident that the PEI had documented this requirement in its PPD. The extraction pass read every provided Policy & Procedure document and returned no candidate passage for this requirement (0 extracted).",
         chunkIds: [],
         promises: pooledPromises?.length ? pooledPromises : undefined,
+        extractionStats,
       };
     }
     // An "Adequate" verdict that cannot point at any supporting PPD chunk is
@@ -2469,6 +2501,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       // Only carry the exact quote for a positive, cited verdict — a downgraded
       // or Not-documented line shows the passage without a (stale) highlight.
       supportQuote: (verdict === "Adequate" || verdict === "Partial") ? judged.supportQuote : undefined,
+      extractionStats,
     };
   });
 
@@ -2557,6 +2590,11 @@ export type EvidenceAssessmentLineResult = {
   // already identified, never a generic template. Only ever populated for
   // Partial/Not met (empty string for Met, per the prompt's own honesty rule).
   suggestedAction?: string;
+  // Pass 1 visibility: candidate passages the extraction pass RETURNED for
+  // this line vs how many survived verbatim verification. "N raw → 0
+  // verified" (extraction defect) and "0 raw" (genuinely nothing found)
+  // are different diagnoses — this field is what tells them apart.
+  extractionStats?: { raw: number; verified: number };
 };
 
 export type EvidenceAssessmentRunResult = {
@@ -2601,6 +2639,8 @@ For each requirement line return candidates, one entry per relevant passage:
 - kind: "record" when the passage is from an actual implementation record (a completed/signed form, a dated log or register entry, minutes, a report, a filled checklist); "policy" when it is from a policy/SOP/manual/handbook that merely describes the process.
 - chunkId: the chunk ID from the document header the quote came from (e.g. "C001").
 - aspect: 3-8 words naming what the passage evidences (name the promise number where one applies, e.g. "promise 2: peer review record").
+
+PROHIBITION / NEGATIVE requirements ("non-collection of monies…", "must not…", "under any circumstance"): no record can show an absence, so NEVER return an empty list merely because nothing "shows" the negative happening. The passages to extract for these lines are: the signed contract / code-of-conduct clause STATING the prohibition (kind "record" when it sits in a signed/executed document), any fee/receipt/complaint entry bearing on the subject, and any record that CONTRADICTS the prohibition. The judge decides what they prove — your job is only to surface them.
 
 An empty candidates array is the correct answer when nothing in this window bears on the line.
 
@@ -2663,6 +2703,10 @@ Respond with JSON only:
   // Refs whose AI calls failed and never succeeded — surfaced per line as
   // "Assessment failed — retry" so one stuck call cannot silently vanish.
   const failedRefs = new Set<string>();
+  // Raw candidates the model returned per ref, before verification — same
+  // diagnostic as the PPD side: "returned but none verified" is a pipeline
+  // defect, never proof that no evidence exists.
+  const rawCandidateCount = new Map<string, number>();
 
   const addCandidate = (ref: string, cand: EvCandidate) => {
     const key = `${ref}::${normaliseForQuoteMatch(cand.quote)}`;
@@ -2745,6 +2789,7 @@ Respond with JSON only:
           // A candidate survives ONLY when its quote verifies as a real
           // verbatim excerpt of the evidence text (deterministic gate).
           const rawCands = Array.isArray(res.candidates) ? res.candidates as Array<Record<string, unknown>> : [];
+          rawCandidateCount.set(r.ref, (rawCandidateCount.get(r.ref) ?? 0) + rawCands.length);
           for (const c of rawCands) {
             const quote = typeof c.quote === "string" ? c.quote.trim() : "";
             if (!quote || !quoteExistsInSource(quote, evidenceDocText)) continue;
@@ -2863,6 +2908,8 @@ Respond with JSON only:
 
   const rows: EvidenceAssessmentLineResult[] = inputs.map((inp) => {
     const best = judgedByRef.get(inp.ref);
+    // Pass 1 visibility on every row — raw candidates returned vs verified.
+    const extractionStats = { raw: rawCandidateCount.get(inp.ref) ?? 0, verified: candByRef.get(inp.ref)?.length ?? 0 };
     if (best) {
       const verifiedComment = flagUnverifiedQuotes(best.comment || "", evidenceDocText);
       // Code-level APSR Approach hard-gate: a line whose PPD verdict is not
@@ -2878,6 +2925,7 @@ Respond with JSON only:
           promiseChecks: best.promiseChecks,
           evidenceQuote: best.evidenceQuote,
           suggestedAction: best.suggestedAction || undefined,
+          extractionStats,
         };
       }
       // A "Met" verdict that cannot cite any evidence chunk is downgraded to
@@ -2891,6 +2939,7 @@ Respond with JSON only:
           chunkIds: [],
           promiseChecks: best.promiseChecks,
           suggestedAction: best.suggestedAction || undefined,
+          extractionStats,
         };
       }
       // Promise hard-gate: a "Met" line with an unfulfilled or contradicted
@@ -2907,9 +2956,10 @@ Respond with JSON only:
           promiseChecks: best.promiseChecks,
           evidenceQuote: best.evidenceQuote,
           suggestedAction: best.suggestedAction || undefined,
+          extractionStats,
         };
       }
-      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks, evidenceQuote: best.evidenceQuote, suggestedAction: best.suggestedAction || undefined };
+      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks, evidenceQuote: best.evidenceQuote, suggestedAction: best.suggestedAction || undefined, extractionStats };
     }
     if (failedRefs.has(inp.ref)) {
       return { ref: inp.ref, evidenceSummary: "Assessment failed — retry.", verdict: "Not met", comment: "The AI call for this line failed or timed out. Re-run the evidence assessment to retry.", chunkIds: [], failed: true };
@@ -2935,7 +2985,21 @@ Respond with JSON only:
         chunkIds: [],
       };
     }
-    // Extraction covered this line cleanly and found NOTHING relevant —
+    // The model DID return passages but NONE verified as verbatim source
+    // text — an extraction/verification defect, NOT proof that no evidence
+    // exists. Firing the zero-evidence floor here would fabricate a "Not
+    // met" from a pipeline failure; the honest verdict is "Not assessed".
+    if (extractionStats.raw > 0) {
+      return {
+        ref: inp.ref,
+        evidenceSummary: `Not assessed — the extraction pass returned ${extractionStats.raw} passage${extractionStats.raw === 1 ? "" : "s"} but none verified as verbatim source text.`,
+        verdict: "Not assessed",
+        comment: `Not assessed — the extraction pass returned ${extractionStats.raw} candidate passage${extractionStats.raw === 1 ? "" : "s"} for this line, but none could be verified as an exact excerpt of the evidence documents, so no verdict was reached. This usually means the model paraphrased its quotes instead of copying them, or the document text reached the app in a form the verifier cannot match (e.g. OCR/vision artifacts). Re-run the evidence assessment; if it persists, this is an extraction defect — NOT evidence that the requirement is unimplemented.`,
+        chunkIds: [],
+        extractionStats,
+      };
+    }
+    // Extraction covered this line cleanly and the model returned NOTHING —
     // decided deterministically by the SAME decision procedure the judge
     // applies, with zero evidence (replaces the old AI coin-flip on empty
     // support, one of the measured flip-flop sources).
@@ -2949,9 +3013,10 @@ Respond with JSON only:
       ref: inp.ref,
       evidenceSummary: "No implementation evidence found for this requirement.",
       verdict,
-      comment: `It was not evident that the PEI had implemented this requirement, in accordance with its documented PPD. The extraction pass read every provided evidence document and found no record addressing this line${promises.length > 0 ? ` or its ${promises.length} PPD promise${promises.length === 1 ? "" : "s"}` : ""}. PPD verdict was "${inp.ppdVerdict}".`,
+      comment: `It was not evident that the PEI had implemented this requirement, in accordance with its documented PPD. The extraction pass read every provided evidence document and returned no candidate passage for this line${promises.length > 0 ? ` or its ${promises.length} PPD promise${promises.length === 1 ? "" : "s"}` : ""} (0 extracted). PPD verdict was "${inp.ppdVerdict}".`,
       chunkIds: [],
       promiseChecks: promiseChecks.length > 0 ? promiseChecks : undefined,
+      extractionStats,
     };
   });
 

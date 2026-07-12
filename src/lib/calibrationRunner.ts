@@ -228,10 +228,19 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
         const status: ScratchStatus | null = e && !e.failed && (e.verdict === "Met" || e.verdict === "Partial" || e.verdict === "Not met")
           ? e.verdict
           : ppdVerdictToStatus(r.verdict);
-        return { ref: r.ref, text: byRef.get(r.ref)?.requirementText ?? r.requirementText, status, note: e?.comment || r.fullComment || r.shortComment, evidence: cite([...(r.chunkIds ?? []), ...(e?.chunkIds ?? [])]) };
+        // Pass 1 visibility per run: how many candidate passages each pass
+        // extracted vs verified for this line — the number that tells
+        // "correctly found nothing" (0 raw) apart from "wrongly found
+        // nothing" (N raw → 0 verified) in the consistency drill-in.
+        const stats = [
+          r.extractionStats ? `PPD ${r.extractionStats.raw} raw → ${r.extractionStats.verified} verified` : null,
+          e?.extractionStats ? `evidence ${e.extractionStats.raw} raw → ${e.extractionStats.verified} verified` : null,
+        ].filter(Boolean).join(" · ");
+        const note = `${e?.comment || r.fullComment || r.shortComment}${stats ? `\n[Pass 1 extraction — ${stats}]` : ""}`;
+        return { ref: r.ref, text: byRef.get(r.ref)?.requirementText ?? r.requirementText, status, note, evidence: cite([...(r.chunkIds ?? []), ...(e?.chunkIds ?? [])]) };
       });
     } else {
-      lines = ppd.rows.map((r) => ({ ref: r.ref, text: r.requirementText, status: ppdVerdictToStatus(r.verdict), note: r.fullComment || r.shortComment, evidence: cite(r.chunkIds) }));
+      lines = ppd.rows.map((r) => ({ ref: r.ref, text: r.requirementText, status: ppdVerdictToStatus(r.verdict), note: `${r.fullComment || r.shortComment}${r.extractionStats ? `\n[Pass 1 extraction — PPD ${r.extractionStats.raw} raw → ${r.extractionStats.verified} verified]` : ""}`, evidence: cite(r.chunkIds) }));
     }
     const statuses = lines.map((l) => l.status);
     return { ok: true, lines, gapCount: countGaps(statuses), byType: countByType(statuses), bandEstimate: bandEstimate(statuses), digest: buildDigest(lines) };

@@ -896,6 +896,13 @@ export type PPDReviewRow = {
   // means "no single exact quote identified" (never a fabricated one). Used to
   // highlight the supporting sentence in the lineage diagram's expanded view.
   supportQuote?: string;
+  // Pass 1 (extraction) visibility: how many candidate passages the model
+  // RETURNED for this line vs how many survived verbatim verification.
+  // Distinguishes "0 raw" (genuinely nothing found — deterministic negative
+  // verdict is legitimate) from "N raw → 0 verified" (extraction defect —
+  // the line is Not assessed, never a fabricated gap). undefined on rows
+  // from before this field existed.
+  extractionStats?: { raw: number; verified: number };
 };
 
 export type PPDReviewResult = {
