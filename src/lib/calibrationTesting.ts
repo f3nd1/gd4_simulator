@@ -98,6 +98,11 @@ export type ConsistencyTestResult = {
   // labParity.ts). undefined = legacy pre-parity record measured against a
   // DIFFERENT pipeline than production; not comparable with new results.
   pipelineParity?: boolean;
+  // The Analysis model that produced the runs. undefined = recorded before
+  // this field existed — which made the Phase-1-vs-Phase-2 regression
+  // unattributable when the user changed models between measurements (the
+  // records could not say which model each number belonged to).
+  model?: string;
   lines: ConsistencyLine[];
   bands: (number | null)[]; // band estimate per run (null = run failed)
   gapCounts: (number | null)[]; // findings(gaps) count per run
@@ -134,7 +139,7 @@ export function consistencyAgreement(lines: ConsistencyLine[]): { agreementPct: 
 // the agreement + summary. A retry that itself fails updates the stored
 // error instead — the run stays honestly marked failed, never blank.
 // NOTE: the retry runs under the CURRENT settings; record-level fields
-// (temperature/effectiveTemperature/pipelineParity/runAt) describe the
+// (temperature/effectiveTemperature/pipelineParity/model/runAt) describe the
 // original test and are left untouched.
 export type RetryRunOutput = {
   ok: boolean;
@@ -249,9 +254,11 @@ export type ABTestResult = {
   subCriterionId: string;
   runAt: string;
   temperature?: number; // verdict temperature DIAL VALUE (see ConsistencyTestResult.temperature)
-  // Same semantics as ConsistencyTestResult.effectiveTemperature / pipelineParity.
+  // Same semantics as ConsistencyTestResult.effectiveTemperature /
+  // pipelineParity / model.
   effectiveTemperature?: number | null;
   pipelineParity?: boolean;
+  model?: string;
   benchmarkCount: number; // real AFIs available as truth (0 = raw counts only)
   patterns: string[]; // the benchmark AFIs' finding patterns for this sub-criterion
   a: ABPathOutcome;

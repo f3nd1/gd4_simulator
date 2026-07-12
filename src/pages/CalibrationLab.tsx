@@ -268,6 +268,10 @@ export function ConsistencyTab() {
         effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()),
         // Scratch runs now assemble production-identical prompts (labParity).
         pipelineParity: true,
+        // Which Analysis model produced these runs — without this, two
+        // measurements taken across a model switch cannot be attributed
+        // (the exact gap the Phase-1-vs-Phase-2 comparison hit).
+        model: useAISettingsStore.getState().model || "gpt-5-mini",
         lines, bands, gapCounts, failedRuns,
         failedRunErrors: Object.keys(runErrors).length > 0 ? runErrors : undefined,
         agreementPct,
@@ -312,7 +316,7 @@ export function ConsistencyTab() {
     const maxRuns = Math.max(1, ...all.map((t) => t.runs));
     const rows = all.flatMap((t) =>
       t.lines.map((l) => [
-        t.subCriterionId, t.path, t.runAt, formatRunOn(t.runAt), t.temperature ?? "", t.runs, t.agreementPct ?? "",
+        t.subCriterionId, t.path, t.runAt, formatRunOn(t.runAt), t.temperature ?? "", t.model ?? "not recorded", t.runs, t.agreementPct ?? "",
         t.bands.map((b) => b ?? "failed").join(" | "), t.gapCounts.map((c) => c ?? "failed").join(" | "),
         l.ref, l.text,
         ...l.verdicts.map((v) => v ?? "no verdict"),
@@ -323,7 +327,7 @@ export function ConsistencyTab() {
     );
     downloadCsv(
       toCsv([
-        "Sub-criterion", "Path", "Run on (ISO)", "Run on", "Temperature", "Runs", "Agreement %", "Band estimates", "Gap counts", "Line ref", "Requirement",
+        "Sub-criterion", "Path", "Run on (ISO)", "Run on", "Temperature", "Model", "Runs", "Agreement %", "Band estimates", "Gap counts", "Line ref", "Requirement",
         ...Array.from({ length: maxRuns }, (_, i) => `Run ${i + 1} verdict`),
         "Failed run reasons",
         ...Array.from({ length: maxRuns }, (_, i) => `Run ${i + 1} reasoning`),
@@ -401,6 +405,7 @@ export function ConsistencyTab() {
             <Pill s="neutral">Option {t.path} × {t.runs}</Pill>
             <span style={{ fontSize: 12, color: "#475569", flex: 1 }}>{t.summary}</span>
             <TempLabel t={t} />
+            <ModelLabel t={t} />
             <LegacyRecordBadge t={t} />
             <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>Run on {formatRunOn(t.runAt)}</span>
             <button onClick={() => setSelectedId(t.subCriterionId)} style={{ cursor: "pointer", fontSize: 11.5, padding: "3px 9px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}>View</button>
@@ -422,6 +427,21 @@ function TempLabel({ t }: { t: { temperature?: number; effectiveTemperature?: nu
   if (typeof t.effectiveTemperature === "number") return <span style={{ fontSize: 11, color: "#4338ca", whiteSpace: "nowrap" }}>temp {t.effectiveTemperature.toFixed(2)}</span>;
   if (t.temperature != null) return <span title="Recorded before the app checked whether the model honours temperature — the value shown is the dial setting, which may not have been in effect." style={{ fontSize: 11, color: "#b45309", whiteSpace: "nowrap" }}>temp {t.temperature.toFixed(2)}?</span>;
   return null;
+}
+
+// Which Analysis model produced this record. A number without its model is
+// unattributable across a model switch — exactly what made the Phase-1 vs
+// post-Phase-2 regression impossible to pin down from the stored records.
+function ModelLabel({ t }: { t: { model?: string } }) {
+  if (t.model) return <span style={{ fontSize: 11, color: "#4338ca", whiteSpace: "nowrap" }}>· {t.model}</span>;
+  return (
+    <span
+      title="Recorded before the Lab stored which Analysis model ran the test — if the model changed since, this number cannot be attributed to either model. Re-run to refresh."
+      style={{ fontSize: 11, color: "#b45309", whiteSpace: "nowrap" }}
+    >
+      · model not recorded
+    </span>
+  );
 }
 
 // Flags measurement records from before the Lab assembled production-identical
@@ -449,6 +469,7 @@ function ConsistencyResult({ result, onDelete, onRetryRun, retryDisabled }: { re
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>Consistency — {result.subCriterionId} · Option {result.path} × {result.runs}</h3>
         <TempLabel t={result} />
+        <ModelLabel t={result} />
         <LegacyRecordBadge t={result} />
         <span style={{ fontSize: 12, fontWeight: 600, color: "#334155", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 6, padding: "2px 9px" }}>Run on {formatRunOn(result.runAt)}</span>
         <button onClick={onDelete} title="Delete this test record (scratch only — audit results untouched)" style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11.5, padding: "3px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 600 }}>Delete</button>
@@ -591,6 +612,7 @@ export function AvsBTab() {
       const result: ABTestResult = {
         subCriterionId, runAt: new Date().toISOString(), temperature: verdictTemp(useAISettingsStore.getState()),
         effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), pipelineParity: true,
+        model: useAISettingsStore.getState().model || "gpt-5-mini",
         benchmarkCount, patterns, a, b,
         winner: abWinner(a, b, benchmarkCount),
         verdictLine: abVerdictLine(subCriterionId, a, b, benchmarkCount),
@@ -719,6 +741,7 @@ function ABResult({ result, onDelete }: { result: ABTestResult; onDelete: () => 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 14 }}>A vs B — {result.subCriterionId}</h3>
         <TempLabel t={result} />
+        <ModelLabel t={result} />
         <LegacyRecordBadge t={result} />
         <span style={{ fontSize: 12, fontWeight: 600, color: "#334155", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 6, padding: "2px 9px" }}>Run on {formatRunOn(result.runAt)}</span>
         <button onClick={onDelete} title="Delete this test record (scratch only — audit results untouched)" style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11.5, padding: "3px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", fontWeight: 600 }}>Delete</button>

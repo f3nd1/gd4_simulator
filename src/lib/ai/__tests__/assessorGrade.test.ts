@@ -462,6 +462,39 @@ describe("judge prompts carry the Phase 2 verdict framework", () => {
   });
 });
 
+describe("targeted boundary rules for the post-model-switch ambiguous lines (rules 6-11)", () => {
+  // The lines Phase 2's rules 1-5 targeted are all 100% stable on the new
+  // model — so rules 1-5 must stay BYTE-IDENTICAL while rules 6-11 cover the
+  // newly-ambiguous set (3.1.1.DS2.a/.b/.c/.e/.f/.h, DS3.a, DS4;
+  // 6.1.1.DS1.c/.d). These pins fail if anyone rewords a stable rule.
+  it("rules 1-5 are unchanged (stable lines depend on their exact wording)", () => {
+    expect(PPD_BOUNDARY_RULES).toContain('1. REVIEW lines ("Review the [X] process/procedures for continual improvement"): "Adequate" ONLY when a passage names (i) who reviews THAT specific process (role/committee) AND (ii) a frequency or trigger for the review.');
+    expect(PPD_BOUNDARY_RULES).toContain('2. CONTRACT-CONTENT lines (one named term the agent contract must cover');
+    expect(PPD_BOUNDARY_RULES).toContain('3. REGISTER/LIST-FIELD lines (one named field an agent list/register must record');
+    expect(PPD_BOUNDARY_RULES).toContain('4. MECHANISM lines ("Encourage/facilitate…", "Implement…", "Invest in…")');
+    expect(PPD_BOUNDARY_RULES).toContain('5. MULTI-PART lines (several obligations joined in one line');
+  });
+  it("the new PPD rules cover each currently-ambiguous line's wording pattern", () => {
+    expect(PPD_BOUNDARY_RULES).toContain("6. SINGLE-CLAUSE CONTRACT SAFEGUARD lines"); // DS2.e, DS2.h
+    expect(PPD_BOUNDARY_RULES).toContain("laws of Singapore");
+    expect(PPD_BOUNDARY_RULES).toContain("7. ROLES-PLUS-NAMED-DUTY lines"); // DS2.b
+    expect(PPD_BOUNDARY_RULES).toContain("pre-course counselling");
+    expect(PPD_BOUNDARY_RULES).toContain("8. PAIRED-ARTIFACT lines"); // DS2.c
+    expect(PPD_BOUNDARY_RULES).toContain("9. SERVICE-PERFORMANCE-INDICATOR lines"); // DS2.f
+    expect(PPD_BOUNDARY_RULES).toContain("10. AFI/CAP PROCESS lines"); // 6.1.1.DS1.c/.d
+    expect(PPD_BOUNDARY_RULES).toContain("11. REVIEW-LINE FLOOR"); // DS4's Partial-vs-Not-documented wobble
+  });
+  it("the new evidence rules pin the Partial-vs-Not-met floors and the every-instance quantifiers", () => {
+    expect(EVIDENCE_BOUNDARY_RULES).toContain("judged across ALL provided signed agent contracts"); // DS2.a and safeguard lines
+    expect(EVIDENCE_BOUNDARY_RULES).toContain("never demand transaction-level proof of a negative"); // DS2.e's Not-met wobble
+    expect(EVIDENCE_BOUNDARY_RULES).toContain("REGISTER-FIELD lines"); // DS3.a
+    expect(EVIDENCE_BOUNDARY_RULES).toContain("for EVERY listed agent");
+    expect(EVIDENCE_BOUNDARY_RULES).toContain("AFI/CAP PROCESS lines"); // 6.1.1.DS1.c/.d
+    expect(EVIDENCE_BOUNDARY_RULES).toContain('"Not met" ONLY when no assessment report, AFI list or CAP record appears');
+    expect(EVIDENCE_BOUNDARY_RULES).toContain("REVIEW-LINE FLOOR"); // DS4
+  });
+});
+
 describe("'spread across the document' shows real evidence, not just an assertion (Task 4)", () => {
   it("verifies each proposed spreadQuotes passage independently — keeps the real ones, drops a fabricated one", async () => {
     const SRC = `[CHUNK:C001] --- ppd.docx ---

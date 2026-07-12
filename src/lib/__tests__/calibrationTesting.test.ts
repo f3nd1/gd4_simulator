@@ -102,7 +102,7 @@ describe("spliceRetryIntoConsistencyResult", () => {
   // A 3-run test shaped like the reported 6.1 failure: run 3 failed outright.
   const baseResult = (): ConsistencyTestResult => ({
     subCriterionId: "6.1", path: "A", runs: 3, runAt: "2026-07-10T00:00:00.000Z",
-    temperature: 0.1, effectiveTemperature: null, pipelineParity: true,
+    temperature: 0.1, effectiveTemperature: null, pipelineParity: true, model: "gpt-5.6-terra",
     lines: [
       { ref: "6.1.1.DS1", text: "req 1", verdicts: ["Met", "Met", null], details: [{ note: "n1", evidence: ["C001"] }, { note: "n1b", evidence: [] }, null] },
       { ref: "6.1.1.DS2", text: "req 2", verdicts: ["Partial", "Not met", null], details: [{ note: "n2", evidence: [] }, { note: "n2b", evidence: [] }, null] },
@@ -171,6 +171,9 @@ describe("spliceRetryIntoConsistencyResult", () => {
     expect(r.temperature).toBe(0.1);
     expect(r.effectiveTemperature).toBeNull();
     expect(r.pipelineParity).toBe(true);
+    // Model provenance survives a retry — the record still describes the
+    // ORIGINAL test's model even if settings changed since.
+    expect(r.model).toBe("gpt-5.6-terra");
     expect(r.runAt).toBe("2026-07-10T00:00:00.000Z");
     expect(spliceRetryIntoConsistencyResult(base, 0, okRetry())).toBe(base);
     expect(spliceRetryIntoConsistencyResult(base, 4, okRetry())).toBe(base);
