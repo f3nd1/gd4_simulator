@@ -25,18 +25,50 @@ import { sObj, sArr, sStr, sEnum } from "./ai/schemaHelpers";
 import {
   runPPDRequirementsReview, runEvidenceAssessment,
   runStagedPolicyAudit, runStagedEvidenceAudit, runStagedOutcomeReviewAudit, buildStagedApsr,
-  type PPDRequirementInput, type EvidenceAssessmentInput,
+  type PPDRequirementInput, type EvidenceAssessmentInput, type PPDRunEvent, type EvidenceRunEvent,
 } from "./ai/agentRuntime";
 import { deriveApsrStatus } from "./ai/simulateAI";
 import { chatComplete, effectiveSettings, aiOfflineReason, type AIUsage } from "./ai/aiClient";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { useBenchmarkAfiStore } from "../store/useBenchmarkAfiStore";
-import type { EvidenceFolder } from "../types";
+import type { EvidenceFolder, AuditFileRecord } from "../types";
 import { ppdVerdictToStatus, countGaps, countByType, bandEstimate, type ScratchStatus } from "./calibrationTesting";
 
 const MAX_PART_CHARS = 24_000;
 
 export type ScratchProgress = (stage: string) => void;
+
+// ── Live-run visibility (Task 1 diagnostics + Task 3 live view) ────────────
+// Raw sub-events a scratch run can emit, so the SAME live-detail component
+// the real Option A pages use (RunDetailColumns, via PpdRunPanel/
+// EvidenceRunPanel) can render a Consistency test run exactly as it
+// happens — not reconstructed afterward from stored error text. "phase"
+// names which folder/engine call is active: "policy" = reading the Policy &
+// Procedure folder + the PPD requirements review; "evidence" = reading the
+// Actual Evidence folder + the evidence assessment. CalibrationLab.tsx
+// reduces this stream into PPDReviewProgress/EvidenceAssessmentProgress-
+// shaped local state; nothing here writes to the real workspace progress —
+// see the GUARANTEE at the top of this file.
+export type ScratchLiveEvent =
+  | { type: "files"; phase: "policy" | "evidence"; files: AuditFileRecord[]; filesTotal: number }
+  | { type: "file-progress"; phase: "policy" | "evidence"; files: AuditFileRecord[]; currentFile?: string }
+  // windowFiles: the current in-flight window's chunk IDs already resolved
+  // to file names (via the same chunkFiles map the diagnostics use) — the
+  // caller has no access to that map itself, so it must arrive pre-resolved.
+  | { type: "ppd-event"; ev: PPDRunEvent; windowFiles: string[] }
+  | { type: "evidence-event"; ev: EvidenceRunEvent; windowFiles: string[] }
+  | { type: "usage"; model: string; totalTokens: number };
+
+// Human-readable diagnostic line for ONE failed call — names the model, the
+// pass (extract/judge), the real error, and (when resolvable) which file(s)
+// the in-flight window covered. This is what a whole-run failure like the
+// reported gpt-5-mini 6.1 run was missing entirely: the real windowErrors
+// text existed deep inside runPPDRequirementsReview/runEvidenceAssessment
+// but was discarded before it ever reached the stored test record.
+function formatDiagnostic(passLabel: string, model: string, error: string, files: string[]): string {
+  const fileNote = files.length > 0 ? ` — files in flight: ${files.join(", ")}` : "";
+  return `${passLabel} (model: ${model}): ${error}${fileNote}`;
+}
 
 // One scratch engine run's normalised output — everything the score math
 // and the A-vs-B display need, with no store writes.
@@ -53,6 +85,18 @@ export type ScratchRunOutput = {
   bandEstimate: number | null;
   // Text digest of this run's negative results, for the benchmark judge.
   digest: string;
+  // The Analysis model that produced this run — Consistency/A-vs-B scratch
+  // runs only ever use the Analysis model (never Utility or Vision; see the
+  // note on gatherText below), so this single field answers "which model"
+  // for the whole run.
+  model: string;
+  // Real per-call failure diagnostics (model + pass + files), captured
+  // whether the run ended up "ok" or not — see
+  // ConsistencyTestResult.runDiagnostics for why this matters even on an
+  // "ok" run: every line can come back unassessed while every underlying
+  // call individually failed, which used to be indistinguishable from a
+  // clean run with nothing to say about it.
+  diagnostics?: string[];
 };
 
 export function folderOf(subCriterionId: string): EvidenceFolder | undefined {
@@ -72,8 +116,12 @@ export function aiReady(): string | null {
 // Reads every supported file in one Drive folder into the same
 // "[CHUNK:Cnnn] --- path ---" text format the real runs feed the engines.
 // Uses (and fills) the workspace fileTextCache exactly like a normal run;
-// failed reads are skipped and reported, never fabricated.
-async function gatherText(folderLink: string | undefined, label: string, signal: AbortSignal, onProgress: ScratchProgress, chunkStart: { n: number }, chunkFiles: Record<string, string>): Promise<{ text: string; files: number; failed: string[]; hasSpreadsheet: boolean; hasScanned: boolean }> {
+// failed reads are skipped and reported (with the REAL reason — previously
+// only the file name was kept, the actual Drive error was swallowed), never
+// fabricated. phase/onLive optionally drive the SAME live-view component
+// (RunDetailColumns via PpdRunPanel/EvidenceRunPanel) the real Option A
+// pages use — see ScratchLiveEvent above.
+async function gatherText(folderLink: string | undefined, label: string, signal: AbortSignal, onProgress: ScratchProgress, chunkStart: { n: number }, chunkFiles: Record<string, string>, phase: "policy" | "evidence", onLive?: (ev: ScratchLiveEvent) => void): Promise<{ text: string; files: number; failed: { name: string; reason: string }[]; hasSpreadsheet: boolean; hasScanned: boolean }> {
   const folderId = parseFolderId(folderLink || "");
   if (!folderId) return { text: "", files: 0, failed: [], hasSpreadsheet: false, hasScanned: false };
   // Refresh (not just read) the Drive token at the start of every gather —
@@ -86,17 +134,29 @@ async function gatherText(folderLink: string | undefined, label: string, signal:
   onProgress(`Listing ${label} folder…`);
   const files = (await listFolderFilesRecursive(folderId, token)).filter((f) => !IMAGE_MIME_TYPES.has(f.mimeType));
   const parts: string[] = [];
-  const failed: string[] = [];
+  const failed: { name: string; reason: string }[] = [];
   let read = 0;
+  // Upfront file records — same AuditFileRecord shape / FileLedger the real
+  // run's live view uses, so the full scope is visible immediately rather
+  // than growing one row at a time.
+  const fileRecords: AuditFileRecord[] = files.map((f) => ({
+    path: f.path, name: f.path.split("/").pop() || f.path, mimeType: f.mimeType,
+    fileKind: (f.mimeType.split("/").pop() || "file").toUpperCase(),
+    bucket: phase, readStatus: "found", auditStatus: "pending", driveFileId: f.id,
+  }));
+  onLive?.({ type: "files", phase, files: [...fileRecords], filesTotal: files.length });
   // File-type detection for skill injection — mirrors the staged run's
   // per-chunk detection (spreadsheet mimes; scanned = a PDF whose extracted
   // text classifies as suspected-scanned) so the Lab injects the same
   // file-type bonus skill a real run would.
   let hasSpreadsheet = false;
   let hasScanned = false;
-  for (const file of files) {
+  for (const [idx, file] of files.entries()) {
     if (signal.aborted) throw new Error("Cancelled");
-    onProgress(`Reading ${label} file ${++read}/${files.length}: ${file.path.split("/").pop()}`);
+    const fileName = file.path.split("/").pop() || file.path;
+    onProgress(`Reading ${label} file ${++read}/${files.length}: ${fileName}`);
+    fileRecords[idx] = { ...fileRecords[idx], readStatus: "reading" };
+    onLive?.({ type: "file-progress", phase, files: [...fileRecords], currentFile: fileName });
     const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
     const cached = useWorkspaceStore.getState().fileTextCache[cacheKey];
     let body: string | null = cached ? cached.text : null;
@@ -107,17 +167,21 @@ async function gatherText(folderLink: string | undefined, label: string, signal:
         body = await exportFileText(file, readToken, signal);
         if (body != null) {
           const text = body;
-          useWorkspaceStore.setState((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now() } } }));
+          useWorkspaceStore.setState((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName, filePath: file.path, cachedAt: Date.now() } } }));
         }
-      } catch {
-        failed.push(file.path.split("/").pop() || file.path);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        failed.push({ name: fileName, reason });
+        fileRecords[idx] = { ...fileRecords[idx], readStatus: "failed", failReason: reason };
+        onLive?.({ type: "file-progress", phase, files: [...fileRecords] });
         continue;
       }
     }
     if (!body) continue;
+    fileRecords[idx] = { ...fileRecords[idx], readStatus: "read", charCount: body.length };
+    onLive?.({ type: "file-progress", phase, files: [...fileRecords] });
     if (file.mimeType === XLSX_MIME || file.mimeType === XLS_MIME || file.mimeType === "text/csv") hasSpreadsheet = true;
     if (file.mimeType === "application/pdf" && classifyPdfTextQuality(body).suspectedScannedPdf) hasScanned = true;
-    const fileName = file.path.split("/").pop() || file.path;
     const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
     for (let pi = 0; pi < totalParts; pi++) {
       const chunkId = `C${String(++chunkStart.n).padStart(3, "0")}`;
@@ -185,9 +249,24 @@ function buildDigest(lines: ScratchRunOutput["lines"]): string {
 
 // Runs Option A (PPD review, then the evidence assessment when an evidence
 // folder is linked) as a scratch run. Line status: the evidence verdict when
-// the evidence stage ran, else the mapped PPD verdict.
-export async function runScratchA(subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress, ruleInjection?: string): Promise<ScratchRunOutput> {
-  const fail = (error: string): ScratchRunOutput => ({ ok: false, error, lines: [], gapCount: 0, byType: { NC: 0, OFI: 0, OBS: 0 }, bandEstimate: null, digest: "" });
+// the evidence stage ran, else the mapped PPD verdict. onLive, when given,
+// drives a live-detail view identical to the real Option A pages' — see
+// ScratchLiveEvent.
+export async function runScratchA(subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress, ruleInjection?: string, onLive?: (ev: ScratchLiveEvent) => void): Promise<ScratchRunOutput> {
+  const settings = analysisSettings();
+  const model = settings.model || "gpt-5-mini";
+  const fail = (error: string, diagnostics?: string[]): ScratchRunOutput => ({ ok: false, error, lines: [], gapCount: 0, byType: { NC: 0, OFI: 0, OBS: 0 }, bandEstimate: null, digest: "", model, diagnostics: diagnostics?.length ? diagnostics : undefined });
+  // Real per-call failure reasons collected as the run proceeds — populated
+  // whether the run ends up "ok" or not (an "ok" run can still have every
+  // line unassessed because every underlying call individually failed; see
+  // ConsistencyTestResult.runDiagnostics).
+  const diagnostics: string[] = [];
+  // Which file(s) the CURRENT in-flight window covers, resolved from the
+  // window-start event's chunkIds — attached to the next batch-failed
+  // diagnostic so a failure names the file(s) it was reading, not just the
+  // pass. Reset per phase since policy/evidence chunk ranges don't overlap
+  // in meaning (chunkFiles below IS shared, so lookups still resolve either).
+  let currentWindowFiles: string[] = [];
   try {
     const folder = folderOf(subCriterionId);
     if (!folder) return fail("No folder row for this sub-criterion.");
@@ -198,28 +277,46 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
     if (requirements.length === 0) return fail("No requirement lines for this sub-criterion.");
     const chunkStart = { n: 0 };
     const chunkFiles: Record<string, string> = {};
-    const policy = await gatherText(folder.policyLink || folder.folderLink, "policy", signal, onProgress, chunkStart, chunkFiles);
-    if (!policy.text) return fail("No readable Policy & Procedure text — link/check the policy folder first.");
-    const settings = analysisSettings();
+    const policy = await gatherText(folder.policyLink || folder.folderLink, "policy", signal, onProgress, chunkStart, chunkFiles, "policy", onLive);
+    for (const f of policy.failed) diagnostics.push(`Drive read (policy): could not read "${f.name}" — ${f.reason}`);
+    if (!policy.text) return fail("No readable Policy & Procedure text — link/check the policy folder first.", diagnostics);
     const memories = scratchMemories();
     const rules = scratchRules(subCriterionId, ruleInjection);
     onProgress("Option A — PPD requirements review…");
     const ppd = await runPPDRequirementsReview(requirements, policy.text, settings, {
       criterionId: subCriterionId, memories, ruleInjection: rules, signal, onProgress: (d) => onProgress(`Option A — PPD review: ${d}`),
+      onEvent: (ev) => {
+        if (ev.type === "window-start") currentWindowFiles = ev.chunkIds.map((id) => chunkFiles[id] ?? id);
+        if (ev.type === "batch-failed") diagnostics.push(formatDiagnostic(`Option A — PPD ${ev.stage}`, model, ev.error, currentWindowFiles));
+        onLive?.({ type: "ppd-event", ev, windowFiles: currentWindowFiles });
+      },
     });
     logRun("Calibration · Option A (PPD)", subCriterionId, `${ppd.rows.length} lines reviewed`, ppd.usage);
+    // Contradiction-hunt / overall-synthesis failures have no onEvent (only
+    // two calls per run, not per-batch) — their windowErrors entries would
+    // otherwise be lost entirely; fold in any not already captured above.
+    for (const w of ppd.windowErrors ?? []) if (/^(Contradiction hunt|Overall synthesis)/.test(w)) diagnostics.push(`Option A — PPD (${model}): ${w}`);
+    if (ppd.usage) onLive?.({ type: "usage", model: ppd.usage.model || model, totalTokens: ppd.usage.totalTokens });
 
     const byRef = new Map(requirements.map((r) => [r.ref, r]));
     const cite = (ids: string[] | undefined) => [...new Set((ids ?? []).map((id) => chunkFiles[id] ?? id))];
     let lines: ScratchRunOutput["lines"];
-    const evidence = await gatherText(folder.folderLink, "evidence", signal, onProgress, chunkStart, chunkFiles);
+    const evidence = await gatherText(folder.folderLink, "evidence", signal, onProgress, chunkStart, chunkFiles, "evidence", onLive);
+    for (const f of evidence.failed) diagnostics.push(`Drive read (evidence): could not read "${f.name}" — ${f.reason}`);
     if (evidence.text) {
       onProgress("Option A — evidence assessment…");
       const inputs: EvidenceAssessmentInput[] = ppd.rows.map((r) => ({ ref: r.ref, requirementText: r.requirementText, ppdVerdict: r.verdict, ppdExtract: r.fullComment || r.shortComment, promises: r.promises }));
+      currentWindowFiles = [];
       const ev = await runEvidenceAssessment(inputs, evidence.text, settings, {
         criterionId: subCriterionId, memories, ruleInjection: rules, signal, onProgress: (d) => onProgress(`Option A — evidence: ${d}`),
+        onEvent: (ev) => {
+          if (ev.type === "window-start") currentWindowFiles = ev.chunkIds.map((id) => chunkFiles[id] ?? id);
+          if (ev.type === "batch-failed") diagnostics.push(formatDiagnostic(`Option A — Evidence ${ev.stage}`, model, ev.error, currentWindowFiles));
+          onLive?.({ type: "evidence-event", ev, windowFiles: currentWindowFiles });
+        },
       });
       logRun("Calibration · Option A (Evidence)", subCriterionId, `${ev.rows.length} lines assessed`, ev.usage);
+      if (ev.usage) onLive?.({ type: "usage", model: ev.usage.model || model, totalTokens: ev.usage.totalTokens });
       const evByRef = new Map(ev.rows.map((r) => [r.ref, r]));
       lines = ppd.rows.map((r) => {
         const e = evByRef.get(r.ref);
@@ -243,9 +340,9 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
       lines = ppd.rows.map((r) => ({ ref: r.ref, text: r.requirementText, status: ppdVerdictToStatus(r.verdict), note: `${r.fullComment || r.shortComment}${r.extractionStats ? `\n[Pass 1 extraction — PPD ${r.extractionStats.raw} raw → ${r.extractionStats.verified} verified]` : ""}`, evidence: cite(r.chunkIds) }));
     }
     const statuses = lines.map((l) => l.status);
-    return { ok: true, lines, gapCount: countGaps(statuses), byType: countByType(statuses), bandEstimate: bandEstimate(statuses), digest: buildDigest(lines) };
+    return { ok: true, lines, gapCount: countGaps(statuses), byType: countByType(statuses), bandEstimate: bandEstimate(statuses), digest: buildDigest(lines), model, diagnostics: diagnostics.length > 0 ? diagnostics : undefined };
   } catch (err) {
-    return fail(err instanceof Error ? err.message : String(err));
+    return fail(err instanceof Error ? err.message : String(err), diagnostics);
   }
 }
 
@@ -253,7 +350,14 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
 // scratch run. Line status: deriveApsrStatus over buildStagedApsr — the same
 // derivation the real staged audit commits.
 export async function runScratchB(subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress, ruleInjection?: string): Promise<ScratchRunOutput> {
-  const fail = (error: string): ScratchRunOutput => ({ ok: false, error, lines: [], gapCount: 0, byType: { NC: 0, OFI: 0, OBS: 0 }, bandEstimate: null, digest: "" });
+  const settings = analysisSettings();
+  const model = settings.model || "gpt-5-mini";
+  const fail = (error: string, diagnostics?: string[]): ScratchRunOutput => ({ ok: false, error, lines: [], gapCount: 0, byType: { NC: 0, OFI: 0, OBS: 0 }, bandEstimate: null, digest: "", model, diagnostics: diagnostics?.length ? diagnostics : undefined });
+  // Option B's staged passes have no onEvent stream (unlike Option A's
+  // two-pass PPD/evidence engines) — a pre-existing gap, not introduced
+  // here. Diagnostics for Option B are limited to Drive per-file failures
+  // and each pass's windowErrors (model + pass, no per-file attribution).
+  const diagnostics: string[] = [];
   try {
     const folder = folderOf(subCriterionId);
     if (!folder) return fail("No folder row for this sub-criterion.");
@@ -262,10 +366,11 @@ export async function runScratchB(subCriterionId: string, signal: AbortSignal, o
     if (points.length === 0) return fail("No audit points for this sub-criterion.");
     const chunkStart = { n: 0 };
     const chunkFiles: Record<string, string> = {};
-    const policy = await gatherText(folder.policyLink || folder.folderLink, "policy", signal, onProgress, chunkStart, chunkFiles);
-    const evidence = await gatherText(folder.folderLink !== folder.policyLink ? folder.folderLink : undefined, "evidence", signal, onProgress, chunkStart, chunkFiles);
-    if (!policy.text && !evidence.text) return fail("No readable documents — link/check the folders first.");
-    const settings = analysisSettings();
+    const policy = await gatherText(folder.policyLink || folder.folderLink, "policy", signal, onProgress, chunkStart, chunkFiles, "policy");
+    const evidence = await gatherText(folder.folderLink !== folder.policyLink ? folder.folderLink : undefined, "evidence", signal, onProgress, chunkStart, chunkFiles, "evidence");
+    for (const f of policy.failed) diagnostics.push(`Drive read (policy): could not read "${f.name}" — ${f.reason}`);
+    for (const f of evidence.failed) diagnostics.push(`Drive read (evidence): could not read "${f.name}" — ${f.reason}`);
+    if (!policy.text && !evidence.text) return fail("No readable documents — link/check the folders first.", diagnostics);
     const memories = scratchMemories();
     const calibration = scratchCalibration();
     const rules = scratchRules(subCriterionId, ruleInjection);
@@ -280,6 +385,9 @@ export async function runScratchB(subCriterionId: string, signal: AbortSignal, o
     onProgress("Option B — outcome & review pass…");
     const out = await runStagedOutcomeReviewAudit(points, [policy.text, evidence.text].filter(Boolean).join("\n\n"), settings, { ...stagedOpts, signal, onProgress: (d) => onProgress(`Option B — outcomes: ${d}`) });
     logRun("Calibration · Option B (staged)", subCriterionId, `${points.length} audit points, 3 passes`);
+    for (const w of pol.windowErrors ?? []) diagnostics.push(`Option B — policy pass (${model}): ${w}`);
+    for (const w of ev.windowErrors ?? []) diagnostics.push(`Option B — evidence pass (${model}): ${w}`);
+    for (const w of out.windowErrors ?? []) diagnostics.push(`Option B — outcome pass (${model}): ${w}`);
 
     const polByRef = new Map(pol.rows.map((r) => [r.ref, r]));
     const evByRef = new Map(ev.rows.map((r) => [r.ref, r]));
@@ -300,14 +408,17 @@ export async function runScratchB(subCriterionId: string, signal: AbortSignal, o
       return { ref: p.ref, text: p.text, status, note, evidence };
     });
     const statuses = lines.map((l) => l.status);
-    return { ok: true, lines, gapCount: countGaps(statuses), byType: countByType(statuses), bandEstimate: bandEstimate(statuses), digest: buildDigest(lines) };
+    return { ok: true, lines, gapCount: countGaps(statuses), byType: countByType(statuses), bandEstimate: bandEstimate(statuses), digest: buildDigest(lines), model, diagnostics: diagnostics.length > 0 ? diagnostics : undefined };
   } catch (err) {
-    return fail(err instanceof Error ? err.message : String(err));
+    return fail(err instanceof Error ? err.message : String(err), diagnostics);
   }
 }
 
-export async function runScratch(path: "A" | "B", subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress, ruleInjection?: string): Promise<ScratchRunOutput> {
-  return path === "A" ? runScratchA(subCriterionId, signal, onProgress, ruleInjection) : runScratchB(subCriterionId, signal, onProgress, ruleInjection);
+// onLive is Option A only — see runScratchB's comment on why Option B has
+// no event stream to drive a live view from; passing it for path "B" is a
+// harmless no-op.
+export async function runScratch(path: "A" | "B", subCriterionId: string, signal: AbortSignal, onProgress: ScratchProgress, ruleInjection?: string, onLive?: (ev: ScratchLiveEvent) => void): Promise<ScratchRunOutput> {
+  return path === "A" ? runScratchA(subCriterionId, signal, onProgress, ruleInjection, onLive) : runScratchB(subCriterionId, signal, onProgress, ruleInjection);
 }
 
 // Judges one scratch run's output against the sub-criterion's benchmark

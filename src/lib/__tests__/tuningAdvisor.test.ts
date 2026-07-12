@@ -4,7 +4,7 @@ import type { ConsistencyTestResult, ABTestResult, ABPathOutcome } from "../cali
 
 function cons(over: Partial<ConsistencyTestResult> = {}): ConsistencyTestResult {
   return {
-    subCriterionId: "6.3", path: "B", runs: 3, runAt: "2026-07-04T00:00:00.000Z", temperature: 0.7,
+    id: "6.3-2026-07-04T00:00:00.000Z", subCriterionId: "6.3", path: "B", runs: 3, runAt: "2026-07-04T00:00:00.000Z", temperature: 0.7,
     lines: [
       { ref: "6.3.1.DS1", text: "line 1", verdicts: ["Met", "Met", "Met"] },
       { ref: "6.3.1.DS2", text: "line 2", verdicts: ["Partial", "Not met", "Partial"] },
@@ -41,6 +41,23 @@ describe("recommendFromConsistency", () => {
   });
   it("unscorable → advisory, no fabricated recommendation", () => {
     expect(recommendFromConsistency(cons({ agreementPct: null }))[0].severity).toBe("advisory");
+  });
+
+  // Same honesty bug that consistencySummary() had: unconditionally blaming
+  // "too many runs failed" even when nothing failed (gpt-5-mini investigation).
+  it("unscorable because only 1 run → names the run-count cause, not failures", () => {
+    const rec = recommendFromConsistency(cons({ agreementPct: null, runs: 1, failedRuns: [] }))[0];
+    expect(rec.reasoning).toContain("Only 1 run");
+    expect(rec.reasoning).not.toContain("Too many runs failed");
+  });
+  it("unscorable with genuine failed runs → keeps the failure-blaming wording", () => {
+    const rec = recommendFromConsistency(cons({ agreementPct: null, runs: 3, failedRuns: [2, 3] }))[0];
+    expect(rec.reasoning).toContain("Too many runs failed");
+  });
+  it("unscorable but every run completed ok with unassessed lines → points to diagnostics, not a false failure claim", () => {
+    const rec = recommendFromConsistency(cons({ agreementPct: null, runs: 2, failedRuns: [] }))[0];
+    expect(rec.reasoning).toContain("run diagnostics");
+    expect(rec.reasoning).not.toContain("Too many runs failed");
   });
 });
 

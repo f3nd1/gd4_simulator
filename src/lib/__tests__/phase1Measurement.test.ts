@@ -99,7 +99,7 @@ describe("sampling caveat (Item 10a)", () => {
 
 describe("tuning advisor respects the effective temperature (Item 1a)", () => {
   const base: ConsistencyTestResult = {
-    subCriterionId: "6.3", path: "A", runs: 3, runAt: "2026-07-11T00:00:00.000Z",
+    id: "6.3-2026-07-11T00:00:00.000Z", subCriterionId: "6.3", path: "A", runs: 3, runAt: "2026-07-11T00:00:00.000Z",
     temperature: 0.7, lines: [
       { ref: "6.3.1.DS1", text: "req", verdicts: ["Met", "Partial", "Met"] },
     ], bands: [3, 3, 3], gapCounts: [1, 2, 1], failedRuns: [], agreementPct: 40, summary: "s",

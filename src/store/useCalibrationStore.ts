@@ -42,12 +42,21 @@ type CalibrationState = {
   setAiMatch: (afiId: string, status: MatchStatus, justification: string) => void;
   // Called once per completed match-analysis sweep with the resulting totals.
   recordRun: (totals: Omit<CalibrationRunRecord, "runAt">) => void;
-  // Consistency tab: latest repeatability test per sub-criterion (scratch —
-  // measurement results only, never audit data). Delete/clear touch ONLY
-  // these scratch records, never the real audit stores.
-  consistencyTests: Record<string, ConsistencyTestResult>;
-  setConsistencyTest: (r: ConsistencyTestResult) => void;
-  deleteConsistencyTest: (subCriterionId: string) => void;
+  // Consistency tab: FULL HISTORY of repeatability tests per sub-criterion,
+  // newest first (scratch — measurement results only, never audit data).
+  // Running a new test used to OVERWRITE the one record for that
+  // sub-criterion, destroying the user's ability to compare before/after a
+  // model swap or a code fix — exactly the comparison the model-regression
+  // and extraction-collapse investigations both depended on. Delete/clear
+  // touch ONLY these scratch records, never the real audit stores.
+  consistencyTests: Record<string, ConsistencyTestResult[]>;
+  // A brand-new run — PREPENDS a new history entry (never overwrites).
+  addConsistencyTest: (r: ConsistencyTestResult) => void;
+  // A retry-splice on an EXISTING record — replaces the entry with the
+  // matching id in place (same record, not a new history entry).
+  updateConsistencyTest: (r: ConsistencyTestResult) => void;
+  // Deletes ONE history entry (by id), not the whole sub-criterion.
+  deleteConsistencyTest: (subCriterionId: string, id: string) => void;
   clearConsistencyTests: () => void;
   // A vs B tab: latest comparison per sub-criterion.
   abTests: Record<string, ABTestResult>;
@@ -68,6 +77,22 @@ export type AppliedRecommendation = {
 };
 
 const APPLIED_CAP = 100;
+
+// Pure v1→v2 migration step, extracted so it's directly unit-testable (same
+// pattern as useBenchmarkAfiStore's seedStaticIntoEntries): every entry that
+// is still a single record (the pre-v2 shape) is wrapped into a one-entry
+// history array and given a stable id (records never had one before);
+// entries already an array (post-migration, or a fresh v2 write) pass
+// through unchanged. Idempotent — running it twice is a no-op the second time.
+export function wrapConsistencyTestsForV2(rawTests: Record<string, unknown>): Record<string, ConsistencyTestResult[]> {
+  const wrapped: Record<string, ConsistencyTestResult[]> = {};
+  for (const [subId, val] of Object.entries(rawTests)) {
+    if (Array.isArray(val)) { wrapped[subId] = val as ConsistencyTestResult[]; continue; }
+    const rec = val as ConsistencyTestResult;
+    wrapped[subId] = [{ ...rec, id: rec.id ?? `${subId}-${rec.runAt}` }];
+  }
+  return wrapped;
+}
 
 export const useCalibrationStore = create<CalibrationState>()(
   persist(
@@ -91,8 +116,21 @@ export const useCalibrationStore = create<CalibrationState>()(
           return { lastRunAt: runAt, runHistory: [{ runAt, ...totals }, ...s.runHistory].slice(0, RUN_HISTORY_CAP) };
         }),
       consistencyTests: {},
-      setConsistencyTest: (r) => set((s) => ({ consistencyTests: { ...s.consistencyTests, [r.subCriterionId]: r } })),
-      deleteConsistencyTest: (id) => set((s) => { const { [id]: _drop, ...rest } = s.consistencyTests; return { consistencyTests: rest }; }),
+      addConsistencyTest: (r) =>
+        set((s) => ({ consistencyTests: { ...s.consistencyTests, [r.subCriterionId]: [r, ...(s.consistencyTests[r.subCriterionId] ?? [])] } })),
+      updateConsistencyTest: (r) =>
+        set((s) => ({
+          consistencyTests: {
+            ...s.consistencyTests,
+            [r.subCriterionId]: (s.consistencyTests[r.subCriterionId] ?? []).map((existing) => (existing.id === r.id ? r : existing)),
+          },
+        })),
+      deleteConsistencyTest: (subCriterionId, id) =>
+        set((s) => {
+          const remaining = (s.consistencyTests[subCriterionId] ?? []).filter((r) => r.id !== id);
+          if (remaining.length === 0) { const { [subCriterionId]: _drop, ...rest } = s.consistencyTests; return { consistencyTests: rest }; }
+          return { consistencyTests: { ...s.consistencyTests, [subCriterionId]: remaining } };
+        }),
       clearConsistencyTests: () => set({ consistencyTests: {} }),
       abTests: {},
       setAbTest: (r) => set((s) => ({ abTests: { ...s.abTests, [r.subCriterionId]: r } })),
@@ -110,14 +148,29 @@ export const useCalibrationStore = create<CalibrationState>()(
       // for sub-criteria that no longer exist so this scratch store doesn't
       // accumulate parentless keys. `matches` are keyed by stable benchmark
       // AFI ids and need no reconciliation.
-      version: 1,
+      // v2: consistencyTests moves from ONE record per sub-criterion to a
+      // HISTORY array per sub-criterion (abTests is untouched — Task 2 scoped
+      // this to Consistency only). Every pre-existing single record is
+      // wrapped into a one-entry array and given a stable id (records never
+      // had one before), so no history is lost.
+      version: 2,
       migrate: (persisted, fromVersion) => {
-        const s = persisted as CalibrationState;
-        if (!s || fromVersion >= 1) return s;
-        const validSub = new Set(GD4_SUB_CRITERIA.map((sc) => sc.id));
-        const prune = <V,>(rec: Record<string, V> | undefined): Record<string, V> =>
-          rec ? (Object.fromEntries(Object.entries(rec).filter(([k]) => validSub.has(k))) as Record<string, V>) : ({} as Record<string, V>);
-        return { ...s, consistencyTests: prune(s.consistencyTests), abTests: prune(s.abTests) };
+        // Permissive record shape throughout — the persisted blob predates
+        // whichever fields the CURRENT version's types require, so treating
+        // it as CalibrationState from the start fights the type checker for
+        // no benefit. Only the final return is asserted to the real type.
+        let s = persisted as Record<string, unknown> | undefined;
+        if (!s) return s as unknown as CalibrationState;
+        if (fromVersion < 1) {
+          const validSub = new Set(GD4_SUB_CRITERIA.map((sc) => sc.id));
+          const prune = (rec: unknown): Record<string, unknown> =>
+            rec && typeof rec === "object" ? Object.fromEntries(Object.entries(rec as Record<string, unknown>).filter(([k]) => validSub.has(k))) : {};
+          s = { ...s, consistencyTests: prune(s.consistencyTests), abTests: prune(s.abTests) };
+        }
+        if (fromVersion < 2) {
+          s = { ...s, consistencyTests: wrapConsistencyTestsForV2((s.consistencyTests ?? {}) as Record<string, unknown>) };
+        }
+        return s as unknown as CalibrationState;
       },
     }
   )

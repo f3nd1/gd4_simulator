@@ -37,10 +37,20 @@ const TEMP_FLOOR = 0.15; // at/below this, temperature is "already low"
 // low, flagging the disagreeing lines as genuinely ambiguous for human review.
 export function recommendFromConsistency(r: ConsistencyTestResult): Recommendation[] {
   if (r.agreementPct == null) {
+    // Same three-way honesty distinction as consistencySummary() — a run
+    // isn't scorable for three different reasons, and "too many runs
+    // failed" is only true for the middle one. Blaming failures when the
+    // real cause is "only 1 run" or "every run completed but produced
+    // unassessed lines" sent the user chasing a nonexistent outage.
+    const reasoning = r.runs < 2
+      ? "Only 1 run — at least 2 are needed to measure agreement. Increase Repeat runs and re-run."
+      : r.failedRuns.length > 0
+      ? "Too many runs failed to produce comparable verdicts. Re-run with the folders connected and AI available."
+      : "Every completed run's lines came back unassessed rather than the run itself failing — check the run diagnostics below for the specific model/pass/file involved, then re-run.";
     return [{
       id: `cons-${r.subCriterionId}-nodata`, severity: "advisory",
       title: "Consistency could not be scored",
-      reasoning: "Too many runs failed to produce comparable verdicts. Re-run with the folders connected and AI available.",
+      reasoning,
       evidence: [r.summary],
     }];
   }

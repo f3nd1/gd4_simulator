@@ -68,6 +68,23 @@ describe("consistency labels + summary", () => {
     // The reported 6.1 case: 3 of 5 failed → the number rests on 2 runs.
     expect(consistencySummary(71, [3, 3, null, null, null], [2, 3, null, null, null], [3, 4, 5], 5)).toContain("71% verdict agreement across 2 completed runs (of 5)");
   });
+  it("the honest 'no scorable lines' message names the ACTUAL cause instead of always blaming failures (gpt-5-mini investigation)", () => {
+    // Cause 1: only 1 run — structurally unscorable, nothing "failed".
+    const oneRun = consistencySummary(null, [3], [2], [], 1);
+    expect(oneRun).toContain("Only 1 run — at least 2 are needed to measure agreement");
+    expect(oneRun).not.toContain("too many failed runs");
+    // Cause 2: runs genuinely failed — old wording preserved.
+    const genuinelyFailed = consistencySummary(null, [null, null, null], [null, null, null], [1, 2, 3], 3);
+    expect(genuinelyFailed).toContain("No scorable lines (too many failed runs)");
+    // Cause 3: every run technically completed (no failedRuns) but every
+    // line came back unassessed — the exact "run failed outright" report
+    // where failedRuns was empty yet the old wording still said "too many
+    // failed runs" (false — nothing was recorded as failed).
+    const zeroExtracted = consistencySummary(null, [null, null], [null, null], [], 2);
+    expect(zeroExtracted).toContain("every completed run's lines came back unassessed");
+    expect(zeroExtracted).toContain("check the run diagnostics below");
+    expect(zeroExtracted).not.toContain("too many failed runs");
+  });
 });
 
 describe("status normalisation + counts + band estimate", () => {
@@ -101,7 +118,7 @@ describe("status normalisation + counts + band estimate", () => {
 describe("spliceRetryIntoConsistencyResult", () => {
   // A 3-run test shaped like the reported 6.1 failure: run 3 failed outright.
   const baseResult = (): ConsistencyTestResult => ({
-    subCriterionId: "6.1", path: "A", runs: 3, runAt: "2026-07-10T00:00:00.000Z",
+    id: "6.1-2026-07-10T00:00:00.000Z", subCriterionId: "6.1", path: "A", runs: 3, runAt: "2026-07-10T00:00:00.000Z",
     temperature: 0.1, effectiveTemperature: null, pipelineParity: true, model: "gpt-5.6-terra",
     lines: [
       { ref: "6.1.1.DS1", text: "req 1", verdicts: ["Met", "Met", null], details: [{ note: "n1", evidence: ["C001"] }, { note: "n1b", evidence: [] }, null] },

@@ -79,6 +79,12 @@ export type LineDetail = { note: string; evidence: string[] };
 export type ConsistencyLine = { ref: string; text: string; verdicts: (string | null)[]; details?: (LineDetail | null)[] };
 
 export type ConsistencyTestResult = {
+  // Stable identity for this specific test RUN (not the sub-criterion —
+  // multiple records now accumulate per sub-criterion as a history, so
+  // subCriterionId alone can no longer key a record for retry/delete/update).
+  // Always set at creation time; the store's migration assigns one to every
+  // pre-existing record so nothing is ever missing it at runtime.
+  id: string;
   subCriterionId: string;
   path: "A" | "B";
   runs: number;
@@ -112,6 +118,15 @@ export type ConsistencyTestResult = {
   // bare ✗. undefined on records from before this field (their reasons were
   // discarded at capture time — unrecoverable).
   failedRunErrors?: Record<number, string>;
+  // Run number → detailed per-call diagnostics for THAT run (model + which
+  // pass — extract/judge — + which file(s) were in flight), populated for
+  // EVERY run that hit at least one partial failure, whether the run as a
+  // whole ended up "ok" or not. This is what makes a run diagnosable when
+  // it technically "succeeded" (ok:true) but every line came back
+  // unassessed because every underlying AI call failed — a case
+  // failedRunErrors alone cannot describe, since that field only exists for
+  // runs recorded as outright failed.
+  runDiagnostics?: Record<number, string[]>;
   agreementPct: number | null;
   summary: string;
 };
@@ -147,6 +162,9 @@ export type RetryRunOutput = {
   lines: { ref: string; text: string; status: ScratchStatus | null; note: string; evidence: string[] }[];
   gapCount: number;
   bandEstimate: number | null;
+  // Per-call diagnostics captured during this run (model/pass/file), whether
+  // the run ended up ok or not — see ConsistencyTestResult.runDiagnostics.
+  diagnostics?: string[];
 };
 
 export function spliceRetryIntoConsistencyResult(result: ConsistencyTestResult, runNumber: number, out: RetryRunOutput): ConsistencyTestResult {
@@ -187,11 +205,16 @@ export function spliceRetryIntoConsistencyResult(result: ConsistencyTestResult, 
   if (out.ok) delete failedRunErrors[runNumber];
   else failedRunErrors[runNumber] = out.error || "Run failed with no error message.";
 
+  const runDiagnostics = { ...(result.runDiagnostics ?? {}) };
+  if (out.diagnostics && out.diagnostics.length > 0) runDiagnostics[runNumber] = out.diagnostics;
+  else delete runDiagnostics[runNumber];
+
   const { agreementPct } = consistencyAgreement(lines);
   return {
     ...result,
     lines, bands, gapCounts, failedRuns,
     failedRunErrors: Object.keys(failedRunErrors).length > 0 ? failedRunErrors : undefined,
+    runDiagnostics: Object.keys(runDiagnostics).length > 0 ? runDiagnostics : undefined,
     agreementPct,
     summary: consistencySummary(agreementPct, bands, gapCounts, failedRuns, result.runs),
   };
@@ -218,7 +241,23 @@ export function consistencySummary(agreementPct: number | null, bands: (number |
   // Say how many runs the number actually rests on — "71% across 5 runs"
   // when 3 of the 5 failed misrepresents 2 completed runs as 5.
   const completed = runs - failedRuns.length;
-  parts.push(agreementPct == null ? "No scorable lines (too many failed runs)" : `${agreementPct}% verdict agreement across ${completed} completed run${completed === 1 ? "" : "s"} (of ${runs})`);
+  // "No scorable lines" has THREE distinct honest causes that the old
+  // one-liner ("too many failed runs") conflated into one, misleadingly
+  // blaming failures even when none occurred:
+  //  1. runs < 2 — agreement is structurally undefined with a single run
+  //     (a line needs 2+ verdicts to be scorable at all); this is not a
+  //     failure of anything, just not enough data to compare.
+  //  2. failedRuns.length > 0 — some runs genuinely errored (Drive/API);
+  //     the old wording, unchanged here.
+  //  3. every run technically completed (ok:true) but every line came back
+  //     unassessed (extraction found nothing verifiable) — a real result,
+  //     not a "failure", so it must not be reported as one; the run
+  //     diagnostics (if any) explain why.
+  const noScorableReason = agreementPct != null ? null
+    : runs < 2 ? "Only 1 run — at least 2 are needed to measure agreement. Increase Repeat runs and re-run."
+    : failedRuns.length > 0 ? "No scorable lines (too many failed runs)"
+    : "No scorable lines — every completed run's lines came back unassessed; check the run diagnostics below.";
+  parts.push(noScorableReason ?? `${agreementPct}% verdict agreement across ${completed} completed run${completed === 1 ? "" : "s"} (of ${runs})`);
   parts.push(bandStabilityLabel(bands));
   parts.push(gapVariationLabel(gapCounts));
   if (failedRuns.length > 0) parts.push(`⚠ run${failedRuns.length === 1 ? "" : "s"} ${failedRuns.join(", ")} failed — scored on completed runs only`);

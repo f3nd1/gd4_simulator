@@ -2033,11 +2033,15 @@ export function flagUnverifiedQuotes(fullComment: string, sourceText: string): s
 export type PPDRunEvent =
   // chunkIds: the chunk IDs this window's text actually contains, so the
   // caller can resolve which source files the in-flight call covers.
-  | { type: "window-start"; window: { current: number; total: number }; refs: string[]; chunkIds: string[] }
+  // stage: which pass this window/batch belongs to — "extract" (Pass 1,
+  // finding candidate passages) or "judge" (Pass 2, deciding verdicts from
+  // the verified pool) — so a caller diagnosing a failure (or building a
+  // live view) knows WHICH call was in flight, not just that "PPD" failed.
+  | { type: "window-start"; window: { current: number; total: number }; refs: string[]; chunkIds: string[]; stage: "extract" | "judge" }
   | { type: "batch-done"; verdicts: { ref: string; verdict: PPDVerdict }[] }
   // error: the real failure reason (exception message, or "no parseable
   // verdicts" for a malformed/empty reply) — never just "it failed".
-  | { type: "batch-failed"; refs: string[]; error: string };
+  | { type: "batch-failed"; refs: string[]; error: string; stage: "extract" | "judge" };
 
 export async function runPPDRequirementsReview(
   requirements: PPDRequirementInput[],
@@ -2192,7 +2196,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     for (const [bi, batch] of batches.entries()) {
       if (stopRequested()) { stoppedEarly = true; break; }
       opts.onProgress?.(`PPD extraction — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
-      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((r) => r.ref), chunkIds: chunkIdsInWindow(win.text) });
+      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((r) => r.ref), chunkIds: chunkIdsInWindow(win.text), stage: "extract" });
       const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText}`).join("\n");
       const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nExtract the relevant PPD passages and promises for each GD4 requirement line:\n${pointsBlock}`;
       const system = extractSystem(windows.length > 1 ? `runPPDRequirementsReview (extract, window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview (extract)");
@@ -2213,7 +2217,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           windowErrors.push(`${label} returned no parseable passages — the AI reply was empty or not valid JSON.`);
           console.error("[PPDRequirementsReview]", label, "no parseable results");
           for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
-          opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it." });
+          opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it.", stage: "extract" });
           continue;
         }
         const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
@@ -2270,7 +2274,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         windowErrors.push(`${label} failed — ${msg}`);
         console.error("[PPDRequirementsReview]", label, msg);
         for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
-        opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg });
+        opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg, stage: "extract" });
       }
     }
     if (stoppedEarly) break;
@@ -2349,7 +2353,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         windowErrors.push(`PPD judge batch ${bi + 1}/${judgeBatches.length} returned no parseable verdicts — the AI reply was empty or not valid JSON.`);
         console.error("[PPDRequirementsReview]", `judge batch ${bi + 1}`, "no parseable results");
         for (const r of batch) judgeFailedRefs.add(r.ref);
-        opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no verdicts could be parsed from it." });
+        opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no verdicts could be parsed from it.", stage: "judge" });
         continue;
       }
       const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
@@ -2413,7 +2417,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       windowErrors.push(`PPD judge batch ${bi + 1}/${judgeBatches.length} failed — ${msg}`);
       console.error("[PPDRequirementsReview]", "judge batch failed", msg);
       for (const r of batch) judgeFailedRefs.add(r.ref);
-      opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg });
+      opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg, stage: "judge" });
     }
   }
 
@@ -2603,6 +2607,11 @@ export type EvidenceAssessmentRunResult = {
   promptSent?: string;
   windowsProcessed?: number;
   fullCoverage?: boolean;
+  // Real per-batch failure reasons (API error, malformed reply) — the same
+  // honesty guard runPPDRequirementsReview already had. Previously these
+  // were only console.error'd and lost; the caller had no way to tell WHY
+  // lines came back "Assessment failed — retry."
+  windowErrors?: string[];
 };
 
 // Purely-observational live events emitted as the assessment proceeds, so the
@@ -2611,10 +2620,12 @@ export type EvidenceAssessmentRunResult = {
 export type EvidenceRunEvent =
   // chunkIds: the chunk IDs this window's text actually contains, so the
   // caller can resolve which source files the in-flight call covers.
-  | { type: "window-start"; window: { current: number; total: number }; refs: string[]; firstLine: number; lastLine: number; chunkIds: string[] }
+  // stage: "extract" (Pass 1, finding candidate passages) or "judge" (Pass
+  // 2, deciding verdicts from the verified pool) — see PPDRunEvent.
+  | { type: "window-start"; window: { current: number; total: number }; refs: string[]; firstLine: number; lastLine: number; chunkIds: string[]; stage: "extract" | "judge" }
   | { type: "batch-done"; verdicts: { ref: string; verdict: EvidenceVerdict }[]; usage?: AIUsage }
   // error: the real failure reason (exception message) — never just "it failed".
-  | { type: "batch-failed"; refs: string[]; error: string };
+  | { type: "batch-failed"; refs: string[]; error: string; stage: "extract" | "judge" };
 
 export async function runEvidenceAssessment(
   inputs: EvidenceAssessmentInput[],
@@ -2707,6 +2718,10 @@ Respond with JSON only:
   // diagnostic as the PPD side: "returned but none verified" is a pipeline
   // defect, never proof that no evidence exists.
   const rawCandidateCount = new Map<string, number>();
+  // Real per-batch failure reasons, in call order — mirrors
+  // runPPDRequirementsReview's windowErrors (was entirely absent here; every
+  // failure below used to reach only console.error, never the caller).
+  const windowErrors: string[] = [];
 
   const addCandidate = (ref: string, cand: EvCandidate) => {
     const key = `${ref}::${normaliseForQuoteMatch(cand.quote)}`;
@@ -2757,7 +2772,7 @@ Respond with JSON only:
       const lineLabel = inputs.length === 1 ? "line 1 of 1" : `lines ${firstLine}–${lastLine} of ${inputs.length}`;
       const winLabel = windows.length > 1 ? ` · window ${win.index + 1}/${win.total}` : "";
       opts.onProgress?.(`Extracting evidence for ${lineLabel}${winLabel}…`, Math.round((unitsDone / totalUnits) * 100));
-      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((b) => b.ref), firstLine, lastLine, chunkIds: chunkIdsInWindow(win.text) });
+      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((b) => b.ref), firstLine, lastLine, chunkIds: chunkIdsInWindow(win.text), stage: "extract" });
       const pointsBlock = batch.map((r, i) => lineBlock(r, i)).join("\n");
       const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nExtract every passage that bears on each requirement line or its PPD promises:\n${pointsBlock}`;
       const system = extractSystem(windows.length > 1 ? `runEvidenceAssessment (extract, window ${win.index + 1}/${win.total})` : "runEvidenceAssessment (extract)");
@@ -2773,9 +2788,10 @@ Respond with JSON only:
         // Empty/unparseable reply = a failure per "never fabricate from
         // failures" — never treated as "no evidence exists".
         if (results.length === 0) {
-          const label = windows.length > 1 ? `window ${win.index + 1}/${win.total}` : "extraction call";
+          const label = windows.length > 1 ? `extraction window ${win.index + 1}/${win.total}` : "extraction call";
+          windowErrors.push(`Evidence ${label} returned no parseable passages — the AI reply was empty or not valid JSON.`);
           for (const r of batch) if (!extractedOk.has(r.ref)) failedRefs.add(r.ref);
-          opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it." });
+          opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it.", stage: "extract" });
           console.error("[EvidenceAssessment]", label, "no parseable results");
           unitsDone++;
           continue;
@@ -2807,9 +2823,11 @@ Respond with JSON only:
         // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
         if (stopRequested()) { stoppedEarly = true; break; }
         const msg = err instanceof Error ? err.message : String(err);
+        const label = windows.length > 1 ? `extract window ${win.index + 1}/${win.total}` : "extract call";
+        windowErrors.push(`Evidence ${label} failed — ${msg}`);
         for (const r of batch) if (!extractedOk.has(r.ref)) failedRefs.add(r.ref);
-        opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: msg });
-        console.error("[EvidenceAssessment]", windows.length > 1 ? `extract window ${win.index + 1}/${win.total}` : "extract call failed", msg);
+        opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: msg, stage: "extract" });
+        console.error("[EvidenceAssessment]", label, msg);
       }
       unitsDone++;
     }
@@ -2847,6 +2865,19 @@ Respond with JSON only:
       );
       const parsed = parseJSONObject(content);
       const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+      // The call RETURNED but nothing parseable came back — same failure
+      // class as the extract loop and PPD's judge loop (was previously
+      // silently absorbed: every ref in the batch fell through to the
+      // generic per-ref !res branch below with NO diagnostic captured).
+      if (results.length === 0) {
+        const label = judgeBatches.length > 1 ? `judge batch ${bi + 1}/${judgeBatches.length}` : "judge call";
+        windowErrors.push(`Evidence ${label} returned no parseable verdicts — the AI reply was empty or not valid JSON.`);
+        console.error("[EvidenceAssessment]", label, "no parseable results");
+        for (const r of batch) failedRefs.add(r.ref);
+        opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "The AI reply was empty or not valid JSON — no verdicts could be parsed from it.", stage: "judge" });
+        unitsDone++;
+        continue;
+      }
       const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
       const batchVerdicts: { ref: string; verdict: EvidenceVerdict }[] = [];
       for (const [idx, inp] of batch.entries()) {
@@ -2899,9 +2930,11 @@ Respond with JSON only:
     } catch (err) {
       if (stopRequested()) { stoppedEarly = true; break; }
       const msg = err instanceof Error ? err.message : String(err);
+      const label = judgeBatches.length > 1 ? `judge batch ${bi + 1}/${judgeBatches.length}` : "judge call";
+      windowErrors.push(`Evidence ${label} failed — ${msg}`);
       for (const inp of batch) if (!judgedByRef.has(inp.ref)) failedRefs.add(inp.ref);
-      opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: msg });
-      console.error("[EvidenceAssessment]", "judge batch failed", msg);
+      opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: msg, stage: "judge" });
+      console.error("[EvidenceAssessment]", label, msg);
     }
     unitsDone++;
   }
@@ -3020,5 +3053,5 @@ Respond with JSON only:
     };
   });
 
-  return { rows, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: !stoppedEarly && (windows.length === 0 || windowsCompleted === windows.length) };
+  return { rows, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: !stoppedEarly && (windows.length === 0 || windowsCompleted === windows.length), windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
 }
