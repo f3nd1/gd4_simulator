@@ -543,6 +543,26 @@ const BATCH_DOC_CAP = 60_000;
 // slowdowns within a tolerable wall-clock window.
 const AUDIT_BATCH_TIMEOUT_MS = 90_000;
 
+// The two-pass JUDGE call (Option A PPD-review and evidence-assessment
+// second pass) is the one call whose input GROWS with folder size: it
+// receives every verified passage the extract pass pooled for the batch, so
+// a large folder (measured: 6.1 Option A — 6 files incl. big oversight /
+// mapping PDFs) pools enough passages that a single judge call blows past
+// the flat 90 s ceiling. That timeout is caught honestly, but a run that
+// times out looks (to a consistency test) indistinguishable from one that
+// finished — the alternating "sometimes fast enough, sometimes not" pattern.
+// Scale the judge ceiling with the pooled-passage prompt size, floored at
+// the shared 90 s base (small folders wait no longer than before) and
+// HARD-CAPPED so a runaway prompt still fails with the SAME honest timeout
+// diagnostic rather than hanging forever — never a silent "unassessed".
+// Extract calls keep the flat base: they are per-window, already bounded by
+// WINDOW_SIZE, so their input does not grow with total folder size.
+export const JUDGE_TIMEOUT_CAP_MS = 300_000; // 5 min hard cap
+export function judgeTimeoutMs(promptChars: number): number {
+  const scaled = AUDIT_BATCH_TIMEOUT_MS + Math.floor(promptChars / 10_000) * 30_000;
+  return Math.min(JUDGE_TIMEOUT_CAP_MS, Math.max(AUDIT_BATCH_TIMEOUT_MS, scaled));
+}
+
 // ─── Auditor Review Panel ─────────────────────────────────────────────────────
 // A panel of the user's own auditor profiles reviews one finding from their
 // assigned perspectives, then a synthesis call combines them into one balanced
@@ -2345,7 +2365,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       const content = await chatComplete(
         [{ role: "system", content: system }, { role: "user", content: user }],
         settings,
-        { schema: PPD_JUDGE_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+        { schema: PPD_JUDGE_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: judgeTimeoutMs(user.length), signal: opts.signal }
       );
       const parsed = parseJSONObject(content);
       const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -2836,6 +2856,15 @@ Respond with JSON only:
   }
 
   // ── Pass 2 — JUDGE: verdicts from the verified pool, ONCE per line. ──
+  // FOLLOW-UP (not built here): this judge call batches by REQUEST line
+  // (REQ_BATCH_SIZE), so ALL of a batch's pooled passages — potentially every
+  // window's worth on a large folder — travel in ONE call. judgeTimeoutMs now
+  // scales the ceiling with that prompt size, but the more durable fix for
+  // very large folders is to batch the judge BY WINDOW too (judge each
+  // window's verified passages, then reconcile per line with the existing
+  // best-verdict merge), so no single call ever has to process the whole
+  // folder at once. Deferred because it touches the verdict-merge path and
+  // this task is a call-configuration fix only.
   type JudgedEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[]; evidenceQuote?: string; suggestedAction?: string };
   const judgedByRef = new Map<string, JudgedEv>();
 
@@ -2861,7 +2890,7 @@ Respond with JSON only:
       const content = await chatComplete(
         [{ role: "system", content: system }, { role: "user", content: user }],
         settings,
-        { schema: EVIDENCE_ASSESSMENT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+        { schema: EVIDENCE_ASSESSMENT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: judgeTimeoutMs(user.length), signal: opts.signal }
       );
       const parsed = parseJSONObject(content);
       const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
