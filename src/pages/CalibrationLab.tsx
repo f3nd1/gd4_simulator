@@ -22,6 +22,7 @@ import { toCsv, downloadCsv } from "../lib/auditCsvExport";
 import { foldersConnected, aiReady, runScratch, judgeVsBenchmark, type ScratchRunOutput } from "../lib/calibrationRunner";
 import {
   consistencyAgreement, consistencySummary, bandStabilityLabel, gapVariationLabel, formatRunOn,
+  spliceRetryIntoConsistencyResult,
   abWinner, abVerdictLine, abOverallTally,
   type ConsistencyLine, type ConsistencyTestResult, type ABTestResult, type ABPathOutcome,
 } from "../lib/calibrationTesting";
@@ -229,13 +230,17 @@ export function ConsistencyTab() {
     abortRef.current = abort;
     const startedAt = Date.now();
     const outputs: (ScratchRunOutput | null)[] = [];
+    const runErrors: Record<number, string> = {};
     try {
       for (let i = 0; i < n; i++) {
         if (abort.signal.aborted) break;
         setRunning({ headline: `Run ${i + 1} of ${n} (Option ${testPath})`, stage: "Starting…", startedAt });
         const out = await runScratch(testPath, subCriterionId, abort.signal, (stage) =>
           setRunning({ headline: `Run ${i + 1} of ${n} (Option ${testPath})`, stage, startedAt }));
-        outputs.push(out.ok ? out : null);
+        // Keep the failed run's REAL error — it used to be discarded here,
+        // leaving a bare ✗ nobody could diagnose or act on.
+        if (out.ok) outputs.push(out);
+        else { outputs.push(null); runErrors[i + 1] = out.error || "Run failed with no error message."; }
         if (!out.ok && abort.signal.aborted) break;
       }
       // Align lines by ref across the completed runs — a failed run
@@ -263,10 +268,37 @@ export function ConsistencyTab() {
         effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()),
         // Scratch runs now assemble production-identical prompts (labParity).
         pipelineParity: true,
-        lines, bands, gapCounts, failedRuns, agreementPct,
+        lines, bands, gapCounts, failedRuns,
+        failedRunErrors: Object.keys(runErrors).length > 0 ? runErrors : undefined,
+        agreementPct,
         summary: consistencySummary(agreementPct, bands, gapCounts, failedRuns, outputs.length),
       };
       setConsistencyTest(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunning(null);
+      abortRef.current = null;
+    }
+  }
+
+  // Retry ONE failed run and splice its column back into the saved result —
+  // a transient failure (Drive token expiry, rate-limit burst) shouldn't
+  // force re-paying for the whole N-run test. A retry that fails again
+  // updates the stored reason; the run stays marked failed, never blank.
+  async function retryRun(t: ConsistencyTestResult, runNumber: number) {
+    setError(null);
+    const offline = aiReady();
+    if (offline) { setError(offline); return; }
+    if (!foldersConnected(t.subCriterionId)) { setError("Folders not connected for this sub-criterion."); return; }
+    const abort = new AbortController();
+    abortRef.current = abort;
+    const startedAt = Date.now();
+    try {
+      setRunning({ headline: `Retrying run ${runNumber} of ${t.runs} (Option ${t.path})`, stage: "Starting…", startedAt });
+      const out = await runScratch(t.path, t.subCriterionId, abort.signal, (stage) =>
+        setRunning({ headline: `Retrying run ${runNumber} of ${t.runs} (Option ${t.path})`, stage, startedAt }));
+      setConsistencyTest(spliceRetryIntoConsistencyResult(t, runNumber, out));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -283,7 +315,8 @@ export function ConsistencyTab() {
         t.subCriterionId, t.path, t.runAt, formatRunOn(t.runAt), t.temperature ?? "", t.runs, t.agreementPct ?? "",
         t.bands.map((b) => b ?? "failed").join(" | "), t.gapCounts.map((c) => c ?? "failed").join(" | "),
         l.ref, l.text,
-        ...l.verdicts.map((v) => v ?? "run failed"),
+        ...l.verdicts.map((v) => v ?? "no verdict"),
+        t.failedRuns.map((n) => `run ${n}: ${t.failedRunErrors?.[n] ?? "reason not recorded"}`).join(" | "),
         // Reasoning per run, so the drill-in detail travels to the CSV too.
         ...Array.from({ length: maxRuns }, (_, i) => l.details?.[i]?.note ?? ""),
       ])
@@ -292,6 +325,7 @@ export function ConsistencyTab() {
       toCsv([
         "Sub-criterion", "Path", "Run on (ISO)", "Run on", "Temperature", "Runs", "Agreement %", "Band estimates", "Gap counts", "Line ref", "Requirement",
         ...Array.from({ length: maxRuns }, (_, i) => `Run ${i + 1} verdict`),
+        "Failed run reasons",
         ...Array.from({ length: maxRuns }, (_, i) => `Run ${i + 1} reasoning`),
       ], rows),
       `gd4-consistency-tests-${new Date().toISOString().slice(0, 10)}.csv`);
@@ -355,7 +389,7 @@ export function ConsistencyTab() {
         {error && <div style={{ fontSize: 12, color: "#b91c1c" }}>{error}</div>}
       </Card>
 
-      {saved && <ConsistencyResult result={saved} onDelete={() => { deleteConsistencyTest(saved.subCriterionId); setSelectedId(""); }} />}
+      {saved && <ConsistencyResult result={saved} onDelete={() => { deleteConsistencyTest(saved.subCriterionId); setSelectedId(""); }} onRetryRun={(n) => retryRun(saved, n)} retryDisabled={!!running} />}
       {saved && <Card><ConsistencyHeatChart result={saved} /></Card>}
       {saved && <RecommendationsPanel source="consistency" recommendations={recommendFromConsistency(saved)} />}
 
@@ -405,7 +439,7 @@ function LegacyRecordBadge({ t }: { t: { pipelineParity?: boolean } }) {
   );
 }
 
-function ConsistencyResult({ result, onDelete }: { result: ConsistencyTestResult; onDelete: () => void }) {
+function ConsistencyResult({ result, onDelete, onRetryRun, retryDisabled }: { result: ConsistencyTestResult; onDelete: () => void; onRetryRun?: (runNumber: number) => void; retryDisabled?: boolean }) {
   const disagreeing = result.lines.filter((l) => {
     const vs = l.verdicts.filter((v): v is string => v != null);
     return vs.length >= 2 && !vs.every((v) => v === vs[0]);
@@ -422,6 +456,30 @@ function ConsistencyResult({ result, onDelete }: { result: ConsistencyTestResult
       <div style={{ fontSize: 12.5, fontWeight: 600, color: result.agreementPct != null && result.agreementPct < 75 ? "#b45309" : "#15803d", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", marginBottom: 10 }}>
         {result.summary}
       </div>
+      {/* Failed runs: the REAL reason per run (actionable), plus a one-run
+          retry so a transient failure doesn't cost a full re-test. Records
+          from before reason-capture say so instead of showing nothing. */}
+      {result.failedRuns.length > 0 && (
+        <div style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 11px", marginBottom: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+          {result.failedRuns.map((n) => (
+            <div key={n} style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <span style={{ flex: 1, minWidth: 240 }}>
+                ✗ <b>Run {n} failed:</b> {result.failedRunErrors?.[n] ?? "reason not recorded — this test pre-dates failure-reason capture; retry the run to get a diagnosable result."}
+              </span>
+              {onRetryRun && (
+                <button
+                  disabled={retryDisabled}
+                  onClick={() => onRetryRun(n)}
+                  title={`Re-run ONLY run ${n} (one real AI run) and splice the result back into this test.`}
+                  style={{ cursor: retryDisabled ? "not-allowed" : "pointer", fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 6, border: "1px solid #f59e0b", background: "#fff7ed", color: "#92400e", whiteSpace: "nowrap", opacity: retryDisabled ? 0.5 : 1 }}
+                >
+                  ↻ Retry run {n}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 6 }}>
         {bandStabilityLabel(result.bands)} · {gapVariationLabel(result.gapCounts)} · {disagreeing} line{disagreeing === 1 ? "" : "s"} with disagreement (highlighted) · click any row to see the reasoning behind each run's verdict
       </div>
@@ -459,7 +517,7 @@ function ConsistencyLineRow({ line, runs }: { line: ConsistencyLine; runs: numbe
           <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#6b7280" }}>{line.ref}</span> {line.text.slice(0, 140)}{line.text.length > 140 ? "…" : ""}
         </td>
         {line.verdicts.map((v, i) => (
-          <td key={i} style={{ padding: "5px 8px", fontWeight: 600, color: v ? STATUS_COLOR[v] ?? "#374151" : "#94a3b8", whiteSpace: "nowrap" }}>{v ?? "run failed"}</td>
+          <td key={i} title={v ? undefined : "No verdict for this line in this run — the run failed, or this line's AI call failed (Not assessed). Excluded from the agreement score."} style={{ padding: "5px 8px", fontWeight: 600, color: v ? STATUS_COLOR[v] ?? "#374151" : "#94a3b8", whiteSpace: "nowrap" }}>{v ?? "no verdict"}</td>
         ))}
       </tr>
       {open && (
@@ -722,7 +780,7 @@ function ABLineDetail({ result }: { result: ABTestResult }) {
             <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr" }}>
               {([["Option A", a], ["Option B", b]] as const).map(([label, ln]) => (
                 <div key={label} style={{ border: "1px solid #f1f5f9", borderRadius: 6, padding: "6px 9px", background: "#f8fafc" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 3 }}>{label} — <span style={{ color: ln ? STATUS_COLOR[ln.status] ?? "#374151" : "#94a3b8" }}>{ln?.status ?? "no result"}</span></div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 3 }}>{label} — <span style={{ color: ln?.status ? STATUS_COLOR[ln.status] ?? "#374151" : "#94a3b8" }}>{ln?.status ?? "no verdict"}</span></div>
                   <div style={{ fontSize: 11.5, color: "#1e293b", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{ln?.note || "(no reasoning captured)"}</div>
                   {ln?.evidence.length ? <div style={{ fontSize: 11, color: "#475569", marginTop: 5 }}><b>Evidence:</b> {ln.evidence.join(", ")}</div> : null}
                 </div>

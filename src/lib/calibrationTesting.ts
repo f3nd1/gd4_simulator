@@ -24,19 +24,25 @@ export type ScratchStatus = "Met" | "Partial" | "Not met";
 // Option A PPD verdicts → the shared status scale, so A and B runs are
 // comparable line-for-line. (Used when A runs PPD-only — with an evidence
 // stage the evidence verdict IS already Met/Partial/Not met.)
-export function ppdVerdictToStatus(verdict: string): ScratchStatus {
+// "Not assessed" returns NULL — that line's AI call failed or never ran, so
+// it carries NO verdict. It used to map to "Not met", silently folding
+// call failures into the measurement as if they were real gaps.
+export function ppdVerdictToStatus(verdict: string): ScratchStatus | null {
   if (verdict === "Adequate") return "Met";
   if (verdict === "Partially documented" || verdict === "Partial") return "Partial";
+  if (verdict === "Not assessed") return null;
   return "Not met";
 }
 
 // Gap = a line that would raise a finding (NC or OFI under the app's
 // status→type rule: Not met→NC, Partial→OFI, Met→OBS-only).
-export function countGaps(statuses: ScratchStatus[]): number {
-  return statuses.filter((s) => s !== "Met").length;
+// Null statuses (line not assessed — its AI call failed) are excluded from
+// every count: an unassessed line is missing data, never a gap.
+export function countGaps(statuses: (ScratchStatus | null)[]): number {
+  return statuses.filter((s) => s != null && s !== "Met").length;
 }
 
-export function countByType(statuses: ScratchStatus[]): { NC: number; OFI: number; OBS: number } {
+export function countByType(statuses: (ScratchStatus | null)[]): { NC: number; OFI: number; OBS: number } {
   return {
     NC: statuses.filter((s) => s === "Not met").length,
     OFI: statuses.filter((s) => s === "Partial").length,
@@ -48,11 +54,12 @@ export function countByType(statuses: ScratchStatus[]): { NC: number; OFI: numbe
 // coverageCap thresholds (checklistBanding). Deliberately labelled an
 // estimate everywhere it is shown: the full computeBand also weighs evidence
 // attachments and maturity lenses, which a scratch run has no data for.
-export function bandEstimate(statuses: ScratchStatus[]): number | null {
-  if (statuses.length === 0) return null;
-  const met = statuses.filter((s) => s === "Met").length;
-  const partial = statuses.filter((s) => s === "Partial").length;
-  const pct = ((met + partial * 0.5) / statuses.length) * 100;
+export function bandEstimate(statuses: (ScratchStatus | null)[]): number | null {
+  const assessed = statuses.filter((s): s is ScratchStatus => s != null);
+  if (assessed.length === 0) return null;
+  const met = assessed.filter((s) => s === "Met").length;
+  const partial = assessed.filter((s) => s === "Partial").length;
+  const pct = ((met + partial * 0.5) / assessed.length) * 100;
   return coverageCap(pct);
 }
 
@@ -95,6 +102,11 @@ export type ConsistencyTestResult = {
   bands: (number | null)[]; // band estimate per run (null = run failed)
   gapCounts: (number | null)[]; // findings(gaps) count per run
   failedRuns: number[]; // 1-based run indices that errored entirely
+  // Run number → the REAL error that failed it (Drive token expiry, listing
+  // error, …), so a failed run is diagnosable and actionable instead of a
+  // bare ✗. undefined on records from before this field (their reasons were
+  // discarded at capture time — unrecoverable).
+  failedRunErrors?: Record<number, string>;
   agreementPct: number | null;
   summary: string;
 };
@@ -112,6 +124,72 @@ export function consistencyAgreement(lines: ConsistencyLine[]): { agreementPct: 
     if (vs.every((v) => v === vs[0])) agreed++;
   }
   return { agreementPct: scorable === 0 ? null : Math.round((agreed / scorable) * 100), agreedLines: agreed, scorableLines: scorable };
+}
+
+// Splice ONE retried run's output back into a saved consistency result —
+// so a transient failure (Drive token expiry, rate-limit burst) doesn't
+// force paying for all N runs again. Pure so the column-splice arithmetic
+// is unit-tested. Replaces run `runNumber`'s column everywhere (per-line
+// verdicts/details, band, gap count, failed-run bookkeeping) and recomputes
+// the agreement + summary. A retry that itself fails updates the stored
+// error instead — the run stays honestly marked failed, never blank.
+// NOTE: the retry runs under the CURRENT settings; record-level fields
+// (temperature/effectiveTemperature/pipelineParity/runAt) describe the
+// original test and are left untouched.
+export type RetryRunOutput = {
+  ok: boolean;
+  error?: string;
+  lines: { ref: string; text: string; status: ScratchStatus | null; note: string; evidence: string[] }[];
+  gapCount: number;
+  bandEstimate: number | null;
+};
+
+export function spliceRetryIntoConsistencyResult(result: ConsistencyTestResult, runNumber: number, out: RetryRunOutput): ConsistencyTestResult {
+  const i = runNumber - 1;
+  if (i < 0 || i >= result.runs) return result;
+  const blankDetails = () => Array.from({ length: result.runs }, () => null as LineDetail | null);
+
+  // Replace run i's column on every existing line.
+  const lines: ConsistencyLine[] = result.lines.map((l) => {
+    const nl = out.ok ? out.lines.find((x) => x.ref === l.ref) : undefined;
+    const verdicts = [...l.verdicts];
+    verdicts[i] = nl ? nl.status : null;
+    const details = l.details ? [...l.details] : blankDetails();
+    details[i] = nl ? { note: nl.note, evidence: nl.evidence } : null;
+    return { ...l, verdicts, details };
+  });
+  // Lines the retried run assessed that the original runs never saw.
+  if (out.ok) {
+    const seen = new Set(lines.map((l) => l.ref));
+    for (const nl of out.lines) {
+      if (seen.has(nl.ref)) continue;
+      const verdicts = Array.from({ length: result.runs }, () => null as string | null);
+      verdicts[i] = nl.status;
+      const details = blankDetails();
+      details[i] = { note: nl.note, evidence: nl.evidence };
+      lines.push({ ref: nl.ref, text: nl.text, verdicts, details });
+    }
+  }
+
+  const bands = [...result.bands];
+  bands[i] = out.ok ? out.bandEstimate : null;
+  const gapCounts = [...result.gapCounts];
+  gapCounts[i] = out.ok ? out.gapCount : null;
+  const failedRuns = out.ok
+    ? result.failedRuns.filter((n) => n !== runNumber)
+    : [...new Set([...result.failedRuns, runNumber])].sort((a, b) => a - b);
+  const failedRunErrors = { ...(result.failedRunErrors ?? {}) };
+  if (out.ok) delete failedRunErrors[runNumber];
+  else failedRunErrors[runNumber] = out.error || "Run failed with no error message.";
+
+  const { agreementPct } = consistencyAgreement(lines);
+  return {
+    ...result,
+    lines, bands, gapCounts, failedRuns,
+    failedRunErrors: Object.keys(failedRunErrors).length > 0 ? failedRunErrors : undefined,
+    agreementPct,
+    summary: consistencySummary(agreementPct, bands, gapCounts, failedRuns, result.runs),
+  };
 }
 
 const seq = (xs: (number | null)[]) => xs.map((x) => (x == null ? "✗" : String(x))).join(", ");
@@ -132,7 +210,10 @@ export function gapVariationLabel(counts: (number | null)[]): string {
 
 export function consistencySummary(agreementPct: number | null, bands: (number | null)[], gapCounts: (number | null)[], failedRuns: number[], runs: number): string {
   const parts: string[] = [];
-  parts.push(agreementPct == null ? "No scorable lines (too many failed runs)" : `${agreementPct}% verdict agreement across ${runs} runs`);
+  // Say how many runs the number actually rests on — "71% across 5 runs"
+  // when 3 of the 5 failed misrepresents 2 completed runs as 5.
+  const completed = runs - failedRuns.length;
+  parts.push(agreementPct == null ? "No scorable lines (too many failed runs)" : `${agreementPct}% verdict agreement across ${completed} completed run${completed === 1 ? "" : "s"} (of ${runs})`);
   parts.push(bandStabilityLabel(bands));
   parts.push(gapVariationLabel(gapCounts));
   if (failedRuns.length > 0) parts.push(`⚠ run${failedRuns.length === 1 ? "" : "s"} ${failedRuns.join(", ")} failed — scored on completed runs only`);
@@ -145,7 +226,9 @@ export function consistencySummary(agreementPct: number | null, bands: (number |
 // One path's per-line result, kept so the user can drill into WHAT each path
 // actually raised (verdict + reasoning + evidence) and compare A against B
 // line by line.
-export type ABLine = { ref: string; text: string; status: string; note: string; evidence: string[] };
+// status null = the line was not assessed in that path's run (AI call
+// failed) — displayed as such, never shown as a verdict.
+export type ABLine = { ref: string; text: string; status: string | null; note: string; evidence: string[] };
 
 export type ABPathOutcome = {
   ran: boolean;

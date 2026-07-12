@@ -45,7 +45,9 @@ export type ScratchRunOutput = {
   error?: string;
   // Per requirement line: normalised status + the engine's reasoning and the
   // evidence (chunk file names / refs) it cited, so the UI can drill in.
-  lines: { ref: string; text: string; status: ScratchStatus; note: string; evidence: string[] }[];
+  // status null = this line was NOT ASSESSED (its AI call failed) — carried
+  // as missing data, never mapped to a fabricated "Not met".
+  lines: { ref: string; text: string; status: ScratchStatus | null; note: string; evidence: string[] }[];
   gapCount: number;
   byType: { NC: number; OFI: number; OBS: number };
   bandEstimate: number | null;
@@ -74,8 +76,13 @@ export function aiReady(): string | null {
 async function gatherText(folderLink: string | undefined, label: string, signal: AbortSignal, onProgress: ScratchProgress, chunkStart: { n: number }, chunkFiles: Record<string, string>): Promise<{ text: string; files: number; failed: string[]; hasSpreadsheet: boolean; hasScanned: boolean }> {
   const folderId = parseFolderId(folderLink || "");
   if (!folderId) return { text: "", files: 0, failed: [], hasSpreadsheet: false, hasScanned: false };
-  const token = useGoogleDriveStore.getState().getValidToken();
-  if (!token) throw new Error("Google Drive is not connected — connect it in Settings or on the Evidence Folder page.");
+  // Refresh (not just read) the Drive token at the start of every gather —
+  // a 5-run consistency test outlives the ~1h OAuth token, and the old sync
+  // getValidToken() made every run after expiry fail before reading a byte.
+  // Files whose extraction returns empty are never cached, so later runs DO
+  // still hit Drive even when run 1 warmed the cache.
+  const token = await useGoogleDriveStore.getState().getFreshToken();
+  if (!token) throw new Error("Google Drive session expired and could not be refreshed — reconnect Drive in Settings or on the Evidence Folder page, then retry the failed run.");
   onProgress(`Listing ${label} folder…`);
   const files = (await listFolderFilesRecursive(folderId, token)).filter((f) => !IMAGE_MIME_TYPES.has(f.mimeType));
   const parts: string[] = [];
@@ -167,9 +174,13 @@ function logRun(agent: string, subjectId: string, verdict: string, usage?: AIUsa
 }
 
 function buildDigest(lines: ScratchRunOutput["lines"]): string {
-  const gaps = lines.filter((l) => l.status !== "Met");
-  if (gaps.length === 0) return "No gaps raised — every line assessed Met.";
-  return gaps.map((l) => `[${l.ref}] ${l.status}: ${l.note.slice(0, 300)}`).join("\n");
+  // Unassessed (null-status) lines are NOT gaps — a failed AI call must not
+  // read to the benchmark judge as a raised finding.
+  const gaps = lines.filter((l) => l.status != null && l.status !== "Met");
+  const unassessed = lines.filter((l) => l.status == null).length;
+  const suffix = unassessed > 0 ? `\n(${unassessed} line${unassessed === 1 ? "" : "s"} not assessed — AI call failed; excluded above.)` : "";
+  if (gaps.length === 0) return `No gaps raised — every assessed line was Met.${suffix}`;
+  return gaps.map((l) => `[${l.ref}] ${l.status}: ${l.note.slice(0, 300)}`).join("\n") + suffix;
 }
 
 // Runs Option A (PPD review, then the evidence assessment when an evidence
@@ -212,7 +223,9 @@ export async function runScratchA(subCriterionId: string, signal: AbortSignal, o
       const evByRef = new Map(ev.rows.map((r) => [r.ref, r]));
       lines = ppd.rows.map((r) => {
         const e = evByRef.get(r.ref);
-        const status: ScratchStatus = e && !e.failed && (e.verdict === "Met" || e.verdict === "Partial" || e.verdict === "Not met")
+        // null = neither stage produced a verdict for this line (call failed
+        // / Not assessed) — missing data, never counted as a gap.
+        const status: ScratchStatus | null = e && !e.failed && (e.verdict === "Met" || e.verdict === "Partial" || e.verdict === "Not met")
           ? e.verdict
           : ppdVerdictToStatus(r.verdict);
         return { ref: r.ref, text: byRef.get(r.ref)?.requirementText ?? r.requirementText, status, note: e?.comment || r.fullComment || r.shortComment, evidence: cite([...(r.chunkIds ?? []), ...(e?.chunkIds ?? [])]) };
@@ -264,8 +277,15 @@ export async function runScratchB(subCriterionId: string, signal: AbortSignal, o
     const outByRef = new Map(out.rows.map((r) => [r.ref, r]));
     const cite = (ids: string[]) => [...new Set(ids.map((id) => chunkFiles[id] ?? id))];
     const lines = points.map((p) => {
-      const apsr = buildStagedApsr(polByRef.get(p.ref), evByRef.get(p.ref), outByRef.get(p.ref));
-      const status = deriveApsrStatus(apsr);
+      const pol = polByRef.get(p.ref), evd = evByRef.get(p.ref), oc = outByRef.get(p.ref);
+      // Every pass that saw this point marked it notAssessed → the point was
+      // never put in front of the AI; its "status" would be a placeholder,
+      // not a verdict (see PolicyCoverageRow.notAssessed).
+      if ((pol?.notAssessed ?? true) && (evd?.notAssessed ?? true) && (oc?.notAssessed ?? true)) {
+        return { ref: p.ref, text: p.text, status: null as ScratchStatus | null, note: "Not assessed — the AI calls for this point failed or the run stopped early.", evidence: [] as string[] };
+      }
+      const apsr = buildStagedApsr(pol, evd, oc);
+      const status: ScratchStatus | null = deriveApsrStatus(apsr);
       const note = [apsr.approach.note, apsr.processes.note].filter(Boolean).join(" | ");
       const evidence = cite([...(apsr.approach.sourceChunkIds ?? []), ...(apsr.processes.sourceChunkIds ?? []), ...(apsr.systemsOutcomes.sourceChunkIds ?? [])]);
       return { ref: p.ref, text: p.text, status, note, evidence };
