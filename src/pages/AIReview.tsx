@@ -84,12 +84,15 @@ function rateFor(model?: string) {
   return PRICING.find((p) => p.match.test(model)) ?? DEFAULT_RATE;
 }
 
-// Estimated USD cost of one logged run. Analysis tokens are priced at the
-// analysis model's rate; auxiliary (utility) tokens at the utility model's
-// rate. For older log entries that only have a combined totalTokens (no split),
-// we fall back to the analysis-model rate across the total — which was the old
-// (slightly wrong) behaviour, preserved for backward compatibility.
-function costOf(e: AIReviewLogEntry): number {
+// Analysis/utility cost split for one logged run — analysis tokens priced at
+// the analysis model's rate, auxiliary (utility) tokens at the utility
+// model's rate. For older log entries that only have a combined totalTokens
+// (no split), we fall back to the analysis-model rate across the total —
+// which was the old (slightly wrong) behaviour, preserved for backward
+// compatibility. Exposed as a split (not just the summed total from costOf
+// below) so the per-model breakdown in the stats useMemo can price each
+// model separately without a second copy of this formula.
+function costParts(e: AIReviewLogEntry): { analysisCost: number; auxCost: number } {
   const r = rateFor(e.model);
   const pt = e.promptTokens || 0;
   const ct = e.completionTokens || 0;
@@ -106,6 +109,12 @@ function costOf(e: AIReviewLogEntry): number {
     : e.auxTotalTokens
       ? (e.auxTotalTokens * 0.75 * ar.in + e.auxTotalTokens * 0.25 * ar.out) / 1e6
       : 0;
+  return { analysisCost, auxCost };
+}
+
+// Estimated USD cost of one logged run.
+function costOf(e: AIReviewLogEntry): number {
+  const { analysisCost, auxCost } = costParts(e);
   return analysisCost + auxCost;
 }
 
@@ -230,14 +239,13 @@ export function AIReview() {
       if (!e.totalTokens) return;
       trackedRuns += 1;
       totalTokens += e.totalTokens;
-      const cost = costOf(e);
+      const { analysisCost, auxCost } = costParts(e);
+      const cost = analysisCost + auxCost;
       totalCost += cost;
       // For entries with a split, add analysis and utility separately.
       if (e.auxTotalTokens) {
         const analysisTok = (e.promptTokens || 0) + (e.completionTokens || 0) || (e.totalTokens - e.auxTotalTokens);
-        const analysisCost = (() => { const r = rateFor(e.model); const pt = e.promptTokens || 0; const ct = e.completionTokens || 0; return pt || ct ? (pt * r.in + ct * r.out) / 1e6 : (analysisTok * 0.75 * r.in + analysisTok * 0.25 * r.out) / 1e6; })();
         const auxTok = e.auxTotalTokens;
-        const auxCost = cost - analysisCost;
         addModelRow(e.model, analysisTok, analysisCost, true);
         addModelRow(e.auxModel, auxTok, auxCost, false);
       } else {
@@ -477,7 +485,6 @@ export function AIReview() {
       <FeedbackModal
         open={!!reviewFeedback}
         aiOutput={reviewFeedback?.aiOutput ?? ""}
-        module="AI Review Log Feedback"
         onClose={() => setReviewFeedback(null)}
         onSubmit={(fb) => {
           if (!reviewFeedback) return;

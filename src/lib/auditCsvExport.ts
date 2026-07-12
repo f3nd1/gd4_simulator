@@ -18,9 +18,11 @@ export function toCsv(headers: string[], rows: unknown[][]): string {
   return lines.join("\r\n");
 }
 
-// Triggers a browser file-save of the given CSV text.
-export function downloadCsv(content: string, filename: string): void {
-  const blob = new Blob(["﻿" + content], { type: "text/csv;charset=utf-8;" });
+// Triggers a browser file-save of arbitrary text content — shared by every
+// export (CSV, JSON backup, Markdown) so there's one Blob→URL→anchor→click→
+// revoke sequence in the codebase, not one hand-rolled per caller.
+export function downloadBlob(content: string, filename: string, mime: string): void {
+  const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -29,6 +31,12 @@ export function downloadCsv(content: string, filename: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// Triggers a browser file-save of the given CSV text. UTF-8 BOM prefixed so
+// Excel opens it correctly instead of mis-detecting the encoding.
+export function downloadCsv(content: string, filename: string): void {
+  downloadBlob("﻿" + content, filename, "text/csv;charset=utf-8;");
 }
 
 // Returns a filesystem-safe filename for audit CSV exports.

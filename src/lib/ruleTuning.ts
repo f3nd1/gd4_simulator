@@ -98,12 +98,6 @@ export function changeSummaryOf(prev: RuleContent, next: RuleContent): string {
   return "Changed " + bits.join(", ") + ".";
 }
 
-// A version's benchmark caught rate as a fraction, or null when not tested.
-export function caughtRate(v: Pick<RuleVersion, "benchmarkCaught" | "benchmarkTotal">): number | null {
-  if (v.benchmarkCaught == null || !v.benchmarkTotal) return null;
-  return v.benchmarkCaught / v.benchmarkTotal;
-}
-
 // Plain comparison of a candidate version against a baseline (usually the
 // previous version or the champion). Only compares dimensions BOTH have.
 export function scoreCompareText(candidate: RuleVersion, baseline: RuleVersion): string {

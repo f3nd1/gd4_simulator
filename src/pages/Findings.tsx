@@ -80,10 +80,6 @@ export function Findings() {
   const [dimFilter, setDimFilter] = useState<FindingDimension | "All">("All");
   const [riskCatFilter, setRiskCatFilter] = useState<"A" | "B" | "C" | "D" | "All">("All");
   const [dateFilter, setDateFilter] = useState<"all" | "7d" | "30d" | "90d">("all");
-  // Grouped view sorts groups by sub-criterion and keeps findings in raised
-  // order within each group; the old sortable column headers are gone.
-  const sortCol = "raised" as const;
-  const sortDir = "desc" as const;
   const fromItem = searchParams.get("item"); // e.g. "1.1.1" — jumps to that item's sub-criterion filter
   const fromSubCrit = searchParams.get("subCrit"); // e.g. "1.2" — pre-selects that sub-criterion directly
   useEffect(() => {
@@ -248,19 +244,11 @@ export function Findings() {
       if (subCritFilter !== "All" && req?.subCriterionId !== subCritFilter) return false;
       return true;
     });
-    filtered.sort((a, b) => {
-      let cmp = 0;
-      if (sortCol === "raised") {
-        cmp = (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
-      } else if (sortCol === "id") {
-        cmp = a.id.localeCompare(b.id);
-      } else if (sortCol === "gd4") {
-        cmp = a.gd4ItemId.localeCompare(b.gd4ItemId);
-      }
-      return sortDir === "desc" ? -cmp : cmp;
-    });
+    // Grouped view sorts groups by sub-criterion and keeps findings in raised
+    // order (newest first) within each group; the old sortable column headers are gone.
+    filtered.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
     return filtered;
-  }, [allFindings, typeFilter, sevFilter, dimFilter, riskCatFilter, dateFilter, critFilter, subCritFilter, sortCol, sortDir]);
+  }, [allFindings, typeFilter, sevFilter, dimFilter, riskCatFilter, dateFilter, critFilter, subCritFilter]);
 
   const groupedRows = useMemo(() => {
     const map = new Map<string, { subCritId: string; findings: Finding[] }>();
@@ -861,7 +849,6 @@ export function Findings() {
       <FeedbackModal
         open={draftFeedbackOpen}
         aiOutput={aiDraftOutput}
-        module="Finding Observation"
         onClose={() => setDraftFeedbackOpen(false)}
         onSubmit={(feedback) => {
           logHumanDecision({ module: "Finding Observation", subjectId: form.gd4ItemId, field: "observation/criteria/effect", aiOutput: aiDraftOutput, humanDecision: feedback.correction || aiDraftOutput, changed: !!feedback.correction, decisionType: "Overridden", reason: feedback.reason });

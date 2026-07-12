@@ -29,8 +29,7 @@ export function buildProvenance(
 ): RunProvenance {
   const audited = folders.filter((f) => !!f.lastAuditAt);
   const auditTimes = audited.map((f) => f.lastAuditAt!).sort();
-  const models: string[] = [];
-  for (const m of modelIds) if (m && !models.includes(m)) models.push(m);
+  const models = [...new Set(modelIds.filter((m): m is string => !!m))];
   const auditors: string[] = [];
   for (const f of audited) {
     const a = (f.lastAuditAuditor ?? "").replace(/\s*\(.*\)$/, "").trim();

@@ -370,7 +370,6 @@ export function PromptReview() {
       <FeedbackModal
         open={feedbackOpen}
         aiOutput={output}
-        module="Prompt Review"
         onClose={() => setFeedbackOpen(false)}
         onSubmit={(fb) => {
           // In this flow the reviewer opened correction because a rating was

@@ -26,7 +26,6 @@ export type BenchmarkAfiState = {
   addEntries: (items: Omit<BenchmarkAFI, "id">[]) => void;
   updateEntry: (id: string, updates: Partial<Omit<BenchmarkAFI, "id">>) => void;
   removeEntry: (id: string) => void;
-  removeEntriesBatch: (ids: string[]) => void;
   // Scoped reset: reinstates the 67 seeded ids (undoing edits, un-deleting
   // any removed ones) — every entry whose id is NOT one of the 67 (i.e.
   // every uploaded CUST-* finding) is left exactly as-is, never touched.
@@ -81,12 +80,6 @@ export const useBenchmarkAfiStore = create<BenchmarkAfiState>()(
 
       removeEntry: (id) =>
         set((s) => ({ entries: s.entries.filter((e) => e.id !== id) })),
-
-      removeEntriesBatch: (ids) =>
-        set((s) => {
-          const drop = new Set(ids);
-          return { entries: s.entries.filter((e) => !drop.has(e.id)) };
-        }),
 
       resetToDefaults: () =>
         set((s) => {

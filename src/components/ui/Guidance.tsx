@@ -42,9 +42,9 @@ function tipSlug(text: string): string {
 // stacked inside a caller's shared container (see PPDReview.tsx's
 // consolidated status bar) without a nested box-in-a-box look. Opt-in only —
 // every existing call site keeps its own bordered box unless it passes bare.
-export function NextStepBanner({ text, dismissKey, bare = false }: { text: string; dismissKey?: string; bare?: boolean }) {
+export function NextStepBanner({ text, bare = false }: { text: string; bare?: boolean }) {
   const enabled = useGuidanceStore((s) => s.enabled);
-  const key = dismissKey ?? tipSlug(text);
+  const key = tipSlug(text);
   const dismissed = useGuidanceStore((s) => !!s.dismissedTips[key]);
   const dismissTip = useGuidanceStore((s) => s.dismissTip);
   if (!enabled || !text || dismissed) return null;

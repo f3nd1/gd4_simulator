@@ -5,6 +5,7 @@ import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 import { collectBackup, backupFilename } from "../lib/workspaceBackup";
+import { downloadBlob } from "../lib/auditCsvExport";
 
 export function DraftWorkspace() {
   const cycle = useWorkspaceStore((s) => s.cycle);
@@ -32,13 +33,7 @@ export function DraftWorkspace() {
   function downloadBackup() {
     const now = new Date();
     const backup = collectBackup(window.localStorage, now);
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = backupFilename(now);
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(JSON.stringify(backup, null, 2), backupFilename(now), "application/json");
   }
 
   function createNew() {

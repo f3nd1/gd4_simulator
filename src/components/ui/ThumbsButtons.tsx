@@ -3,10 +3,9 @@ import { useState } from "react";
 type Props = {
   onAccept: () => void;
   onReject: () => void;
-  size?: "sm" | "md";
 };
 
-export function ThumbsButtons({ onAccept, onReject, size = "sm" }: Props) {
+export function ThumbsButtons({ onAccept, onReject }: Props) {
   const [logged, setLogged] = useState(false);
 
   function handleAccept() {
@@ -15,8 +14,8 @@ export function ThumbsButtons({ onAccept, onReject, size = "sm" }: Props) {
     setTimeout(() => setLogged(false), 1800);
   }
 
-  const pad = size === "md" ? "3px 9px" : "2px 6px";
-  const fs  = size === "md" ? 13 : 12;
+  const pad = "2px 6px";
+  const fs  = 12;
 
   if (logged) {
     return (

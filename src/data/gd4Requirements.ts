@@ -616,59 +616,6 @@ function deriveItemFlatAuditPoints(raw: RawItem): FlatAuditPoint[] {
   return points;
 }
 
-// Official EduTrust scoring rubric (GD4 section 23) — identical four-dimension,
-// five-band table applies across all items; reproduced verbatim.
-export const RUBRIC_BAND_DESCRIPTORS: Record<string, Record<string, string>> = {
-  Approach: {
-    "Band 1": "No organised approach to item requirements is evident",
-    "Band 2": "The beginning of an organised approach is evident",
-    "Band 3": "An effective and organised approach meeting the minimum requirement is evident",
-    "Band 4": "An effective, efficient and organised approach meeting overall requirements is evident",
-    "Band 5": "An effective, efficient and well-integrated approach meeting all requirements is evident",
-  },
-  Processes: {
-    "Band 1": "Processes are not in place or in their infancy stage",
-    "Band 2": "Processes are established but with weak deployment in key areas",
-    "Band 3": "Processes are deployed and well-managed by owners in key areas",
-    "Band 4": "Intended processes are well-managed by owners; desired outputs are produced by these processes",
-    "Band 5": "All processes are well-managed by owners leading to quality outputs by all processes",
-  },
-  "Systems & Outcomes": {
-    "Band 1": "Systems and outcomes are non-existent",
-    "Band 2": "Systems do not interact with one another; there are limited outcomes",
-    "Band 3": "Key systems are established, producing limited outcomes",
-    "Band 4": "Key systems are interacting with one another, producing desired outcomes with no conflicts",
-    "Band 5": "All systems are interacting with one another, producing good quality outcomes",
-  },
-  Review: {
-    "Band 1": "No planned review; no improvement is made",
-    "Band 2": "Early stages of review; improvements to systems and processes are limited",
-    "Band 3": "There is evidence that the systems and processes are regularly reviewed and action plans for improvement are implemented",
-    "Band 4": "Implemented action plans for improvement are monitored for effectiveness and to bring about positive impact resulting in favourable outcomes",
-    "Band 5": "Many to most trends and current performance levels are evaluated against relevant comparisons and/or benchmarks",
-  },
-};
-
-// The three file types a PEI uploads against each requirement, and the
-// general supporting documents that apply to the EduTrust submission as a
-// whole (shown in the GD4 Library, on top of each item's expected evidence).
-export const SUBMISSION_FILE_TYPES = [
-  "Policy and procedure",
-  "Actual evidence of implementation (if existing)",
-  "Any other supporting document",
-];
-
-export const GENERAL_SUPPORTING_DOCS = [
-  "Other controlled documents such as forms / templates that are in place but not yet implemented",
-  "Staff, Student and Partners listing*",
-  "Organisation chart",
-  "Management Representative Declaration*, if MR is not the filer of the EduTrust application",
-  "Any other awards, accreditations or certifications received (submit supporting documents if applicable)",
-];
-
-export const SUPPORTING_DOCS_TEMPLATE_NOTE = "* Please refer to the TPGateway for the templates provided.";
-export const SUBMISSION_PRIVACY_NOTE = "Note: omit NRIC/FIN details before uploading.";
-
 // Contextualised band descriptors: the generic four-dimension rubric
 // (Approach / Processes / Systems & Outcomes / Review) phrased against THIS
 // item's actual subject, instead of the same placeholder line for every item.

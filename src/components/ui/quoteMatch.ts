@@ -8,6 +8,16 @@
 //
 // A paraphrased/invented quote returns null → no highlight, never a fabricated
 // position. Too-short quotes are ignored to avoid spurious single-word matches.
+
+// Whitespace/curly-quote-tolerant regex escaping shared by both matchers below.
+function escapeForQuoteRegex(s: string): string {
+  return s
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/['‘’]/g, "['‘’]")
+    .replace(/["“”]/g, "[\"“”]")
+    .replace(/\s+/g, "\\s+");
+}
+
 export function findQuoteSpan(text: string, quote: string): [number, number] | null {
   const trimmed = quote.replace(/^(?:\.{3}|…)\s*/, "").replace(/\s*(?:\.{3}|…)$/, "").trim();
   if (trimmed.length < 4) return null;
@@ -15,11 +25,7 @@ export function findQuoteSpan(text: string, quote: string): [number, number] | n
   const exact = text.indexOf(trimmed);
   if (exact >= 0) return [exact, exact + trimmed.length];
   // Tolerant path.
-  const escaped = trimmed
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/['‘’]/g, "['‘’]")
-    .replace(/["“”]/g, "[\"“”]")
-    .replace(/\s+/g, "\\s+");
+  const escaped = escapeForQuoteRegex(trimmed);
   let rx: RegExp;
   try { rx = new RegExp(escaped, "i"); } catch { return null; }
   const m = rx.exec(text);
@@ -50,11 +56,7 @@ export function findQuoteSpan(text: string, quote: string): [number, number] | n
 function findQuoteSpanFrom(text: string, segment: string, from: number): [number, number] | null {
   const exact = text.indexOf(segment, from);
   if (exact >= 0) return [exact, exact + segment.length];
-  const escaped = segment
-    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/['‘’]/g, "['‘’]")
-    .replace(/["“”]/g, "[\"“”]")
-    .replace(/\s+/g, "\\s+");
+  const escaped = escapeForQuoteRegex(segment);
   let rx: RegExp;
   try { rx = new RegExp(escaped, "ig"); } catch { return null; }
   rx.lastIndex = from;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildRuleInjection, changeSummaryOf, scoreCompareText, isWorseThanChampion, caughtRate, DEFAULT_RULE_CONTENT, type RuleContent, type RuleVersion } from "../ruleTuning";
+import { buildRuleInjection, changeSummaryOf, scoreCompareText, isWorseThanChampion, DEFAULT_RULE_CONTENT, type RuleContent, type RuleVersion } from "../ruleTuning";
 
 const content = (over: Partial<RuleContent> = {}): RuleContent => ({ ...DEFAULT_RULE_CONTENT, perCriterionMetPartial: {}, perCriterionGuidance: {}, ...over });
 const version = (over: Partial<RuleVersion> = {}): RuleVersion => ({ id: "v", createdAt: "2026-07-04T00:00:00Z", content: content(), ...over });
@@ -67,13 +67,5 @@ describe("isWorseThanChampion", () => {
   });
   it("does not warn when one dimension dropped but the other improved", () => {
     expect(isWorseThanChampion(version({ consistencyPct: 60, benchmarkCaught: 40, benchmarkTotal: 54 }), version({ consistencyPct: 85, benchmarkCaught: 35, benchmarkTotal: 54 }))).toBe(false);
-  });
-});
-
-describe("caughtRate", () => {
-  it("is a fraction or null", () => {
-    expect(caughtRate({ benchmarkCaught: 27, benchmarkTotal: 54 })).toBe(0.5);
-    expect(caughtRate({ benchmarkCaught: null, benchmarkTotal: 54 })).toBeNull();
-    expect(caughtRate({ benchmarkCaught: 5, benchmarkTotal: 0 })).toBeNull();
   });
 });

@@ -3,7 +3,6 @@ import { useState } from "react";
 type FeedbackModalProps = {
   open: boolean;
   aiOutput: string;
-  module: string;
   onClose: () => void;
   onSubmit: (feedback: {
     thumbs: "up" | "down";
@@ -13,7 +12,7 @@ type FeedbackModalProps = {
   }) => void;
 };
 
-export function FeedbackModal({ open, aiOutput, module: _module, onClose, onSubmit }: FeedbackModalProps) {
+export function FeedbackModal({ open, aiOutput, onClose, onSubmit }: FeedbackModalProps) {
   const [correct, setCorrect] = useState(false);
   const [correction, setCorrection] = useState("");
   const [reason, setReason] = useState("");

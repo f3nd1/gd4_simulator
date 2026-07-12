@@ -322,7 +322,6 @@ export function AFIClosure() {
       <FeedbackModal
         open={!!closureFeedback}
         aiOutput={closureFeedback?.aiOutput ?? ""}
-        module="AFI Closure"
         onClose={() => setClosureFeedback(null)}
         onSubmit={(fb) => {
           if (!closureFeedback) return;

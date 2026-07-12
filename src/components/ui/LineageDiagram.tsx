@@ -343,11 +343,26 @@ function VerdictCell({ coverage, label }: { coverage: Coverage; label: string })
 // in place with the same Show more/less control RationaleCell uses. An
 // em-dash means a very old stored run predating the ppdExtract/ppdVerdict
 // fields — honest absence, never an error.
-function PolicyPromiseCell({ promise, coverage }: { promise?: string; coverage?: Coverage }) {
+// Clamps text at `max` chars with a "Show more/less" toggle — shared by
+// PolicyPromiseCell and RationaleCell, which both need the identical pattern.
+function ExpandableText({ text, max = 220, style }: { text: string; max?: number; style?: React.CSSProperties }) {
   const [expanded, setExpanded] = useState(false);
+  const long = text.length > max;
+  const shown = long && !expanded ? `${text.slice(0, max).trimEnd()}…` : text;
+  return (
+    <span style={{ fontSize: 11, color: "#475569", lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal", ...style }}>
+      {shown}
+      {long && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} style={{ marginLeft: 4, fontSize: 10.5, fontWeight: 600, color: "#4338ca", background: "transparent", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </span>
+  );
+}
+
+function PolicyPromiseCell({ promise, coverage }: { promise?: string; coverage?: Coverage }) {
   if (!promise) return <span style={{ color: "#94a3b8" }}>—</span>;
-  const long = promise.length > 220;
-  const shown = long && !expanded ? `${promise.slice(0, 220).trimEnd()}…` : promise;
   const hollow = coverage === "not-checked";
   return (
     <div style={{ minWidth: 0 }}>
@@ -355,14 +370,7 @@ function PolicyPromiseCell({ promise, coverage }: { promise?: string; coverage?:
         {coverage && <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: hollow ? "transparent" : COV_DOT[coverage], border: `1.5px solid ${COV_DOT[coverage]}` }} />}
         <span style={{ fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>From PPD review</span>
       </div>
-      <span style={{ display: "block", fontSize: 11, color: "#475569", lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }}>
-        {shown}
-        {long && (
-          <button type="button" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} style={{ marginLeft: 4, fontSize: 10.5, fontWeight: 600, color: "#4338ca", background: "transparent", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>
-            {expanded ? "Show less" : "Show more"}
-          </button>
-        )}
-      </span>
+      <ExpandableText text={promise} style={{ display: "block" }} />
     </div>
   );
 }
@@ -456,22 +464,12 @@ function PassageCell({ source, fallbackText, muted, resolveText }: { source?: { 
 // out every row's height by default. suggestedAction (evidence tab, Partial/
 // Not met only) renders as a distinct "To reach Met" callout underneath.
 function RationaleCell({ text, suggestedAction }: { text?: string; suggestedAction?: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const long = !!text && text.length > 220;
-  const shown = long && !expanded ? `${text!.slice(0, 220).trimEnd()}…` : text;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
       {!text ? (
         <span style={{ color: "#94a3b8", fontStyle: "italic", fontSize: 11 }}>No rationale returned by the AI for this line</span>
       ) : (
-        <span style={{ fontSize: 11, color: "#475569", lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }}>
-          {shown}
-          {long && (
-            <button type="button" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} style={{ marginLeft: 4, fontSize: 10.5, fontWeight: 600, color: "#4338ca", background: "transparent", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>
-              {expanded ? "Show less" : "Show more"}
-            </button>
-          )}
-        </span>
+        <ExpandableText text={text} />
       )}
       {suggestedAction && (
         <div style={{ fontSize: 10.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "3px 6px", lineHeight: 1.4 }}>

@@ -25,7 +25,7 @@ import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../l
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import { ppdVerdictTone, ppdVerdictBorderColor, evVerdictTone, evVerdictBorderColor, ppdVerdictLabel, evVerdictLabel } from "../lib/verdictTone";
 import { excerptAround } from "../components/ui/quoteMatch";
-import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, PPDReviewRow } from "../types";
+import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, PPDReviewRow, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue } from "../types";
 
 // Option A's complete flow, as two tabs on one page:
 //   • PPD Review — policy only, one row per GD4 requirement line (3 columns).
@@ -461,12 +461,12 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
                 <span style={{ fontSize: 11, color: "#6366f1" }}>live</span>
               </div>
               {/* Same step-by-step view as the staged audit modal. */}
-              <RunStepper current={ppdRunStep(detail, true, false)} running detail={detail} />
+              <RunStepper current={ppdRunStep(detail)} running detail={detail} />
             </div>
             {/* Detailed live-activity panel (collapsible to a compact summary) —
-                same RunDetailColumns component the Evidence tab's EvidenceRunPanel
-                uses, so both tabs' 3-column live views are visually identical. */}
-            <PpdRunPanel progress={runProgress} onCancel={cancelBusy} />
+                same LiveRunPanel/RunDetailColumns the Evidence tab uses, so both
+                tabs' 3-column live views are visually identical. */}
+            <LiveRunPanel progress={runProgress} stageLabel={PPD_STAGE_LABEL} onCancel={cancelBusy} />
           </>
         );
       })()}
@@ -719,7 +719,6 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
       <FeedbackModal
         open={!!lineFeedback}
         aiOutput={lineFeedback?.text ?? ""}
-        module="Line Status"
         onClose={() => setLineFeedback(null)}
         onSubmit={(fb) => {
           logHumanDecision({ module: "Line Status", subjectId: selectedId, field: lineFeedback?.ref, aiOutput: lineFeedback?.text ?? "", humanDecision: (fb.correction || lineFeedback?.text) ?? "", changed: !!fb.correction, decisionType: "Overridden", reason: fb.reason });
@@ -733,19 +732,50 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
   );
 }
 
-// ─── Detailed live-activity panel for a running evidence assessment ─────────
+// ─── Detailed live-activity panel for a running PPD review / evidence
+// assessment ────────────────────────────────────────────────────────────────
 // Collapsible: a compact summary line always shows; "Show detail" reveals the
 // full live view (stage, window, per-line status, files, log, AI usage). All
-// data comes from evidenceAssessmentProgress — no assessment logic here.
-const STAGE_LABEL: Record<NonNullable<EvidenceAssessmentProgress["stage"]>, string> = {
-  reading: "Reading files", assessing: "Assessing evidence", verifying: "Verifying citations", synthesising: "Synthesising", done: "Done",
+// data comes from the caller's progress object — no assessment logic here.
+// EvidenceAssessmentProgress and PPDReviewProgress structurally satisfy this
+// (PPD simply lacks the Evidence-only `filesRead` field), so one panel component
+// renders both tabs' live view, fed a per-tab stage-label map and read-count.
+type LiveRunProgress = {
+  pct?: number;
+  stage?: string;
+  detail?: string;
+  startedAt?: number;
+  heartbeatAt?: number;
+  window?: { current: number; total: number };
+  filesTotal?: number;
+  filesFound?: AuditFileRecord[];
+  filesRead?: { name: string; driveFileId?: string }[]; // Evidence only
+  canSkipCurrentFile?: boolean;
+  currentFile?: string;
+  currentWindowFiles?: string[];
+  lineRefs?: string[];
+  lineStatus?: Record<string, EvidenceLineRunStatus>;
+  lineVerdict?: Record<string, string>;
+  log?: EvidenceRunLogLine[];
+  ai?: { calls: number; model?: string; totalTokens: number };
+  lastIssue?: EvidenceRunIssue;
 };
 
-function EvidenceRunPanel({ progress: p, onCancel, onSkipFile }: { progress: EvidenceAssessmentProgress | null; onCancel: () => void; onSkipFile: () => void }) {
+const EVIDENCE_STAGE_LABEL: Record<NonNullable<EvidenceAssessmentProgress["stage"]>, string> = {
+  reading: "Reading files", assessing: "Assessing evidence", verifying: "Verifying citations", synthesising: "Synthesising", done: "Done",
+};
+const PPD_STAGE_LABEL: Record<NonNullable<PPDReviewProgress["stage"]>, string> = {
+  reading: "Reading files", assessing: "Assessing PPD documentation", done: "Done",
+};
+
+function LiveRunPanel({ progress: p, stageLabel, onCancel, onSkipFile }: { progress: LiveRunProgress | null; stageLabel: Record<string, string>; onCancel: () => void; onSkipFile?: () => void }) {
+  // Evidence tracks reads via its own `filesRead` list; PPD (which has no
+  // such field) derives the count from filesFound's readStatus instead.
+  const filesReadCount = p?.filesRead ? p.filesRead.length : (p?.filesFound ?? []).filter((f) => f.readStatus === "read").length;
   return (
     <RunDetailColumns
       pct={p?.pct ?? 5}
-      stageLabel={p?.stage ? STAGE_LABEL[p.stage] : "Starting…"}
+      stageLabel={p?.stage ? (stageLabel[p.stage] ?? p.stage) : "Starting…"}
       windowLabel={p?.window && p.window.total > 1 ? `window ${p.window.current} of ${p.window.total}` : undefined}
       detail={p?.detail ?? "Working…"}
       startedAt={p?.startedAt}
@@ -754,46 +784,13 @@ function EvidenceRunPanel({ progress: p, onCancel, onSkipFile }: { progress: Evi
       lineStatus={p?.lineStatus}
       lineVerdict={p?.lineVerdict}
       filesFound={p?.filesFound ?? []}
-      filesReadCount={(p?.filesRead ?? []).length}
+      filesReadCount={filesReadCount}
       filesTotal={p?.filesTotal}
       isReadingStage={p?.stage === "reading"}
       currentFile={p?.currentFile}
       currentWindowFiles={p?.currentWindowFiles}
       canSkipCurrentFile={p?.canSkipCurrentFile}
       onSkipFile={onSkipFile}
-      ai={p?.ai}
-      log={p?.log ?? []}
-      onCancel={onCancel}
-      lastIssue={p?.lastIssue}
-    />
-  );
-}
-
-// PPD tab's live-run detail panel — same RunDetailColumns body as Evidence's,
-// fed from PPDReviewProgress instead of EvidenceAssessmentProgress. PPD has
-// no manual per-file Skip wiring (only Evidence does — see runPPDReview in
-// useWorkspaceStore.ts), so onSkipFile is simply omitted.
-const PPD_STAGE_LABEL: Record<NonNullable<PPDReviewProgress["stage"]>, string> = {
-  reading: "Reading files", assessing: "Assessing PPD documentation", done: "Done",
-};
-function PpdRunPanel({ progress: p, onCancel }: { progress: PPDReviewProgress | null; onCancel: () => void }) {
-  return (
-    <RunDetailColumns
-      pct={p?.pct ?? 5}
-      stageLabel={p?.stage ? PPD_STAGE_LABEL[p.stage] : "Starting…"}
-      windowLabel={p?.window && p.window.total > 1 ? `window ${p.window.current} of ${p.window.total}` : undefined}
-      detail={p?.detail ?? "Working…"}
-      startedAt={p?.startedAt}
-      heartbeatAt={p?.heartbeatAt}
-      lineRefs={p?.lineRefs ?? []}
-      lineStatus={p?.lineStatus}
-      lineVerdict={p?.lineVerdict}
-      filesFound={p?.filesFound ?? []}
-      filesReadCount={(p?.filesFound ?? []).filter((f) => f.readStatus === "read").length}
-      filesTotal={p?.filesTotal}
-      isReadingStage={p?.stage === "reading"}
-      currentFile={p?.currentFile}
-      currentWindowFiles={p?.currentWindowFiles}
       ai={p?.ai}
       log={p?.log ?? []}
       onCancel={onCancel}
@@ -1241,13 +1238,13 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
           blow log / per-line status / files-read view. */}
       {isRunning && (
         <div style={{ marginBottom: 10, padding: "10px 12px", border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 8 }}>
-          <RunStepper current={evidenceRunStep(runProgress?.stage, true, false)} running detail={runProgress?.detail} />
+          <RunStepper current={evidenceRunStep(runProgress?.stage)} running detail={runProgress?.detail} />
         </div>
       )}
       {/* Detailed live-activity panel while a fresh assessment runs (collapsible
           to a compact summary). Surfaces the backend activity the run already
           performs: stage, window, per-line status, files read, live log, AI usage. */}
-      {isRunning && <EvidenceRunPanel progress={runProgress} onCancel={cancelBusy} onSkipFile={skipCurrentFile} />}
+      {isRunning && <LiveRunPanel progress={runProgress} stageLabel={EVIDENCE_STAGE_LABEL} onCancel={cancelBusy} onSkipFile={skipCurrentFile} />}
 
       {/* Files read this run — same clickable/inspectable ledger the staged audit
           shows; each file expands to its extracted text. (Fresh runs only; the
@@ -1434,7 +1431,6 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
       <FeedbackModal
         open={!!lineFeedback}
         aiOutput={lineFeedback?.text ?? ""}
-        module="Line Status"
         onClose={() => setLineFeedback(null)}
         onSubmit={(fb) => {
           logHumanDecision({ module: "Line Status", subjectId: selectedId, field: lineFeedback?.ref, aiOutput: lineFeedback?.text ?? "", humanDecision: (fb.correction || lineFeedback?.text) ?? "", changed: !!fb.correction, decisionType: "Overridden", reason: fb.reason });

@@ -13,7 +13,6 @@
 // a future swap-in to a real model call has the exact wording to use.
 
 import type { AgentDefinition, Finding, GD4Requirement, ItemEvidence, SpecificChecklistLine, ApsrBreakdown, GeneratedChecklistLine } from "../../types";
-import { aiScore } from "../scoring";
 import { FINDINGS } from "../../data/findings";
 
 export type SimulatedItemVerdict = {
@@ -450,5 +449,3 @@ export function simulateEvidenceFill(link: string, lineText: string): EvidenceFi
     live: false,
   };
 }
-
-export { aiScore };

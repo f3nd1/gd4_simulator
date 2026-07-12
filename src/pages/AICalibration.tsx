@@ -10,6 +10,7 @@ import { useAISettingsStore } from "../store/useAISettingsStore";
 import { benchmarkSubCriteria, type BenchmarkAFI, type BenchmarkFindingPattern, type BenchmarkSource } from "../data/benchmarkAFIs";
 import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA, GD4_CRITERIA } from "../data/gd4Requirements";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
+import { toCsv, downloadCsv } from "../lib/auditCsvExport";
 import { sObj, sArr, sStr, sEnum } from "../lib/ai/schemaHelpers";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
@@ -76,10 +77,6 @@ function isAllPositive(ppd: ReturnType<typeof useAppResults>["ppd"], ev: ReturnT
   const evAllMet = evAssessed.every((r) => r.verdict === "Met");
   const negativeFindings = findings.filter((f) => (f.findingType ?? "NC") !== "OBS" && f.riskCategory !== "D");
   return ppdAllAdequate && evAllMet && negativeFindings.length === 0;
-}
-
-function csvCell(v: string | number | boolean): string {
-  return `"${String(v).replace(/"/g, '""')}"`;
 }
 
 // "04 Jul 2026, 14:30" / "04 Jul" — every timestamp on this page goes through
@@ -254,14 +251,7 @@ Give a one-line justification naming what matched or what was missed. Respond wi
       const m = matches[a.id];
       return [a.id, a.source, a.year, a.subCriterion, a.gd4Ref ?? "", a.findingPattern, a.hasNamedExample, a.findingText, m?.status ?? "unassessed", m?.humanOverride ?? false, m?.justification ?? "", m?.assessedAt ?? "", lastRunAt ?? ""];
     });
-    const csv = [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `gd4-ai-calibration-${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(toCsv(header, rows), `gd4-ai-calibration-${new Date().toISOString().slice(0, 10)}.csv`);
   }
 
   if (allAfis.length === 0) {

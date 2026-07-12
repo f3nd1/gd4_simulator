@@ -217,7 +217,6 @@ export function CriterionScorecard() {
       <FeedbackModal
         open={!!feedbackTarget}
         aiOutput={feedbackTarget?.aiOutput ?? ""}
-        module="Item Scoring"
         onClose={() => setFeedbackTarget(null)}
         onSubmit={(fb) => {
           if (!feedbackTarget) return;

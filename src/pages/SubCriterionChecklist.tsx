@@ -1065,7 +1065,6 @@ export function SubCriterionChecklist() {
       <FeedbackModal
         open={!!lineFeedback}
         aiOutput={lineFeedback?.text ?? ""}
-        module="Line Status"
         onClose={() => setLineFeedback(null)}
         onSubmit={(fb) => {
           logHumanDecision({ module: "Line Status", subjectId: selectedId, field: lineFeedback?.id, aiOutput: lineFeedback?.text ?? "", humanDecision: (fb.correction || lineFeedback?.text) ?? "", changed: !!fb.correction, decisionType: "Overridden", reason: fb.reason });

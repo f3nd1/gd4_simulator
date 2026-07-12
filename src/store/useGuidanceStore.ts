@@ -21,7 +21,6 @@ type GuidanceState = {
   // be hidden for the current view and always reappear on the next run/reload.
   dismissedTips: Record<string, boolean>;
   dismissTip: (key: string) => void;
-  resetDismissedTips: () => void;
 };
 
 export const useGuidanceStore = create<GuidanceState>()(
@@ -38,7 +37,6 @@ export const useGuidanceStore = create<GuidanceState>()(
         }),
       dismissedTips: {},
       dismissTip: (key) => set((s) => ({ dismissedTips: { ...s.dismissedTips, [key]: true } })),
-      resetDismissedTips: () => set({ dismissedTips: {} }),
     }),
     { name: "ucc-gd4-guidance:v1", storage: createJSONStorage(() => localStorage) }
   )

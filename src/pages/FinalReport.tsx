@@ -282,7 +282,6 @@ export function FinalReport() {
       <FeedbackModal
         open={summaryFeedbackOpen}
         aiOutput={aiSummary || ""}
-        module="Final Report"
         onClose={() => setSummaryFeedbackOpen(false)}
         onSubmit={(feedback) => {
           logHumanDecision({ module: "Final Report", subjectId: "executive-summary", aiOutput: aiSummary || "", humanDecision: feedback.correction || aiSummary || "", changed: !!feedback.correction, decisionType: "Overridden", reason: feedback.reason });

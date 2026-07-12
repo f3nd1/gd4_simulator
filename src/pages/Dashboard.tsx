@@ -550,7 +550,6 @@ export function Dashboard() {
       <FeedbackModal
         open={feedbackTarget !== null}
         aiOutput={feedbackTarget?.text ?? ""}
-        module="Cross-Criterion Analysis"
         onClose={() => setFeedbackTarget(null)}
         onSubmit={(feedback) => {
           if (!feedbackTarget) return;

@@ -24,7 +24,7 @@ const PATTERNS: BenchmarkFindingPattern[] = [
 // ground-truth set until that final click. Collapsed by default so it
 // doesn't push the scoreboard down for people who never use it.
 export function UploadBenchmarkPanel() {
-  const [open, setOpen] = useState(false);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [source, setSource] = useState<BenchmarkSource>("Internal");
   const [year, setYear] = useState<number>(new Date().getFullYear());
@@ -78,20 +78,21 @@ export function UploadBenchmarkPanel() {
     setDraft([]);
     setFile(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
-    setOpen(false);
+    if (detailsRef.current) detailsRef.current.open = false;
   }
 
   return (
     <Card>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        style={{ cursor: "pointer", border: "none", background: "transparent", padding: 0, display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left" }}
-      >
-        <h3 style={{ margin: 0, fontSize: 14 }}>{open ? "▾" : "▸"} Add ground truth from an audit report</h3>
-        <span style={{ fontSize: 11.5, color: "#6b7280", fontWeight: 400 }}>upload a PDF/DOCX/XLSX/TXT report — AI extracts findings for you to review</span>
-      </button>
+      <details ref={detailsRef}>
+        <summary style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
+          <h3 style={{ margin: 0, fontSize: 14, display: "inline" }}>
+            <span className="details-marker-closed">▸</span>
+            <span className="details-marker-open">▾</span>
+            {" "}Add ground truth from an audit report
+          </h3>
+          <span style={{ fontSize: 11.5, color: "#6b7280", fontWeight: 400 }}>upload a PDF/DOCX/XLSX/TXT report — AI extracts findings for you to review</span>
+        </summary>
 
-      {open && (
         <div style={{ marginTop: 12 }}>
           <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
             Upload an internal or external audit report. AI reads it and extracts each finding as a draft below — nothing
@@ -177,7 +178,7 @@ export function UploadBenchmarkPanel() {
             </div>
           )}
         </div>
-      )}
+      </details>
     </Card>
   );
 }

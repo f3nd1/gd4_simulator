@@ -164,7 +164,7 @@ export type GD4Requirement = {
   flatAuditPoints?: FlatAuditPoint[];
 };
 
-export type SourceSystem = "SMS" | "ERPNext" | "Google Drive" | "Helpdesk" | "LMS" | "Manual";
+export type SourceSystem = "Google Drive" | "Manual";
 
 export type Band = 1 | 2 | 3 | 4 | 5;
 export type Confidence = "Low" | "Medium" | "High";

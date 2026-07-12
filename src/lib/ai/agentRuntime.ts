@@ -1208,6 +1208,7 @@ export type StagedOutcomeReviewAuditResult = {
 };
 
 const STAGED_BATCH_SIZE = 8; // audit points per AI call (each is smaller than a full checklist line)
+const REQ_BATCH_SIZE = 8; // requirement lines per AI call — Option A's runPPDRequirementsReview and runEvidenceAssessment
 
 // Shared assessor-register rule appended to every staged-audit prompt. Brings
 // the staged (Option B) notes to the same standard as the Option A prompts —
@@ -1335,51 +1336,67 @@ function buildStagedPointsBlock(auditPoints: FlatAuditPoint[]): string {
   ).join("\n");
 }
 
-// Stage 2: Policy Adequacy Audit.
-// Reads POLICY documents only; checks if each FlatAuditPoint has a documented
-// approach. Does NOT look at evidence documents or outcome data.
-// Uses a sliding window so the full text is assessed even when it exceeds one AI call.
-export async function runStagedPolicyAudit(
+// Shared opts shape for all three staged passes below.
+type StagedAuditOpts = { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined };
+
+// Per-ref accumulator across sliding windows: the merged verdict so far, the
+// positive-coverage notes collected (one per contributing window), and the
+// single best negative note retained for a pure gap (see betterNegNote).
+type StagedBest<V> = { verdict: V; notes: WindowNote[]; negNote?: WindowNote; chunkIds: string[] };
+
+type WindowedStagedAuditResult<Row> = {
+  rows: Row[];
+  usage?: AIUsage;
+  promptSent?: string;
+  truncationNote?: string;
+  windowsProcessed: number;
+  totalCharsAssessed: number;
+  totalCharsAvailable: number;
+  fullCoverage: boolean;
+  windowErrors?: string[];
+};
+
+// Shared window→batch→chatComplete→parse→merge pipeline behind
+// runStagedPolicyAudit / runStagedEvidenceAudit / runStagedOutcomeReviewAudit.
+// The three staged passes differ only in: prompt wording (buildSystem/
+// buildUser), the JSON schema, how one AI result row parses into a per-point
+// verdict (extractVerdict), whether a verdict counts as "found something"
+// (isPositive), how two windows' verdicts merge (mergeVerdict — Yes/Partial/No
+// priority vs OR-of-booleans), and the final row shape (buildRow). Everything
+// else — the sliding-window/batch loop, per-batch progress heartbeat, stop/
+// abort handling, failed-batch → notAssessed accounting, and the fullCoverage/
+// truncationNote bookkeeping — was identical copy-paste three times before
+// this helper existed; a fix to one no longer risks silently missing the
+// other two.
+async function runWindowedStagedAudit<V, Row>(
   auditPoints: FlatAuditPoint[],
-  policyDocText: string,
+  docText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
-): Promise<StagedPolicyAuditResult> {
-  if (auditPoints.length === 0 || !policyDocText.trim()) {
-    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No policy documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
+  opts: StagedAuditOpts,
+  cfg: {
+    noDocsNote: string;
+    emptyVerdict: V;
+    schema: ChatSchema;
+    label: string;      // "Policy" | "Evidence" | "Outcome/review" — progress/error/truncation text
+    funcName: string;   // "runStagedPolicyAudit" etc — per-call system-prompt label
+    logTag: string;     // "[StagedPolicyAudit]" etc — console.error tag
+    buildSystem: (label: string) => string;
+    buildUser: (batch: FlatAuditPoint[], win: DocWindow, windowLabel: string) => string;
+    extractVerdict: (r: Record<string, unknown> | undefined) => V;
+    isPositive: (v: V) => boolean;
+    mergeVerdict: (prev: V, next: V) => V;
+    fallbackNote: (windowsCompleted: number) => string;
+    buildRow: (p: FlatAuditPoint, verdict: V, note: string, chunkIds: string[], notAssessed?: boolean) => Row;
   }
-  const domainSkill = domainExpertiseFor(opts.criterionId);
-  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+): Promise<WindowedStagedAuditResult<Row>> {
+  if (auditPoints.length === 0 || !docText.trim()) {
+    return { rows: auditPoints.map((p) => cfg.buildRow(p, cfg.emptyVerdict, cfg.noDocsNote, [])), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
+  }
 
-  // Built per actual AI call (inside the window/batch loop below) rather than
-  // once for the whole function — buildSystemPrompt() has a dev-only debug-log
-  // side effect, and the debug log is meant to show every real chatComplete()
-  // call. Building it once here (as before) meant only one entry ever appeared
-  // for a stage that can make many real calls across windows. The label is the
-  // only thing that varies between calls; the resulting prompt text sent to the
-  // AI is unchanged from before.
-  const buildSystem = (label: string) => `You are auditing ONLY the POLICY & PROCEDURE documents for a GD4 EduTrust sub-criterion. Your task for each audit point: does this institution's policy documentation DOCUMENT an approach that addresses this requirement? You are assessing APPROACH only — not whether it is implemented, not whether outcomes are achieved.
+  const windows = buildDocWindows(docText);
+  const totalCharsAvailable = docText.length;
 
-Decide deterministically by counting which of the four specifics are documented — WHO owns it, WHAT they do, WHEN/how often, and WHAT record results — the same policy text must always yield the same verdict:
-"Yes" = all four specifics are documented (named owner, the action, timing/frequency, and the resulting record). Full, specific, sustainable.
-"Partial" = the requirement is addressed but ONE OR MORE of the four specifics is missing or is boilerplate not specific to this institution. Name which specific is missing.
-"No" = the policy does not address this requirement at all.
-BOUNDARY RULE (Yes vs Partial): if you can name even one missing specific (owner / action / timing / record), it is "Partial", not "Yes". When unsure between "Yes" and "Partial", choose "Partial" (resolve down).
-
-IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
-Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
-
-Respond with JSON only:
-{"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
-
-  const windows = buildDocWindows(policyDocText);
-  const totalCharsAvailable = policyDocText.length;
-
-  // Accumulate best verdict per ref across all windows. `notes` collects one
-  // entry per window that found specific (non-"No") coverage, so the final
-  // note can cite every contributing window instead of discarding all but
-  // whichever window happened to win the coverage-priority merge.
-  const bestByRef = new Map<string, { covered: StagedCoverageStatus; notes: WindowNote[]; negNote?: WindowNote; chunkIds: string[] }>();
+  const bestByRef = new Map<string, StagedBest<V>>();
 
   let usage: AIUsage | undefined;
   let firstPromptSent: string | undefined;
@@ -1409,54 +1426,53 @@ Respond with JSON only:
       // to refresh the audit heartbeat, so emitting only once per window let the
       // stuck-detector fire mid-window during normal (slow) operation, which
       // misled users into hitting "Skip pass" and cutting the run short.
-      opts.onProgress?.(`Policy audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
-      const pointsBlock = buildStagedPointsBlock(batch);
-      const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for APPROACH coverage:\n${pointsBlock}`;
-      const system = buildSystem(windows.length > 1 ? `runStagedPolicyAudit (window ${win.index + 1}/${win.total})` : "runStagedPolicyAudit");
+      opts.onProgress?.(`${cfg.label} audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
+      const user = cfg.buildUser(batch, win, windowLabel);
+      const system = cfg.buildSystem(windows.length > 1 ? `${cfg.funcName} (window ${win.index + 1}/${win.total})` : cfg.funcName);
       if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
       try {
         const content = await chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { schema: STAGED_COVERAGE_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: cfg.schema, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
         const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
         for (const p of batch) {
           const r = byRef.get(normalizeAuditRef(p.ref));
-          const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
-            ? (r!.covered as StagedCoverageStatus) : "No";
+          const verdict = cfg.extractVerdict(r);
           const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
           const note = typeof r?.note === "string" ? r.note : "";
+          const positive = cfg.isPositive(verdict);
           const prev = bestByRef.get(p.ref);
           if (!prev) {
             bestByRef.set(p.ref, {
-              covered,
-              notes: covered !== "No" ? pushWindowNote([], win.index, note, chunkIds) : [],
-              negNote: covered === "No" ? betterNegNote(undefined, win.index, note, chunkIds) : undefined,
+              verdict,
+              notes: positive ? pushWindowNote([], win.index, note, chunkIds) : [],
+              negNote: positive ? undefined : betterNegNote(undefined, win.index, note, chunkIds),
               chunkIds,
             });
           } else {
-            const merged = mergeCoverage(prev.covered, covered);
-            const mergedNotes = covered !== "No" ? pushWindowNote(prev.notes, win.index, note, chunkIds) : prev.notes;
-            const mergedNeg = covered === "No" ? betterNegNote(prev.negNote, win.index, note, chunkIds) : prev.negNote;
+            const merged = cfg.mergeVerdict(prev.verdict, verdict);
+            const mergedNotes = positive ? pushWindowNote(prev.notes, win.index, note, chunkIds) : prev.notes;
+            const mergedNeg = positive ? prev.negNote : betterNegNote(prev.negNote, win.index, note, chunkIds);
             const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
-            bestByRef.set(p.ref, { covered: merged, notes: mergedNotes, negNote: mergedNeg, chunkIds: mergedChunks });
+            bestByRef.set(p.ref, { verdict: merged, notes: mergedNotes, negNote: mergedNeg, chunkIds: mergedChunks });
           }
         }
       } catch (err) {
         // A cancel/abort surfaces here as a thrown "AI call cancelled." — that
-        // is a stop, not a failure: no error row, no "No" fabrication.
+        // is a stop, not a failure: no error row, no fabricated negative verdict.
         if (stopRequested()) { stoppedEarly = true; break; }
         const msg = err instanceof Error ? err.message : String(err);
-        const label = windows.length > 1 ? `Policy window ${win.index + 1}/${win.total}` : "Policy AI call";
-        const errNote = `${label} failed — ${msg}`;
+        const errLabel = windows.length > 1 ? `${cfg.label} window ${win.index + 1}/${win.total}` : `${cfg.label} AI call`;
+        const errNote = `${errLabel} failed — ${msg}`;
         windowErrors.push(errNote);
-        console.error("[StagedPolicyAudit]", errNote);
-        // Do NOT seed a "No" for the failed batch's points — an API failure is
-        // not an assessed gap. Points that never get a verdict in ANY window
-        // become "Not assessed" rows below, exactly like a stopped run.
+        console.error(cfg.logTag, errNote);
+        // Do NOT seed a negative verdict for the failed batch's points — an API
+        // failure is not an assessed gap. Points that never get a verdict in ANY
+        // window become "Not assessed" rows below, exactly like a stopped run.
       }
     }
     // A window whose batch sweep was cut short is NOT a completed window —
@@ -1465,40 +1481,93 @@ Respond with JSON only:
     windowsCompleted++;
   }
 
-  const rows: PolicyCoverageRow[] = auditPoints.map((p) => {
+  let notAssessedCount = 0;
+  const rows: Row[] = auditPoints.map((p) => {
     const best = bestByRef.get(p.ref);
     // A stopped run OR a batch whose AI call failed in every window leaves the
     // point with no verdict at all — mark it Not assessed instead of
-    // fabricating a "No" (a false negative that would flow into checklist
-    // statuses and findings).
+    // fabricating a negative verdict (a false negative that would flow into
+    // checklist statuses and findings).
     if (!best) {
+      notAssessedCount++;
       const reason = stoppedEarly
         ? "the run was stopped before this audit point was reviewed"
         : "the AI call for this audit point failed in every window it was sent to";
-      return { ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: `Not assessed — ${reason}. No verdict was produced.`, chunkIds: [], notAssessed: true };
+      return cfg.buildRow(p, cfg.emptyVerdict, `Not assessed — ${reason}. No verdict was produced.`, [], true);
     }
-    const fallback = `No relevant policy evidence found in the ${windowsCompleted} window(s) reviewed.`;
     // Positive-coverage notes win; for a pure gap, surface the retained
     // negative note (specific SSG observation) instead of the generic fallback.
     const noteParts = best.notes.length ? best.notes : best.negNote ? [best.negNote] : [];
-    return {
-      ref: p.ref, pointText: p.text,
-      covered: best.covered,
-      note: renderWindowNotes(noteParts, fallback, opts.resolveChunkFile),
-      chunkIds: best.chunkIds,
-    };
+    return cfg.buildRow(p, best.verdict, renderWindowNotes(noteParts, cfg.fallbackNote(windowsCompleted), opts.resolveChunkFile), best.chunkIds);
   });
 
-  const notAssessedCount = rows.filter((r) => r.notAssessed).length;
   // Full coverage means every window completed AND every point actually got a
   // verdict — a run where a batch failed in all windows is PARTIAL even though
   // the window loop technically finished.
   const fullCoverage = !stoppedEarly && windowsCompleted === windows.length && notAssessedCount === 0;
   const truncationNote = !fullCoverage
-    ? `Policy content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). Assessed ${auditPoints.length - notAssessedCount} of ${auditPoints.length} audit points.${notAssessedCount > 0 ? ` ${notAssessedCount} audit point(s) were NOT assessed (${stoppedEarly ? "run stopped early" : "AI call failures"}); results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
+    ? `${cfg.label} content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). Assessed ${auditPoints.length - notAssessedCount} of ${auditPoints.length} audit points.${notAssessedCount > 0 ? ` ${notAssessedCount} audit point(s) were NOT assessed (${stoppedEarly ? "run stopped early" : "AI call failures"}); results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
     : undefined;
 
   return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
+}
+
+// Stage 2: Policy Adequacy Audit.
+// Reads POLICY documents only; checks if each FlatAuditPoint has a documented
+// approach. Does NOT look at evidence documents or outcome data.
+// Uses a sliding window so the full text is assessed even when it exceeds one AI call.
+export async function runStagedPolicyAudit(
+  auditPoints: FlatAuditPoint[],
+  policyDocText: string,
+  settings: AISettings,
+  opts: StagedAuditOpts = {}
+): Promise<StagedPolicyAuditResult> {
+  const domainSkill = domainExpertiseFor(opts.criterionId);
+  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+
+  // Built per actual AI call (inside runWindowedStagedAudit's window/batch
+  // loop) rather than once for the whole function — buildSystemPrompt() has a
+  // dev-only debug-log side effect, and the debug log is meant to show every
+  // real chatComplete() call. The label is the only thing that varies between
+  // calls; the resulting prompt text sent to the AI is unchanged from before.
+  const buildSystem = (label: string) => `You are auditing ONLY the POLICY & PROCEDURE documents for a GD4 EduTrust sub-criterion. Your task for each audit point: does this institution's policy documentation DOCUMENT an approach that addresses this requirement? You are assessing APPROACH only — not whether it is implemented, not whether outcomes are achieved.
+
+Decide deterministically by counting which of the four specifics are documented — WHO owns it, WHAT they do, WHEN/how often, and WHAT record results — the same policy text must always yield the same verdict:
+"Yes" = all four specifics are documented (named owner, the action, timing/frequency, and the resulting record). Full, specific, sustainable.
+"Partial" = the requirement is addressed but ONE OR MORE of the four specifics is missing or is boilerplate not specific to this institution. Name which specific is missing.
+"No" = the policy does not address this requirement at all.
+BOUNDARY RULE (Yes vs Partial): if you can name even one missing specific (owner / action / timing / record), it is "Partial", not "Yes". When unsure between "Yes" and "Partial", choose "Partial" (resolve down).
+
+IMPORTANT: Do NOT credit evidence of implementation (records, logs, filled forms) as policy. A record of doing something is NOT a documented approach.
+Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leave chunkIds empty if no chunk directly supports the coverage verdict. Write "note" as a complete observation for THIS window — do not abbreviate or summarise it; a later merge step, not you, is responsible for keeping the final text concise.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
+
+Respond with JSON only:
+{"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
+
+  return runWindowedStagedAudit<StagedCoverageStatus, PolicyCoverageRow>(
+    auditPoints, policyDocText, settings, opts,
+    {
+      noDocsNote: "No policy documents provided.",
+      emptyVerdict: "No",
+      schema: STAGED_COVERAGE_SCHEMA,
+      label: "Policy",
+      funcName: "runStagedPolicyAudit",
+      logTag: "[StagedPolicyAudit]",
+      buildSystem,
+      buildUser: (batch, win, windowLabel) => {
+        const pointsBlock = buildStagedPointsBlock(batch);
+        return `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for APPROACH coverage:\n${pointsBlock}`;
+      },
+      extractVerdict: (r) => (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus) ? (r!.covered as StagedCoverageStatus) : "No",
+      isPositive: (v) => v !== "No",
+      mergeVerdict: mergeCoverage,
+      fallbackNote: (windowsCompleted) => `No relevant policy evidence found in the ${windowsCompleted} window(s) reviewed.`,
+      buildRow: (p, verdict, note, chunkIds, notAssessed) =>
+        notAssessed
+          ? { ref: p.ref, pointText: p.text, covered: verdict, note, chunkIds, notAssessed: true }
+          : { ref: p.ref, pointText: p.text, covered: verdict, note, chunkIds },
+    }
+  );
 }
 
 // Stage 3: Evidence Implementation Audit.
@@ -1511,18 +1580,16 @@ export async function runStagedEvidenceAudit(
   evidenceDocText: string,
   policyRows: PolicyCoverageRow[],
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
+  opts: StagedAuditOpts = {}
 ): Promise<StagedEvidenceAuditResult> {
-  if (auditPoints.length === 0 || !evidenceDocText.trim()) {
-    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: "No evidence documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
-  }
   const domainSkill = domainExpertiseFor(opts.criterionId);
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
   const policyByRef = new Map(policyRows.map((r) => [r.ref, r]));
 
   // See runStagedPolicyAudit's comment on `buildSystem`: built per actual AI
-  // call (inside the loop below) so the debug log gets one entry per real
-  // chatComplete() call instead of a single entry for the whole stage.
+  // call (inside runWindowedStagedAudit's loop) so the debug log gets one
+  // entry per real chatComplete() call instead of a single entry for the
+  // whole stage.
   const buildSystem = (label: string) => `You are auditing ONLY the ACTUAL EVIDENCE documents for a GD4 EduTrust sub-criterion. Your task: does the evidence show that the institution actually IMPLEMENTS each requirement in practice? You are assessing PROCESSES only — not the documented policy (assessed separately), not outcomes.
 
 Decide "covered" deterministically — the same evidence must always yield the same verdict; count records, do not judge "feel":
@@ -1537,117 +1604,34 @@ Cite the exact chunk ID(s) from document headers (e.g. "C001") in chunkIds. Leav
 Respond with JSON only:
 {"results": [{"ref": string, "covered": "Yes"|"Partial"|"No", "note": string, "chunkIds": string[]}]}`;
 
-  const windows = buildDocWindows(evidenceDocText);
-  const totalCharsAvailable = evidenceDocText.length;
-
-  const bestByRef = new Map<string, { covered: StagedCoverageStatus; notes: WindowNote[]; negNote?: WindowNote; chunkIds: string[] }>();
-
-  let usage: AIUsage | undefined;
-  let firstPromptSent: string | undefined;
-  let totalCharsAssessed = 0;
-  let windowsCompleted = 0;
-  const windowErrors: string[] = [];
-  // See runStagedPolicyAudit: stopped runs must not fabricate verdicts.
-  const stopRequested = () => !!opts.shouldStop?.() || !!opts.signal?.aborted;
-  let stoppedEarly = false;
-
-  const batches: FlatAuditPoint[][] = [];
-  for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
-    batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
-  }
-
-  for (const win of windows) {
-    if (stopRequested()) { stoppedEarly = true; break; }
-    totalCharsAssessed += win.end - win.start;
-    const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
-
-    for (const [bi, batch] of batches.entries()) {
-      if (stopRequested()) { stoppedEarly = true; break; }
-      // Per-batch heartbeat — see the note in runStagedPolicyAudit.
-      opts.onProgress?.(`Evidence audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
-      const pointsBlock = batch.map((p, i) => {
-        const pol = policyByRef.get(p.ref);
-        const polNote = pol ? ` [Policy adequacy: ${pol.covered}${pol.covered !== "No" ? ` — "${pol.note.slice(0, 80)}"` : ""}]` : "";
-        return `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}${polNote}`;
-      }).join("\n");
-      const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for IMPLEMENTATION evidence:\n${pointsBlock}`;
-      const system = buildSystem(windows.length > 1 ? `runStagedEvidenceAudit (window ${win.index + 1}/${win.total})` : "runStagedEvidenceAudit");
-      if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
-      try {
-        const content = await chatComplete(
-          [{ role: "system", content: system }, { role: "user", content: user }],
-          settings,
-          { schema: STAGED_COVERAGE_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
-        );
-        const parsed = parseJSONObject(content);
-        const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-        const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
-        for (const p of batch) {
-          const r = byRef.get(normalizeAuditRef(p.ref));
-          const covered = (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus)
-            ? (r!.covered as StagedCoverageStatus) : "No";
-          const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
-          const note = typeof r?.note === "string" ? r.note : "";
-          const prev = bestByRef.get(p.ref);
-          if (!prev) {
-            bestByRef.set(p.ref, {
-              covered,
-              notes: covered !== "No" ? pushWindowNote([], win.index, note, chunkIds) : [],
-              negNote: covered === "No" ? betterNegNote(undefined, win.index, note, chunkIds) : undefined,
-              chunkIds,
-            });
-          } else {
-            const merged = mergeCoverage(prev.covered, covered);
-            const mergedNotes = covered !== "No" ? pushWindowNote(prev.notes, win.index, note, chunkIds) : prev.notes;
-            const mergedNeg = covered === "No" ? betterNegNote(prev.negNote, win.index, note, chunkIds) : prev.negNote;
-            const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
-            bestByRef.set(p.ref, { covered: merged, notes: mergedNotes, negNote: mergedNeg, chunkIds: mergedChunks });
-          }
-        }
-      } catch (err) {
-        // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
-        if (stopRequested()) { stoppedEarly = true; break; }
-        const msg = err instanceof Error ? err.message : String(err);
-        const label = windows.length > 1 ? `Evidence window ${win.index + 1}/${win.total}` : "Evidence AI call";
-        const errNote = `${label} failed — ${msg}`;
-        windowErrors.push(errNote);
-        console.error("[StagedEvidenceAudit]", errNote);
-        // See runStagedPolicyAudit: an API failure is not an assessed gap —
-        // never-assessed points become "Not assessed" rows below.
-      }
+  return runWindowedStagedAudit<StagedCoverageStatus, EvidenceCoverageRow>(
+    auditPoints, evidenceDocText, settings, opts,
+    {
+      noDocsNote: "No evidence documents provided.",
+      emptyVerdict: "No",
+      schema: STAGED_COVERAGE_SCHEMA,
+      label: "Evidence",
+      funcName: "runStagedEvidenceAudit",
+      logTag: "[StagedEvidenceAudit]",
+      buildSystem,
+      buildUser: (batch, win, windowLabel) => {
+        const pointsBlock = batch.map((p, i) => {
+          const pol = policyByRef.get(p.ref);
+          const polNote = pol ? ` [Policy adequacy: ${pol.covered}${pol.covered !== "No" ? ` — "${pol.note.slice(0, 80)}"` : ""}]` : "";
+          return `[${p.ref}] (${i + 1}) ${p.text}${p.parentText ? ` [parent: ${p.parentText}]` : ""}${polNote}`;
+        }).join("\n");
+        return `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for IMPLEMENTATION evidence:\n${pointsBlock}`;
+      },
+      extractVerdict: (r) => (["Yes", "Partial", "No"] as StagedCoverageStatus[]).includes(r?.covered as StagedCoverageStatus) ? (r!.covered as StagedCoverageStatus) : "No",
+      isPositive: (v) => v !== "No",
+      mergeVerdict: mergeCoverage,
+      fallbackNote: (windowsCompleted) => `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`,
+      buildRow: (p, verdict, note, chunkIds, notAssessed) =>
+        notAssessed
+          ? { ref: p.ref, pointText: p.text, covered: verdict, note, chunkIds, notAssessed: true }
+          : { ref: p.ref, pointText: p.text, covered: verdict, note, chunkIds },
     }
-    if (stoppedEarly) break;
-    windowsCompleted++;
-  }
-
-  const rows: EvidenceCoverageRow[] = auditPoints.map((p) => {
-    const best = bestByRef.get(p.ref);
-    if (!best) {
-      const reason = stoppedEarly
-        ? "the run was stopped before this audit point was reviewed"
-        : "the AI call for this audit point failed in every window it was sent to";
-      return { ref: p.ref, pointText: p.text, covered: "No" as StagedCoverageStatus, note: `Not assessed — ${reason}. No verdict was produced.`, chunkIds: [], notAssessed: true };
-    }
-    const fallback = `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`;
-    // Positive-coverage notes win; for a pure gap, surface the retained
-    // negative note (specific SSG observation) instead of the generic fallback.
-    const noteParts = best.notes.length ? best.notes : best.negNote ? [best.negNote] : [];
-    return {
-      ref: p.ref, pointText: p.text,
-      covered: best.covered,
-      note: renderWindowNotes(noteParts, fallback, opts.resolveChunkFile),
-      chunkIds: best.chunkIds,
-    };
-  });
-
-  const notAssessedCount = rows.filter((r) => r.notAssessed).length;
-  // See runStagedPolicyAudit: an all-window batch failure makes the run PARTIAL.
-  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length && notAssessedCount === 0;
-  const truncationNote = !fullCoverage
-    ? `Evidence content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). Assessed ${auditPoints.length - notAssessedCount} of ${auditPoints.length} audit points.${notAssessedCount > 0 ? ` ${notAssessedCount} audit point(s) were NOT assessed (${stoppedEarly ? "run stopped early" : "AI call failures"}); results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
-    : undefined;
-
-  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
+  );
 }
 
 // Stage 4: Outcome & Review Audit.
@@ -1659,17 +1643,15 @@ export async function runStagedOutcomeReviewAudit(
   auditPoints: FlatAuditPoint[],
   allDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined } = {}
+  opts: StagedAuditOpts = {}
 ): Promise<StagedOutcomeReviewAuditResult> {
-  if (auditPoints.length === 0 || !allDocText.trim()) {
-    return { rows: auditPoints.map((p) => ({ ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: "No documents provided.", chunkIds: [] })), windowsProcessed: 0, totalCharsAssessed: 0, totalCharsAvailable: 0, fullCoverage: true };
-  }
   const domainSkill = domainExpertiseFor(opts.criterionId);
   const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
 
   // See runStagedPolicyAudit's comment on `buildSystem`: built per actual AI
-  // call (inside the loop below) so the debug log gets one entry per real
-  // chatComplete() call instead of a single entry for the whole stage.
+  // call (inside runWindowedStagedAudit's loop) so the debug log gets one
+  // entry per real chatComplete() call instead of a single entry for the
+  // whole stage.
   const buildSystem = (label: string) => `You are auditing ALL documents (policy and evidence combined) for outcome data and review/improvement records for a GD4 EduTrust sub-criterion. For each audit point assess:
 
 outcomeEvident: true if there is actual outcome data, KPIs, results, trends, survey data, or performance measurements for this requirement — not just a statement that outcomes will be tracked. The data must cover the review period, name targets or results, and show actual numbers or trends.
@@ -1681,117 +1663,31 @@ Cite chunk IDs from document headers in chunkIds. Leave chunkIds empty if no chu
 Respond with JSON only:
 {"results": [{"ref": string, "outcomeEvident": boolean, "reviewEvident": boolean, "note": string, "chunkIds": string[]}]}`;
 
-  const windows = buildDocWindows(allDocText);
-  const totalCharsAvailable = allDocText.length;
-
-  // For outcome/review: OR across windows (true if any window finds evidence).
-  const bestByRef = new Map<string, { outcomeEvident: boolean; reviewEvident: boolean; notes: WindowNote[]; negNote?: WindowNote; chunkIds: string[] }>();
-
-  let usage: AIUsage | undefined;
-  let firstPromptSent: string | undefined;
-  let totalCharsAssessed = 0;
-  let windowsCompleted = 0;
-  const windowErrors: string[] = [];
-  // See runStagedPolicyAudit: stopped runs must not fabricate verdicts.
-  const stopRequested = () => !!opts.shouldStop?.() || !!opts.signal?.aborted;
-  let stoppedEarly = false;
-
-  const batches: FlatAuditPoint[][] = [];
-  for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
-    batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
-  }
-
-  for (const win of windows) {
-    if (stopRequested()) { stoppedEarly = true; break; }
-    totalCharsAssessed += win.end - win.start;
-    const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
-
-    for (const [bi, batch] of batches.entries()) {
-      if (stopRequested()) { stoppedEarly = true; break; }
-      // Per-batch heartbeat — see the note in runStagedPolicyAudit.
-      opts.onProgress?.(`Outcome/review audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
-      const pointsBlock = buildStagedPointsBlock(batch);
-      const user = `All documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for OUTCOME DATA and REVIEW RECORDS:\n${pointsBlock}`;
-      const system = buildSystem(windows.length > 1 ? `runStagedOutcomeReviewAudit (window ${win.index + 1}/${win.total})` : "runStagedOutcomeReviewAudit");
-      if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
-      try {
-        const content = await chatComplete(
-          [{ role: "system", content: system }, { role: "user", content: user }],
-          settings,
-          { schema: STAGED_OUTCOME_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
-        );
-        const parsed = parseJSONObject(content);
-        const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
-        const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
-        for (const p of batch) {
-          const r = byRef.get(normalizeAuditRef(p.ref));
-          const outcomeEvident = r?.outcomeEvident === true;
-          const reviewEvident = r?.reviewEvident === true;
-          const chunkIds = Array.isArray(r?.chunkIds) ? (r!.chunkIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
-          const note = typeof r?.note === "string" ? r.note : "";
-          const foundSomething = outcomeEvident || reviewEvident;
-          const prev = bestByRef.get(p.ref);
-          if (!prev) {
-            bestByRef.set(p.ref, {
-              outcomeEvident, reviewEvident,
-              notes: foundSomething ? pushWindowNote([], win.index, note, chunkIds) : [],
-              negNote: foundSomething ? undefined : betterNegNote(undefined, win.index, note, chunkIds),
-              chunkIds,
-            });
-          } else {
-            const mergedChunks = [...new Set([...prev.chunkIds, ...chunkIds])];
-            const newOutcome = prev.outcomeEvident || outcomeEvident;
-            const newReview = prev.reviewEvident || reviewEvident;
-            const mergedNotes = foundSomething ? pushWindowNote(prev.notes, win.index, note, chunkIds) : prev.notes;
-            const mergedNeg = foundSomething ? prev.negNote : betterNegNote(prev.negNote, win.index, note, chunkIds);
-            bestByRef.set(p.ref, { outcomeEvident: newOutcome, reviewEvident: newReview, notes: mergedNotes, negNote: mergedNeg, chunkIds: mergedChunks });
-          }
-        }
-      } catch (err) {
-        // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
-        if (stopRequested()) { stoppedEarly = true; break; }
-        const msg = err instanceof Error ? err.message : String(err);
-        const label = windows.length > 1 ? `Outcome/review window ${win.index + 1}/${win.total}` : "Outcome/review AI call";
-        const errNote = `${label} failed — ${msg}`;
-        windowErrors.push(errNote);
-        console.error("[StagedOutcomeReviewAudit]", errNote);
-        // See runStagedPolicyAudit: an API failure is not an assessed gap —
-        // never-assessed points become "Not assessed" rows below.
-      }
+  return runWindowedStagedAudit<{ outcomeEvident: boolean; reviewEvident: boolean }, OutcomeReviewRow>(
+    auditPoints, allDocText, settings, opts,
+    {
+      noDocsNote: "No documents provided.",
+      emptyVerdict: { outcomeEvident: false, reviewEvident: false },
+      schema: STAGED_OUTCOME_SCHEMA,
+      label: "Outcome/review",
+      funcName: "runStagedOutcomeReviewAudit",
+      logTag: "[StagedOutcomeReviewAudit]",
+      buildSystem,
+      buildUser: (batch, win, windowLabel) => {
+        const pointsBlock = buildStagedPointsBlock(batch);
+        return `All documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nAssess each audit point for OUTCOME DATA and REVIEW RECORDS:\n${pointsBlock}`;
+      },
+      extractVerdict: (r) => ({ outcomeEvident: r?.outcomeEvident === true, reviewEvident: r?.reviewEvident === true }),
+      // For outcome/review: OR across windows (true if any window finds evidence).
+      isPositive: (v) => v.outcomeEvident || v.reviewEvident,
+      mergeVerdict: (prev, next) => ({ outcomeEvident: prev.outcomeEvident || next.outcomeEvident, reviewEvident: prev.reviewEvident || next.reviewEvident }),
+      fallbackNote: (windowsCompleted) => `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`,
+      buildRow: (p, verdict, note, chunkIds, notAssessed) =>
+        notAssessed
+          ? { ref: p.ref, pointText: p.text, outcomeEvident: verdict.outcomeEvident, reviewEvident: verdict.reviewEvident, note, chunkIds, notAssessed: true }
+          : { ref: p.ref, pointText: p.text, outcomeEvident: verdict.outcomeEvident, reviewEvident: verdict.reviewEvident, note, chunkIds },
     }
-    if (stoppedEarly) break;
-    windowsCompleted++;
-  }
-
-  const rows: OutcomeReviewRow[] = auditPoints.map((p) => {
-    const best = bestByRef.get(p.ref);
-    if (!best) {
-      const reason = stoppedEarly
-        ? "the run was stopped before this audit point was reviewed"
-        : "the AI call for this audit point failed in every window it was sent to";
-      return { ref: p.ref, pointText: p.text, outcomeEvident: false, reviewEvident: false, note: `Not assessed — ${reason}. No verdict was produced.`, chunkIds: [], notAssessed: true };
-    }
-    const fallback = `No relevant evidence chunk found for this dimension in the ${windowsCompleted} window(s) reviewed.`;
-    // When neither outcome nor review evidence was found, surface the retained
-    // negative note (specific SSG observation) instead of the generic fallback.
-    const noteParts = best.notes.length ? best.notes : best.negNote ? [best.negNote] : [];
-    return {
-      ref: p.ref, pointText: p.text,
-      outcomeEvident: best.outcomeEvident,
-      reviewEvident: best.reviewEvident,
-      note: renderWindowNotes(noteParts, fallback, opts.resolveChunkFile),
-      chunkIds: best.chunkIds,
-    };
-  });
-
-  const notAssessedCount = rows.filter((r) => r.notAssessed).length;
-  // See runStagedPolicyAudit: an all-window batch failure makes the run PARTIAL.
-  const fullCoverage = !stoppedEarly && windowsCompleted === windows.length && notAssessedCount === 0;
-  const truncationNote = !fullCoverage
-    ? `Outcome/review content assessed via ${windowsCompleted} of ${windows.length} sliding windows — ${totalCharsAssessed.toLocaleString()} chars of ${totalCharsAvailable.toLocaleString()} total (${WINDOW_OVERLAP.toLocaleString()}-char overlap). Assessed ${auditPoints.length - notAssessedCount} of ${auditPoints.length} audit points.${notAssessedCount > 0 ? ` ${notAssessedCount} audit point(s) were NOT assessed (${stoppedEarly ? "run stopped early" : "AI call failures"}); results are PARTIAL.` : ` ${(totalCharsAvailable - totalCharsAssessed).toLocaleString()} chars were not assessed.`}`
-    : undefined;
-
-  return { rows, usage, promptSent: firstPromptSent, truncationNote, windowsProcessed: windowsCompleted, totalCharsAssessed, totalCharsAvailable, fullCoverage, windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
+  );
 }
 
 // Stage 5: Deterministic APSR verdict builder.
@@ -2202,7 +2098,6 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
   const stopRequested = () => !!opts.shouldStop?.() || !!opts.signal?.aborted;
   let stoppedEarly = false;
 
-  const REQ_BATCH_SIZE = 8;
   const batches: PPDRequirementInput[][] = [];
   for (let i = 0; i < requirements.length; i += REQ_BATCH_SIZE) {
     batches.push(requirements.slice(i, i + REQ_BATCH_SIZE));
@@ -2759,7 +2654,6 @@ Respond with JSON only:
   const stopRequested = () => !!opts.shouldStop?.() || !!opts.signal?.aborted;
   let stoppedEarly = false;
 
-  const REQ_BATCH_SIZE = 8;
   const batches: EvidenceAssessmentInput[][] = [];
   for (let i = 0; i < inputs.length; i += REQ_BATCH_SIZE) batches.push(inputs.slice(i, i + REQ_BATCH_SIZE));
 

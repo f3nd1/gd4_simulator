@@ -126,7 +126,7 @@ describe("useBenchmarkAfiStore — addEntries", () => {
   });
 });
 
-describe("useBenchmarkAfiStore — updateEntry / removeEntry / removeEntriesBatch on custom entries", () => {
+describe("useBenchmarkAfiStore — updateEntry / removeEntry on custom entries", () => {
   it("updateEntry edits only the targeted entry", () => {
     useBenchmarkAfiStore.getState().addEntries([draft({ findingText: "A" }), draft({ findingText: "B" })]);
     const custom = useBenchmarkAfiStore.getState().entries.filter((e) => e.id.startsWith("CUST-"));
@@ -135,15 +135,5 @@ describe("useBenchmarkAfiStore — updateEntry / removeEntry / removeEntriesBatc
     const after = useBenchmarkAfiStore.getState().entries;
     expect(after.find((e) => e.id === first.id)?.findingText).toBe("Edited");
     expect(after.find((e) => e.id === second.id)?.findingText).toBe("B");
-  });
-
-  it("removeEntriesBatch deletes exactly the given ids in one call", () => {
-    useBenchmarkAfiStore.getState().addEntries([draft(), draft(), draft()]);
-    const custom = useBenchmarkAfiStore.getState().entries.filter((e) => e.id.startsWith("CUST-"));
-    const ids = custom.map((e) => e.id);
-    useBenchmarkAfiStore.getState().removeEntriesBatch([ids[0], ids[2]]);
-    const remainingCustom = useBenchmarkAfiStore.getState().entries.filter((e) => e.id.startsWith("CUST-"));
-    expect(remainingCustom).toHaveLength(1);
-    expect(remainingCustom[0].id).toBe(ids[1]);
   });
 });

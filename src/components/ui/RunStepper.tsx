@@ -39,10 +39,10 @@ export function RunStepper({ current, running, detail }: { current: number; runn
 }
 
 // Map an Option A PPD review's free-text progress detail to a step index. The
-// PPD run has no structured stage, so infer from the detail string; when a run
-// isn't in flight the step reflects whether a result already exists.
-export function ppdRunStep(detail: string | undefined, running: boolean, hasResult: boolean): number {
-  if (!running) return hasResult ? 4 : 0;
+// PPD run has no structured stage, so infer from the detail string. Only ever
+// called while a run is in flight (RunStepper's `running` marker is always on
+// at the call site) — no "not running" case to handle here.
+export function ppdRunStep(detail: string | undefined): number {
   const d = (detail || "").toLowerCase();
   if (/read|extract|listing|folder|file/.test(d)) return 1;
   if (/sav|writ|commit|final|summar|compil/.test(d)) return 3;
@@ -50,8 +50,8 @@ export function ppdRunStep(detail: string | undefined, running: boolean, hasResu
 }
 
 // Map an Option A evidence assessment's structured stage to a step index.
-export function evidenceRunStep(stage: string | undefined, running: boolean, hasResult: boolean): number {
-  if (!running) return hasResult ? 4 : 0;
+// Only ever called while a run is in flight (see ppdRunStep above).
+export function evidenceRunStep(stage: string | undefined): number {
   switch (stage) {
     case "reading": return 1;
     case "assessing":

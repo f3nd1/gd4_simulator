@@ -8,7 +8,7 @@ import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 import { resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
-import { buildFindingsRegisterCsv, downloadCsv } from "../lib/auditCsvExport";
+import { buildFindingsRegisterCsv, downloadCsv, downloadBlob } from "../lib/auditCsvExport";
 import { buildProvenance, provenanceLine } from "../lib/provenance";
 import { buildBoardSummaryMd } from "../lib/boardSummary";
 import { buildQaAppendixMd } from "../lib/qaAppendix";
@@ -42,13 +42,7 @@ export function ExportCentre() {
   const isClosed = (id: string) => (closures[id]?.human || "") === "Accepted";
 
   function downloadMd(md: string, filename: string) {
-    const blob = new Blob([md], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(md, filename, "text/markdown");
     addExportLogEntry({ id: `EXP-${Date.now()}`, auditCycleId: cycle.id, exportName: filename, format: "Markdown", exportedAt: new Date().toLocaleString(), exportedBy: cycle.owner });
   }
 

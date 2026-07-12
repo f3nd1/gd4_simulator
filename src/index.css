@@ -17,6 +17,23 @@ h1, h2, h3, h4 {
   letter-spacing: -0.01em;
 }
 
+/* App-wide disclosure rows use <details>/<summary> with their own ▲/▼
+   indicator span, not the native marker triangle — suppress it once here
+   instead of an inline style per <summary> (::marker can't be targeted inline). */
+summary {
+  list-style: none;
+  cursor: pointer;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+/* Companion classes for content inside a <summary> that must react to the
+   <details> open state without JS: a closed/open marker pair, and a preview
+   snippet shown only while closed. */
+details:not([open]) .details-marker-open { display: none; }
+details[open] .details-marker-closed { display: none; }
+details[open] .details-hide-when-open { display: none; }
+
 /* ---- Tables: more breathing room + zebra striping for scannability ---- */
 table {
   width: 100%;

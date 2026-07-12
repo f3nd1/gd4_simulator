@@ -9,7 +9,7 @@ import { ExtractedTextPanel } from "../components/ui/ExtractedTextPanel";
 import { PreAnalysisChecklistPanel } from "../components/ui/PreAnalysisChecklistPanel";
 import { hasChecklist } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
-import type { AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
+import type { AuditAISummaryLine, AuditFileRecord, AuditProgressState, AuditRunRecord, AuditScope, FolderStatus } from "../types";
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { samplingCaveat } from "../lib/samplingCaveat";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
@@ -147,11 +147,20 @@ function Dots() {
 
 // ── File list components ───────────────────────────────────────────────────
 
+// Shared cited/not_used/audited colour mapping — used by both FileStatusBadge
+// (the "Read files" step) and aiFileBadge (the "Ask AI" step), which only
+// differ in wording for these three shared statuses.
+const AI_STATUS_STYLE: Record<"cited" | "not_used" | "audited", { color: string; bg: string }> = {
+  cited: { color: "#0369a1", bg: "#e0f2fe" },
+  not_used: { color: "#6b7280", bg: "#f3f4f6" },
+  audited: { color: "#1e40af", bg: "#eff6ff" },
+};
+
 function FileStatusBadge({ file }: { file: AuditFileRecord }) {
   const badge =
-    file.auditStatus === "cited"    ? { label: "📎 Cited",     color: "#0369a1", bg: "#e0f2fe" } :
-    file.auditStatus === "not_used" ? { label: "— Not used",   color: "#6b7280", bg: "#f3f4f6" } :
-    file.auditStatus === "audited"  ? { label: "🤖 Audited",   color: "#1e40af", bg: "#eff6ff" } :
+    file.auditStatus === "cited"    ? { label: "📎 Cited",     ...AI_STATUS_STYLE.cited } :
+    file.auditStatus === "not_used" ? { label: "— Not used",   ...AI_STATUS_STYLE.not_used } :
+    file.auditStatus === "audited"  ? { label: "🤖 Audited",   ...AI_STATUS_STYLE.audited } :
     file.readStatus === "reading"   ? { label: "⏳ Reading…",  color: "#b45309", bg: "#fffbeb" } :
     file.readStatus === "read"      ? { label: "✅ Read",       color: "#15803d", bg: "#f0fdf4" } :
     file.readStatus === "condensed" ? { label: "📋 Condensed", color: "#7c3aed", bg: "#faf5ff" } :
@@ -287,11 +296,52 @@ function FileRow({ file, isReading, onSkipFile, resolveText, showParent }: { fil
 // wording used across that step (Pending / Analysed / Cited / Not used).
 function aiFileBadge(file: AuditFileRecord): { label: string; color: string; bg: string } {
   switch (file.auditStatus) {
-    case "cited":    return { label: "📎 Cited",    color: "#0369a1", bg: "#e0f2fe" };
-    case "not_used": return { label: "— Not used",  color: "#6b7280", bg: "#f3f4f6" };
-    case "audited":  return { label: "🤖 Analysed", color: "#1e40af", bg: "#eff6ff" };
+    case "cited":    return { label: "📎 Cited",    ...AI_STATUS_STYLE.cited };
+    case "not_used": return { label: "— Not used",  ...AI_STATUS_STYLE.not_used };
+    case "audited":  return { label: "🤖 Analysed", ...AI_STATUS_STYLE.audited };
     default:         return { label: "⏳ Pending",   color: "#b45309", bg: "#fffbeb" };
   }
+}
+
+const verdictTh: React.CSSProperties = { padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" };
+
+// AI-summary verdict table — shared by the live progress panel's "Ask AI"
+// step and the completed-run result modal. `showText` adds the full line-text
+// column the result modal shows (the live panel keeps it as a hover title
+// on the Line cell instead, to stay compact during a running audit).
+function VerdictTable({ verdicts, showText = false, maxHeight = 200 }: { verdicts: AuditAISummaryLine[]; showText?: boolean; maxHeight?: number }) {
+  return (
+    <div style={{ maxHeight, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
+        <thead>
+          <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+            <th style={verdictTh}>Line</th>
+            {showText && <th style={verdictTh}>Text</th>}
+            <th style={verdictTh}>Result</th>
+            <th style={verdictTh}>A·P·S·R</th>
+            <th style={verdictTh}>Cited</th>
+          </tr>
+        </thead>
+        <tbody>
+          {verdicts.map((v) => {
+            const resultColor = v.result === "Met" ? "#15803d" : v.result === "Partial" ? "#b45309" : "#b91c1c";
+            const apsrSummary = [v.approachStatus[0], v.processesStatus[0], v.systemsOutcomesStatus[0], v.reviewStatus[0]].join("·");
+            return (
+              <tr key={v.lineId} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                <td style={{ padding: "3px 6px", fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#374151" }} title={showText ? undefined : v.lineText}>{v.lineId}</td>
+                {showText && (
+                  <td style={{ padding: "3px 6px", color: "#475569", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={v.lineText}>{v.lineText}</td>
+                )}
+                <td style={{ padding: "3px 6px", fontWeight: 700, color: resultColor }}>{v.result}</td>
+                <td style={{ padding: "3px 6px", fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#6b7280" }}>{apsrSummary}</td>
+                <td style={{ padding: "3px 6px", fontSize: 10, color: "#6b7280" }}>{v.citedChunkIds.length > 0 ? v.citedChunkIds.join(", ") : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // Clickable file row for the "Ask AI" step: same AI-status/chunk info as before,
@@ -853,32 +903,7 @@ function AuditStepDetail({ p, isActive, onExportAISummary }: { p: AuditProgressS
       )}
       {verdicts.length > 0 && (
         <div>
-          <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
-              <thead>
-                <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
-                  <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Line</th>
-                  <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Result</th>
-                  <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>A·P·S·R</th>
-                  <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Cited</th>
-                </tr>
-              </thead>
-              <tbody>
-                {verdicts.map((v) => {
-                  const resultColor = v.result === "Met" ? "#15803d" : v.result === "Partial" ? "#b45309" : "#b91c1c";
-                  const apsrSummary = [v.approachStatus[0], v.processesStatus[0], v.systemsOutcomesStatus[0], v.reviewStatus[0]].join("·");
-                  return (
-                    <tr key={v.lineId} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                      <td style={{ padding: "3px 6px", fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#374151" }} title={v.lineText}>{v.lineId}</td>
-                      <td style={{ padding: "3px 6px", fontWeight: 700, color: resultColor }}>{v.result}</td>
-                      <td style={{ padding: "3px 6px", fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#6b7280" }}>{apsrSummary}</td>
-                      <td style={{ padding: "3px 6px", fontSize: 10, color: "#6b7280" }}>{v.citedChunkIds.length > 0 ? v.citedChunkIds.join(", ") : "—"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <VerdictTable verdicts={verdicts} />
           {onExportAISummary && (
             <button
               onClick={onExportAISummary}
@@ -1573,33 +1598,8 @@ function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => v
           {verdicts.length > 0 && (
             <div>
               <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>AI summary ({verdicts.length} lines)</div>
-              <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 6, marginBottom: 6 }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
-                  <thead>
-                    <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
-                      <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Line</th>
-                      <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Text</th>
-                      <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Result</th>
-                      <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>A·P·S·R</th>
-                      <th style={{ padding: "3px 6px", textAlign: "left", color: "#64748b", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>Cited</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {verdicts.map((v) => {
-                      const resultColor = v.result === "Met" ? "#15803d" : v.result === "Partial" ? "#b45309" : "#b91c1c";
-                      const apsrSummary = [v.approachStatus[0], v.processesStatus[0], v.systemsOutcomesStatus[0], v.reviewStatus[0]].join("·");
-                      return (
-                        <tr key={v.lineId} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                          <td style={{ padding: "3px 6px", fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#374151" }}>{v.lineId}</td>
-                          <td style={{ padding: "3px 6px", color: "#475569", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={v.lineText}>{v.lineText}</td>
-                          <td style={{ padding: "3px 6px", fontWeight: 700, color: resultColor }}>{v.result}</td>
-                          <td style={{ padding: "3px 6px", fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#6b7280" }}>{apsrSummary}</td>
-                          <td style={{ padding: "3px 6px", fontSize: 10, color: "#6b7280" }}>{v.citedChunkIds.length > 0 ? v.citedChunkIds.join(", ") : "—"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div style={{ marginBottom: 6 }}>
+                <VerdictTable verdicts={verdicts} showText maxHeight={220} />
               </div>
               <button
                 onClick={handleExportAISummary}

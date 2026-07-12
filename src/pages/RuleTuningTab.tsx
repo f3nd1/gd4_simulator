@@ -233,7 +233,7 @@ export function RuleTuningTab() {
                 </div>
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>
                   {v.isOriginal ? "The built-in baseline." : `${new Date(v.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })} · ${v.changeSummary ?? ""}`}
-                  {prev && !v.isOriginal && (v.consistencyPct != null || v.benchmarkCaught != null) && (v.id === activeVersionId || true) && (
+                  {prev && !v.isOriginal && (v.consistencyPct != null || v.benchmarkCaught != null) && (
                     <span style={{ color: "#4338ca" }}> · vs {prev.label || "previous"}: {scoreCompareText(v, prev)}</span>
                   )}
                 </div>
