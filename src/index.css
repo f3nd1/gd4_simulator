@@ -193,3 +193,28 @@ textarea:focus {
 @media (max-width: 900px) {
   .option-a-run-cols { grid-template-columns: 1fr; }
 }
+
+/* LineageDiagram.tsx clause-by-clause detail matrix (both Option A tabs):
+   Clause requirement | policy clause-or-extract | File | Remarks. Below 900px
+   the four columns stack to one — same stacking convention as
+   .option-a-run-cols — and each cell shows its own field label (.cm-cell-label,
+   hidden on desktop where the header row already labels the columns). */
+.clause-matrix-head,
+.clause-matrix-row {
+  display: grid;
+  grid-template-columns: 1.5fr 1.5fr 1.1fr 1.6fr;
+}
+.cm-cell-label { display: none; }
+@media (max-width: 900px) {
+  .clause-matrix-head { display: none; }
+  .clause-matrix-row { grid-template-columns: 1fr; }
+  .cm-cell-label {
+    display: block;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #94a3b8;
+    margin-bottom: 3px;
+  }
+}

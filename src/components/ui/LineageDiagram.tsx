@@ -452,39 +452,42 @@ function VisionProvenanceTag({ record }: { record?: AuditFileRecord }) {
   );
 }
 
-function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: ResolveText }) {
+// The located-passage block for ONE sub-part's own check — the exact quote
+// states the spine used to stack vertically, now a reusable block placed in
+// whichever column owns "the passage" for the active tab (col 2 on the PPD
+// tab = the policy quote; col 3/File on the Evidence tab, since col 2 there
+// is the linked PPD extract). Returns null when there is genuinely no located
+// passage to show (a pure not-found sub-part) — that case is carried by the
+// File column's badge + attribution text instead. Every honesty state is
+// preserved verbatim: exact-quote highlight, the context-unavailable
+// fallback, the real "spread across these passages" list, the non-failure
+// "spread across the document" italic, and the quote-unverified warning.
+function LocatedPassage({ item, resolveText }: { item: SpineItem; resolveText: ResolveText }) {
   const text = item.sourceFile?.record ? resolveText(item.sourceFile.record) : undefined;
   const quoted = (item.found || item.contradicted) && item.quote;
   const excerpt = quoted && typeof text === "string" ? excerptAround(text, item.quote!) : null;
-  const attr = item.sourceFile?.name;
-  const attrUrl = item.sourceFile?.url;
-
+  const hasSpread = item.found && item.spreadQuotes && item.spreadQuotes.length > 0;
+  const nothingToShow = !quoted && !hasSpread && !(item.found && item.noExactQuote) && !(item.found && item.quoteUnverified);
+  if (nothingToShow) return null;
   return (
-    <div style={{ position: "relative", paddingLeft: 2 }}>
-      {/* Spine dot: filled = found, hollow = not found (shape, not colour). */}
-      <span aria-hidden style={{ position: "absolute", left: -18, top: 3, width: 8, height: 8, borderRadius: "50%", background: item.found ? "#64748b" : "transparent", border: "1.5px solid #94a3b8" }} />
-      <div style={{ fontSize: 11.5, fontWeight: 600, color: "#334155" }}>{item.name}</div>
-      {item.clause && (
-        <div style={{ fontSize: 10.5, color: "#64748b", marginTop: 1 }}>§ {item.clause}</div>
-      )}
-
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
       {quoted && excerpt && (
-        <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5, marginTop: 3 }}>
+        <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
           <ExcerptSpan excerpt={excerpt} />
         </div>
       )}
       {quoted && !excerpt && (
-        <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.5, marginTop: 3 }}>
+        <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.5 }}>
           “{shorten(item.quote!, 220)}” <span style={{ color: "#94a3b8", fontStyle: "italic" }}>(context unavailable — re-run to refresh the cache)</span>
         </div>
       )}
       {/* "Spread across the document" shows the ACTUAL matched passages, not
           just the claim — up to 5, each with its own file attribution; only
           the true diffuse-mention fallback (below) has nothing to show. */}
-      {item.found && item.spreadQuotes && item.spreadQuotes.length > 0 && (
-        <div style={{ marginTop: 3, display: "flex", flexDirection: "column", gap: 5 }}>
-          <div style={{ fontSize: 10.5, color: "#64748b", fontStyle: "italic" }}>Covered — spread across {item.spreadQuotes.length > 1 ? "these" : "this"} passage{item.spreadQuotes.length > 1 ? "s" : ""} rather than one:</div>
-          {item.spreadQuotes.slice(0, 5).map((sq, i) => (
+      {hasSpread && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          <div style={{ fontSize: 10.5, color: "#64748b", fontStyle: "italic" }}>Covered — spread across {item.spreadQuotes!.length > 1 ? "these" : "this"} passage{item.spreadQuotes!.length > 1 ? "s" : ""} rather than one:</div>
+          {item.spreadQuotes!.slice(0, 5).map((sq, i) => (
             <div key={i} style={{ fontSize: 11, color: "#475569", lineHeight: 1.5, paddingLeft: 8, borderLeft: "2px solid #e2e8f0" }}>
               “{shorten(sq.quote, 180)}”
               {sq.sourceFile?.name && (
@@ -497,15 +500,17 @@ function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: Re
               )}
             </div>
           ))}
-          {item.spreadQuotes.length > 5 && (
+          {item.spreadQuotes!.length > 5 && (
             <div style={{ fontSize: 10.5, color: "#94a3b8", fontStyle: "italic", paddingLeft: 8 }}>
-              …and {item.spreadQuotes.length - 5} more spread across the document.
+              …and {item.spreadQuotes!.length - 5} more spread across the document.
             </div>
           )}
         </div>
       )}
+      {/* Non-failure state — must stay reading as "covered" (neutral slate +
+          serif italic), never recoloured to look like a gap in the table. */}
       {item.found && item.noExactQuote && !item.quoteUnverified && (
-        <div style={{ fontSize: 11.5, color: "#64748b", fontStyle: "italic", fontFamily: "Georgia, 'Times New Roman', serif", marginTop: 3 }}>
+        <div style={{ fontSize: 11.5, color: "#64748b", fontStyle: "italic", fontFamily: "Georgia, 'Times New Roman', serif" }}>
           Covered, but spread across the document rather than one passage.
         </div>
       )}
@@ -513,40 +518,160 @@ function SpineItemView({ item, resolveText }: { item: SpineItem; resolveText: Re
           the source — say exactly that, never the "spread across" claim
           (which asserts a fact about the document nothing supports here). */}
       {item.found && item.quoteUnverified && (
-        <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "3px 6px", marginTop: 3, lineHeight: 1.45 }}>
+        <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "3px 6px", lineHeight: 1.45 }}>
           ⚠ The AI cited a supporting passage, but it could not be verified word-for-word against the source document, so it is not shown. Treat this sub-part's coverage with caution — re-running the review may resolve it.
         </div>
-      )}
-
-      {/* Attribution — mandatory for a found/contradicted passage; also names the
-          file searched for a not-found sub-part. */}
-      {item.found ? (
-        attr && (
-          <div style={{ fontSize: 10.5, marginTop: 3 }}>
-            {attrUrl
-              ? <a href={attrUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#4338ca", textDecoration: "none" }}>from {attr} ↗</a>
-              : <span style={{ color: "#64748b" }}>from {attr}</span>}
-            <VisionProvenanceTag record={item.sourceFile?.record} />
-          </div>
-        )
-      ) : (
-        <div style={{ fontSize: 11, color: "#64748b", marginTop: quoted ? 3 : 2 }}>
-          {item.contradicted ? "Contradicted" : "Not found"}{attr ? ` in ${attr}` : ""}.
-          {attrUrl && <> <a href={attrUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#4338ca", textDecoration: "none" }}>↗</a></>}
-        </div>
-      )}
-
-      {item.rationale && (
-        <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.45, marginTop: 4 }}>{item.rationale}</div>
       )}
     </div>
   );
 }
 
-// The expanded detail for one covered/partial row: the spine (indented + shaded
-// under the parent), a "Read the full document" toggle per cited readable file,
-// and "Jump to full line detail". Owns the per-file full-text open state.
-function RowDetail({ line, resolveText, onOpenLine }: { line: MatrixLine; resolveText: ResolveText; onOpenLine: (ref: string) => void }) {
+// Found / Not found / Contradicted pill for the File column (prototype's
+// badge). Single coverage axis: green = found, grey = not found, red-tinted
+// = contradicted (a distinct not-found variant, same as the spine spelled it
+// out in words). Never recolours the non-failure "spread across the document"
+// state — that item is `found`, so it reads green here too.
+function FoundBadge({ item }: { item: SpineItem }) {
+  const [label, bg, fg] = item.found
+    ? ["Found", "#dcfce7", "#15803d"]
+    : item.contradicted
+    ? ["Contradicted", "#fee2e2", "#b91c1c"]
+    : ["Not found", "#f1f5f9", "#64748b"];
+  return (
+    <span style={{ display: "inline-block", fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 3, background: bg, color: fg }}>{label}</span>
+  );
+}
+
+// The File column's attribution: the specific source file this sub-part was
+// attributed to (via chunkId → resolveSourceFile, so it's the ONE file among
+// several the row cites, not the whole row list), as the working "from …↗"
+// Drive link, plus the found/not-found badge, plus the honest not-found /
+// contradicted sentence naming the file that WAS searched (or a bare "Not
+// found." when none was). An old run with no attributed file degrades to an
+// em-dash rather than an error.
+function FileCell({ item }: { item: SpineItem }) {
+  const attr = item.sourceFile?.name;
+  const attrUrl = item.sourceFile?.url;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 0 }}>
+      {attr ? (
+        <span style={{ fontSize: 11, lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word" }}>
+          {attrUrl
+            ? <a href={attrUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#4338ca", textDecoration: "none" }}>from {attr} ↗</a>
+            : <span style={{ color: "#64748b" }}>from {attr}</span>}
+          <VisionProvenanceTag record={item.sourceFile?.record} />
+        </span>
+      ) : (
+        <span style={{ fontSize: 11, color: "#94a3b8" }}>—</span>
+      )}
+      <FoundBadge item={item} />
+      {!item.found && (
+        <span style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.4 }}>
+          {item.contradicted ? "Contradicted" : "Not found"}{attr ? ` in ${attr}` : ""}.
+        </span>
+      )}
+    </div>
+  );
+}
+
+// One clause-matrix row = one sub-part, four cells. Column 2 differs per tab
+// (PPD: this sub-part's own policy clause + located quote; Evidence: the
+// LINE's linked PPD extract, the same reference promise on every sub-part
+// row — carried in via policyPromise/policyCoverage). The evidence-side
+// located passage rides in the File column on the evidence tab, since col 2
+// there belongs to the PPD reference. Mobile labels (.cm-cell-label) self-
+// label each cell once the grid stacks below 900px.
+function ClauseRow({ item, isEv, resolveText, headers, policyPromise, policyCoverage }: {
+  item: SpineItem; isEv: boolean; resolveText: ResolveText; headers: [string, string, string, string];
+  policyPromise?: string; policyCoverage?: Coverage;
+}) {
+  const barColor = item.found ? "#16a34a" : "#cbd5e1"; // solid green = found, grey = not (single axis)
+  const cellStyle: React.CSSProperties = { padding: "11px 14px", borderLeft: "1px solid #f1f5f9", minWidth: 0 };
+  const passage = <LocatedPassage item={item} resolveText={resolveText} />;
+  return (
+    <div className="clause-matrix-row" style={{ borderTop: "1px solid #f1f5f9", borderLeft: `3px solid ${barColor}` }}>
+      {/* Col 1 — Clause requirement (dot + name, muted when not found) */}
+      <div style={{ ...cellStyle, borderLeft: "none" }}>
+        <span className="cm-cell-label">{headers[0]}</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <span aria-hidden style={{ marginTop: 4, width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: item.found ? "#16a34a" : "transparent", border: item.found ? "none" : "1.5px solid #94a3b8" }} />
+          <span style={{ fontSize: 12, fontWeight: 500, lineHeight: 1.45, color: item.found ? "#1e293b" : "#64748b" }}>{item.name}</span>
+        </div>
+      </div>
+
+      {/* Col 2 — PPD tab: policy clause + located policy quote. Evidence tab:
+          the linked PPD extract (reference promise) — same on every row. */}
+      <div style={cellStyle}>
+        <span className="cm-cell-label">{headers[1]}</span>
+        {isEv ? (
+          policyPromise ? (
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
+                {policyCoverage && <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: policyCoverage === "not-checked" ? "transparent" : COV_DOT[policyCoverage], border: `1.5px solid ${COV_DOT[policyCoverage]}` }} />}
+                <span style={{ fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>From PPD review</span>
+              </div>
+              <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5, fontStyle: "italic", overflowWrap: "anywhere", wordBreak: "break-word" }}>“{shorten(policyPromise, 300)}”</div>
+            </div>
+          ) : (
+            <span style={{ fontSize: 11, color: "#94a3b8" }}>—</span>
+          )
+        ) : (
+          <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+            {item.clause && <div style={{ fontSize: 10.5, fontWeight: 600, color: "#475569" }}>§ {item.clause}</div>}
+            {passage ?? <span style={{ fontSize: 11, color: "#94a3b8" }}>—</span>}
+          </div>
+        )}
+      </div>
+
+      {/* Col 3 — File: specific attributed file + link + badge, plus (evidence
+          tab only) the located evidence passage, since col 2 there is the PPD ref. */}
+      <div style={cellStyle}>
+        <span className="cm-cell-label">{headers[2]}</span>
+        <FileCell item={item} />
+        {isEv && passage && <div style={{ marginTop: 6 }}>{passage}</div>}
+      </div>
+
+      {/* Col 4 — Remarks / Rationale */}
+      <div style={cellStyle}>
+        <span className="cm-cell-label">{headers[3]}</span>
+        {item.rationale
+          ? <span style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.5, overflowWrap: "anywhere", wordBreak: "break-word" }}>{item.rationale}</span>
+          : <span style={{ fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>—</span>}
+      </div>
+    </div>
+  );
+}
+
+// The clause-by-clause detail as a 4-column matrix (replaces the old vertical
+// spine): a header row + one ClauseRow per sub-part. Column-2 header/meaning
+// is per-tab (see ClauseRow). Passes the line's linked PPD promise down so the
+// evidence tab's col 2 can show it on every sub-part row.
+function ClauseMatrix({ line, isEv, resolveText }: { line: MatrixLine; isEv: boolean; resolveText: ResolveText }) {
+  const headers: [string, string, string, string] = isEv
+    ? ["Clause requirement", "PPD clause / extract", "File", "Remarks"]
+    : ["Clause requirement", "Policy clause & quote", "File", "Rationale"];
+  const headerCell: React.CSSProperties = { padding: "7px 14px", fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.4, borderLeft: "1px solid #eef2f6" };
+  return (
+    <div style={{ border: "1px solid #eef2f6", borderRadius: 6, overflow: "hidden", background: "#fff" }}>
+      <div className="clause-matrix-head" style={{ background: "#f8fafc", borderBottom: "1px solid #eef2f6" }}>
+        <span style={{ ...headerCell, borderLeft: "none" }}>{headers[0]}</span>
+        <span style={headerCell}>{headers[1]}</span>
+        <span style={headerCell}>{headers[2]}</span>
+        <span style={headerCell}>{headers[3]}</span>
+      </div>
+      {line.items.map((it, i) => (
+        <ClauseRow key={i} item={it} isEv={isEv} resolveText={resolveText} headers={headers} policyPromise={line.policyPromise} policyCoverage={line.policyCoverage} />
+      ))}
+    </div>
+  );
+}
+
+// The expanded detail for one covered/partial row: the clause-by-clause
+// matrix (4 columns, see ClauseMatrix — replaced the old vertical spine), a
+// "Read the full document" toggle per cited readable file, and "Jump to full
+// line detail". Owns the per-file full-text open state. `isEv` selects the
+// column-2 semantics (PPD: policy clause & quote; Evidence: linked PPD extract).
+function RowDetail({ line, isEv, resolveText, onOpenLine }: { line: MatrixLine; isEv: boolean; resolveText: ResolveText; onOpenLine: (ref: string) => void }) {
   const [fullFile, setFullFile] = useState<string | null>(null);
   const readable = line.files.filter((f) => f.record);
   const firstQuoteFor = (name: string) => line.items.find((it) => it.found && it.quote && it.sourceFile?.name === name)?.quote;
@@ -557,11 +682,9 @@ function RowDetail({ line, resolveText, onOpenLine }: { line: MatrixLine; resolv
           never just some (a prior version dropped it for some row shapes). */}
       <div style={{ marginBottom: 8 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>Clause by clause</div>
-        <div style={{ fontSize: 10.5, color: "#94a3b8" }}>Each clause shows the exact wording, the file it came from, and why it does or doesn't satisfy the requirement.</div>
+        <div style={{ fontSize: 10.5, color: "#94a3b8" }}>Same detail as a table: what each sub-part required, {isEv ? "the linked PPD promise" : "the matched policy clause"}, the file it was checked in, and why it does or doesn't satisfy the requirement.</div>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, borderLeft: "1px solid #cbd5e1", marginLeft: 4, paddingLeft: 16 }}>
-        {line.items.map((it, i) => <SpineItemView key={i} item={it} resolveText={resolveText} />)}
-      </div>
+      <ClauseMatrix line={line} isEv={isEv} resolveText={resolveText} />
       {line.suggestedAction && (
         <div style={{ marginTop: 10, fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 8px", lineHeight: 1.45 }}>
           <span style={{ fontWeight: 700 }}>To reach Met: </span>{line.suggestedAction}
@@ -806,7 +929,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
                     <RationaleCell text={line.rowRationale} suggestedAction={isEv ? line.suggestedAction : undefined} />
                   </div>
 
-                  {isOpen && line.expandable && <RowDetail line={line} resolveText={resolveText} onOpenLine={onOpenLine} />}
+                  {isOpen && line.expandable && <RowDetail line={line} isEv={isEv} resolveText={resolveText} onOpenLine={onOpenLine} />}
                 </div>
               </div>
             );
