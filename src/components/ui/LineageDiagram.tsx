@@ -918,10 +918,14 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
         </span>
         <span style={{ fontSize: 11, color: "#94a3b8" }}>{lines.length} line{lines.length !== 1 ? "s" : ""}{gaps > 0 ? ` · ${gaps} with a gap` : " · all covered"}</span>
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10, fontSize: 10.5, color: "#64748b", flexWrap: "wrap" }}>
-          <LegendSwatch bar={coverageBar("covered")} label="met" />
-          <LegendSwatch bar={coverageBar("partial")} label="partial" />
-          <LegendSwatch bar={coverageBar("not-covered")} label="not met" />
-          <LegendSwatch bar={coverageBar("not-checked")} label="not checked" />
+          {/* Same ppdVerdictLabel/evVerdictLabel single source of truth the
+              matrix cells below use — never a second, hand-typed vocabulary
+              ("met"/"not met") that can drift from what the column actually
+              shows ("Documented"/"Not covered" on the PPD tab). */}
+          <LegendSwatch bar={coverageBar("covered")} label={isEv ? evVerdictLabel("Met") : ppdVerdictLabel("Adequate")} />
+          <LegendSwatch bar={coverageBar("partial")} label={isEv ? evVerdictLabel("Partial") : ppdVerdictLabel("Partial")} />
+          <LegendSwatch bar={coverageBar("not-covered")} label={isEv ? evVerdictLabel("Not met") : ppdVerdictLabel("Not documented")} />
+          <LegendSwatch bar={coverageBar("not-checked")} label={isEv ? evVerdictLabel("Not assessed") : ppdVerdictLabel("Not assessed")} />
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
             <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 3px" }}>abc</mark> exact quote
           </span>
