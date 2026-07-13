@@ -82,7 +82,7 @@ All persisted via `workspaceStorage` (Supabase-synced adapter in `src/store/supa
 | `useRuleTuningStore` | Rule injections; champion-vs-active gate (`championInjection()`) | `ucc-gd4-rule-tuning:v1` | 0 |
 | `usePromptReviewStore` | Prompt Review prompts + connected review records | `ucc-gd4-prompt-review:v1` | 0 |
 | `useScoringConfigStore` | Award thresholds, AI strictness | `ucc-gd4-scoring-config:v1` | 0 |
-| `useGoogleDriveStore` | Drive OAuth token — **token excluded by `partialize`, never persisted** | `ucc-gd4-google-drive:v1` | 0 |
+| `useGoogleDriveStore` | Drive Client ID persisted; the access token itself is **excluded by `partialize`, never persisted** — the long-lived refresh token lives server-side instead, see Persistence & security below | `ucc-gd4-google-drive:v1` | 0 |
 | `useProfileOfPeiStore` / `useSupabaseSettingsStore` / `useChangeLogStore` / `useGuidanceStore` | PEI profile / Supabase creds / change-log cache / guidance dismissals | own `ucc-gd4-*` keys | 0–1 |
 | `useAIDebugLogStore` | System prompt per `buildSystemPrompt()` call — in-memory only, 100-cap, cleared on reload | — | — |
 | `useSaveStatusStore` | "saving…/saved" indicator — not persisted | — | — |
@@ -176,7 +176,8 @@ HashRouter — all routes under `#/`. Route list in `src/App.tsx`; nav labels/hi
 ## Persistence & security
 
 - Supabase URL + publishable key from `VITE_SUPABASE_URL` / `VITE_SUPABASE_PUBLISHABLE_KEY` (`.env.local`, never committed) or entered in-app on Settings.
-- Drive OAuth token excluded from Zustand `partialize` — never written to storage or logs. Mask NRIC/FIN values in any UI (`maskNric`).
+- Drive access (short-lived, ~1hr) token excluded from Zustand `partialize` — never written to storage or logs. Mask NRIC/FIN values in any UI (`maskNric`).
+- **Google Drive uses a server-side refresh token** (`supabase/functions/drive-oauth`, a Supabase Edge Function — the app's only backend component) so the connection survives reloads and outlives one browser session, instead of needing a fresh "Connect" every ~1hr. The Edge Function holds the ONE long-lived Google refresh token for the whole workspace (no per-user login exists — see `supabase/schema.sql`'s `drive_oauth_tokens` table, which grants the anon role zero access; only the Edge Function's service-role key can read/write it) and the Google OAuth Client Secret (`GOOGLE_CLIENT_SECRET`, a Supabase Edge Function secret — never in this repo, never in the client bundle, never in Settings). `src/lib/drive/driveClient.ts`'s `requestDriveAuthCode()` gets a one-time authorization code from Google (popup, `access_type: offline`, forced `prompt: consent`); `useGoogleDriveStore.ts` hands that code to the Edge Function to exchange server-side, and later calls the SAME function's `refresh` action (via `supabase.functions.invoke`) whenever `getFreshToken()`/`connectSilently()` need a new access token — no more client-only GIS silent reauth. One-time setup checklist (Google Cloud Console Client Secret + Supabase secrets + `supabase functions deploy drive-oauth`): `docs/google-drive-server-auth-setup.md`.
 - Known stale message: `aiClient.ts` (~line 61) claims the OpenAI key "never syncs between devices" — it actually syncs via Supabase with the rest of `ucc-gd4-ai-settings:v1`. Don't propagate that claim.
 
 ## Communicating with the user

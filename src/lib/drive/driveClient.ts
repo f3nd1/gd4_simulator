@@ -1,11 +1,14 @@
-// Thin wrapper around Google's browser-only OAuth (Google Identity Services
-// "token client") and the Drive v3 REST API. This is the ONLY place that
+// Thin wrapper around Google's browser OAuth (Google Identity Services
+// "code client") and the Drive v3 REST API. This is the ONLY place that
 // knows how to reach Google Drive — every other module gets a folder's
 // files/text through the functions below, never by talking to Google
-// directly. Mirrors the same "one client module, prototype-only" pattern
-// used for OpenAI in aiClient.ts: the access token lives in memory only
-// (never persisted), is requested directly from the browser, and there is
-// no backend proxy.
+// directly. The short-lived (~1hr) ACCESS token lives in memory only, in
+// useGoogleDriveStore (never persisted) — same as before. What changed: a
+// Supabase Edge Function (supabase/functions/drive-oauth) now holds a
+// long-lived Google REFRESH token server-side, so this module's caller can
+// mint a fresh access token on demand indefinitely without the user ever
+// re-clicking "Connect" — see requestDriveAuthCode below and
+// useGoogleDriveStore's getFreshToken/connectSilently.
 
 // pdfCompat MUST load before pdfjs: it polyfills the ReadableStream async
 // iterator / Promise.withResolvers that pdfjs v6 needs and Safari lacks.
@@ -18,7 +21,6 @@ import "./pdfCompat";
 // Safari) actually runs. A plain workerSrc URL can't inject that.
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import PdfjsWorker from "./pdfWorker?worker";
-import { withDeadline } from "../asyncGuards";
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 // Import pure text utilities for use within this module, and re-export so
@@ -116,11 +118,14 @@ declare global {
     google?: {
       accounts: {
         oauth2: {
-          initTokenClient: (config: {
+          initCodeClient: (config: {
             client_id: string;
             scope: string;
-            callback: (resp: { access_token?: string; expires_in?: number; error?: string }) => void;
-          }) => { requestAccessToken: (opts?: { prompt?: string }) => void };
+            ux_mode: "popup";
+            access_type: "offline";
+            prompt?: string;
+            callback: (resp: { code?: string; error?: string }) => void;
+          }) => { requestCode: () => void };
         };
       };
     };
@@ -145,52 +150,46 @@ function loadGsiScript(): Promise<void> {
 
 export class DriveAuthError extends Error {}
 
-// Opens Google's consent popup and resolves with an access token scoped to
-// drive.readonly. Requires the caller to have a valid OAuth Client ID
-// (Web application type, with this app's origin in "Authorized JavaScript
-// origins") created in Google Cloud Console — that one-time setup happens
-// outside this app, in the user's own Google account.
+// Opens Google's consent popup and resolves with a one-time AUTHORIZATION
+// CODE (not an access token) scoped to drive.readonly, requesting offline
+// access so Google issues a refresh token alongside it. The code is
+// exchanged for real tokens server-side, by the drive-oauth Supabase Edge
+// Function — this module never sees a client secret or a refresh token,
+// only ever the short-lived access token the Edge Function hands back.
 //
-// `silent: true` passes prompt: "none" instead — Google issues a fresh
-// token with no UI at all if this origin already has an active, consented
-// session, or fails immediately with no popup otherwise. Used to quietly
-// re-establish the connection on page load (the access token itself is
-// never persisted, so every reload otherwise starts "disconnected" even
-// though the user already granted access earlier in the same browser).
-// GIS settles ONLY via its callback — and a failed silent request can drop the
-// callback entirely (blocked third-party cookies, dead network, backgrounded
-// tab), leaving the promise unsettleable. A mid-run token refresh awaiting it
-// froze a real 155-file audit for 98 minutes. Silent requests therefore get a
-// hard deadline: a healthy silent refresh completes in ~1–2s, so 20s is 10×
-// margin. Interactive requests are NOT deadlined — the user may legitimately
-// sit in Google's consent popup for minutes.
-const SILENT_AUTH_TIMEOUT_MS = 20_000;
-
-export async function requestDriveAccessToken(
-  clientId: string,
-  opts: { silent?: boolean } = {}
-): Promise<{ accessToken: string; expiresInSeconds: number }> {
+// `ux_mode: "popup"` means no separate "Authorized redirect URI" needs to be
+// registered in Google Cloud Console — GIS handles the popup/callback
+// itself; the redirect_uri the server-side exchange must use is simply this
+// page's origin (see requestDriveAuthCode's caller in useGoogleDriveStore).
+//
+// prompt: "consent" is forced so Google reliably re-issues a refresh token
+// on every "Connect" click — Google only issues one on first consent (or
+// when explicitly re-prompted), and silently omits it on a plain repeat
+// request. This is only ever called from an explicit user click ("Connect
+// Google Drive"), never in the background, so the extra consent screen is
+// expected, not a regression from the old silent-reauth UX.
+export async function requestDriveAuthCode(clientId: string): Promise<{ code: string }> {
   if (!clientId) throw new DriveAuthError("No Google OAuth Client ID configured in Settings.");
   await loadGsiScript();
   if (!window.google?.accounts?.oauth2) throw new DriveAuthError("Google Identity Services failed to load.");
 
-  const tokenPromise = new Promise<{ accessToken: string; expiresInSeconds: number }>((resolve, reject) => {
-    const client = window.google!.accounts.oauth2.initTokenClient({
+  return new Promise<{ code: string }>((resolve, reject) => {
+    const client = window.google!.accounts.oauth2.initCodeClient({
       client_id: clientId,
       scope: DRIVE_SCOPE,
+      ux_mode: "popup",
+      access_type: "offline",
+      prompt: "consent",
       callback: (resp) => {
-        if (resp.error || !resp.access_token) {
-          reject(new DriveAuthError(resp.error || "Google did not return an access token."));
+        if (resp.error || !resp.code) {
+          reject(new DriveAuthError(resp.error || "Google did not return an authorization code."));
           return;
         }
-        resolve({ accessToken: resp.access_token, expiresInSeconds: resp.expires_in || 3600 });
+        resolve({ code: resp.code });
       },
     });
-    client.requestAccessToken(opts.silent ? { prompt: "none" } : undefined);
+    client.requestCode();
   });
-  return opts.silent
-    ? withDeadline(tokenPromise, SILENT_AUTH_TIMEOUT_MS, "Silent Google Drive re-authentication timed out — Google never responded. Reconnect Google Drive and re-run.")
-    : tokenPromise;
 }
 
 // Folder links look like https://drive.google.com/drive/folders/<ID>?... —
@@ -301,7 +300,8 @@ const GOOGLE_EXPORT_MIME: Record<string, string> = {
 
 // PDF has no Drive /export conversion (that's only for Google-native
 // formats) — read the raw bytes via alt=media instead and extract text
-// client-side, consistent with this app having no backend to do it for us.
+// client-side; file content is never proxied through a backend (the
+// drive-oauth Edge Function only ever handles the OAuth token exchange).
 // Exported (not just used internally) because it has zero Drive dependency
 // itself — src/lib/uploadedDocText.ts reuses it for locally-uploaded PDFs.
 export async function extractPdfText(bytes: ArrayBuffer): Promise<string> {

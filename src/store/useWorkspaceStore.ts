@@ -3888,10 +3888,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // fresh token can't be minted, so the run never silently skips the
           // remaining files and scores "no evidence" against unread evidence.
           // This await sits OUTSIDE the per-file read race below, so it gets
-          // its own honest stage label + Skip wiring: GIS's silent refresh can
-          // stall (bounded by requestDriveAccessToken's 20s watchdog — this
-          // exact spot once froze a real run for 98 minutes, with the UI
-          // blaming the innocent file whose name was already on screen).
+          // its own honest stage label + Skip wiring: the server-side refresh
+          // call (drive-oauth Edge Function) can stall (bounded by
+          // callDriveOauth's 15s watchdog in useGoogleDriveStore.ts — this
+          // exact spot once froze a real run for 98 minutes under the old
+          // client-only GIS silent-reauth flow, with the UI blaming the
+          // innocent file whose name was already on screen).
           setProgress("reading", { stageDetail: `Refreshing Google Drive access (before reading ${file.path.split("/").pop() || file.path})…`, lastHeartbeatAt: Date.now() });
           const TOKEN_WAIT_SKIPPED = Symbol("token-wait-skipped");
           let skipTokenWait!: () => void;

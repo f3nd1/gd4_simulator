@@ -465,13 +465,19 @@ create policy "anon read/write" on public.workspace_state
         <p style={{ fontSize: 12.5, color: "#6b7280", marginTop: 0 }}>
           Connecting your Google account lets the Evidence Folder page's "Check access" and "Run audit" buttons actually
           read files inside the Drive folder pasted into each folder's link field — no separate folder ID field needed.
-          This is a prototype, client-side-only OAuth connection: there is no backend, the access token lives only in this
-          browser tab's memory (never saved to local storage or the database), and it expires after about an hour.
+          The access token this browser holds is still short-lived (~1hr) and kept in memory only, never saved to local
+          storage — same as before. What's different: a Supabase server function now holds a long-lived Google refresh
+          token, so this connection survives page reloads and stays live for days, not just one browser session — you
+          should only ever need to click "Connect Google Drive" once.
         </p>
         <p style={{ fontSize: 12.5, color: "#6b7280" }}>
-          One-time setup in Google Cloud Console: create an OAuth Client ID (Application type "Web application"), add
-          this app's URL to "Authorized JavaScript origins", and enable the Google Drive API for the project. No client
-          secret is needed for this flow — paste only the Client ID below.
+          One-time setup, in TWO places (see <code>docs/google-drive-server-auth-setup.md</code> for the full
+          checklist): (1) Google Cloud Console — create an OAuth Client ID (Application type "Web application"), add
+          this app's URL to "Authorized JavaScript origins", enable the Google Drive API, and copy the auto-generated
+          Client Secret. (2) Supabase — run this repo's <code>supabase/schema.sql</code>, then{" "}
+          <code>supabase secrets set GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=…</code> and{" "}
+          <code>supabase functions deploy drive-oauth</code>. The Client Secret is NEVER pasted into this app —
+          only the Client ID below, exactly as before.
         </p>
 
         <label style={{ display: "block", marginBottom: 10 }}>
