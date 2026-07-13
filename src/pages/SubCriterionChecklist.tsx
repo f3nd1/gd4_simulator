@@ -1041,13 +1041,33 @@ export function SubCriterionChecklist() {
                               </tr>
                               <tr>
                                 <td colSpan={8} style={{ paddingTop: 0, paddingBottom: 8 }}>
-                                  <textarea
-                                    rows={ev.auditorNote && ev.auditorNote.includes("\n") ? 8 : 2}
-                                    placeholder="Auditor note — justify the sufficiency verdict, note strengths/weaknesses/gaps, suggest how to close…"
-                                    value={ev.auditorNote || ""}
-                                    onChange={(e) => updateEvidence(selectedId, l.id, ev.id, { auditorNote: e.target.value })}
-                                    style={{ ...inputStyle, width: "100%", resize: "vertical", fontSize: 11.5, whiteSpace: "pre-wrap" }}
-                                  />
+                                  {ev.runId ? (
+                                    /* AI-run item: its stored note is a frozen snapshot from
+                                       that run (old runs' auto-blob, possibly with human edits
+                                       merged in) — the PPD/Evidence tabs above are the current
+                                       data, so the note renders read-only behind an "archived"
+                                       toggle rather than as a live editable field. New runs
+                                       write no note at all (optionAChecklistWrite), so this
+                                       collapses to nothing for them. */
+                                    ev.auditorNote ? (
+                                      <details>
+                                        <summary style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#92400e" }}>
+                                          Show archived note from run {ev.runId} (older snapshot — the tabs above show current data)
+                                        </summary>
+                                        <div style={{ fontSize: 11.5, color: "#64748b", whiteSpace: "pre-wrap", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 9px", marginTop: 4 }}>
+                                          {ev.auditorNote}
+                                        </div>
+                                      </details>
+                                    ) : null
+                                  ) : (
+                                    <textarea
+                                      rows={ev.auditorNote && ev.auditorNote.includes("\n") ? 8 : 2}
+                                      placeholder="Auditor note — justify the sufficiency verdict, note strengths/weaknesses/gaps, suggest how to close…"
+                                      value={ev.auditorNote || ""}
+                                      onChange={(e) => updateEvidence(selectedId, l.id, ev.id, { auditorNote: e.target.value })}
+                                      style={{ ...inputStyle, width: "100%", resize: "vertical", fontSize: 11.5, whiteSpace: "pre-wrap" }}
+                                    />
+                                  )}
                                 </td>
                               </tr>
                             </Fragment>

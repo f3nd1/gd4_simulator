@@ -56,9 +56,6 @@ export function buildOptionALineWrites(
       (l) => (l.sourceRef && normalizeAuditRef(l.sourceRef) === normRef) || (l.clause && normalizeAuditRef(l.clause) === normRef)
     );
     const ppdRow = ppdByRef.get(normRef);
-    const promiseLines = (row.promiseChecks ?? [])
-      .map((p) => `Promise ${p.verdict}: ${p.promiseText}`)
-      .join("\n");
     // Confidence gating signal (used by the "confidence" run mode): gap
     // verdicts, uncited lines, unverified quotes and contradicted promises
     // all queue for human review instead of auto-committing.
@@ -92,18 +89,19 @@ export function buildOptionALineWrites(
         sufficiency: status === "Met" ? "Present" : status === "Partial" ? "Weak" : "Missing",
         ppdVerdict: row.ppdVerdict,
         // Tab snapshots (see SubChecklistEvidenceItem) — the run's own verdict
-        // and both halves' reasoning verbatim, so the card's PPD/Evidence tabs
-        // bind to real stored data instead of parsing auditorNote below.
+        // and both halves' reasoning verbatim. These structured fields are the
+        // ONLY carrier now: the old auto-generated auditorNote blob ("PPD
+        // verdict: X. Combined verdict: Y." + reasoning + promise list +
+        // SOURCE TRACE) is deliberately no longer written — it froze at write
+        // time, went stale against later runs, and duplicated everything the
+        // checklist card's PPD/Evidence tabs already show live. auditorNote
+        // stays reserved for HUMAN-typed notes (and the hybrid-gate override
+        // append); notes on old stored items render behind an "archived"
+        // toggle, never as current data.
         evidenceVerdict: status,
         ppdComment: ppdRow?.fullComment || ppdRow?.shortComment || undefined,
         evidenceComment: row.comment || row.evidenceSummary || undefined,
         promiseChecks: row.promiseChecks,
-        auditorNote: [
-          `PPD verdict: ${ppdVerdictLabel(row.ppdVerdict)}. Combined verdict: ${evVerdictLabel(status)}.`,
-          row.comment || row.evidenceSummary,
-          promiseLines,
-          `SOURCE TRACE\nRun: ${opts.runId} (Option A — PPD Requirements Review + Evidence assessment)`,
-        ].filter(Boolean).join("\n\n"),
         apsr: optionAApsr(row, ppdRow),
         runId: opts.runId,
       },

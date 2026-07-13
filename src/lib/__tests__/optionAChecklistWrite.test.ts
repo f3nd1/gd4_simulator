@@ -78,6 +78,9 @@ describe("buildOptionALineWrites — Option A verdicts land on checklist lines b
     expect(ev.ppdComment).toBe("…"); // ppdRow.fullComment verbatim, not the shortComment
     expect(ev.evidenceComment).toBe("Documented and implemented (C002)."); // row.comment verbatim
     expect(ev.promiseChecks).toEqual(checks);
+    // The auto-generated auditorNote blob is deliberately gone — it froze at
+    // write time and duplicated the tabs. auditorNote is human-input-only now.
+    expect(ev.auditorNote).toBeUndefined();
   });
 
   it("never writes 'Not assessed' or failed rows over an existing status", () => {
