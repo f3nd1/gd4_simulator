@@ -803,6 +803,18 @@ export function HybridGatePanel({ subCriterionId }: { subCriterionId: string }) 
           </button>
         </span>
       </div>
+      {/* Legacy drain: the per-line gate was removed for Option A (new PPD +
+          Evidence runs commit straight to the checklist) — a path-A queue can
+          only be an older run from before that change, waiting for ONE
+          explicit decision. It is also auto-cleared if a newer run commits
+          for this sub-criterion (superseded). Option B staged runs still
+          queue normally and keep the full per-line flow below. */}
+      {run.path === "A" && (
+        <div style={{ fontSize: 11.5, color: "#92400e", background: "#fff", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 9px", marginBottom: 6 }}>
+          The per-line approval step has been removed — new evidence runs now commit straight to the checklist, where you can edit any verdict.
+          This older run was still waiting from before that change: <b>Accept all remaining</b> to apply it, or <b>Discard run</b> if it has been superseded.
+        </div>
+      )}
       <div style={{ fontSize: 11.5, color: "#a16207", marginBottom: 6 }}>
         Approve, edit or reject each verdict in turn, beside its evidence below — {run.items.length} gate{run.items.length === 1 ? "" : "s"} remaining. Closing this review commits nothing and keeps them pending.
       </div>

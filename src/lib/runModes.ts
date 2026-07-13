@@ -18,7 +18,7 @@ export const AUDIT_MODES: Array<{ value: AuditMode; label: string; icon: string;
     value: "hybrid",
     label: "Hybrid (step by step)",
     icon: "🤝",
-    desc: "The AI drafts each verdict and finding, and stops for you to approve, edit or reject before moving on.",
+    desc: "PPD + Evidence verdicts commit to the checklist automatically — review or edit any of them there, then raise findings yourself when ready. Staged-audit verdicts still stop for per-line approval.",
     best: "Best for a careful review.",
   },
   {
@@ -53,6 +53,22 @@ export function partitionWritesByMode(
     case "manual":
       return { commit: [], queue: [] };
   }
+}
+
+// Option A (PPD + Evidence) writes: the per-line approval gate was REMOVED
+// for this path (2026-07) — in practice it was never completed (runs piled up
+// unapproved and the checklist froze on the first run, firing the staleness
+// warning the gate itself caused). In hybrid the verdicts now commit
+// immediately, like full-auto; the human's override lives on the checklist
+// card's editable verdict dropdown, and findings compilation still waits for
+// the human's explicit Compile click (that is what keeps hybrid distinct from
+// full-auto, which compiles findings automatically). Option B's staged flow
+// keeps the full gate via partitionWritesByMode above.
+export function partitionOptionAWrites(
+  mode: AuditMode,
+  writes: ChecklistLineWrite[]
+): { commit: ChecklistLineWrite[]; queue: ChecklistLineWrite[] } {
+  return partitionWritesByMode(mode === "hybrid" ? "full-auto" : mode, writes);
 }
 
 // Confidence note for a staged-audit verdict — no longer a gating signal

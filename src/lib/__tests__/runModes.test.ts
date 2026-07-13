@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { partitionWritesByMode, DEFAULT_AUDIT_MODE, auditModeLabel, AUDIT_MODES } from "../runModes";
+import { partitionWritesByMode, partitionOptionAWrites, DEFAULT_AUDIT_MODE, auditModeLabel, AUDIT_MODES } from "../runModes";
 import { buildFullAuditPlan, fullAuditLabel } from "../fullAudit";
 import type { ChecklistLineWrite } from "../../types";
 
@@ -22,10 +22,22 @@ describe("three-mode gating — modes decide WHEN writes commit, not how they ar
     expect(queue).toHaveLength(0);
   });
 
-  it("hybrid commits NOTHING — every verdict queues as a gate for approval", () => {
+  it("hybrid commits NOTHING — every verdict queues as a gate for approval (Option B staged path)", () => {
     const { commit, queue } = partitionWritesByMode("hybrid", writes);
     expect(commit).toHaveLength(0);
     expect(queue).toHaveLength(2);
+  });
+
+  it("Option A: hybrid commits immediately like full-auto (per-line gate removed); manual still commits nothing", () => {
+    const hybrid = partitionOptionAWrites("hybrid", writes);
+    expect(hybrid.commit).toHaveLength(2);
+    expect(hybrid.queue).toHaveLength(0);
+    const fullAuto = partitionOptionAWrites("full-auto", writes);
+    expect(fullAuto.commit).toHaveLength(2);
+    expect(fullAuto.queue).toHaveLength(0);
+    const manual = partitionOptionAWrites("manual", writes);
+    expect(manual.commit).toHaveLength(0);
+    expect(manual.queue).toHaveLength(0);
   });
 
   it("manual neither commits nor queues — the AI decides nothing", () => {

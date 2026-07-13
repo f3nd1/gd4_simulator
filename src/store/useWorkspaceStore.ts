@@ -89,7 +89,7 @@ function enqueuePanelAutoRun(findingId: string, getRunner: () => (id: string, op
 }
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { buildOptionALineWrites } from "../lib/optionAChecklistWrite";
-import { DEFAULT_AUDIT_MODE, partitionWritesByMode, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
+import { DEFAULT_AUDIT_MODE, partitionWritesByMode, partitionOptionAWrites, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
 import { effectiveVerdictTemp, describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
 import { computeBand, lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
@@ -1606,9 +1606,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // persist across reloads/versions and feed buildScored/computeBand
           // identically. Idempotent: lines are matched by normalized ref and
           // updated; prior Option A/audit evidence (runId items) is replaced.
-          // GATED by the cycle audit mode: full-auto commits all (and compiles
-          // findings), hybrid queues everything for per-gate approval, manual
-          // commits nothing (results stay on the PPD page as suggestions only).
+          // Mode gating: full-auto AND hybrid commit immediately (the per-line
+          // gate was removed for this path — see partitionOptionAWrites); only
+          // full-auto also auto-compiles findings, hybrid leaves that to the
+          // human's Compile click. Manual commits nothing (results stay on the
+          // PPD page as suggestions only).
           if (rows) {
             try {
               const activeMode: AuditMode = get().auditMode;
@@ -1622,29 +1624,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 drive: folder.folderLink || folder.policyLink,
                 owner: folder.owner,
               });
-              const { commit, queue } = partitionWritesByMode(activeMode, writes);
-              if (commit.length > 0) checklist.applyOptionAWrites(commit);
+              const { commit } = partitionOptionAWrites(activeMode, writes);
+              if (commit.length > 0) {
+                checklist.applyOptionAWrites(commit);
+                // This freshly-committed run supersedes any still-queued older
+                // run for the same sub-criterion (legacy pre-gate-removal
+                // queue, or an Option B queue for this sub-criterion is left
+                // alone — only path "A" entries are stale duplicates of what
+                // was just committed). Without this, a later "Accept all" on
+                // the legacy queue would REGRESS the checklist to older data.
+                set((st) => {
+                  const prev = st.pendingCommits[subCriterionId];
+                  if (!prev || prev.path !== "A") return {};
+                  const { [subCriterionId]: _superseded, ...rest } = st.pendingCommits;
+                  return { pendingCommits: rest };
+                });
+              }
               if (activeMode === "full-auto") {
                 // Full auto carries straight on to findings (existing deduped
                 // compile) — no stops.
                 get().compileEvidenceFindings(subCriterionId);
-              }
-              if (queue.length > 0) {
-                const entries = useChecklistModuleStore.getState().entries;
-                const lineTextOf = (w: ChecklistLineWrite): string =>
-                  w.newLine?.text ?? entries[w.gd4ItemId]?.specific.find((l) => l.id === w.existingLineId)?.text ?? w.gd4ItemId;
-                const items: PendingCommitItem[] = queue.map((w, i) => ({
-                  id: `${runId}-Q${i + 1}`,
-                  write: w,
-                  lineText: lineTextOf(w),
-                  reason: w.confidenceReason ?? "Awaiting your approval",
-                }));
-                set((st) => ({
-                  pendingCommits: {
-                    ...st.pendingCommits,
-                    [subCriterionId]: { subCriterionId, path: "A", runMode: activeMode, runId, createdAt: new Date().toISOString(), items },
-                  },
-                }));
               }
             } catch (err) {
               console.error("[EvidenceAssessment] checklist write-back failed", err instanceof Error ? err.message : String(err));
