@@ -85,6 +85,12 @@ type SpineItem = {
   // `quote` and from `rationale` (which is optional and can be absent) — so
   // this is shown even when rationale isn't, never silently dropped.
   evidenceNote?: string;
+  // PPD tab only: the chunk id of a PPDPromise whose sourceQuote is an EXACT
+  // match of this sub-part's own quote — never a fuzzy/text-similarity match
+  // (this app's conservative-matching rule: an exact hit or nothing). Shown
+  // next to the clause heading so the promise's citation rides on the row it
+  // actually supports instead of a separate list restating the same quote.
+  citationCode?: string;
 };
 
 type MatrixLine = {
@@ -234,13 +240,22 @@ function resolveSourceFile(chunkId: string | undefined, quote: string | undefine
   return files.length === 1 ? files[0] : undefined;
 }
 
+// Exact-match only (never fuzzy/similarity) — the app's conservative-
+// matching rule. A promise attaches to a sub-part's clause row only when its
+// sourceQuote is verbatim-identical to a quote already verified for that
+// sub-part; no match means no citation shown, never a guessed one.
+function matchPromiseCitation(row: PPDReviewRow, quote: string | undefined): string | undefined {
+  if (!quote) return undefined;
+  return row.promises?.find((p) => p.sourceQuote === quote)?.chunkId;
+}
+
 function policySpine(row: PPDReviewRow, files: CitedFile[], chunkFileNames: Record<string, string> | undefined, resolveText: ResolveText): SpineItem[] {
   const subs = row.subClauses;
   if (subs && subs.length > 0) {
     return subs.map((sc) => {
       const sourceFile = resolveSourceFile(sc.chunkId, sc.quote, files, chunkFileNames, resolveText);
       if (sc.verdict === "documented") {
-        if (sc.quote) return { name: sc.text, clause: sc.clause, found: true, quote: sc.quote, sourceFile, rationale: sc.rationale };
+        if (sc.quote) return { name: sc.text, clause: sc.clause, found: true, quote: sc.quote, sourceFile, rationale: sc.rationale, citationCode: matchPromiseCitation(row, sc.quote) };
         // No single quote — show the real matched passages behind "spread
         // across the document" instead of only asserting it (Task 4).
         const spreadQuotes = (sc.spreadQuotes ?? []).map((sq) => ({
@@ -252,8 +267,11 @@ function policySpine(row: PPDReviewRow, files: CitedFile[], chunkFileNames: Reco
         // renders through the ordinary single-quote path instead (never a
         // self-contradictory "spread across... rather than one" claim
         // backed by a single quote).
-        if (spreadQuotes.length > 1) return { name: sc.text, clause: sc.clause, found: true, spreadQuotes, sourceFile, rationale: sc.rationale };
-        if (spreadQuotes.length === 1) return { name: sc.text, clause: sc.clause, found: true, quote: spreadQuotes[0].quote, sourceFile: spreadQuotes[0].sourceFile ?? sourceFile, rationale: sc.rationale };
+        if (spreadQuotes.length > 1) {
+          const citationCode = spreadQuotes.map((sq) => matchPromiseCitation(row, sq.quote)).find(Boolean);
+          return { name: sc.text, clause: sc.clause, found: true, spreadQuotes, sourceFile, rationale: sc.rationale, citationCode };
+        }
+        if (spreadQuotes.length === 1) return { name: sc.text, clause: sc.clause, found: true, quote: spreadQuotes[0].quote, sourceFile: spreadQuotes[0].sourceFile ?? sourceFile, rationale: sc.rationale, citationCode: matchPromiseCitation(row, spreadQuotes[0].quote) };
         // No verified passage. Distinguish "the AI cited support that failed
         // verification" (suspicious — say so) from the true fallback of
         // "documented, but genuinely no extractable passage at all".
@@ -721,8 +739,15 @@ function ClauseRow({ item, isEv, resolveText, headers, policyPromise, policyCove
         ) : (
           <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
             {/* Clause reference alone — no "§" prefix: the column header
-                ("Policy clause & quote") already establishes what this is. */}
-            {item.clause && <div style={{ fontSize: 10.5, fontWeight: 600, color: "#475569" }}>{item.clause}</div>}
+                ("Policy clause & quote") already establishes what this is.
+                citationCode (an exact-quote-matched PPD promise, never a
+                guess) rides alongside it instead of a separate promises list. */}
+            {item.clause && (
+              <div style={{ fontSize: 10.5, fontWeight: 600, color: "#475569" }}>
+                {item.clause}
+                {item.citationCode && <span style={{ fontWeight: 400, color: "#94a3b8", fontFamily: "ui-monospace,monospace" }}> ({item.citationCode})</span>}
+              </div>
+            )}
             {passage ?? <span style={{ fontSize: 10.5, color: "#94a3b8" }}>—</span>}
           </div>
         )}
@@ -802,7 +827,7 @@ function RowDetail({ line, isEv, resolveText, renderExtra }: { line: MatrixLine;
         <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>
             Clause by clause
-            <span style={{ fontWeight: 400, color: "#94a3b8" }}> · {doneCount} of {line.items.length} {isEv ? "promises evidenced" : "sub-parts documented"}</span>
+            <span style={{ fontWeight: 400, color: "#94a3b8" }}> · {doneCount} of {line.items.length} {isEv ? "promises evidenced" : "clauses matched"}</span>
           </div>
           <div style={{ fontSize: 10.5, color: "#94a3b8" }}>Same detail as a table: what each sub-part required, {isEv ? "the linked PPD promise" : "the matched policy clause"}, the file it was checked in, and why it does or doesn't satisfy the requirement.</div>
         </div>

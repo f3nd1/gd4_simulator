@@ -315,25 +315,33 @@ function PpdNextStep({ selectedId, bare }: { selectedId: string; bare?: boolean 
 
 // One PPD line's expand-detail extras, rendered inside the matrix's own
 // clause-by-clause expand (LineageDiagram's renderExtra) instead of a
-// separate "Full requirement table" row. PPD promises have no reliable link
-// to a specific clause row (row.promises carries no shared key with
-// row.subClauses), so they stay their own labeled mini-list here rather than
-// being force-attached to a clause row via invented matching.
+// separate "Full requirement table" row. Per the user's Option A decision:
+// PPD promises fold INTO the clause table (LineageDiagram's citationCode, an
+// exact sourceQuote match, no separate list here) — but the sub-clause check
+// stays its own compact strip, because on real runs the clause table can
+// have FEWER rows than row.subClauses (not every sub-part resolves to a
+// clause+quote), so this is the only place some sub-parts are visible at all.
 function PpdRowExtra({ row, selectedId, setLineFeedback }: { row: PPDReviewRow; selectedId: string; setLineFeedback: (fb: { ref: string; text: string } | null) => void }) {
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const [showComment, setShowComment] = useState(false);
   return (
     <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
-      {row.promises && row.promises.length > 0 && (
+      {row.subClauses && row.subClauses.length > 0 && (
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>PPD promises (verified in the Evidence tab)</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            {row.promises.map((p, i) => (
-              <div key={i} style={{ fontSize: 12, color: "#374151", lineHeight: 1.4 }}>
-                • {p.promiseText}
-                {p.sourceQuote && <span style={{ fontStyle: "italic", color: "#64748b" }}> — "{p.sourceQuote}"</span>}
-                {p.chunkId && <span style={{ fontFamily: "ui-monospace,monospace", color: "#94a3b8" }}> ({p.chunkId})</span>}
-              </div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Sub-clause check</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {row.subClauses.map((c, i) => (
+              <span
+                key={i}
+                style={{
+                  fontSize: 11, lineHeight: 1.4, padding: "2px 8px", borderRadius: 999, whiteSpace: "nowrap",
+                  background: c.verdict === "documented" ? "#f0fdf4" : "#fef2f2",
+                  border: `1px solid ${c.verdict === "documented" ? "#bbf7d0" : "#fecaca"}`,
+                  color: c.verdict === "documented" ? "#166534" : "#b91c1c",
+                }}
+              >
+                {c.verdict === "documented" ? "✓" : "○"} {c.text}
+              </span>
             ))}
           </div>
         </div>
