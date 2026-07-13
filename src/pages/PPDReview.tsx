@@ -1540,15 +1540,19 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
                 <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
                   {row.promiseChecks && row.promiseChecks.length > 0 && (
                     <div style={{ marginBottom: row.comment ? 10 : 0 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>PPD promise checks</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>What the policy promised, checked against practice</div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                         {row.promiseChecks.map((p, i) => {
                           const tone = p.verdict === "evidenced" ? "#166534" : p.verdict === "contradicted" ? "#b91c1c" : "#b45309";
                           const mark = p.verdict === "evidenced" ? "✓" : p.verdict === "contradicted" ? "✗" : "○";
+                          // Plain-language lead-in in place of the raw pipeline verdict
+                          // word. "Not shown in the evidence"/"Contradicted" keep the
+                          // honest gap meaning of "not evidenced"/"contradicted" exactly.
+                          const lead = p.verdict === "evidenced" ? "Promise kept" : p.verdict === "contradicted" ? "Contradicted by the evidence" : "Not shown in the evidence";
                           return (
                             <div key={i} style={{ fontSize: 12, lineHeight: 1.45 }}>
-                              <span style={{ color: tone, fontWeight: 700 }}>{mark} {p.verdict}</span>
-                              <span style={{ color: "#1e293b" }}> — {p.promiseText}</span>
+                              <span style={{ color: tone, fontWeight: 700 }}>{mark} {lead}:</span>
+                              <span style={{ color: "#1e293b" }}> {p.promiseText}</span>
                               {p.evidence && <div style={{ color: "#64748b", marginLeft: 16 }}>{p.evidence}{p.chunkIds.length > 0 && <span style={{ fontFamily: "ui-monospace,monospace", color: "#94a3b8" }}> ({p.chunkIds.join(", ")})</span>}</div>}
                             </div>
                           );
@@ -1558,7 +1562,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
                   )}
                   {row.comment && (
                     <>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>Combined assessment</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>In short</div>
                       <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.45, whiteSpace: "pre-line" }}>{row.comment}</div>
                     </>
                   )}
