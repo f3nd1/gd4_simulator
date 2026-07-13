@@ -80,13 +80,24 @@ type SpineItem = {
   contradicted?: boolean;  // evidence-only: the passage contradicts the promise
   sourceFile?: CitedFile;
   rationale?: string;      // per-clause / per-promise "why"
+  // Evidence tab only: PromiseCheck.evidence — a required field on every real
+  // promise check (citation label/description), distinct from the verified
+  // `quote` and from `rationale` (which is optional and can be absent) — so
+  // this is shown even when rationale isn't, never silently dropped.
+  evidenceNote?: string;
 };
 
 type MatrixLine = {
   ref: string;
   reqLabel: string;
   coverage: Coverage;      // the tab's own verdict → left bar + expandability
-  expandable: boolean;
+  expandable: boolean;     // has real clause-by-clause coverage data (covered/partial) — drives the muted styling of File/Clause/Passage cells
+  // Row can be opened at all — broader than `expandable`: a gap row (Not
+  // met/Not documented) has no clause-by-clause data but still needs its
+  // comment/thumbs/saved-finding (renderExtra) reachable, so it must still
+  // open. Only a row with no verdict at all (Not assessed/not-checked) has
+  // nothing to open into.
+  hasDetail: boolean;
   verdictLabel: string;
   files: CitedFile[];
   clauses: string[];       // policy: distinct clause references for the matrix cell
@@ -162,7 +173,7 @@ function buildClauseDetailExport(line: MatrixLine, isEv: boolean): LineageClause
     col2: isEv ? (line.policyPromise || "—") : clauseCol2Text(it),
     fileName: it.sourceFile?.name,
     passage: isEv ? passageText(it) : undefined,
-    remarks: it.rationale || "",
+    remarks: isEv ? [it.rationale, it.evidenceNote].filter(Boolean).join(" — ") : (it.rationale || ""),
   }));
 }
 
@@ -266,13 +277,13 @@ function evidenceSpine(row: EvidenceAssessmentRow, files: CitedFile[], chunkFile
       const sourceFile = resolveSourceFile(c.chunkId ?? c.chunkIds[0], c.quote, files, chunkFileNames, resolveText);
       if (c.verdict === "evidenced") {
         return c.quote
-          ? { name: c.promiseText, found: true, quote: c.quote, sourceFile, rationale: c.rationale }
-          : { name: c.promiseText, found: true, noExactQuote: true, sourceFile, rationale: c.rationale };
+          ? { name: c.promiseText, found: true, quote: c.quote, sourceFile, rationale: c.rationale, evidenceNote: c.evidence }
+          : { name: c.promiseText, found: true, noExactQuote: true, sourceFile, rationale: c.rationale, evidenceNote: c.evidence };
       }
       if (c.verdict === "contradicted") {
-        return { name: c.promiseText, found: false, contradicted: true, quote: c.quote, sourceFile, rationale: c.rationale };
+        return { name: c.promiseText, found: false, contradicted: true, quote: c.quote, sourceFile, rationale: c.rationale, evidenceNote: c.evidence };
       }
-      return { name: c.promiseText, found: false, sourceFile, rationale: c.rationale };
+      return { name: c.promiseText, found: false, sourceFile, rationale: c.rationale, evidenceNote: c.evidence };
     });
   }
   if (row.evidenceQuote) {
@@ -288,7 +299,7 @@ function buildPpdLines(ppd: PPDReviewResult, resolveText: ResolveText): MatrixLi
     const expandable = coverage === "covered" || coverage === "partial";
     const items = expandable ? policySpine(r, files, ppd.chunkFileNames, resolveText) : [];
     return {
-      ref: r.ref, reqLabel: r.requirementText, coverage, expandable, verdictLabel: ppdVerdictLabel(r.verdict),
+      ref: r.ref, reqLabel: r.requirementText, coverage, expandable, hasDetail: coverage !== "not-checked", verdictLabel: ppdVerdictLabel(r.verdict),
       files, clauses: uniqStrings(items.map((it) => it.clause)), rowRationale: r.shortComment || undefined, items,
     };
   });
@@ -315,7 +326,7 @@ function buildEvidenceLines(ev: EvidenceAssessmentResult, resolveText: ResolveTe
     const policyPromise = r.ppdExtract?.trim()
       || (ppdV ? `PPD verdict: ${ppdVerdictLabel(ppdV)} — no PPD extract recorded for this line.` : undefined);
     return {
-      ref: r.gdRef, reqLabel: r.requirementText, coverage, expandable, verdictLabel: evVerdictLabel(r.verdict),
+      ref: r.gdRef, reqLabel: r.requirementText, coverage, expandable, hasDetail: coverage !== "not-checked", verdictLabel: evVerdictLabel(r.verdict),
       files, clauses: [], passagePreview: passageQuote,
       passageSource: passageQuote ? { quote: passageQuote, sourceFile: passageSourceFile } : undefined,
       rowRationale: r.comment || undefined,
@@ -725,12 +736,16 @@ function ClauseRow({ item, isEv, resolveText, headers, policyPromise, policyCove
         {isEv && passage && <div style={{ marginTop: 6 }}>{passage}</div>}
       </div>
 
-      {/* Col 4 — Remarks / Rationale */}
+      {/* Col 4 — Remarks / Rationale. Evidence tab also carries evidenceNote
+          (PromiseCheck.evidence — always populated, unlike rationale) so it
+          is never silently dropped when rationale itself is absent. */}
       <div style={cellStyle}>
         <span className="cm-cell-label">{headers[3]}</span>
-        {item.rationale
-          ? <span style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.5, overflowWrap: "anywhere", wordBreak: "break-word" }}>{item.rationale}</span>
-          : <span style={{ fontSize: 10.5, color: "#94a3b8", fontStyle: "italic" }}>—</span>}
+        {item.rationale && <span style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.5, overflowWrap: "anywhere", wordBreak: "break-word" }}>{item.rationale}</span>}
+        {isEv && item.evidenceNote && (
+          <div style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.5, marginTop: item.rationale ? 3 : 0, overflowWrap: "anywhere", wordBreak: "break-word" }}>{item.evidenceNote}</div>
+        )}
+        {!item.rationale && !(isEv && item.evidenceNote) && <span style={{ fontSize: 10.5, color: "#94a3b8", fontStyle: "italic" }}>—</span>}
       </div>
     </div>
   );
@@ -766,30 +781,39 @@ function ClauseMatrix({ line, isEv, resolveText }: { line: MatrixLine; isEv: boo
   );
 }
 
-// The expanded detail for one covered/partial row: the clause-by-clause
-// matrix (4 columns, see ClauseMatrix — replaced the old vertical spine), a
-// "Read the full document" toggle per cited readable file, and "Jump to full
-// line detail". Owns the per-file full-text open state. `isEv` selects the
-// column-2 semantics (PPD: policy clause & quote; Evidence: linked PPD extract).
-function RowDetail({ line, isEv, resolveText, onOpenLine }: { line: MatrixLine; isEv: boolean; resolveText: ResolveText; onOpenLine: (ref: string) => void }) {
+// The expanded detail for one openable row: the clause-by-clause matrix (4
+// columns, see ClauseMatrix — replaced the old vertical spine, shown only
+// when the row actually has clause data, i.e. covered/partial), the
+// tab-specific extra detail (comment/thumbs/promises/saved-finding — see
+// renderExtra, shown for ANY openable row including a gap line, which has no
+// clause data but still needs its feedback controls reachable), and a "Read
+// the full document" toggle per cited readable file. Owns the per-file
+// full-text open state. `isEv` selects the column-2 semantics (PPD: policy
+// clause & quote; Evidence: linked PPD extract).
+function RowDetail({ line, isEv, resolveText, renderExtra }: { line: MatrixLine; isEv: boolean; resolveText: ResolveText; renderExtra?: (ref: string) => React.ReactNode }) {
   const [fullFile, setFullFile] = useState<string | null>(null);
   const readable = line.files.filter((f) => f.record);
   const firstQuoteFor = (name: string) => line.items.find((it) => it.found && it.quote && it.sourceFile?.name === name)?.quote;
+  const doneCount = line.items.filter((it) => it.found).length;
 
   return (
     <div style={{ margin: "2px 0 8px 26px", background: "#f8fafc", border: "1px solid #eef2f6", borderRadius: 8, padding: "10px 12px" }}>
-      {/* Unconditional — every expanded covered/partial row gets this caption,
-          never just some (a prior version dropped it for some row shapes). */}
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>Clause by clause</div>
-        <div style={{ fontSize: 10.5, color: "#94a3b8" }}>Same detail as a table: what each sub-part required, {isEv ? "the linked PPD promise" : "the matched policy clause"}, the file it was checked in, and why it does or doesn't satisfy the requirement.</div>
-      </div>
-      <ClauseMatrix line={line} isEv={isEv} resolveText={resolveText} />
+      {line.items.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>
+            Clause by clause
+            <span style={{ fontWeight: 400, color: "#94a3b8" }}> · {doneCount} of {line.items.length} {isEv ? "promises evidenced" : "sub-parts documented"}</span>
+          </div>
+          <div style={{ fontSize: 10.5, color: "#94a3b8" }}>Same detail as a table: what each sub-part required, {isEv ? "the linked PPD promise" : "the matched policy clause"}, the file it was checked in, and why it does or doesn't satisfy the requirement.</div>
+        </div>
+      )}
+      {line.items.length > 0 && <ClauseMatrix line={line} isEv={isEv} resolveText={resolveText} />}
       {line.suggestedAction && (
         <div style={{ marginTop: 10, fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 8px", lineHeight: 1.45 }}>
           <span style={{ fontWeight: 700 }}>To reach Met: </span>{line.suggestedAction}
         </div>
       )}
+      {renderExtra?.(line.ref)}
       {readable.length > 0 && (
         <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
           {readable.map((f) => (
@@ -810,13 +834,6 @@ function RowDetail({ line, isEv, resolveText, onOpenLine }: { line: MatrixLine; 
           ))}
         </div>
       )}
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onOpenLine(line.ref); }}
-        style={{ marginTop: 10, cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#4338ca", border: "none", background: "transparent", padding: 0 }}
-      >
-        Jump to full line detail →
-      </button>
     </div>
   );
 }
@@ -830,16 +847,20 @@ function LegendSwatch({ bar, label }: { bar: string; label: string }) {
   );
 }
 
-export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
+export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
   mode: "ppd" | "evidence";
   ppd?: PPDReviewResult;
   evidence?: EvidenceAssessmentResult; // NOTE: evidence tab is self-contained; `ppd` is unused there.
-  onOpenLine: (ref: string) => void;
   // Sub-criterion id + title (e.g. "6.2 Management Review"), for the CSV/PDF
   // export's header and filename only — optional so existing callers that
   // don't pass it still render exactly as before, just with a plain ref-only
   // export label instead of the human title.
   runLabel?: string;
+  // Tab-specific expand content (full comment toggle, thumbs, PPD promises)
+  // keyed by line ref — kept out of this generic component so the thumbs/
+  // feedback wiring stays owned by PPDReview.tsx exactly as before, just
+  // relocated into this expand instead of a separate table.
+  renderExtra?: (ref: string) => React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);
   const [openRef, setOpenRef] = useState<string | null>(null);
@@ -1025,14 +1046,14 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
                 <div aria-hidden style={{ width: 3, flexShrink: 0, background: coverageBar(line.coverage) }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
-                    onClick={line.expandable ? () => setOpenRef(isOpen ? null : line.ref) : undefined}
-                    style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "8px 12px 8px 8px", alignItems: "start", cursor: line.expandable ? "pointer" : "default" }}
+                    onClick={line.hasDetail ? () => setOpenRef(isOpen ? null : line.ref) : undefined}
+                    style={{ display: "grid", gridTemplateColumns: gridCols, gap: 12, padding: "8px 12px 8px 8px", alignItems: "start", cursor: line.hasDetail ? "pointer" : "default" }}
                   >
                     {/* GD4 requirement (chevron slot reserved so refs align on every row).
                         Evidence tab: secondary/muted treatment — smaller, greyer — the
                         line's identity, not its emphasis (that's the Policy promise). */}
                     <div style={{ minWidth: 0, display: "flex", gap: 6 }}>
-                      <span aria-hidden style={{ width: 9, flexShrink: 0, color: "#94a3b8", fontSize: 9, marginTop: 2 }}>{line.expandable ? (isOpen ? "▾" : "▸") : ""}</span>
+                      <span aria-hidden style={{ width: 9, flexShrink: 0, color: "#94a3b8", fontSize: 9, marginTop: 2 }}>{line.hasDetail ? (isOpen ? "▾" : "▸") : ""}</span>
                       <span style={{ minWidth: 0 }}>
                         <span style={{ fontFamily: "ui-monospace,monospace", fontSize: isEv ? 10 : 10.5, fontWeight: 700, color: isEv ? "#64748b" : "#4338ca" }}>{line.ref}</span>
                         <span style={{ fontSize: isEv ? 11 : 12, color: isEv ? "#64748b" : "#334155", marginLeft: isEv ? 5 : 6, lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal" }}>{line.reqLabel}</span>
@@ -1047,7 +1068,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
                     <RationaleCell text={line.rowRationale} suggestedAction={isEv ? line.suggestedAction : undefined} />
                   </div>
 
-                  {isOpen && line.expandable && <RowDetail line={line} isEv={isEv} resolveText={resolveText} onOpenLine={onOpenLine} />}
+                  {isOpen && line.hasDetail && <RowDetail line={line} isEv={isEv} resolveText={resolveText} renderExtra={renderExtra} />}
                 </div>
               </div>
             );

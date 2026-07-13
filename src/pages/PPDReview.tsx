@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
@@ -18,15 +18,13 @@ import { LineageDiagram } from "../components/ui/LineageDiagram";
 import { RunStepper, ppdRunStep, evidenceRunStep } from "../components/ui/RunStepper";
 import { FileLedger } from "./EvidenceFolder";
 import { RunDetailColumns } from "../components/ui/RunDetailColumns";
-import { normalizeAuditRef } from "../lib/gd4Refs";
 import { PreAnalysisChecklistPanel } from "../components/ui/PreAnalysisChecklistPanel";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
-import { ppdVerdictTone, ppdVerdictBorderColor, evVerdictTone, evVerdictBorderColor, ppdVerdictLabel, evVerdictLabel } from "../lib/verdictTone";
-import { excerptAround } from "../components/ui/quoteMatch";
-import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, PPDReviewRow, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue, VisionBudgetPrompt } from "../types";
+import { ppdVerdictTone, ppdVerdictLabel, evVerdictLabel } from "../lib/verdictTone";
+import type { PPDOverallVerdict, EvidenceVerdict, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, PPDReviewRow, EvidenceAssessmentRow, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue, VisionBudgetPrompt } from "../types";
 import { fmtUSD } from "../lib/aiCost";
 
 // Task 2: a STABLE empty-array reference for "no history yet" — `?? []`
@@ -53,34 +51,6 @@ function overallPanelColors(v: PPDOverallVerdict): { bg: string; border: string 
   if (v === "PPD Adequate") return { bg: "#f0fdf4", border: "#bbf7d0" };
   if (v === "PPD Partial") return { bg: "#fffbeb", border: "#fde68a" };
   return { bg: "#fef2f2", border: "#fecaca" };
-}
-
-const PPD_GRID = "1fr 1fr 1fr";
-const EV_GRID = "1.1fr 1.1fr 1.1fr 0.9fr";
-
-// The "PPD procedure (AI-matched)" column's exact matched span: the same
-// quote+excerptAround(...) lookup the lineage map's expanded spine detail
-// already does (LineageDiagram.tsx's resolveSourceFile + excerptAround), so
-// this preview highlights via the SAME located passage rather than a new
-// mechanism. Prefers the first documented sub-clause's own quote (matches
-// what the spine would show first); falls back to the row-level supportQuote
-// on older/undecomposed rows. Returns null when no quote resolves against the
-// cited file's cached text — callers fall back to the plain comment preview,
-// never a fabricated highlight.
-function policyMatchedExcerpt(
-  row: PPDReviewRow,
-  chunkFileNames: Record<string, string> | undefined,
-  fileLedger: AuditFileRecord[] | undefined,
-  resolveText: (f: AuditFileRecord) => string | null | undefined
-) {
-  const sub = row.subClauses?.find((c) => c.verdict === "documented" && c.quote);
-  const quote = sub?.quote || row.supportQuote;
-  if (!quote) return null;
-  const chunkId = sub?.chunkId || row.chunkIds[0];
-  const fileName = chunkId ? chunkFileNames?.[chunkId] : undefined;
-  const record = fileName ? fileLedger?.find((f) => f.name === fileName) : undefined;
-  const text = record ? resolveText(record) : undefined;
-  return typeof text === "string" ? excerptAround(text, quote) : null;
 }
 
 // NOTE: the standalone PPD Requirements Review page (and its /ppd-review route)
@@ -343,18 +313,67 @@ function PpdNextStep({ selectedId, bare }: { selectedId: string; bare?: boolean 
   );
 }
 
+// One PPD line's expand-detail extras, rendered inside the matrix's own
+// clause-by-clause expand (LineageDiagram's renderExtra) instead of a
+// separate "Full requirement table" row. PPD promises have no reliable link
+// to a specific clause row (row.promises carries no shared key with
+// row.subClauses), so they stay their own labeled mini-list here rather than
+// being force-attached to a clause row via invented matching.
+function PpdRowExtra({ row, selectedId, setLineFeedback }: { row: PPDReviewRow; selectedId: string; setLineFeedback: (fb: { ref: string; text: string } | null) => void }) {
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const [showComment, setShowComment] = useState(false);
+  return (
+    <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
+      {row.promises && row.promises.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>PPD promises (verified in the Evidence tab)</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {row.promises.map((p, i) => (
+              <div key={i} style={{ fontSize: 12, color: "#374151", lineHeight: 1.4 }}>
+                • {p.promiseText}
+                {p.sourceQuote && <span style={{ fontStyle: "italic", color: "#64748b" }}> — "{p.sourceQuote}"</span>}
+                {p.chunkId && <span style={{ fontFamily: "ui-monospace,monospace", color: "#94a3b8" }}> ({p.chunkId})</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => setShowComment((v) => !v)}
+        style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#4a5a8a", border: "none", background: "transparent", padding: 0 }}
+      >
+        {showComment ? "Hide the AI's written comment ▲" : "Show the AI's written comment ▼"}
+      </button>
+      {showComment && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.45, marginBottom: row.suggestedRewrite ? 10 : 0, whiteSpace: "pre-line" }}>
+            {row.fullComment || row.shortComment}
+          </div>
+          {row.suggestedRewrite && (
+            <div style={{ background: "#f0f6ff", border: "1px solid #c7d2fe", borderRadius: 6, padding: "7px 10px" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#4338ca", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>Suggested rewrite</div>
+              <div style={{ fontSize: 12, color: "#1e293b", whiteSpace: "pre-line" }}>{row.suggestedRewrite}</div>
+            </div>
+          )}
+        </div>
+      )}
+      {/* Was this PPD verdict right? 👎 opens the correction modal, which
+          stores a CalibrationMemory that future runs learn from. */}
+      <div style={{ marginTop: 8 }}>
+        <ThumbsButtons
+          onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: row.ref, aiOutput: `PPD ${row.ref}: ${row.verdict}`, humanDecision: `Accepted PPD verdict: ${row.verdict}`, changed: false, decisionType: "Accepted", reason: "" })}
+          onReject={() => setLineFeedback({ ref: row.ref, text: `PPD verdict "${row.verdict}" for ${row.ref}: ${row.fullComment || row.shortComment || "(no comment)"}` })}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ─── PPD Review tab (policy only, 3 columns) ────────────────────────────────
 function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: number }) {
   const busy = useWorkspaceStore((s) => s.busy);
   const runPPDReview = useWorkspaceStore((s) => s.runPPDReview);
-  // Same fileTextCache -> extracted-text lookup LineageDiagram uses, so the
-  // "PPD procedure (AI-matched)" column can locate + highlight its matched
-  // quote in the same cached text the spine detail highlights.
-  const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
-  const resolveText = useCallback(
-    (f: AuditFileRecord) => (f.driveFileId ? fileTextCache[`${f.driveFileId}:${f.driveModifiedTime ?? ""}`]?.text : undefined),
-    [fileTextCache]
-  );
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   // Transient "you stopped this" flag, shown until the next run starts. Cancel
@@ -396,31 +415,10 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
   useEffect(() => {
     if (driveToken && driveBlock?.reason === "not-connected") setDriveBlockedReason(null);
   }, [driveToken, driveBlock, setDriveBlockedReason]);
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const toggleExpanded = (ref: string) =>
-    setExpandedRows((prev) => {
-      const next = new Set(prev);
-      next.has(ref) ? next.delete(ref) : next.add(ref);
-      return next;
-    });
-  // Lineage-diagram node click: expand the matching row and scroll it into
-  // view. Must also open the full requirement table itself — the row's DOM
-  // node (id="ppdline-...") only exists when tableOpen is true, so a click
-  // while the table is collapsed previously found no element and silently
-  // did nothing.
-  const openLine = (ref: string) => {
-    setExpandedRows((prev) => new Set(prev).add(ref));
-    setTableOpen(true);
-    const id = `ppdline-${normalizeAuditRef(ref)}`;
-    requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" }));
-  };
-  // The lineage map (below) already covers "which file/section backs this
-  // line" via its per-sub-part highlighted-source expansion — this prose
-  // summary and the full per-line table are secondary detail, so both default
-  // collapsed. Nothing inside is removed; a click reopens the exact same
-  // content that rendered here before.
+  // The lineage map's "Overall PPD assessment" summary is secondary detail,
+  // so it defaults collapsed. Nothing inside is removed; a click reopens the
+  // exact same content that rendered here before.
   const [assessmentOpen, setAssessmentOpen] = useState(false);
-  const [tableOpen, setTableOpen] = useState(false);
 
   // Old-format results (pre per-line refactor) keyed rows per whole item and
   // lack `ref`; force a re-run rather than render the collapsed single row.
@@ -654,127 +652,18 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
           </div>
 
           {/* Requirement → PPD lineage map (reuses this run's row data) — the
-              primary, always-visible view: per-sub-part expand-to-highlighted-
-              source already answers "which file/section backs this line". */}
-          <LineageDiagram mode="ppd" ppd={viewedResult!} onOpenLine={openLine} runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()} />
-
-          {/* Full per-line table below is secondary detail (same rows the map
-              already summarises), so it defaults collapsed. Every row, every
-              action (thumbs, "show full comment + rewrite") is unchanged and
-              intact underneath — this only changes default visibility. */}
-          <button
-            type="button"
-            onClick={() => setTableOpen((o) => !o)}
-            style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155", marginBottom: 10 }}
-          >
-            {tableOpen ? "Hide full requirement table ▲" : "Show full requirement table ▾"}
-          </button>
-
-          {tableOpen && (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: PPD_GRID, gap: 10, position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px 8px 0 0", padding: "6px 12px", marginBottom: -1 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>GD4 requirement</span>
-                <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>PPD procedure (AI-matched)</span>
-                <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>AI verdict</span>
-              </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {liveResult.rows.map((row) => {
-              const expanded = expandedRows.has(row.ref);
-              const sourceRef = row.chunkIds.length > 0
-                ? row.chunkIds.map((cid) => liveResult.chunkFileNames?.[cid] ? `${liveResult.chunkFileNames[cid]} · ${cid}` : cid).join(", ")
-                : "No chunk cited";
-              const extractPreview = row.fullComment || row.shortComment || "(no comment returned)";
-              // The exact quote this row matched, located in the cited file's
-              // cached text — same mechanism the spine's <mark> uses. null
-              // when no quote resolves (older run, or text not cached yet),
-              // in which case the plain comment preview below is shown as-is.
-              const matched = policyMatchedExcerpt(row, liveResult.chunkFileNames, liveResult.fileLedger, resolveText);
-              return (
-                <div key={row.ref} id={`ppdline-${normalizeAuditRef(row.ref)}`} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${ppdVerdictBorderColor(row.verdict)}`, borderRadius: 8, padding: "10px 12px", scrollMarginTop: 12 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: PPD_GRID, gap: 10, alignItems: "start" }}>
-                    <div>
-                      <div style={{ fontFamily: "ui-monospace,monospace", fontSize: 12, fontWeight: 700, color: "#4338ca", marginBottom: 4 }}>{row.ref}</div>
-                      <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.4 }}>{row.requirementText}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 10.5, color: "#94a3b8", marginBottom: 4, fontFamily: "ui-monospace,monospace" }}>{sourceRef}</div>
-                      <div style={{ borderLeft: "3px solid #c7d2fe", paddingLeft: 8, fontSize: 12, color: "#374151", lineHeight: 1.4, fontStyle: "italic" }}>
-                        {matched ? (
-                          <>
-                            {matched.clippedStart && "… "}{matched.before}
-                            <mark style={{ background: "#fde68a", color: "#713f12", borderRadius: 2, padding: "0 1px", fontStyle: "normal" }}>{matched.match}</mark>
-                            {matched.after}{matched.clippedEnd && " …"}
-                          </>
-                        ) : extractPreview}
-                      </div>
-                    </div>
-                    <div>
-                      <Pill s={ppdVerdictTone(row.verdict)}>{ppdVerdictLabel(row.verdict)}</Pill>
-                      <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.4, margin: "5px 0" }}>{row.shortComment}</div>
-                      <button
-                        onClick={() => toggleExpanded(row.ref)}
-                        style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#4a5a8a", border: "none", background: "transparent", padding: 0 }}
-                      >
-                        {expanded ? "Hide full comment + rewrite ▲" : "Show full comment + rewrite ▼"}
-                      </button>
-                      {/* Was this PPD verdict right? 👎 opens the correction modal,
-                          which stores a CalibrationMemory that future runs learn from. */}
-                      <div style={{ marginTop: 6 }}>
-                        <ThumbsButtons
-                          onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: row.ref, aiOutput: `PPD ${row.ref}: ${row.verdict}`, humanDecision: `Accepted PPD verdict: ${row.verdict}`, changed: false, decisionType: "Accepted", reason: "" })}
-                          onReject={() => setLineFeedback({ ref: row.ref, text: `PPD verdict "${row.verdict}" for ${row.ref}: ${row.fullComment || row.shortComment || "(no comment)"}` })}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  {expanded && (
-                    <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
-                      {row.subClauses && row.subClauses.length > 0 && (
-                        <div style={{ marginBottom: 10 }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>Sub-clause check</div>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                            {row.subClauses.map((c, i) => (
-                              <div key={i} style={{ fontSize: 12, color: c.verdict === "documented" ? "#166534" : "#b91c1c", lineHeight: 1.4 }}>
-                                {c.verdict === "documented" ? "✓" : "✗"} {c.text}
-                                <span style={{ color: "#94a3b8" }}> — {c.verdict}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {row.promises && row.promises.length > 0 && (
-                        <div style={{ marginBottom: 10 }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>PPD promises (verified in the Evidence tab)</div>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                            {row.promises.map((p, i) => (
-                              <div key={i} style={{ fontSize: 12, color: "#374151", lineHeight: 1.4 }}>
-                                • {p.promiseText}
-                                {p.sourceQuote && <span style={{ fontStyle: "italic", color: "#64748b" }}> — "{p.sourceQuote}"</span>}
-                                {p.chunkId && <span style={{ fontFamily: "ui-monospace,monospace", color: "#94a3b8" }}> ({p.chunkId})</span>}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>Full comment</div>
-                      <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.45, marginBottom: row.suggestedRewrite ? 10 : 0, whiteSpace: "pre-line" }}>
-                        {row.fullComment || row.shortComment}
-                      </div>
-                      {row.suggestedRewrite && (
-                        <div style={{ background: "#f0f6ff", border: "1px solid #c7d2fe", borderRadius: 6, padding: "7px 10px" }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#4338ca", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>Suggested rewrite</div>
-                          <div style={{ fontSize: 12, color: "#1e293b", whiteSpace: "pre-line" }}>{row.suggestedRewrite}</div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-              </div>
-            </>
-          )}
+              only view of these 13 lines on this tab: per-sub-part expand
+              shows the clause-by-clause detail plus (see renderExtra) the
+              policy promises, full comment, and thumbs for that same line. */}
+          <LineageDiagram
+            mode="ppd"
+            ppd={viewedResult!}
+            runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()}
+            renderExtra={(ref) => {
+              const row = viewedResult!.rows.find((r) => r.ref === ref);
+              return row ? <PpdRowExtra row={row} selectedId={selectedId} setLineFeedback={setLineFeedback} /> : null;
+            }}
+          />
         </>
       )}
       <FeedbackModal
@@ -1096,6 +985,57 @@ function EvidenceArrivalPanel({
   );
 }
 
+// One evidence line's expand-detail extras, rendered inside the matrix's own
+// clause-by-clause expand (LineageDiagram's renderExtra). The promise-check
+// list itself is NOT repeated here — evidenceSpine() already builds the
+// matrix's clause-by-clause rows straight from row.promiseChecks (same
+// array), so this only carries what the matrix doesn't: the comment toggle,
+// thumbs, and the saved-finding badge/link.
+function EvRowExtra({ row, selectedId, setLineFeedback }: { row: EvidenceAssessmentRow; selectedId: string; setLineFeedback: (fb: { ref: string; text: string } | null) => void }) {
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const [showComment, setShowComment] = useState(false);
+  if (!row.verdict || row.verdict === "Not assessed" || row.assessmentFailed) return null;
+  return (
+    <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
+      {row.comment && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowComment((v) => !v)}
+            style={{ cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#4a5a8a", border: "none", background: "transparent", padding: 0 }}
+          >
+            {showComment ? "Hide comment ▲" : "Show comment ▼"}
+          </button>
+          {showComment && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>In short</div>
+              <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.45, whiteSpace: "pre-line" }}>{row.comment}</div>
+            </div>
+          )}
+        </>
+      )}
+      {/* Was this evidence verdict right? 👎 stores a CalibrationMemory that
+          future Option A runs learn from. */}
+      <div style={{ marginTop: 8 }}>
+        <ThumbsButtons
+          onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: row.gdRef, aiOutput: `Evidence ${row.gdRef}: ${row.verdict}`, humanDecision: `Accepted evidence verdict: ${row.verdict}`, changed: false, decisionType: "Accepted", reason: "" })}
+          onReject={() => setLineFeedback({ ref: row.gdRef, text: `Evidence verdict "${row.verdict}" for ${row.gdRef}: ${row.comment || row.evidenceSummary || "(no comment)"}` })}
+        />
+      </div>
+      <div style={{ marginTop: 5 }}>
+        {row.savedFindingId ? (
+          <>
+            <Pill s={findingTypeTone(findingTypeForStatus(row.verdict))}>Saved {row.savedFindingId}</Pill>
+            <Link to={`/findings?item=${row.gd4ItemId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none", marginLeft: 4 }}>View →</Link>
+          </>
+        ) : (
+          <span style={{ fontSize: 10.5, color: "#94a3b8" }}>Not yet compiled</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrecheck, onGoToPpd }: { selectedId: string; justArrived?: boolean; onDismissJustArrived?: () => void; onGoToPrecheck?: () => void; onGoToPpd?: () => void }) {
   const busy = useWorkspaceStore((s) => s.busy);
   const runEvidenceAssessment = useWorkspaceStore((s) => s.runEvidenceAssessment);
@@ -1194,30 +1134,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
             return { kind: "existing", met, partial, notMet, runAt: assessment.runAt, caveat };
           })();
 
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [compileMsg, setCompileMsg] = useState<string | null>(null);
-  // The lineage map (below) already covers "which file/section backs this
-  // line" via its per-sub-part highlighted-source expansion, so the full
-  // per-line table is secondary detail and defaults collapsed — same as the
-  // PPD tab's table. Nothing inside is removed; a click reopens it intact.
-  const [tableOpen, setTableOpen] = useState(false);
-  const toggleExpanded = (ref: string) =>
-    setExpandedRows((prev) => {
-      const next = new Set(prev);
-      next.has(ref) ? next.delete(ref) : next.add(ref);
-      return next;
-    });
-  // Lineage-diagram node click: expand the matching evidence row + scroll to
-  // it. Must also open the full requirement table itself — the row's DOM
-  // node (id="evline-...") only exists when tableOpen is true, so a click
-  // while the table is collapsed previously found no element and silently
-  // did nothing.
-  const openLine = (ref: string) => {
-    setExpandedRows((prev) => new Set(prev).add(ref));
-    setTableOpen(true);
-    const id = `evline-${normalizeAuditRef(ref)}`;
-    requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" }));
-  };
 
   // Mirrors compileEvidenceFindings' exclusions: already-saved, failed, and
   // "Not assessed" rows raise nothing, so they don't count as compilable.
@@ -1253,19 +1170,6 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
       </>
     );
   }
-
-  // Before an assessment exists, still show one row per requirement line with
-  // the GD4 + PPD columns filled from the PPD result; Evidence / AI verdict
-  // columns show a "not assessed yet" placeholder.
-  const rows = assessment
-    ? assessment.rows
-    : ppd.rows.map((p) => ({
-        gdRef: p.ref, gd4ItemId: p.gd4ItemId, requirementText: p.requirementText,
-        ppdExtract: p.fullComment || p.shortComment || "", ppdVerdict: p.verdict,
-        evidenceSummary: "", evidenceFiles: [] as { name: string; url: string }[], evidenceChunkIds: [] as string[],
-        verdict: undefined as EvidenceVerdict | undefined, comment: "", assessmentFailed: undefined as boolean | undefined, savedFindingId: undefined as string | undefined,
-        promiseChecks: undefined as PromiseCheck[] | undefined,
-      }));
 
   return (
     <>
@@ -1417,163 +1321,19 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
       <HybridGatePanel subCriterionId={selectedId} />
 
       {/* Requirement → PPD → Evidence lineage map (reuses stored row data) —
-          the primary, always-visible view: per-sub-part expand-to-highlighted-
-          source already answers "which file/section backs this line". */}
-      <LineageDiagram mode="evidence" evidence={viewedAssessment} ppd={ppd} onOpenLine={openLine} runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()} />
-
-      {/* Full per-line table below is secondary detail (same rows the map
-          already summarises), so it defaults collapsed. Every row, every
-          action (thumbs, Accept/Reject via the gate above, "show comment")
-          is unchanged and intact underneath — this only changes default
-          visibility. */}
-      <button
-        type="button"
-        onClick={() => setTableOpen((o) => !o)}
-        style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155", marginBottom: 10 }}
-      >
-        {tableOpen ? "Hide full requirement table ▲" : "Show full requirement table ▾"}
-      </button>
-
-      {tableOpen && (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: EV_GRID, gap: 10, position: "sticky", top: 0, zIndex: 1, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px 8px 0 0", padding: "6px 12px", marginBottom: -1 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>GD4 requirement</span>
-            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>PPD</span>
-            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>Evidence</span>
-            <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>AI verdict</span>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {rows.map((row) => {
-          const expanded = expandedRows.has(row.gdRef);
-          const border = row.assessmentFailed ? "#9ca3af" : row.verdict ? evVerdictBorderColor(row.verdict) : "#e2e8f0";
-          const ppdExtractShort = row.ppdExtract.length > 160 ? `${row.ppdExtract.slice(0, 160)}…` : row.ppdExtract;
-          return (
-            <div key={row.gdRef} id={`evline-${normalizeAuditRef(row.gdRef)}`} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${border}`, borderRadius: 8, padding: "10px 12px", scrollMarginTop: 12 }}>
-              <div style={{ display: "grid", gridTemplateColumns: EV_GRID, gap: 10, alignItems: "start" }}>
-                {/* Column 1 — GD4 requirement */}
-                <div>
-                  <div style={{ fontFamily: "ui-monospace,monospace", fontSize: 12, fontWeight: 700, color: "#4338ca", marginBottom: 4 }}>{row.gdRef}</div>
-                  <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.4 }}>{row.requirementText}</div>
-                </div>
-
-                {/* Column 2 — PPD (reused from PPD Review tab) */}
-                <div>
-                  <Pill s={ppdVerdictTone(row.ppdVerdict)}>{row.ppdVerdict}</Pill>
-                  <div style={{ borderLeft: "3px solid #c7d2fe", paddingLeft: 8, marginTop: 5, fontSize: 11.5, color: "#374151", lineHeight: 1.4, fontStyle: "italic" }}>
-                    {ppdExtractShort || "(no PPD extract)"}
-                  </div>
-                </div>
-
-                {/* Column 3 — Evidence (read fresh from the Actual Evidence folder) */}
-                <div>
-                  {!assessment ? (
-                    <span style={{ fontSize: 11.5, color: "#94a3b8" }}>Not assessed yet</span>
-                  ) : (
-                    <>
-                      <div style={{ fontSize: 11.5, fontWeight: 700, color: row.evidenceFiles.length > 0 ? "#15803d" : "#b23121", marginBottom: 3 }}>
-                        {row.evidenceFiles.length > 0 ? `${row.evidenceFiles.length} file${row.evidenceFiles.length > 1 ? "s" : ""} cited` : "No evidence files cited"}
-                      </div>
-                      <div style={{ fontSize: 11.5, color: "#374151", lineHeight: 1.4, marginBottom: row.evidenceFiles.length > 0 ? 4 : 0 }}>{row.evidenceSummary}</div>
-                      {row.evidenceFiles.length > 0 && (
-                        <ul style={{ margin: 0, paddingLeft: 16 }}>
-                          {row.evidenceFiles.map((f) => (
-                            <li key={f.url} style={{ fontSize: 11, marginBottom: 1 }}>
-                              <a href={f.url} target="_blank" rel="noreferrer" style={{ color: "#4338ca" }}>{f.name}</a>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </>
-                  )}
-                </div>
-
-                {/* Column 4 — AI verdict (combined) */}
-                <div>
-                  {row.assessmentFailed ? (
-                    <div>
-                      <Pill s="critical">Assessment failed — retry</Pill>
-                      <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 4 }}>Re-run the evidence assessment to retry this line.</div>
-                    </div>
-                  ) : row.verdict === "Not assessed" ? (
-                    <div>
-                      <Pill s="neutral">Not assessed</Pill>
-                      <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 4 }}>No audit result matched this line — run or re-run the evidence assessment.</div>
-                    </div>
-                  ) : row.verdict ? (
-                    <>
-                      <Pill s={evVerdictTone(row.verdict)}>{evVerdictLabel(row.verdict)}</Pill>
-                      {row.comment && (
-                        <button
-                          onClick={() => toggleExpanded(row.gdRef)}
-                          style={{ display: "block", cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#4a5a8a", border: "none", background: "transparent", padding: 0, marginTop: 5 }}
-                        >
-                          {expanded ? "Hide comment ▲" : "Show comment ▼"}
-                        </button>
-                      )}
-                      {/* Was this evidence verdict right? 👎 stores a CalibrationMemory
-                          that future Option A runs learn from. */}
-                      <div style={{ marginTop: 6 }}>
-                        <ThumbsButtons
-                          onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: row.gdRef, aiOutput: `Evidence ${row.gdRef}: ${row.verdict}`, humanDecision: `Accepted evidence verdict: ${row.verdict}`, changed: false, decisionType: "Accepted", reason: "" })}
-                          onReject={() => setLineFeedback({ ref: row.gdRef, text: `Evidence verdict "${row.verdict}" for ${row.gdRef}: ${row.comment || row.evidenceSummary || "(no comment)"}` })}
-                        />
-                      </div>
-                      <div style={{ marginTop: 5 }}>
-                        {row.savedFindingId ? (
-                          <>
-                            <Pill s={findingTypeTone(findingTypeForStatus(row.verdict))}>Saved {row.savedFindingId}</Pill>
-                            <Link to={`/findings?item=${row.gd4ItemId}`} style={{ fontSize: 11, color: "#4f46e5", fontWeight: 600, textDecoration: "none", marginLeft: 4 }}>View →</Link>
-                          </>
-                        ) : (
-                          <span style={{ fontSize: 10.5, color: "#94a3b8" }}>Not yet compiled</span>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <span style={{ fontSize: 11.5, color: "#94a3b8" }}>—</span>
-                  )}
-                </div>
-              </div>
-
-              {expanded && (row.comment || (row.promiseChecks && row.promiseChecks.length > 0)) && (
-                <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
-                  {row.promiseChecks && row.promiseChecks.length > 0 && (
-                    <div style={{ marginBottom: row.comment ? 10 : 0 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>What the policy promised, checked against practice</div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        {row.promiseChecks.map((p, i) => {
-                          const tone = p.verdict === "evidenced" ? "#166534" : p.verdict === "contradicted" ? "#b91c1c" : "#b45309";
-                          const mark = p.verdict === "evidenced" ? "✓" : p.verdict === "contradicted" ? "✗" : "○";
-                          // Plain-language lead-in in place of the raw pipeline verdict
-                          // word. "Not shown in the evidence"/"Contradicted" keep the
-                          // honest gap meaning of "not evidenced"/"contradicted" exactly.
-                          const lead = p.verdict === "evidenced" ? "Promise kept" : p.verdict === "contradicted" ? "Contradicted by the evidence" : "Not shown in the evidence";
-                          return (
-                            <div key={i} style={{ fontSize: 12, lineHeight: 1.45 }}>
-                              <span style={{ color: tone, fontWeight: 700 }}>{mark} {lead}:</span>
-                              <span style={{ color: "#1e293b" }}> {p.promiseText}</span>
-                              {p.evidence && <div style={{ color: "#64748b", marginLeft: 16 }}>{p.evidence}{p.chunkIds.length > 0 && <span style={{ fontFamily: "ui-monospace,monospace", color: "#94a3b8" }}> ({p.chunkIds.join(", ")})</span>}</div>}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  {row.comment && (
-                    <>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>In short</div>
-                      <div style={{ fontSize: 12.5, color: "#1e293b", lineHeight: 1.45, whiteSpace: "pre-line" }}>{row.comment}</div>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-          </div>
-        </>
-      )}
+          the only view of these lines on this tab: per-sub-part expand shows
+          the clause-by-clause detail plus (see renderExtra) the comment,
+          thumbs, and saved-finding status for that same line. */}
+      <LineageDiagram
+        mode="evidence"
+        evidence={viewedAssessment}
+        ppd={ppd}
+        runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()}
+        renderExtra={(ref) => {
+          const row = viewedAssessment?.rows.find((r) => r.gdRef === ref);
+          return row ? <EvRowExtra row={row} selectedId={selectedId} setLineFeedback={setLineFeedback} /> : null;
+        }}
+      />
       <FeedbackModal
         open={!!lineFeedback}
         aiOutput={lineFeedback?.text ?? ""}
