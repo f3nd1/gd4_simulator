@@ -1727,12 +1727,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             budget: { count: 0, max: 10 },
             maxPerFile: 5,
           };
-          // Task 1a: once the user has answered the vision-budget prompt for
-          // this run, every later file that also hits the budget follows the
-          // SAME choice without asking again — the prompt is "how should the
-          // rest of this run behave", not "ask me for every file".
-          let budgetChoice: "proceed" | "skip" | null = null;
-          for (let fi = 0; fi < evidenceFiles.length; fi++) {
+          // Reads evidenceFiles[fi] and records the result into fileRecords /
+          // docParts / chunk maps — the SAME logic whether this is the file's
+          // first attempt or a Task 1a retry after the budget was raised (see
+          // the bulk prompt below). Returns true when this attempt was
+          // skipped SPECIFICALLY because the run's vision budget ran out, so
+          // the caller can collect it for that one bulk prompt.
+          const readAndRecordFile = async (fi: number): Promise<boolean> => {
             const file = evidenceFiles[fi];
             const readFileName = file.path.split("/").pop() || file.path;
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "reading" };
@@ -1745,6 +1746,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             let pdfQuality: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" } | undefined;
             let skipNote: string | undefined;
             let readErrorMsg = "";
+            let budgetBlocked = false;
             // Manual skip: races the real read against a never-resolving promise
             // that ONLY settles when the user clicks Skip (skipCurrentFile()),
             // mirroring the exact pattern used for the mid-run token-refresh
@@ -1765,7 +1767,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               _currentFileAbort = resolveSkip;
               const readToken = await useGoogleDriveStore.getState().getFreshToken();
               _currentFileAbort = null;
-              if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
+              if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return false; }
               try {
                 _currentFileAbort = resolveSkip;
                 const raced = await Promise.race([
@@ -1777,47 +1779,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   body = null;
                   skipNote = "Skipped by user";
                 } else {
-                  let result = raced;
-                  // Task 1a: this file hit the run's vision-image budget — STOP
-                  // and ask instead of silently leaving it unread (the old
-                  // behaviour: 0 chars extracted, no signal to the user). Only
-                  // the first budget-blocked file in a run pauses; every later
-                  // one reuses that same answer (budgetChoice, set below).
-                  if (result.budgetBlocked && budgetChoice === null) {
-                    const filesRemaining = evidenceFiles.length - fi - 1;
-                    const estimatedExtraImages = 1 + filesRemaining * evVisionCtx.maxPerFile;
-                    const rate = aiRateFor(evVisionCtx.visionModelId);
-                    // ~1000 tokens/image is a rough, documented estimate (OpenAI
-                    // vision billing varies by image size/detail level) — good
-                    // enough for a ballpark "should I proceed" figure, not a
-                    // promise of the exact spend.
-                    const estimatedCostUSD = (estimatedExtraImages * 1000 * rate.in) / 1e6;
-                    budgetChoice = await new Promise<"proceed" | "skip">((resolve) => {
-                      _pendingVisionBudgetResolve = resolve;
-                      set({
-                        visionBudgetPrompt: {
-                          subCriterionId, fileName: readFileName, budgetMax: evVisionCtx.budget.max,
-                          filesRemaining, estimatedExtraImages, estimatedCostUSD,
-                        },
-                      });
-                    });
-                    set({ visionBudgetPrompt: null });
-                    if (budgetChoice === "proceed") {
-                      // Cover every remaining image this run could plausibly
-                      // need, not an arbitrary "unlimited" — bounded by the
-                      // same per-file cap (maxPerFile) the run already uses.
-                      evVisionCtx.budget.max = evVisionCtx.budget.count + estimatedExtraImages;
-                      result = await readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), evVisionCtx);
-                    }
-                  }
-                  body = result.text;
-                  readMethod = result.readMethod;
-                  if (result.pdfQuality) pdfQuality = result.pdfQuality;
-                  if (result.note) skipNote = result.note;
+                  body = raced.text;
+                  readMethod = raced.readMethod;
+                  budgetBlocked = !!raced.budgetBlocked;
+                  if (raced.pdfQuality) pdfQuality = raced.pdfQuality;
+                  if (raced.note) skipNote = raced.note;
                   // Only cache genuine (non-empty) extractions — see runPPDReview.
                   if (body != null && body.trim().length > 0) {
                     const text = body;
-                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: readFileName, filePath: file.path, cachedAt: Date.now(), readMethod: result.readMethod, ...(result.pdfQuality ? { pdfQuality: result.pdfQuality } : {}) } } }));
+                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: readFileName, filePath: file.path, cachedAt: Date.now(), readMethod: raced.readMethod, ...(raced.pdfQuality ? { pdfQuality: raced.pdfQuality } : {}) } } }));
                   }
                 }
               } catch (err) {
@@ -1835,8 +1805,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 ...(failed ? { failReason: "Drive read error — file not assessed." } : { skipReason: skipNote ?? "No extractable text (empty or unreadable)." }),
               };
               patchEv({ filesFound: [...fileRecords], ...(failed ? { lastIssue: { at: Date.now(), kind: "file-read-error" as const, message: `Failed to read ${readFileName}: ${readErrorMsg}` } } : {}) });
-              logEv(failed ? `FAILED to read ${readFileName} (Drive error: ${readErrorMsg}) — not assessed` : `Skipped ${readFileName}${skipNote === "Skipped by user" ? " (by user)" : " (empty)"}`, failed ? "bad" : "warn");
-              continue;
+              logEv(failed ? `FAILED to read ${readFileName} (Drive error: ${readErrorMsg}) — not assessed` : `Skipped ${readFileName}${skipNote === "Skipped by user" ? " (by user)" : budgetBlocked ? " (vision budget)" : " (empty)"}`, failed ? "bad" : "warn");
+              return budgetBlocked;
             }
             filesReadCount++;
             patchEv({ filesRead: [...(curEv().filesRead ?? []), { name: readFileName, driveFileId: file.id }], currentFile: undefined, canSkipCurrentFile: false });
@@ -1856,6 +1826,39 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode, ...(readMethod ? { readMethod } : {}), ...(pdfQuality ?? {}), chunkIds };
             patchEv({ filesFound: [...fileRecords] });
+            return false;
+          };
+          // Task 1a: read every file first, collecting any that were skipped
+          // because the run's vision budget ran out — a false "no evidence"
+          // risk if left silent. Bulk, not per-file: ask ONCE after the whole
+          // pass, not on the first file that hits the cap.
+          const budgetBlockedIdx: number[] = [];
+          for (let fi = 0; fi < evidenceFiles.length; fi++) {
+            if (await readAndRecordFile(fi)) budgetBlockedIdx.push(fi);
+          }
+          if (budgetBlockedIdx.length > 0) {
+            const estimatedExtraImages = budgetBlockedIdx.length * evVisionCtx.maxPerFile;
+            const rate = aiRateFor(evVisionCtx.visionModelId);
+            // ~1000 tokens/image is a rough, documented estimate (OpenAI vision
+            // billing varies by image size/detail level) — good enough for a
+            // ballpark "should I proceed" figure, not a promise of exact spend.
+            const estimatedCostUSD = (estimatedExtraImages * 1000 * rate.in) / 1e6;
+            const choice = await new Promise<"proceed" | "skip">((resolve) => {
+              _pendingVisionBudgetResolve = resolve;
+              set({
+                visionBudgetPrompt: {
+                  subCriterionId, budgetMax: evVisionCtx.budget.max, estimatedExtraImages, estimatedCostUSD,
+                  fileNames: budgetBlockedIdx.map((i) => evidenceFiles[i].path.split("/").pop() || evidenceFiles[i].path),
+                },
+              });
+            });
+            set({ visionBudgetPrompt: null });
+            if (choice === "proceed") {
+              // Cover every blocked file's own per-file cap — bounded, not an
+              // arbitrary "unlimited" — then re-read exactly those files.
+              evVisionCtx.budget.max = evVisionCtx.budget.count + estimatedExtraImages;
+              for (const fi of budgetBlockedIdx) await readAndRecordFile(fi);
+            }
           }
           // Per-file ledger for this Option A evidence run, in the same
           // AuditFileRecord shape the staged path uses so the CSVs line up.

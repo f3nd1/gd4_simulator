@@ -2015,7 +2015,6 @@ export function EvidenceFolder() {
   const checkFolderAccess   = useWorkspaceStore((s) => s.checkFolderAccess);
   const probeFolder         = useWorkspaceStore((s) => s.probeFolder);
   const auditFolderStaged   = useWorkspaceStore((s) => s.auditFolderStaged);
-  const runPPDReview        = useWorkspaceStore((s) => s.runPPDReview);
   const navigate            = useNavigate();
   const cancelBusy          = useWorkspaceStore((s) => s.cancelBusy);
   const clearFileTextCache  = useWorkspaceStore((s) => s.clearFileTextCache);
@@ -2876,15 +2875,18 @@ export function EvidenceFolder() {
                       </Link>
                     ) : path === "A" ? (
                       // Option A is multi-step (PPD → evidence → compile).
-                      // Clicking here STARTS the first step (PPD review) and
-                      // opens the near-fullscreen review MODAL over this page
-                      // — same action shape as Option B's "Run audit", no
-                      // page navigation. (The PPD Review page route still
-                      // works for deep links.)
+                      // Clicking here ONLY opens the near-fullscreen review
+                      // MODAL over this page — same no-navigation shape as
+                      // Option B's "Run audit" — and does NOT start any run
+                      // itself; the user picks "Run PPD review" or "Run
+                      // evidence assessment" inside the modal. Used to fire
+                      // runPPDReview() immediately on click too, which meant
+                      // a click here silently started (and billed) a run the
+                      // user hadn't asked for yet if they just wanted to look.
                       <button
-                        onClick={() => { runPPDReview(f.subCriterionId); setOptionAModal(f.subCriterionId); }}
+                        onClick={() => setOptionAModal(f.subCriterionId)}
                         disabled={noAuditors}
-                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option A (PPD + Evidence): starts the PPD review now and opens the full review, where you continue with the evidence assessment and compile findings. In Hybrid mode you approve, edit or reject each verdict inside that review — beside the evidence rows that produced it — before it commits.")}
+                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option A (PPD + Evidence): opens the full review, where you run the PPD review, then the evidence assessment, then compile findings. In Hybrid mode you approve, edit or reject each verdict inside that review — beside the evidence rows that produced it — before it commits.")}
                         style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >
                         Run review

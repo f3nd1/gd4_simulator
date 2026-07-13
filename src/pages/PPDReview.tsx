@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { DRIVE_CONNECT_PATH } from "../lib/driveGuard";
+import { AUDITOR_CREATION_PATH } from "../lib/auditorGuard";
 import { inputStyle } from "../components/ui/Card";
 import { RunModeBanner } from "../components/ui/RunModeBanner";
 import { Pill } from "../components/ui/Pill";
@@ -372,6 +373,11 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
   const isRunning = busy === "ppdreview" + selectedId;
   const liveProgress = useWorkspaceStore((s) => s.ppdReviewProgress);
 
+  // Auditor gate — runPPDReview checks this BEFORE the Drive check, so a
+  // blocked auditor gate (no auditors, or none currently active) used to make
+  // "Re-run PPD review" silently no-op inside this modal: the outer Evidence
+  // Folder page already renders auditBlockedReason, but this modal never did.
+  const auditBlockedReason = useWorkspaceStore((s) => s.auditBlockedReason);
   // Drive-connection block for THIS sub-criterion — runPPDReview sets this when
   // the folder can't be reached, so the button appears to "do nothing".
   // Surface it here with a Connect action (Option A parity with Evidence Folder).
@@ -449,6 +455,19 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
           </button>
         )}
       </span>
+
+      {/* Auditor gate blocked the last run attempt — same message + action
+          the outer Evidence Folder page shows, so a click here that fails
+          this gate (checked BEFORE Drive) is never a silent no-op. */}
+      {auditBlockedReason && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12, padding: "9px 12px", background: "#fbe7e3", border: "1px solid #f2b8ae", borderRadius: 8, fontSize: 12.5, color: "#b23121", fontWeight: 600 }}>
+          <span aria-hidden>⛔</span>
+          <span style={{ flex: 1, minWidth: 240 }}>{auditBlockedReason}</span>
+          <Link to={AUDITOR_CREATION_PATH} style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: "#b23121", borderRadius: 6, padding: "5px 12px", textDecoration: "none", whiteSpace: "nowrap" }}>
+            Go to Auditor Creation →
+          </Link>
+        </div>
+      )}
 
       {/* Show a Connect affordance whenever Drive isn't connected (so the
           button is always reachable), or when a run was explicitly blocked. */}
@@ -623,10 +642,10 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
                   onChange={(e) => setHistoryIdx(e.target.value === "latest" ? null : Number(e.target.value))}
                   style={{ fontSize: 11.5, padding: "3px 6px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#334155" }}
                 >
-                  <option value="latest">Latest{liveResult ? ` (${new Date(liveResult.runAt).toLocaleDateString("en-GB")})` : ""}</option>
+                  <option value="latest">Latest{liveResult ? ` (${fmtRunAt(liveResult.runAt)})` : ""}</option>
                   {ppdHistory.map((h, i) => (
                     <option key={h.runAt} value={i}>
-                      {new Date(h.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}{h.model ? ` — ${h.model}` : ""}
+                      {fmtRunAt(h.runAt)}{h.model ? ` — ${h.model}` : ""}
                     </option>
                   ))}
                 </select>
@@ -963,24 +982,27 @@ function fmtRunAt(iso: string): string {
   return new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-// Task 1a: blocking choice the moment runEvidenceAssessment's read loop hits
-// the run's vision-image budget — no backdrop-dismiss, no default choice, so
-// the run genuinely pauses until the user picks. Replaces the old silent
-// behaviour (file skipped, 0 chars extracted, no signal) that could produce a
-// false "no evidence" verdict for a file that was never actually read.
+// Task 1a: blocking choice runEvidenceAssessment presents ONCE, after its
+// read loop has attempted every evidence file — bulk, not per-file: every
+// file the run's vision-image budget forced it to skip is collected first,
+// then this one prompt covers all of them. No backdrop-dismiss, no default
+// choice, so the run genuinely pauses until the user picks. Replaces the old
+// silent behaviour (file skipped, 0 chars extracted, no signal) that could
+// produce a false "no evidence" verdict for files that were never read.
 function VisionBudgetPromptModal({ prompt, onChoose }: { prompt: VisionBudgetPrompt; onChoose: (choice: "proceed" | "skip") => void }) {
+  const n = prompt.fileNames.length;
   return (
     <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
       <div style={{ backgroundColor: "#fff", borderRadius: 12, maxWidth: 480, width: "100%", padding: 20, boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, color: "#92400e" }}>⚠ Vision image budget reached</div>
         <p style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5, margin: 0 }}>
-          This run has read <b>{prompt.budgetMax} images</b> (scanned pages / photos) so far and just hit that limit while reading <b>{prompt.fileName}</b>.
-          {prompt.filesRemaining > 0
-            ? ` ${prompt.filesRemaining} more evidence file${prompt.filesRemaining === 1 ? "" : "s"} haven't been read yet and may also need images — left as-is, they'll be skipped exactly like this one, which can look like "no evidence" even when evidence exists.`
-            : " This was the last unread file."}
+          This run read <b>{prompt.budgetMax} images</b> (scanned pages / photos), then ran out of budget for <b>{n} evidence file{n === 1 ? "" : "s"}</b>: left as-is, {n === 1 ? "it stays" : "they stay"} unread — which can look like "no evidence" even when evidence exists.
         </p>
+        <ul style={{ fontSize: 11.5, color: "#475569", margin: 0, paddingLeft: 18, maxHeight: 100, overflowY: "auto" }}>
+          {prompt.fileNames.map((name) => <li key={name}>{name}</li>)}
+        </ul>
         <div style={{ fontSize: 12, color: "#475569", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
-          <b>Proceed with all</b> raises the budget to cover up to {prompt.estimatedExtraImages} more image{prompt.estimatedExtraImages === 1 ? "" : "s"} this run — estimated extra cost <b>{fmtUSD(prompt.estimatedCostUSD)}</b> (rough estimate; actual spend depends on image size/detail).
+          <b>Proceed with all</b> raises the budget to cover up to {prompt.estimatedExtraImages} more image{prompt.estimatedExtraImages === 1 ? "" : "s"} and re-reads {n === 1 ? "that file" : "those files"} — estimated extra cost <b>{fmtUSD(prompt.estimatedCostUSD)}</b> (rough estimate; actual spend depends on image size/detail).
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
           <button type="button" onClick={() => onChoose("skip")} style={arrivalSecondaryBtn}>Skip the rest</button>
@@ -1103,6 +1125,11 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
   const assessment = evidenceAssessments[selectedId];
   const isRunning = busy === "evidenceassess" + selectedId;
   const runProgress = progress && progress.subCriterionId === selectedId ? progress : null;
+
+  // Same auditor-gate visibility fix as PpdTab — runEvidenceAssessment checks
+  // this before Drive too, so "Re-run evidence assessment" had the same
+  // silent-no-op risk.
+  const auditBlockedReason = useWorkspaceStore((s) => s.auditBlockedReason);
 
   // Task 1a: the blocking vision-budget prompt, scoped to THIS sub-criterion's
   // run (a different sub-criterion's in-flight prompt must not show here).
@@ -1243,6 +1270,15 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
   return (
     <>
       {budgetPrompt && <VisionBudgetPromptModal prompt={budgetPrompt} onChoose={resolveVisionBudgetPrompt} />}
+      {auditBlockedReason && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12, padding: "9px 12px", background: "#fbe7e3", border: "1px solid #f2b8ae", borderRadius: 8, fontSize: 12.5, color: "#b23121", fontWeight: 600 }}>
+          <span aria-hidden>⛔</span>
+          <span style={{ flex: 1, minWidth: 240 }}>{auditBlockedReason}</span>
+          <Link to={AUDITOR_CREATION_PATH} style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: "#b23121", borderRadius: 6, padding: "5px 12px", textDecoration: "none", whiteSpace: "nowrap" }}>
+            Go to Auditor Creation →
+          </Link>
+        </div>
+      )}
       {justArrived && !isRunning && (
         <EvidenceArrivalPanel
           state={arrivalState}
@@ -1277,10 +1313,10 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
                   onChange={(e) => setHistoryIdx(e.target.value === "latest" ? null : Number(e.target.value))}
                   style={{ fontSize: 11.5, padding: "3px 6px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#334155" }}
                 >
-                  <option value="latest">Latest{assessment ? ` (${new Date(assessment.runAt).toLocaleDateString("en-GB")})` : ""}</option>
+                  <option value="latest">Latest{assessment ? ` (${fmtRunAt(assessment.runAt)})` : ""}</option>
                   {evidenceHistory.map((h, i) => (
                     <option key={h.runAt} value={i}>
-                      {new Date(h.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}{h.model ? ` — ${h.model}` : ""}
+                      {fmtRunAt(h.runAt)}{h.model ? ` — ${h.model}` : ""}
                     </option>
                   ))}
                 </select>

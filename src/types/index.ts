@@ -1093,16 +1093,18 @@ export type EvidenceAssessmentProgress = {
   lastIssue?: EvidenceRunIssue; // most recent call/file-read failure, if any
 };
 
-// Task 1a: the blocking choice runEvidenceAssessment presents the FIRST time
-// its read loop hits the run's vision-image budget, instead of silently
-// skipping the file (the old, honesty-guard-violating behaviour). Ephemeral
-// UI state only — never persisted.
+// Task 1a: the blocking choice runEvidenceAssessment presents ONCE, after its
+// read loop has attempted every evidence file, if one or more files couldn't
+// be read because the run's vision-image budget ran out — instead of
+// silently skipping each one (the old, honesty-guard-violating behaviour).
+// Bulk, not per-file: every budget-blocked file is collected first, then a
+// single prompt covers all of them, so the user isn't asked once per file.
+// Ephemeral UI state only — never persisted.
 export type VisionBudgetPrompt = {
   subCriterionId: string;
-  fileName: string;         // the file that hit the budget
+  fileNames: string[];      // every file that hit the budget, in read order
   budgetMax: number;        // the run's current image cap
-  filesRemaining: number;   // evidence files not yet attempted (upper-bound signal, not an exact image count — see runEvidenceAssessment)
-  estimatedExtraImages: number; // rough "up to N more images" if every remaining file needs vision
+  estimatedExtraImages: number; // "up to N more images" needed to cover every blocked file
   estimatedCostUSD: number; // ballpark spend for estimatedExtraImages, same $ convention as the AI Review Log
 };
 
