@@ -158,9 +158,12 @@ export class DriveAuthError extends Error {}
 // only ever the short-lived access token the Edge Function hands back.
 //
 // `ux_mode: "popup"` means no separate "Authorized redirect URI" needs to be
-// registered in Google Cloud Console — GIS handles the popup/callback
-// itself; the redirect_uri the server-side exchange must use is simply this
-// page's origin (see requestDriveAuthCode's caller in useGoogleDriveStore).
+// registered in Google Cloud Console — GIS handles the popup/callback itself
+// and delivers the code to the callback below with no redirect. Because no
+// redirect ever happens, the server-side exchange uses the literal
+// "postmessage" as its redirect_uri (hardcoded in the Edge Function), NOT
+// this page's origin — the origin isn't a registered redirect URI, so Google
+// rejects it. See the drive-oauth function's exchange branch.
 //
 // prompt: "consent" is forced so Google reliably re-issues a refresh token
 // on every "Connect" click — Google only issues one on first consent (or

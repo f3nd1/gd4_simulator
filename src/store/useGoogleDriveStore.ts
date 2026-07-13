@@ -69,15 +69,18 @@ export const useGoogleDriveStore = create<GoogleDriveState>()(
 
       // Interactive only (the user clicked "Connect Google Drive"): gets a
       // one-time authorization code from Google, then hands it to the Edge
-      // Function to exchange server-side. redirectUri must match what the
-      // Edge Function passes to Google's token endpoint — GIS's popup mode
-      // uses this page's origin, not a registered redirect URI (see
-      // requestDriveAuthCode's comment).
+      // Function to exchange server-side. No redirect_uri is sent: GIS's popup
+      // flow delivers the code straight to a JS callback (never via a
+      // redirect), so Google's token exchange expects the special literal
+      // "postmessage" — hardcoded in the Edge Function, not passed from here
+      // (see requestDriveAuthCode's comment). Sending this page's origin
+      // instead makes Google reject the exchange with an invalid-grant /
+      // redirect_uri_mismatch 400.
       connect: async () => {
         set({ connecting: true, lastError: null });
         try {
           const { code } = await requestDriveAuthCode(get().clientId);
-          const result = await callDriveOauth({ action: "exchange", code, redirectUri: window.location.origin });
+          const result = await callDriveOauth({ action: "exchange", code });
           if ("error" in result) { set({ connecting: false, lastError: result.error }); throw new DriveAuthError(result.error); }
           set({ accessToken: result.accessToken, tokenExpiresAt: Date.now() + result.expiresInSeconds * 1000, connecting: false });
         } catch (err) {

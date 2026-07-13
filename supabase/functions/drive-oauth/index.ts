@@ -34,7 +34,7 @@ const TABLE = "drive_oauth_tokens";
 // holds the single Drive connection for the whole workspace.
 const ROW_ID = "default";
 
-type ExchangeBody = { action: "exchange"; code: string; redirectUri: string };
+type ExchangeBody = { action: "exchange"; code: string };
 type RefreshBody = { action: "refresh" };
 type DisconnectBody = { action: "disconnect" };
 type RequestBody = ExchangeBody | RefreshBody | DisconnectBody;
@@ -121,12 +121,18 @@ Deno.serve(async (req) => {
   const supabase = adminClient();
 
   if (body.action === "exchange") {
-    if (!body.code || !body.redirectUri) return json({ error: "Missing code or redirectUri." }, 400);
+    if (!body.code) return json({ error: "Missing authorization code." }, 400);
     const result = await callGoogleToken({
       client_id: clientId,
       client_secret: clientSecret,
       code: body.code,
-      redirect_uri: body.redirectUri,
+      // GIS popup mode (initCodeClient, ux_mode: "popup") delivers the code to
+      // a JS callback with no redirect ever happening, so Google's token
+      // exchange expects the literal "postmessage" here — the carried-over
+      // convention from the gapi popup flow. Sending the page origin instead
+      // (which isn't a registered "Authorized redirect URI", only a JS origin)
+      // is rejected with redirect_uri_mismatch / invalid_grant.
+      redirect_uri: "postmessage",
       grant_type: "authorization_code",
     });
     if (!result.ok) return json({ error: result.error }, 400);
