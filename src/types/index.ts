@@ -311,6 +311,14 @@ export type SubChecklistEvidenceItem = {
   // Review) from the folder audit (when live), kept so a finding raised from
   // this line can name which rubric dimension fell short.
   apsr?: ApsrBreakdown;
+  // The PPD (policy-only) verdict this evidence item's write ORIGINATED
+  // from — set only by Option A (buildOptionALineWrites), which is the only
+  // path that assesses policy separately from combined evidence. Absent on
+  // Option B, manual, and seed lines: there is no policy-only pass to report
+  // for them, so the Sub-Criterion Checklist card shows an honest empty
+  // state rather than deriving one from apsr.approach.status (a different,
+  // lossier vocabulary — see optionAChecklistWrite.ts).
+  ppdVerdict?: PPDVerdict;
   // Audit-run id (e.g. "AR-1.2-K9QZ") when this item was created by a folder
   // audit, so it can be traced to the matching result row, AI Review Log entry
   // and journal entry. Also records that an AI run produced it, not a human.

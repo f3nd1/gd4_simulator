@@ -90,6 +90,7 @@ export function buildOptionALineWrites(
         approved: false,
         reviewed: false,
         sufficiency: status === "Met" ? "Present" : status === "Partial" ? "Weak" : "Missing",
+        ppdVerdict: row.ppdVerdict,
         auditorNote: [
           `PPD verdict: ${ppdVerdictLabel(row.ppdVerdict)}. Combined verdict: ${evVerdictLabel(status)}.`,
           row.comment || row.evidenceSummary,

@@ -11,6 +11,7 @@ import { buildGenericLines } from "../data/checklistSeed";
 import { computeBand, lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
 import { apsrAuditNote } from "../lib/ai/simulateAI";
 import { findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
+import { ppdVerdictLabel, ppdVerdictTone } from "../lib/verdictTone";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
@@ -692,6 +693,10 @@ export function SubCriterionChecklist() {
             const metEvidence = l.status === "Met" ? [...l.evidence].reverse().find((e) => e.apsr) : undefined;
             const expanded = expandedLine === l.id;
             const ref = l.sourceType && l.generatedBy === "ai" ? sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined) : l.clause || null;
+            // Policy (PPD-only) verdict — real field, set only on lines written by
+            // Option A (buildOptionALineWrites); absent on Option B/manual/seed
+            // lines, which show the honest "—" empty state rather than a guess.
+            const ppdVerdict = [...l.evidence].reverse().find((e) => e.ppdVerdict)?.ppdVerdict;
 
             // Left border colour by status — strongest signal
             const statusBorder =
@@ -723,17 +728,19 @@ export function SubCriterionChecklist() {
                   style={{ display: "flex", gap: 7, alignItems: "flex-start", padding: "8px 10px 5px", cursor: "pointer", background: expanded ? "#f0f4ff" : dimBg }}
                 >
                   <span style={{ color: "#94a3b8", fontSize: 11, marginTop: 2, flexShrink: 0 }}>{expanded ? "▾" : "▸"}</span>
+                  {/* Reference leads the row now (Task 4) — larger/bolder so the
+                      existing ordering (already correct) is visible at a glance. */}
+                  {ref && (
+                    <span
+                      style={{ fontSize: 13, fontWeight: 800, color: "#334155", fontFamily: "ui-monospace,monospace", flexShrink: 0, marginTop: 1, cursor: l.sourceText ? "help" : "default" }}
+                      title={l.sourceText ? `Source: "${l.sourceText}"` : undefined}
+                    >
+                      {ref}
+                    </span>
+                  )}
                   {l.afiTag && <Pill s="critical">AFI {l.afiTag}</Pill>}
                   <span style={{ fontSize: 12.5, flex: 1, lineHeight: 1.45, color: "#1e293b" }}>{l.text}</span>
                   <div style={{ display: "flex", gap: 5, alignItems: "center", flexShrink: 0, marginTop: 1 }}>
-                    {ref && (
-                      <span
-                        style={{ fontSize: 9.5, color: "#a8a29e", fontFamily: "ui-monospace,monospace", background: "rgba(255,255,255,0.7)", borderRadius: 4, padding: "1px 5px", cursor: l.sourceText ? "help" : "default" }}
-                        title={l.sourceText ? `Source: "${l.sourceText}"` : undefined}
-                      >
-                        {ref}
-                      </span>
-                    )}
                     {l.apsrDimension && <Pill s="neutral">{l.apsrDimension}</Pill>}
                   </div>
                 </div>
@@ -742,6 +749,12 @@ export function SubCriterionChecklist() {
                   onClick={(e) => e.stopPropagation()}
                   style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "4px 10px 7px 28px", borderTop: `1px solid ${statusBorder}22`, fontSize: 11, background: row2Bg }}
                 >
+                  {/* Policy = PPD-only verdict (Task 2) — real field, read-only here
+                      (Option A is what produces it; nothing on this card writes it).
+                      Honest "—" when absent, never a guessed/derived value. */}
+                  <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Policy</span>
+                  <Pill s={ppdVerdict ? ppdVerdictTone(ppdVerdict) : "neutral"}>{ppdVerdict ? ppdVerdictLabel(ppdVerdict) : "—"}</Pill>
+                  <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Combined</span>
                   <select
                     value={l.status}
                     onChange={(e) => setSpecificStatus(selectedId, l.id, e.target.value as SpecificLineStatus)}
