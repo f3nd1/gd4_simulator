@@ -2083,6 +2083,11 @@ export function EvidenceFolder() {
   const [searchParams] = useSearchParams();
   const focusSub = searchParams.get("sub");
   const focusRun = searchParams.get("run");
+  // ?review=<subCriterionId> opens the PPD + Evidence review modal directly —
+  // the standalone /ppd-review page was retired, so this is the deep link the
+  // Manual-mode banner on the Sub-Criterion Checklist uses to send the user
+  // straight to the review (and its Compile findings button).
+  const focusReview = searchParams.get("review");
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const openedRunParamRef = useRef<string | null>(null);
 
@@ -2101,6 +2106,12 @@ export function EvidenceFolder() {
     const evMatch = Object.values(evidenceAssessments).find((ev) => ev.runId === focusRun);
     if (evMatch) { openedRunParamRef.current = focusRun; setOptionAModal(evMatch.subCriterionId); }
   }, [focusRun, auditRunHistory, lastAuditRuns, evidenceAssessments]);
+
+  // ?review= deep link (see above). Fires once per param value; closing the
+  // modal doesn't re-open it because the param value hasn't changed.
+  useEffect(() => {
+    if (focusReview) setOptionAModal(focusReview);
+  }, [focusReview]);
 
   // Once a Drive token arrives, clear any "not connected" block so the banner
   // and per-row status flip to Connected without a reload (Fix 1).

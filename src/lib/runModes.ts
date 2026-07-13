@@ -41,6 +41,14 @@ export function auditModeLabel(mode: AuditMode): string {
 //   queue  — hold as PendingCommitItems for human approval (hybrid's gates)
 // manual never reaches here via the engines (auto-runs are blocked in manual
 // mode), but the mapping is defined anyway: nothing commits, nothing queues.
+//
+// INTENTIONAL DIVERGENCE (investigated + user-confirmed 2026-07-13): hybrid
+// behaves differently here (Option B: queue per line) vs partitionOptionAWrites
+// below (Option A: commit immediately). This is NOT a bug to align. Option B's
+// staged audit commits a whole sub-criterion at once from windowed AI passes
+// with weaker deterministic checks (see stagedWriteConfidence — verdicts can
+// be uncited or carry unverified excerpts), so the per-line human gate is its
+// compensating control. Do not remove B's gate or re-add A's in a cleanup pass.
 export function partitionWritesByMode(
   mode: AuditMode,
   writes: ChecklistLineWrite[]
@@ -64,6 +72,13 @@ export function partitionWritesByMode(
 // the human's explicit Compile click (that is what keeps hybrid distinct from
 // full-auto, which compiles findings automatically). Option B's staged flow
 // keeps the full gate via partitionWritesByMode above.
+//
+// INTENTIONAL DIVERGENCE (investigated + user-confirmed 2026-07-13): Option A
+// does not need the per-line gate because its verdicts pass a two-pass,
+// verified pipeline before ever reaching the checklist — GD4 → policy, then
+// policy → evidence, with deterministic verbatim-quote verification and
+// code-level downgrades for uncited/unverified lines. Option B's staged path
+// lacks that rigor, so it keeps its gate. Do not "fix" this asymmetry.
 export function partitionOptionAWrites(
   mode: AuditMode,
   writes: ChecklistLineWrite[]

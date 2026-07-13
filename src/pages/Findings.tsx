@@ -69,6 +69,8 @@ export function Findings() {
   const clearAllFindings = useWorkspaceStore((s) => s.clearAllFindings);
   const clearFindingsForSubCriterion = useWorkspaceStore((s) => s.clearFindingsForSubCriterion);
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
+  const compileEvidenceFindings = useWorkspaceStore((s) => s.compileEvidenceFindings);
+  const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
   const raiseAllUnmetFindings = useChecklistModuleStore((s) => s.raiseAllUnmetFindings);
   const scored = useScored();
   const allFindings = useAllFindings();
@@ -699,6 +701,22 @@ export function Findings() {
       {groupedRows.length === 0 ? (
         <div style={{ padding: "18px 4px", color: "#6b7280", fontSize: 12.5 }}>
           No findings to show. Run a folder audit (Evidence Folder page) — findings are raised automatically from the gaps — or click <b>Generate from gaps</b> above to create them from the current Sub-Criterion Checklist.
+          {/* Duplicate of the review modal's Compile action, so a user sent
+              here (e.g. from the checklist in Manual mode) with a finished
+              PPD + Evidence run isn't bounced to yet another page to use it. */}
+          {subCritFilter !== "All" && evidenceAssessments[subCritFilter] && (
+            <div style={{ marginTop: 10 }}>
+              <button
+                onClick={() => {
+                  const n = compileEvidenceFindings(subCritFilter);
+                  setGenNote(n > 0 ? `${n} finding(s) raised to the register from the last PPD + Evidence run for ${subCritFilter}.` : `No new findings — the last PPD + Evidence run for ${subCritFilter} has no uncompiled gaps.`);
+                }}
+                style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #c7d2fe", background: "#eef2ff", color: "#4338ca" }}
+              >
+                Compile findings from the last PPD + Evidence run ({subCritFilter})
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

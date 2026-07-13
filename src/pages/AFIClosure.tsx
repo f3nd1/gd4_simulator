@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useScored } from "../hooks/useScored";
@@ -42,6 +42,29 @@ export function AFIClosure() {
     () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter)),
     [critFilter]
   );
+
+  // ?item=<gd4ItemId> deep link ("Manage closure →" on the Sub-Criterion
+  // Checklist): pre-filter to that item's sub-criterion and expand + scroll to
+  // its first finding, so the link lands where it claims to instead of on the
+  // full unfiltered list. Runs once per param value; allFindings is
+  // intentionally not a dep — re-running on every findings change would yank
+  // the user back to the deep-linked row while they work.
+  const [searchParams] = useSearchParams();
+  const focusItem = searchParams.get("item");
+  useEffect(() => {
+    if (!focusItem) return;
+    const req = GD4_REQUIREMENTS.find((r) => r.id === focusItem);
+    if (req) {
+      setCritFilter(req.criterion);
+      setSubCritFilter(req.subCriterionId);
+    }
+    const first = allFindings.find((f) => f.gd4ItemId === focusItem);
+    if (first) {
+      setSelFinding(first.id);
+      setTimeout(() => document.getElementById(`closure-${first.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusItem]);
 
   const findings = allFindings.filter((f) => {
     const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
@@ -119,7 +142,7 @@ export function AFIClosure() {
         const c = closures[f.id] || {};
         const open = selFinding === f.id;
         return (
-          <Card key={f.id} style={{ marginBottom: 9, padding: 0, overflow: "hidden", boxShadow: "none", border: "1px solid #e2e8f0" }}>
+          <Card key={f.id} id={`closure-${f.id}`} style={{ marginBottom: 9, padding: 0, overflow: "hidden", boxShadow: "none", border: "1px solid #e2e8f0" }}>
             <button
               className="rowh"
               onClick={() => setSelFinding(open ? null : f.id)}

@@ -347,6 +347,7 @@ export function SubCriterionChecklist() {
 
   const scored = useScored();
   const folders = useWorkspaceStore((s) => s.folders);
+  const auditMode = useWorkspaceStore((s) => s.auditMode);
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
   const closures = useWorkspaceStore((s) => s.closures);
@@ -588,6 +589,22 @@ export function SubCriterionChecklist() {
           {partialAuditScope && (
             <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 11px", marginBottom: 8, fontSize: 12, color: "#9a3412", fontWeight: 600 }}>
               ⚠️ Last audit ran in {partialAuditScope}-only mode — {partialAuditScope === "policy" ? "evidence and outcomes were not assessed" : "policy was not assessed"}. Run a full audit to get complete results.
+            </div>
+          )}
+
+          {/* Manual mode writes nothing automatically — without this banner a
+              user who just ran an assessment sees an unchanged, empty item and
+              no explanation (the confirmed silent no-op). The page itself stays
+              fully enabled: it IS manual mode's work surface. */}
+          {auditMode === "manual" && specific.length === 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: "#eef2ff", border: "1px solid #a5b4fc", borderRadius: 8, padding: "8px 11px", marginBottom: 8, fontSize: 12.5, color: "#3730a3", fontWeight: 600 }}>
+              <span aria-hidden>✍️</span>
+              <span style={{ flex: 1, minWidth: 240 }}>
+                Manual mode: nothing is written automatically. Enter verdicts here by hand, or run PPD + Evidence and click <b>Compile findings</b> there to populate this item.
+              </span>
+              <Link to={`/evidence-folder?review=${sub.id}`} style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: "#4f46e5", borderRadius: 6, padding: "5px 12px", textDecoration: "none", whiteSpace: "nowrap" }}>
+                Open PPD + Evidence Review →
+              </Link>
             </div>
           )}
 

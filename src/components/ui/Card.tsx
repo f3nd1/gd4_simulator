@@ -5,11 +5,12 @@ import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 // highest-leverage place to reach the "Bold" display theme's warmer, less
 // stark background — one flip in Settings reaches virtually the whole app
 // without touching every page's inline styles.
-export function Card({ children, style }: { children: ReactNode; style?: CSSProperties }) {
+export function Card({ children, style, id }: { children: ReactNode; style?: CSSProperties; id?: string }) {
   const bold = useWorkspaceStore((s) => s.uiTheme) === "bold";
   return (
     <div
       className="gd-card"
+      id={id}
       style={{
         background: bold ? "#fbf9f4" : "#fff",
         border: bold ? "1px solid #e6ded0" : "1px solid #e8edf3",
