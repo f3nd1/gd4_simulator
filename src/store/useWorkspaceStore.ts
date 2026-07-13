@@ -1242,7 +1242,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (requirements.length === 0) { finish(null, false, "No GD4 requirement lines map to this sub-criterion."); return; }
 
           const policyId = parseFolderId(folder.policyLink) || parseFolderId(folder.folderLink);
-          const token = useGoogleDriveStore.getState().getValidToken();
+          // getFreshToken (not getValidToken) so a near-/already-expired token
+          // gets silently refreshed here, before the folder listing that
+          // follows — the same refresh the per-file read loop below already
+          // does, just also covering the run's very first Drive call.
+          const token = await useGoogleDriveStore.getState().getFreshToken();
           // Drive guard: block with a clear message + Connect action (via the
           // Evidence Folder banner) instead of failing silently — Option A used
           // to just stop here with no visible error.
@@ -1665,7 +1669,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (!ppd || ppd.rows.length === 0) { finish(null, false, "Run the PPD review first — the Evidence tab reuses its per-line verdicts."); return; }
 
           const evidenceId = parseFolderId(folder.folderLink) || parseFolderId(folder.policyLink);
-          const token = useGoogleDriveStore.getState().getValidToken();
+          // getFreshToken (not getValidToken) — see runPPDReview's identical
+          // comment: refreshes a near-/already-expired token before the
+          // listing call that follows, instead of only refreshing per file.
+          const token = await useGoogleDriveStore.getState().getFreshToken();
           const drive = checkDriveForRun(!!evidenceId, !!token);
           if (drive) { set({ driveBlockedReason: { ...drive, subCriterionId } }); finish(null, false, drive.message); return; }
           set({ driveBlockedReason: null });
@@ -3552,7 +3559,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const evidenceId = parseFolderId(folder.folderLink);
         const policyId = parseFolderId(folder.policyLink);
-        const token = useGoogleDriveStore.getState().getValidToken();
+        // getFreshToken (not getValidToken) — see runPPDReview's identical
+        // comment: refreshes a near-/already-expired token before the
+        // listing call that follows.
+        const token = await useGoogleDriveStore.getState().getFreshToken();
         const drive = checkDriveForRun(!!(evidenceId || policyId), !!token);
         if (drive) {
           auditHadError = true;
@@ -4928,7 +4938,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const evidenceId = parseFolderId(folder.folderLink);
         const policyId = parseFolderId(folder.policyLink);
-        const token = useGoogleDriveStore.getState().getValidToken();
+        // getFreshToken (not getValidToken) — see runPPDReview's identical
+        // comment: refreshes a near-/already-expired token before the
+        // listing call that follows.
+        const token = await useGoogleDriveStore.getState().getFreshToken();
         const drive = checkDriveForRun(!!(evidenceId || policyId), !!token);
         if (drive) {
           auditHadError = true;
@@ -5885,20 +5898,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
         // One up-front connection check for the whole run — otherwise every
         // folder would fail individually with the same not-connected message.
-        const bulkToken = useGoogleDriveStore.getState().getValidToken();
+        // getFreshToken (not getValidToken): this is the bulk sweep's ONE
+        // Drive touchpoint most likely to run long enough to cross the
+        // token's ~1hr lifetime, so it gets refreshed here before any of the
+        // per-folder audits below start (each of which also refreshes again
+        // at its own start — see auditFolderContents/auditFolderStaged).
+        const bulkToken = await useGoogleDriveStore.getState().getFreshToken();
         const bulkDrive = checkDriveForRun(true, !!bulkToken);
         if (bulkDrive) { set({ driveBlockedReason: bulkDrive, bulkAuditStatus: null }); return; }
         set({ driveBlockedReason: null });
         // Read the school-wide Additional-info folder ONCE and reuse it for
         // every sub-criterion (vs re-reading it 24×). "" means "no context /
-        // don't read again" to each auditFolderContents call.
+        // don't read again" to each auditFolderContents call. Reuses the
+        // just-refreshed bulkToken rather than fetching a second one.
         let sharedContext = "";
         const addId = parseFolderId(get().additionalInfo.link);
-        const token = useGoogleDriveStore.getState().getValidToken();
-        if (addId && token) {
+        if (addId && bulkToken) {
           set({ bulkAuditStatus: "Reading school-wide additional info…" });
           try {
-            sharedContext = await readFolderPlainText(addId, token);
+            sharedContext = await readFolderPlainText(addId, bulkToken);
           } catch {
             sharedContext = "";
           }
@@ -5926,7 +5944,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       },
 
       auditChangedFolders: async () => {
-        const token = useGoogleDriveStore.getState().getValidToken();
+        // getFreshToken (not getValidToken) — this sweep lists every linked
+        // folder looking for changes before auditing any of them, the same
+        // long-running-bulk-check shape as auditAllFolders above.
+        const token = await useGoogleDriveStore.getState().getFreshToken();
         const folders = get().folders;
         const linked = folders.filter((f) => parseFolderId(f.folderLink) || parseFolderId(f.policyLink));
         const unlinked = folders.length - linked.length;
