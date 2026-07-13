@@ -91,6 +91,13 @@ export function buildOptionALineWrites(
         reviewed: false,
         sufficiency: status === "Met" ? "Present" : status === "Partial" ? "Weak" : "Missing",
         ppdVerdict: row.ppdVerdict,
+        // Tab snapshots (see SubChecklistEvidenceItem) — the run's own verdict
+        // and both halves' reasoning verbatim, so the card's PPD/Evidence tabs
+        // bind to real stored data instead of parsing auditorNote below.
+        evidenceVerdict: status,
+        ppdComment: ppdRow?.fullComment || ppdRow?.shortComment || undefined,
+        evidenceComment: row.comment || row.evidenceSummary || undefined,
+        promiseChecks: row.promiseChecks,
         auditorNote: [
           `PPD verdict: ${ppdVerdictLabel(row.ppdVerdict)}. Combined verdict: ${evVerdictLabel(status)}.`,
           row.comment || row.evidenceSummary,

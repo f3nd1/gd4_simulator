@@ -319,6 +319,18 @@ export type SubChecklistEvidenceItem = {
   // state rather than deriving one from apsr.approach.status (a different,
   // lossier vocabulary — see optionAChecklistWrite.ts).
   ppdVerdict?: PPDVerdict;
+  // Option A run snapshots for the checklist card's PPD/Evidence tabs — same
+  // additive pattern as ppdVerdict above: real fields written at commit time,
+  // never parsed back out of the auditorNote free text. evidenceVerdict is
+  // what the RUN concluded, preserved even after a human later edits the
+  // line's status (the editable field that drives the band); the comments are
+  // each half's reasoning verbatim; promiseChecks is the per-promise ✓/○
+  // detail. All absent on Option B, manual, seed, and pre-existing lines —
+  // the tabs degrade to the apsr notes (older runs) or render nothing.
+  evidenceVerdict?: "Met" | "Partial" | "Not met";
+  ppdComment?: string;
+  evidenceComment?: string;
+  promiseChecks?: PromiseCheck[];
   // Audit-run id (e.g. "AR-1.2-K9QZ") when this item was created by a folder
   // audit, so it can be traced to the matching result row, AI Review Log entry
   // and journal entry. Also records that an AI run produced it, not a human.

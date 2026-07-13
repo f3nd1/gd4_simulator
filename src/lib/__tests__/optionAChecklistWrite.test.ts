@@ -66,6 +66,20 @@ describe("buildOptionALineWrites — Option A verdicts land on checklist lines b
     expect(apsr.review.status).toBe("Not evident");
   });
 
+  it("carries the tab snapshots verbatim: run verdict, both halves' reasoning, ppdVerdict and promiseChecks", () => {
+    const checks = [
+      { promiseText: "Rubric applied before appointment", verdict: "evidenced" as const, evidence: "Scoring sheets on file.", chunkIds: ["C002"] },
+      { promiseText: "Due-diligence on every agent", verdict: "not evidenced" as const, evidence: "No record found.", chunkIds: [] },
+    ];
+    const writes = buildOptionALineWrites([row({ verdict: "Partial", promiseChecks: checks })], {}, PPD_ROWS, OPTS);
+    const ev = writes[0].evidence;
+    expect(ev.ppdVerdict).toBe("Adequate");
+    expect(ev.evidenceVerdict).toBe("Partial"); // the RUN's verdict, preserved even if a human later edits l.status
+    expect(ev.ppdComment).toBe("…"); // ppdRow.fullComment verbatim, not the shortComment
+    expect(ev.evidenceComment).toBe("Documented and implemented (C002)."); // row.comment verbatim
+    expect(ev.promiseChecks).toEqual(checks);
+  });
+
   it("never writes 'Not assessed' or failed rows over an existing status", () => {
     const writes = buildOptionALineWrites(
       [row({ verdict: "Not assessed" }), row({ gdRef: "1.2.1.DS2", assessmentFailed: true })],

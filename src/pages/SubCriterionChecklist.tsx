@@ -304,6 +304,9 @@ export function SubCriterionChecklist() {
   const [reuseTargetItem, setReuseTargetItem] = useState("");
   const [reuseTargetLine, setReuseTargetLine] = useState("");
   const [maturityOpen, setMaturityOpen] = useState(false);
+  // Which read-only reasoning tab the expanded line shows — pure UI state,
+  // both halves' data are already on the line's stored evidence item.
+  const [expandTab, setExpandTab] = useState<"ppd" | "evidence">("evidence");
 
   const req = GD4_REQUIREMENTS.find((r) => r.id === selectedId)!;
   const sub = GD4_SUB_CRITERIA.find((s) => s.id === req.subCriterionId)!;
@@ -415,6 +418,7 @@ export function SubCriterionChecklist() {
       setExpandedLine(null);
     } else {
       setExpandedLine(lineId);
+      setExpandTab("evidence"); // per prototype: tabs default to Evidence on every expand
       setEvidenceDraft(emptyEvidenceDraft());
       setSamplingDraft({});
     }
@@ -740,10 +744,11 @@ export function SubCriterionChecklist() {
             const metEvidence = l.status === "Met" ? [...l.evidence].reverse().find((e) => e.apsr) : undefined;
             const expanded = expandedLine === l.id;
             const ref = l.sourceType && l.generatedBy === "ai" ? sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined) : l.clause || null;
-            // Policy (PPD-only) verdict — real field, set only on lines written by
-            // Option A (buildOptionALineWrites); absent on Option B/manual/seed
-            // lines, which show the honest "—" empty state rather than a guess.
-            const ppdVerdict = [...l.evidence].reverse().find((e) => e.ppdVerdict)?.ppdVerdict;
+            // The most recent AI-run evidence item — ONE item so the tabs'
+            // verdict/reasoning/runId always describe the same run (Task 1
+            // gate: a write is atomic, one runId covers both halves). Manual
+            // lines have none → no tab block, nothing to show.
+            const aiItem = [...l.evidence].reverse().find((e) => e.runId);
             // Gate-visibility fix: a newer run for THIS line is queued but not
             // yet approved/rejected — everything above (Policy, Combined,
             // evidence) is still the last-APPROVED run, not this one.
@@ -800,12 +805,11 @@ export function SubCriterionChecklist() {
                   onClick={(e) => e.stopPropagation()}
                   style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "4px 10px 7px 28px", borderTop: `1px solid ${statusBorder}22`, fontSize: 11, background: row2Bg }}
                 >
-                  {/* Policy = PPD-only verdict (Task 2) — real field, read-only here
-                      (Option A is what produces it; nothing on this card writes it).
-                      Honest "—" when absent, never a guessed/derived value. */}
-                  <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Policy</span>
-                  <Pill s={ppdVerdict ? ppdVerdictTone(ppdVerdict) : "neutral"}>{ppdVerdict ? ppdVerdictLabel(ppdVerdict) : "—"}</Pill>
-                  <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Combined</span>
+                  {/* ONE editable verdict — the field that drives the band. The
+                      PPD/Evidence split lives in the expand's read-only tabs;
+                      this control keeps the exact same field, write path and
+                      options as before (setSpecificStatus → l.status). */}
+                  <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Verdict — drives the band</span>
                   <select
                     value={l.status}
                     onChange={(e) => setSpecificStatus(selectedId, l.id, e.target.value as SpecificLineStatus)}
@@ -872,6 +876,92 @@ export function SubCriterionChecklist() {
 
                 {expanded && (
                   <div style={{ padding: "0 9px 9px", borderTop: "1px solid #f1f5f9", paddingTop: 8 }}>
+                    {/* PPD / Evidence reasoning tabs — read-only views of the ONE
+                        AI run whose write produced this line (single runId, per
+                        the Task 1 gate: PPD and Evidence halves are written
+                        atomically and cannot diverge). Manual lines have no AI
+                        evidence item, so no tab block renders for them. */}
+                    {aiItem && (
+                      <div style={{ marginBottom: 8, border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+                        <div style={{ display: "flex", alignItems: "center", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                          {(["ppd", "evidence"] as const).map((tab) => (
+                            <button
+                              key={tab}
+                              onClick={() => setExpandTab(tab)}
+                              style={{
+                                cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "6px 14px", border: "none",
+                                borderBottom: expandTab === tab ? "2px solid #4338ca" : "2px solid transparent",
+                                background: expandTab === tab ? "#fff" : "transparent",
+                                color: expandTab === tab ? "#4338ca" : "#64748b",
+                              }}
+                            >
+                              {tab === "ppd" ? "PPD" : "Evidence"}
+                            </button>
+                          ))}
+                          <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#94a3b8", fontFamily: "ui-monospace,monospace", paddingRight: 10 }}>
+                            Run {aiItem.runId}
+                          </span>
+                        </div>
+                        <div style={{ padding: "8px 11px" }}>
+                          {pendingWrite && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8, background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 6, padding: "6px 9px", fontSize: 11.5, color: "#92400e", fontWeight: 600 }}>
+                              <span aria-hidden>⚠</span>
+                              <span style={{ flex: 1, minWidth: 180 }}>This tab shows run {aiItem.runId} — a newer run ({itemPendingRunId}) is awaiting your review.</span>
+                              <Link to={`/evidence-folder?run=${itemPendingRunId}`} style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#b45309", borderRadius: 6, padding: "3px 9px", textDecoration: "none", whiteSpace: "nowrap" }}>
+                                Review pending run →
+                              </Link>
+                            </div>
+                          )}
+                          {expandTab === "ppd" ? (
+                            <>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                                <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Policy verdict</span>
+                                <Pill s={aiItem.ppdVerdict ? ppdVerdictTone(aiItem.ppdVerdict) : "neutral"}>{aiItem.ppdVerdict ? ppdVerdictLabel(aiItem.ppdVerdict) : "—"}</Pill>
+                                <span style={{ fontSize: 10.5, color: "#94a3b8" }}>PPD reasoning as snapshotted by this evidence run</span>
+                              </div>
+                              {(aiItem.ppdComment || aiItem.apsr?.approach.note) ? (
+                                <div style={{ fontSize: 12, color: "#1e293b", lineHeight: 1.45, whiteSpace: "pre-line" }}>{aiItem.ppdComment || aiItem.apsr?.approach.note}</div>
+                              ) : (
+                                <div style={{ fontSize: 11.5, color: "#94a3b8", fontStyle: "italic" }}>No PPD reasoning stored on this line.</div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                                <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Run verdict</span>
+                                <Pill s={aiItem.evidenceVerdict ? statusTone(aiItem.evidenceVerdict) : "neutral"}>{aiItem.evidenceVerdict ? evVerdictLabel(aiItem.evidenceVerdict) : "—"}</Pill>
+                                {aiItem.evidenceVerdict && aiItem.evidenceVerdict !== l.status && (
+                                  <span style={{ fontSize: 10.5, color: "#b45309" }}>differs from the current verdict above (edited after this run)</span>
+                                )}
+                              </div>
+                              {(aiItem.evidenceComment || aiItem.apsr?.processes.note) ? (
+                                <div style={{ fontSize: 12, color: "#1e293b", lineHeight: 1.45, whiteSpace: "pre-line" }}>{aiItem.evidenceComment || aiItem.apsr?.processes.note}</div>
+                              ) : (
+                                <div style={{ fontSize: 11.5, color: "#94a3b8", fontStyle: "italic" }}>No evidence reasoning stored on this line.</div>
+                              )}
+                              {aiItem.promiseChecks && aiItem.promiseChecks.length > 0 && (
+                                <div style={{ marginTop: 8 }}>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 3 }}>What the policy promised, checked against practice</div>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                    {aiItem.promiseChecks.map((p, i) => {
+                                      const tone = p.verdict === "evidenced" ? "#166534" : p.verdict === "contradicted" ? "#b91c1c" : "#b45309";
+                                      const mark = p.verdict === "evidenced" ? "✓" : p.verdict === "contradicted" ? "✗" : "○";
+                                      const lead = p.verdict === "evidenced" ? "Promise kept" : p.verdict === "contradicted" ? "Contradicted by the evidence" : "Not shown in the evidence";
+                                      return (
+                                        <div key={i} style={{ fontSize: 12, lineHeight: 1.45 }}>
+                                          <span style={{ color: tone, fontWeight: 700 }}>{mark} {lead}:</span>
+                                          <span style={{ color: "#1e293b" }}> {p.promiseText}</span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     {!draft && metEvidence?.apsr && (
                       <div style={{ marginBottom: 8, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 11px", fontSize: 12 }}>
                         <div style={{ fontWeight: 700, color: "#15803d", marginBottom: 4, textTransform: "uppercase", fontSize: 10.5, letterSpacing: 0.3 }}>Evidence strength</div>
