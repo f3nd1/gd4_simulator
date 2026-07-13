@@ -32,6 +32,52 @@ function optionAApsr(row: EvidenceAssessmentRow, ppdRow: PPDReviewRow | undefine
   };
 }
 
+// Frozen-at-raise source trace appended to a finding's observation when the
+// Option A compile raises it. A finding is a standalone register record — it
+// must carry its own citations (file names, chunk ids, verbatim quotes), the
+// same way the PPD-contradiction findings embed quoteA/quoteB + chunkA/chunkB.
+// This is NOT the retired auditorNote blob: that duplicated live checklist-tab
+// data on the evidence item; a register finding has no live tabs to defer to.
+// Honesty rule: only verified quotes are embedded (promiseChecks[].quote and
+// PPDReviewRow.supportQuote exist only after verbatim verification against the
+// source), so the trace can never fabricate a citation.
+export function buildOptionASourceTrace(
+  row: EvidenceAssessmentRow,
+  ppdRow: PPDReviewRow | undefined,
+  resolveChunkFile?: (chunkId: string) => string | undefined,
+  runId?: string
+): string {
+  const label = (cid: string) => {
+    const file = resolveChunkFile?.(cid);
+    return file ? `${file} · ${cid}` : cid;
+  };
+  const lines: string[] = [];
+  const files = (row.evidenceFiles ?? []).map((f) => f.name).filter(Boolean);
+  if (files.length > 0) lines.push(`Evidence files: ${files.join("; ")}`);
+  const cites = (row.evidenceChunkIds ?? []).map(label);
+  if (cites.length > 0) lines.push(`Cited passages: ${cites.join(", ")}`);
+  // The row's own verified excerpt (see EvidenceAssessmentRow.evidenceQuote) —
+  // no per-chunk attribution is asserted; the cited-passages line above names
+  // the chunks it can only have come from.
+  if (row.evidenceQuote) lines.push(`Verified excerpt: "${row.evidenceQuote}"`);
+  for (const p of row.promiseChecks ?? []) {
+    if (!p.quote) continue;
+    const cid = p.chunkId ?? p.chunkIds?.[0];
+    lines.push(`"${p.quote}"${cid ? ` (${label(cid)})` : ""} — ${p.verdict}: ${p.promiseText}`);
+  }
+  if (ppdRow?.supportQuote) {
+    const cid = ppdRow.chunkIds?.[0];
+    lines.push(`PPD basis: "${ppdRow.supportQuote}"${cid ? ` (${label(cid)})` : ""}`);
+  }
+  if (lines.length === 0) {
+    // Nothing citable (typical for a Not met line — the gap IS the absence of
+    // evidence). Still point at the run's file ledger so the finding names
+    // what was actually read, rather than tracing to nothing.
+    return runId ? `Source evidence (run ${runId}): no evidence passages were cited for this line — the run's file ledger records which documents were read.` : "";
+  }
+  return `Source evidence${runId ? ` (run ${runId})` : ""}:\n${lines.map((l) => `- ${l}`).join("\n")}`;
+}
+
 export function buildOptionALineWrites(
   rows: EvidenceAssessmentRow[],
   // gd4ItemId -> that item's existing specific checklist lines

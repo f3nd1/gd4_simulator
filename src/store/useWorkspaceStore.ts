@@ -88,7 +88,7 @@ function enqueuePanelAutoRun(findingId: string, getRunner: () => (id: string, op
   void drain();
 }
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
-import { buildOptionALineWrites } from "../lib/optionAChecklistWrite";
+import { buildOptionALineWrites, buildOptionASourceTrace } from "../lib/optionAChecklistWrite";
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, partitionOptionAWrites, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
 import { effectiveVerdictTemp, describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
@@ -2048,6 +2048,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const s = get();
         const result = s.evidenceAssessments[subCriterionId];
         if (!result) return 0;
+        const ppd = s.ppdReviewResults[subCriterionId];
+        // chunkId → source file name, from whichever run produced the chunk
+        // (evidence chunks from this assessment, PPD chunks from the PPD run),
+        // so a finding's citations read "file · C004", not a bare chunk id.
+        const resolveChunkFile = (cid: string) => result.chunkFileNames?.[cid] ?? ppd?.chunkFileNames?.[cid];
         let raised = 0;
         let changed = false;
         // Composite keys of every finding already in the register, so a
@@ -2118,7 +2123,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const writes = buildOptionALineWrites(
               [row],
               { [row.gd4ItemId]: (checklist.entries[row.gd4ItemId]?.specific ?? []).map((l) => ({ id: l.id, sourceRef: l.sourceRef, clause: l.clause })) },
-              get().ppdReviewResults[subCriterionId]?.rows ?? [],
+              ppd?.rows ?? [],
               { runId: result.runId ?? `EV-${subCriterionId}-COMPILE`, folderName: folder?.folderName, drive: folder?.folderLink || folder?.policyLink, owner: folder?.owner }
             );
             if (writes.length > 0) checklist.applyOptionAWrites(writes);
@@ -2135,8 +2140,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // value, which typed the finding differently from the dedupe key
             // built at the top of this loop and produced duplicates later.
             const draft = buildDraftFinding(req, { ...line, status: rowStatus });
+            // Freeze this row's citations onto the finding — file names,
+            // chunk ids (resolved to files) and verified verbatim quotes —
+            // so the register record traces back to the source documents on
+            // its own, like the PPD-contradiction findings below already do.
+            // Without this the finding kept only buildDraftFinding's
+            // paraphrase (the real traceability gap found 2026-07-13).
+            const ppdRow = (ppd?.rows ?? []).find((pr) => normalizeAuditRef(pr.ref) === normRef);
+            const trace = buildOptionASourceTrace(row, ppdRow, resolveChunkFile, result.runId);
+            if (trace) draft.observation = draft.observation ? `${draft.observation}\n\n${trace}` : trace;
             const before = get().customFindings.length;
-            useChecklistModuleStore.getState().confirmDraftFinding(row.gd4ItemId, line.id, draft);
+            useChecklistModuleStore.getState().confirmDraftFinding(row.gd4ItemId, line.id, draft, result.runId);
             findingId = useChecklistModuleStore
               .getState()
               .entries[row.gd4ItemId]?.specific.find((l) => l.id === line!.id)?.draftFinding?.savedFindingId;
@@ -2157,8 +2171,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Technique 2 compile: each PPD internal contradiction raises its own
         // finding (OFI, or NC-Minor when it involves a gate-sensitive item's
         // sub-criterion). Dedupe via the same composite-key mechanism, with a
-        // stable synthetic ref per contradiction.
-        const ppd = get().ppdReviewResults[subCriterionId];
+        // stable synthetic ref per contradiction. (`ppd` hoisted to the top
+        // of this action — the row loop's source traces need it too.)
         if (ppd?.contradictions?.length) {
           const subItems = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId);
           const anchorItem = subItems[0];

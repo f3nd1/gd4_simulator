@@ -1014,7 +1014,9 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
     text ? (
       <div style={{ marginBottom: 8 }}>
         <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>{label}</div>
-        <div style={{ fontSize: 12.5, color: "#334155", lineHeight: 1.5 }}>{text}</div>
+        {/* pre-line: the observation may carry a multi-line "Source evidence"
+            trace (file · chunk citations + verbatim quotes) — keep its lines. */}
+        <div style={{ fontSize: 12.5, color: "#334155", lineHeight: 1.5, whiteSpace: "pre-line" }}>{text}</div>
       </div>
     ) : null;
   return (
@@ -1024,7 +1026,10 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
           GD4 {req.id} · {req.requirement}
           {f.clause && <span style={{ fontFamily: "ui-monospace,monospace", marginLeft: 8 }}>{f.clause}</span>}
           {f.source && <Pill s="neutral">{f.source}</Pill>}
-          {f.auditRunId && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#6b7280", marginLeft: 6 }}>Run: {f.auditRunId}</span>}
+          {/* Clickable run back-link: Option A run ids deep-link to the run's
+              result modal on Evidence Folder; ids that don't resolve just open
+              the page (harmless). */}
+          {f.auditRunId && <Link to={`/evidence-folder?run=${f.auditRunId}`} style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#4f46e5", marginLeft: 6, textDecoration: "none" }}>Run: {f.auditRunId} →</Link>}
           {f.dimension && <span style={{ marginLeft: 4 }}><Pill s={dimensionTone(f.dimension)}>{dimensionLabel(f.dimension)}</Pill></span>}
           {f.riskCategory && <span style={{ marginLeft: 4 }}><Pill s={riskCatTone(f.riskCategory) as Parameters<typeof Pill>[0]["s"]}>{riskCatLabel(f.riskCategory)}</Pill></span>}
         </div>

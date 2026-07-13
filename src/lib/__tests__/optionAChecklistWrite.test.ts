@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildOptionALineWrites } from "../optionAChecklistWrite";
+import { buildOptionALineWrites, buildOptionASourceTrace } from "../optionAChecklistWrite";
 import type { EvidenceAssessmentRow, PPDReviewRow } from "../../types";
 
 function row(over: Partial<EvidenceAssessmentRow>): EvidenceAssessmentRow {
@@ -91,5 +91,46 @@ describe("buildOptionALineWrites — Option A verdicts land on checklist lines b
       OPTS
     );
     expect(writes).toHaveLength(0);
+  });
+});
+
+describe("buildOptionASourceTrace — findings carry file + chunk + verbatim-quote citations", () => {
+  const resolve = (cid: string) => ({ C001: "PPD_v3.pdf", C002: "enrolment_log.xlsx" } as Record<string, string>)[cid];
+
+  it("embeds evidence files, resolved chunk citations and verified quotes", () => {
+    const r = row({
+      evidenceFiles: [{ name: "enrolment_log.xlsx", url: "https://drive/x" }],
+      evidenceQuote: "Attendance is recorded per session.",
+      promiseChecks: [
+        { promiseText: "Refund within 7 days", verdict: "evidenced" as const, evidence: "Refund log.", chunkIds: ["C002"], quote: "refunds are processed within 7 working days" },
+        { promiseText: "No quote for this one", verdict: "not evidenced" as const, evidence: "None.", chunkIds: [] }, // no verified quote — must NOT appear
+      ],
+    });
+    const trace = buildOptionASourceTrace(r, PPD_ROWS[0], resolve, "EV-1.2-TEST");
+    expect(trace).toContain("Source evidence (run EV-1.2-TEST):");
+    expect(trace).toContain("Evidence files: enrolment_log.xlsx");
+    expect(trace).toContain("Cited passages: enrolment_log.xlsx · C002"); // resolved, not a bare chunk id
+    expect(trace).toContain(`Verified excerpt: "Attendance is recorded per session."`);
+    expect(trace).toContain(`"refunds are processed within 7 working days" (enrolment_log.xlsx · C002) — evidenced: Refund within 7 days`);
+    expect(trace).not.toContain("No quote for this one"); // unverified promise carries no quotable citation
+  });
+
+  it("includes the PPD basis quote only when a verified supportQuote exists", () => {
+    const withQuote = buildOptionASourceTrace(row({}), { ...PPD_ROWS[0], supportQuote: "The PEI shall review annually." }, resolve);
+    expect(withQuote).toContain(`PPD basis: "The PEI shall review annually." (PPD_v3.pdf · C001)`);
+    const withoutQuote = buildOptionASourceTrace(row({ evidenceChunkIds: [] }), PPD_ROWS[0], resolve);
+    expect(withoutQuote).not.toContain("PPD basis"); // no supportQuote on the fixture row
+  });
+
+  it("falls back to the file-ledger pointer when nothing is citable (Not met with no evidence), never fabricates", () => {
+    const empty = row({ verdict: "Not met", evidenceChunkIds: [], evidenceFiles: [], comment: "" });
+    expect(buildOptionASourceTrace(empty, undefined, resolve, "EV-1.2-TEST")).toContain("no evidence passages were cited for this line");
+    expect(buildOptionASourceTrace(empty, undefined, resolve)).toBe(""); // no runId either → empty, appended nowhere
+  });
+
+  it("leaves unresolvable chunk ids as bare ids rather than inventing a file name", () => {
+    const trace = buildOptionASourceTrace(row({ evidenceChunkIds: ["C999"] }), undefined, resolve);
+    expect(trace).toContain("Cited passages: C999");
+    expect(trace).not.toContain("undefined");
   });
 });

@@ -8,7 +8,7 @@ import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildGenericLines } from "../data/checklistSeed";
-import { computeBand, lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
+import { computeBand, lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, type BandResult } from "../lib/checklistBanding";
 import { apsrAuditNote } from "../lib/ai/simulateAI";
 import { findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
 import { ppdVerdictLabel, ppdVerdictTone, evVerdictLabel } from "../lib/verdictTone";
@@ -142,6 +142,28 @@ function quadrantLabel(coveragePct: number, ceiling: number): string {
 
 function quadrantTone(label: string): "good" | "medium" | "critical" {
   return label === "Ready" ? "good" : label === "Needs work" ? "critical" : "medium";
+}
+
+// The G1–G4 Maturity assessment is human-only input: no scan ever sets it, it
+// seeds at "Not Started" (= ceiling Band 1) and it lives behind a collapsed
+// "advanced" toggle — so after a scan fills the specific lines, the final band
+// silently stays floored by an input the user never saw. This note makes that
+// cap visible wherever the band is shown, with a jump straight to the panel.
+// Hidden while an evidence cap is active (completing maturity wouldn't lift
+// the band then, and the evidence warning already explains the cap).
+function MaturityCapNote({ br, onOpen }: { br: BandResult; onOpen: () => void }) {
+  if (!br.started || br.evidenceCapped || br.maturityCeiling >= br.coverageCap) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8, background: "#eef2ff", border: "1px solid #a5b4fc", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, color: "#3730a3", fontWeight: 600 }}>
+      <span aria-hidden>ⓘ</span>
+      <span style={{ flex: 1, minWidth: 240 }}>
+        Your evidence supports Band {br.coverageCap}, but the band is capped at Band {br.maturityCeiling} until the Maturity assessment is completed.
+      </span>
+      <button onClick={onOpen} style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#fff", background: "#4f46e5", border: "none", borderRadius: 6, padding: "5px 12px", whiteSpace: "nowrap" }}>
+        Open Maturity assessment →
+      </button>
+    </div>
+  );
 }
 
 const emptyEvidenceDraft = (): Omit<SubChecklistEvidenceItem, "id"> => ({
@@ -304,6 +326,12 @@ export function SubCriterionChecklist() {
   const [reuseTargetItem, setReuseTargetItem] = useState("");
   const [reuseTargetLine, setReuseTargetLine] = useState("");
   const [maturityOpen, setMaturityOpen] = useState(false);
+  // Jump target for the maturity-cap note: open the collapsed panel, then
+  // scroll to it once it exists in the DOM (next tick).
+  const openMaturityPanel = () => {
+    setMaturityOpen(true);
+    setTimeout(() => document.getElementById("maturity-panel")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
+  };
   // Which read-only reasoning tab the expanded line shows — pure UI state,
   // both halves' data are already on the line's stored evidence item.
   const [expandTab, setExpandTab] = useState<"ppd" | "evidence">("evidence");
@@ -582,6 +610,7 @@ export function SubCriterionChecklist() {
               )}
             </div>
           )}
+          <MaturityCapNote br={bandResult} onOpen={openMaturityPanel} />
 
           {itemPendingItems.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8, background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, color: "#92400e", fontWeight: 600 }}>
@@ -595,7 +624,7 @@ export function SubCriterionChecklist() {
             </div>
           )}
 
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 12 }} id="maturity-panel">
             <button
               onClick={() => setMaturityOpen((o) => !o)}
               style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#6b7280", background: "transparent", border: "none", padding: "4px 0", display: "flex", alignItems: "center", gap: 5 }}
@@ -1243,6 +1272,7 @@ export function SubCriterionChecklist() {
                 <Metric label="Coverage cap" value={<Pill s={bandTone(bandResult.coverageCap)}>Band {bandResult.coverageCap}</Pill>} />
                 <Metric label="Final band" value={<Pill s={bandTone(bandResult.finalBand)}>Band {bandResult.finalBand}</Pill>} />
               </div>
+              <MaturityCapNote br={bandResult} onOpen={openMaturityPanel} />
               {bandResult.evidenceCapWarning && (
                 <div style={{ marginTop: 10, background: "#fbe7e3", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#b23121" }}>
                   <b>Evidence cap:</b> {bandResult.evidenceCapWarning}
