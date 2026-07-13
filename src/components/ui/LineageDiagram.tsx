@@ -134,9 +134,7 @@ function shorten(s: string, n = 110): string {
 }
 
 function uniqStrings(arr: (string | undefined)[]): string[] {
-  const out: string[] = [];
-  for (const s of arr) if (s && !out.includes(s)) out.push(s);
-  return out;
+  return [...new Set(arr.filter((s): s is string => !!s))];
 }
 
 // Plain-text rendering of a sub-part's located passage / honest fallback —

@@ -219,10 +219,10 @@ export function detectDateTimeDiscrepancy(files: DetectFile[], now: Date = new D
   }
 
   const flagMessages: string[] = [];
-  const flaggedFiles: DetectFile[] = [];
+  const flaggedFiles = new Set<DetectFile>();
   const addFlag = (msg: string, ...fs: DetectFile[]) => {
     flagMessages.push(msg);
-    for (const f of fs) if (!flaggedFiles.includes(f)) flaggedFiles.push(f);
+    fs.forEach((f) => flaggedFiles.add(f));
   };
 
   // Flag 1 — policy postdates evidence it would logically govern.
@@ -248,7 +248,7 @@ export function detectDateTimeDiscrepancy(files: DetectFile[], now: Date = new D
     return {
       status: "flag",
       message: flagMessages.slice(0, 3).join(" ") + (flagMessages.length > 3 ? ` …and ${flagMessages.length - 3} more.` : ""),
-      fileRefs: flaggedFiles.map((f) => ({ name: f.name, driveFileId: f.driveFileId })),
+      fileRefs: [...flaggedFiles].map((f) => ({ name: f.name, driveFileId: f.driveFileId })),
     };
   }
   return { status: "clear", message: `Checked ${dated.length} dated file(s) — no postdating or audit-proximity discrepancy found.` };

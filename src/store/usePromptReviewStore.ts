@@ -11,10 +11,6 @@ import type { ReviewablePrompt, PromptReviewRecord } from "../types";
 // `text` is the OPERATIONAL version; an AI-drafted revision lives on the review
 // record as `revisedPrompt` and only replaces `text` when promoteRevision is
 // called from an explicit human click — nothing auto-promotes.
-//
-// Human-override-wins (mirrors useCalibrationStore.setMatch/setAiMatch):
-// attachRevision refuses to overwrite a record that has already been promoted
-// (revision_live), so a re-draft can never clobber a confirmed human decision.
 
 export type PromptReviewState = {
   prompts: ReviewablePrompt[];
@@ -22,11 +18,10 @@ export type PromptReviewState = {
   addPrompt: (p: { name: string; purpose: string; text: string }) => string;
   updatePrompt: (id: string, updates: Partial<Pick<ReviewablePrompt, "name" | "purpose" | "text">>) => void;
   removePrompt: (id: string) => void;
-  // Save a completed review; returns the new record id.
+  // Save a completed review; returns the new record id. A drafted revision
+  // rides along in the record's revisedPrompt field here (see PromptReview's
+  // saveReview) — there is no separate attach step.
   addReview: (rec: Omit<PromptReviewRecord, "id" | "timestamp">) => string;
-  // Attach the AI-drafted (and possibly human-edited) revision to a record.
-  // No-op if the record is already promoted (revision_live) — human wins.
-  attachRevision: (recordId: string, revisedPrompt: string) => void;
   // Promote a drafted revision to operational: copy revisedPrompt into the
   // parent ReviewablePrompt.text and mark the record revision_live. The gate.
   promoteRevision: (recordId: string) => void;
@@ -65,15 +60,6 @@ export const usePromptReviewStore = create<PromptReviewState>()(
         set((s) => ({ records: [{ ...rec, id, timestamp: new Date().toISOString() }, ...s.records] }));
         return id;
       },
-
-      attachRevision: (recordId, revisedPrompt) =>
-        set((s) => ({
-          records: s.records.map((r) =>
-            r.id === recordId && r.status !== "revision_live"
-              ? { ...r, revisedPrompt, status: "revision_drafted", decisionType: "Overridden", timestamp: new Date().toISOString() }
-              : r
-          ),
-        })),
 
       promoteRevision: (recordId) =>
         set((s) => {

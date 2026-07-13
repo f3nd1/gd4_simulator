@@ -11,11 +11,11 @@ import type {
   SamplingInfo,
   DraftFindingInfo,
   Finding,
+  ChecklistLineWrite,
 } from "../types";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildDraftFinding, lineSufficiency, lineApsr } from "../lib/checklistBanding";
 import { findingDedupeKey, findingKeyOf, normalizeAuditRef } from "../lib/gd4Refs";
-import type { OptionALineWrite } from "../lib/optionAChecklistWrite";
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill } from "../lib/ai/agentRuntime";
@@ -95,7 +95,7 @@ export type ChecklistModuleState = {
   // Option A results persist with the checklist and feed scoring the same
   // way. Matched lines are UPDATED (idempotent re-runs, prior runId evidence
   // replaced); unmatched refs create a new line. Returns lines written.
-  applyOptionAWrites: (writes: OptionALineWrite[]) => number;
+  applyOptionAWrites: (writes: ChecklistLineWrite[]) => number;
 
   confirmDraftFinding: (itemId: string, lineId: string, draft: DraftFindingInfo, auditRunId?: string) => void;
   // Scans checklist lines and raises a draft finding for each one that is

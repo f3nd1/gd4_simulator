@@ -3,7 +3,7 @@
 // Review / Evidence tabs present a consistent, equally-informative view. Purely
 // presentational: the caller maps its own progress to a step index.
 
-export const RUN_STEPS = [
+const RUN_STEPS = [
   { emoji: "🔌", label: "Connect" },
   { emoji: "📂", label: "Read files" },
   { emoji: "🤖", label: "Ask AI" },

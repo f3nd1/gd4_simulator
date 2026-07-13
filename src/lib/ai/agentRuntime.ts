@@ -86,9 +86,11 @@ const EVIDENCE_ASSESSMENT_SCHEMA: ChatSchema = { name: "evidence_assessment", sc
 // Verdict/comment self-consistency guard (both judges): the judge returns a
 // verdict enum and freeform comment prose in ONE JSON response with nothing
 // cross-checking them against each other. Confirmed on real exported data
-// that the model can return verdict "Partial" while its own comment's final
-// sentence concludes "...this requirement is assessed as Met." — a genuine
-// LLM self-contradiction, not a code bug. Literal substring patterns only
+// (run EV-6.3-MRHXOO1Y, line 6.3.1.DS1: evidenceVerdict "Partial" while the
+// comment concluded "...this requirement is assessed as Met.") that the model
+// can contradict itself this way — a genuine LLM self-contradiction, not a
+// code bug. NOT dead / NOT speculative: this guard exists for that real case;
+// keep it. (Flagged once in a cleanup audit — do not remove.) Literal substring patterns only
 // (never fuzzy/semantic matching, per this project's conservative-matching
 // rule), checked ONLY against the comment's last 300 characters (its
 // concluding sentence(s)) so an earlier mid-comment mention — e.g. "this

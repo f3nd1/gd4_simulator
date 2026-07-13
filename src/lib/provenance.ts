@@ -30,11 +30,11 @@ export function buildProvenance(
   const audited = folders.filter((f) => !!f.lastAuditAt);
   const auditTimes = audited.map((f) => f.lastAuditAt!).sort();
   const models = [...new Set(modelIds.filter((m): m is string => !!m))];
-  const auditors: string[] = [];
-  for (const f of audited) {
-    const a = (f.lastAuditAuditor ?? "").replace(/\s*\(.*\)$/, "").trim();
-    if (a && a !== "Unassigned" && !auditors.includes(a)) auditors.push(a);
-  }
+  const auditors = [...new Set(
+    audited
+      .map((f) => (f.lastAuditAuditor ?? "").replace(/\s*\(.*\)$/, "").trim())
+      .filter((a) => a && a !== "Unassigned")
+  )];
   return {
     assessedItems: items.filter((i) => i.started || i.checklistOverride).length,
     totalItems: items.length,

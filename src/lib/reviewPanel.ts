@@ -2,7 +2,7 @@
 // gating, cost estimate and finding hash are unit-testable. The AI calls
 // themselves live in agentRuntime.runAuditorPanel.
 
-import type { AuditorProfile, Finding, PanelAuditorReview, PanelReviewMode, PanelReviewResult, ReviewPerspective } from "../types";
+import type { AuditorProfile, Finding, PanelAuditorReview, PanelReviewMode, ReviewPerspective } from "../types";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
 
 export const REVIEW_PERSPECTIVES: Array<{ value: ReviewPerspective; label: string; guidance: string }> = [
@@ -128,84 +128,6 @@ function normRootDir(s: string): string {
   if (/(process|control|workflow|step|system)/.test(t)) return "process";
   if (/(none|no root|not applicable|n\/a)/.test(t)) return "none";
   return t;
-}
-
-// ── Chibi debate view (presentation-only) ───────────────────────────────
-// Pure script builder for the animated "Watch the debate" toggle. It ONLY
-// re-shapes data runAuditorPanel already produced — no AI, no store writes.
-
-export type DebateStep = {
-  kind: "review" | "rebuttal" | "synthesis";
-  // Index into the usable (non-failed) reviews; -1 for the synthesis step.
-  speakerIndex: number;
-  bubble: string;              // short one-line speech-bubble text
-  positionPill?: string;       // "NC · Major" etc. — omitted when unknown
-  caption: string;             // narration line under the stage
-};
-
-// First sentence of a review, clamped to one bubble-sized line.
-export function debateBubbleLine(text: string, maxLen = 110): string {
-  const t = (text || "").replace(/\s+/g, " ").trim();
-  if (!t) return "";
-  const m = t.match(/^.*?[.!?](?=\s|$)/);
-  const first = m ? m[0] : t;
-  return first.length > maxLen ? `${first.slice(0, maxLen - 1).trimEnd()}…` : first;
-}
-
-function positionPillOf(r: PanelAuditorReview): string | undefined {
-  const c = r.position?.classification?.trim();
-  if (!c) return undefined;
-  const sev = r.position?.severity?.trim();
-  return sev && sev.toLowerCase() !== "none" ? `${c} · ${sev}` : c;
-}
-
-export function buildDebateScript(review: PanelReviewResult): DebateStep[] {
-  const usable = review.reviews.filter((r) => !r.failed && r.analysis);
-  const steps: DebateStep[] = usable.map((r, i) => ({
-    kind: "review" as const,
-    speakerIndex: i,
-    bubble: debateBubbleLine(r.analysis),
-    positionPill: positionPillOf(r),
-    caption: `Round 1 — ${r.auditorName} (${r.perspectiveLabel}) gives their independent view.`,
-  }));
-  const rebutters = usable
-    .map((r, i) => ({ r, i }))
-    .filter(({ r }) => r.rebuttal && r.rebuttal.trim());
-  if (review.discussionTriggered && rebutters.length > 0) {
-    steps.push(...rebutters.map(({ r, i }) => ({
-      kind: "rebuttal" as const,
-      speakerIndex: i,
-      bubble: debateBubbleLine(r.rebuttal!),
-      positionPill: positionPillOf(r),
-      caption: `Rebuttal — the panel disagreed, so ${r.auditorName} responds to the others.`,
-    })));
-  }
-  const agreed = !review.discussionTriggered || rebutters.length === 0;
-  const finalLine = review.synthesis.finalClassification || review.synthesis.summary || "";
-  steps.push({
-    kind: "synthesis",
-    speakerIndex: -1,
-    bubble: debateBubbleLine(finalLine, 160),
-    caption: agreed
-      ? "The panel agreed at Round 1 — the chair closes with the synthesis."
-      : "After the discussion, the chair synthesises the panel's conclusion.",
-  });
-  return steps;
-}
-
-// Distinct, stable colour per auditor, derived from identity (djb2 hash over
-// a fixed palette, linear-probed so co-panellists never share a colour).
-const CHIBI_PALETTE = ["#e8695a", "#f2c14e", "#d96ba0", "#4fb5c4", "#7c83e0", "#5aa46c", "#c98a4b", "#8a6fc9"];
-export function chibiColorsFor(ids: string[]): string[] {
-  const taken = new Set<number>();
-  return ids.map((id) => {
-    let h = 5381;
-    for (let i = 0; i < id.length; i++) h = ((h << 5) + h + id.charCodeAt(i)) | 0;
-    let idx = (h >>> 0) % CHIBI_PALETTE.length;
-    while (taken.has(idx)) idx = (idx + 1) % CHIBI_PALETTE.length;
-    taken.add(idx);
-    return CHIBI_PALETTE[idx];
-  });
 }
 
 // Do the panellists' Round-1 positions MATERIALLY disagree? True when they

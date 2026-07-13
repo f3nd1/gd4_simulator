@@ -629,12 +629,6 @@ export type WorkspaceState = {
   // without changing what "the current run" means anywhere else.
   ppdReviewHistory: Record<string, PPDReviewResult[]>;
   runPPDReview: (subCriterionId: string) => Promise<void>;
-  // Last sub-criterion viewed on the PPD Requirements Review page, persisted so
-  // returning to that page via the bare sidebar link (no ?item= param) shows
-  // the last work instead of a blank slate. The results themselves always
-  // lived in ppdReviewResults (persisted); this just restores the selection.
-  lastPpdSubCriterionId: string | null;
-  setLastPpdSubCriterion: (subCriterionId: string) => void;
   // Evidence Assessment (Option A, "Evidence" tab) — per requirement line,
   // reuses the PPD verdict and reads the Actual Evidence folder fresh for a
   // combined Met/Partial/Not met verdict. compileEvidenceFindings raises a
@@ -1052,8 +1046,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       evidenceAuditReport: null,
       ppdReviewResults: {},
       ppdReviewHistory: {},
-      lastPpdSubCriterionId: null,
-      setLastPpdSubCriterion: (subCriterionId) => set({ lastPpdSubCriterionId: subCriterionId }),
       evidenceAssessments: {},
       evidenceAssessmentHistory: {},
       evidenceAssessmentProgress: null,
@@ -6396,7 +6388,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           customFindings: s.customFindings
             ? s.customFindings.filter((f) => !removedSub.has(f.gd4ItemId))
             : s.customFindings,
-          lastPpdSubCriterionId: s.lastPpdSubCriterionId && validSub.has(s.lastPpdSubCriterionId) ? s.lastPpdSubCriterionId : null,
           // Item-keyed reviewer/confirmed/justify scores and AI item reviews
           // for removed items are dropped; those for surviving items are kept.
           reviewer: pruneByItem(s.reviewer),

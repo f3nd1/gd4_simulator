@@ -9,11 +9,6 @@ import type { ApsrBreakdown, ChecklistLineWrite, EvidenceAssessmentRow, PPDRevie
 import { normalizeAuditRef } from "./gd4Refs";
 import { ppdVerdictLabel, evVerdictLabel } from "./verdictTone";
 
-// The write shape now lives in types (ChecklistLineWrite) so the pending-
-// commit queue can reference it without importing lib code; the old name is
-// kept as an alias for existing callers.
-export type OptionALineWrite = ChecklistLineWrite;
-
 // APSR from what Option A actually assessed: Approach from the PPD verdict,
 // Processes from the combined evidence verdict. Systems & Outcomes and
 // Review are NOT assessed by this path — recorded honestly as "Not evident"
@@ -43,9 +38,9 @@ export function buildOptionALineWrites(
   linesByItem: Record<string, Array<Pick<SpecificChecklistLine, "id" | "sourceRef" | "clause">>>,
   ppdRows: PPDReviewRow[],
   opts: { runId: string; folderName?: string; drive?: string; owner?: string }
-): OptionALineWrite[] {
+): ChecklistLineWrite[] {
   const ppdByRef = new Map(ppdRows.map((r) => [normalizeAuditRef(r.ref), r]));
-  const writes: OptionALineWrite[] = [];
+  const writes: ChecklistLineWrite[] = [];
   for (const row of rows) {
     // "Not assessed" rows and failed AI calls carry no verdict — never write
     // them over an existing checklist status.

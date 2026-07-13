@@ -63,41 +63,26 @@ describe("usePromptReviewStore — review → revise → promote", () => {
     expect(rec.timestamp).toBeTruthy();
   });
 
-  it("attachRevision drafts a revision without changing the live prompt text", () => {
+  it("addReview carries a drafted revision on the record without touching the live prompt text", () => {
+    // The real persist path (PromptReview.saveReview): the AI-drafted revision
+    // rides on the record via revisedPrompt at save time — there is no separate
+    // attach step. The parent prompt stays untouched until an explicit promote.
     const s = usePromptReviewStore.getState();
     const id = s.addPrompt({ name: "P1", purpose: "", text: "orig" });
-    const recId = s.addReview(review(id, "P1", "orig", { status: "needs_revision", decisionType: "Overridden" }));
-    s.attachRevision(recId, "improved prompt");
+    const recId = s.addReview(review(id, "P1", "orig", { revisedPrompt: "improved prompt", status: "revision_drafted", decisionType: "Overridden" }));
     const rec = usePromptReviewStore.getState().records.find((r) => r.id === recId)!;
     expect(rec.revisedPrompt).toBe("improved prompt");
     expect(rec.status).toBe("revision_drafted");
-    // The parent prompt is untouched until an explicit promote.
     expect(usePromptReviewStore.getState().prompts.find((p) => p.id === id)!.text).toBe("orig");
   });
 
   it("promoteRevision copies the drafted revision into the prompt text (the champion gate)", () => {
     const s = usePromptReviewStore.getState();
     const id = s.addPrompt({ name: "P1", purpose: "", text: "orig" });
-    const recId = s.addReview(review(id, "P1", "orig", { status: "needs_revision", decisionType: "Overridden" }));
-    s.attachRevision(recId, "improved prompt");
+    const recId = s.addReview(review(id, "P1", "orig", { revisedPrompt: "improved prompt", status: "revision_drafted", decisionType: "Overridden" }));
     s.promoteRevision(recId);
     expect(usePromptReviewStore.getState().prompts.find((p) => p.id === id)!.text).toBe("improved prompt");
     expect(usePromptReviewStore.getState().records.find((r) => r.id === recId)!.status).toBe("revision_live");
-  });
-
-  it("human-override-wins: attachRevision no-ops once a record is revision_live", () => {
-    const s = usePromptReviewStore.getState();
-    const id = s.addPrompt({ name: "P1", purpose: "", text: "orig" });
-    const recId = s.addReview(review(id, "P1", "orig", { status: "needs_revision", decisionType: "Overridden" }));
-    s.attachRevision(recId, "v1");
-    s.promoteRevision(recId);
-    // A late re-draft must not clobber the confirmed, live revision.
-    s.attachRevision(recId, "v2-should-be-ignored");
-    const rec = usePromptReviewStore.getState().records.find((r) => r.id === recId)!;
-    expect(rec.status).toBe("revision_live");
-    expect(rec.revisedPrompt).toBe("v1");
-    // The promoted (live) prompt text stays at v1 — the late re-draft was ignored.
-    expect(usePromptReviewStore.getState().prompts.find((p) => p.id === id)!.text).toBe("v1");
   });
 
   it("promoteRevision is a no-op when there is no drafted revision", () => {
