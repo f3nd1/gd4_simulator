@@ -25,7 +25,17 @@ import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../l
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import { ppdVerdictTone, ppdVerdictBorderColor, evVerdictTone, evVerdictBorderColor, ppdVerdictLabel, evVerdictLabel } from "../lib/verdictTone";
 import { excerptAround } from "../components/ui/quoteMatch";
-import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, PPDReviewRow, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue } from "../types";
+import type { PPDOverallVerdict, EvidenceVerdict, PromiseCheck, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, PPDReviewRow, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue, VisionBudgetPrompt } from "../types";
+import { fmtUSD } from "../lib/aiCost";
+
+// Task 2: a STABLE empty-array reference for "no history yet" — `?? []`
+// inline would allocate a new array on every selector call, and since
+// useWorkspaceStore's selector equality is reference-based, that reads as
+// "the store changed" on every render and infinite-loops (React's "Maximum
+// update depth exceeded" / "getSnapshot should be cached" — a real crash
+// this exact bug caused for any sub-criterion with no archived runs yet,
+// i.e. every one before its second Option A run).
+const EMPTY_HISTORY: never[] = [];
 
 // Option A's complete flow, as two tabs on one page:
 //   • PPD Review — policy only, one row per GD4 requirement line (3 columns).
@@ -411,6 +421,14 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
   const isStale = !!result && result.rows.some((r) => !r.ref);
   const liveResult = result && !isStale ? result : undefined;
 
+  // Task 2: past runs, newest first — the current run stays exactly at
+  // `result` above (untouched), this is ONLY for viewing an older archived
+  // run read-only. null = viewing the current run (the default).
+  const ppdHistory = useWorkspaceStore((s) => s.ppdReviewHistory[selectedId] ?? EMPTY_HISTORY);
+  const [historyIdx, setHistoryIdx] = useState<number | null>(null);
+  useEffect(() => { setHistoryIdx(null); }, [selectedId]);
+  const viewedResult = historyIdx === null ? liveResult : ppdHistory[historyIdx];
+
   return (
     <>
       <span style={{ display: "inline-flex", gap: 8, marginBottom: 12 }}>
@@ -586,16 +604,40 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
               </div>
             </div>
           )}
-          <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
-            Last run {new Date(liveResult.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
-            {" · "}{liveResult.live ? "Live AI" : "Offline"}
-            {" · "}{liveResult.rows.filter((r) => r.verdict === "Adequate").length} {ppdVerdictLabel("Adequate")}, {liveResult.rows.filter((r) => r.verdict === "Partial").length} {ppdVerdictLabel("Partial")}, {liveResult.rows.filter((r) => r.verdict === "Not documented").length} {ppdVerdictLabel("Not documented")}
+          <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>
+              {historyIdx === null ? "Last run" : "Viewing run"} {new Date(viewedResult!.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+              {" · "}{viewedResult!.live ? "Live AI" : "Offline"}
+              {viewedResult!.model && <> · {viewedResult!.model}</>}
+              {" · "}{viewedResult!.rows.filter((r) => r.verdict === "Adequate").length} {ppdVerdictLabel("Adequate")}, {viewedResult!.rows.filter((r) => r.verdict === "Partial").length} {ppdVerdictLabel("Partial")}, {viewedResult!.rows.filter((r) => r.verdict === "Not documented").length} {ppdVerdictLabel("Not documented")}
+            </span>
+            {/* Task 2: past runs are kept, not overwritten — this picker is the
+                only place they're viewable (read-only; re-running always
+                targets the current/Latest run regardless of what's selected
+                here). */}
+            {ppdHistory.length > 0 && (
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <span style={{ fontWeight: 600, color: "#475569" }}>Run:</span>
+                <select
+                  value={historyIdx ?? "latest"}
+                  onChange={(e) => setHistoryIdx(e.target.value === "latest" ? null : Number(e.target.value))}
+                  style={{ fontSize: 11.5, padding: "3px 6px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#334155" }}
+                >
+                  <option value="latest">Latest{liveResult ? ` (${new Date(liveResult.runAt).toLocaleDateString("en-GB")})` : ""}</option>
+                  {ppdHistory.map((h, i) => (
+                    <option key={h.runAt} value={i}>
+                      {new Date(h.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}{h.model ? ` — ${h.model}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
 
           {/* Requirement → PPD lineage map (reuses this run's row data) — the
               primary, always-visible view: per-sub-part expand-to-highlighted-
               source already answers "which file/section backs this line". */}
-          <LineageDiagram mode="ppd" ppd={liveResult} onOpenLine={openLine} runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()} />
+          <LineageDiagram mode="ppd" ppd={viewedResult!} onOpenLine={openLine} runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()} />
 
           {/* Full per-line table below is secondary detail (same rows the map
               already summarises), so it defaults collapsed. Every row, every
@@ -921,6 +963,34 @@ function fmtRunAt(iso: string): string {
   return new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+// Task 1a: blocking choice the moment runEvidenceAssessment's read loop hits
+// the run's vision-image budget — no backdrop-dismiss, no default choice, so
+// the run genuinely pauses until the user picks. Replaces the old silent
+// behaviour (file skipped, 0 chars extracted, no signal) that could produce a
+// false "no evidence" verdict for a file that was never actually read.
+function VisionBudgetPromptModal({ prompt, onChoose }: { prompt: VisionBudgetPrompt; onChoose: (choice: "proceed" | "skip") => void }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
+      <div style={{ backgroundColor: "#fff", borderRadius: 12, maxWidth: 480, width: "100%", padding: 20, boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: "#92400e" }}>⚠ Vision image budget reached</div>
+        <p style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5, margin: 0 }}>
+          This run has read <b>{prompt.budgetMax} images</b> (scanned pages / photos) so far and just hit that limit while reading <b>{prompt.fileName}</b>.
+          {prompt.filesRemaining > 0
+            ? ` ${prompt.filesRemaining} more evidence file${prompt.filesRemaining === 1 ? "" : "s"} haven't been read yet and may also need images — left as-is, they'll be skipped exactly like this one, which can look like "no evidence" even when evidence exists.`
+            : " This was the last unread file."}
+        </p>
+        <div style={{ fontSize: 12, color: "#475569", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
+          <b>Proceed with all</b> raises the budget to cover up to {prompt.estimatedExtraImages} more image{prompt.estimatedExtraImages === 1 ? "" : "s"} this run — estimated extra cost <b>{fmtUSD(prompt.estimatedCostUSD)}</b> (rough estimate; actual spend depends on image size/detail).
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+          <button type="button" onClick={() => onChoose("skip")} style={arrivalSecondaryBtn}>Skip the rest</button>
+          <button type="button" onClick={() => onChoose("proceed")} style={arrivalPrimaryBtn}>Proceed with all →</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EvidenceArrivalPanel({
   state, onRun, onReviewPrecheck, onDismiss, onGoToPpd,
 }: {
@@ -1033,6 +1103,19 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
   const assessment = evidenceAssessments[selectedId];
   const isRunning = busy === "evidenceassess" + selectedId;
   const runProgress = progress && progress.subCriterionId === selectedId ? progress : null;
+
+  // Task 1a: the blocking vision-budget prompt, scoped to THIS sub-criterion's
+  // run (a different sub-criterion's in-flight prompt must not show here).
+  const visionBudgetPrompt = useWorkspaceStore((s) => s.visionBudgetPrompt);
+  const resolveVisionBudgetPrompt = useWorkspaceStore((s) => s.resolveVisionBudgetPrompt);
+  const budgetPrompt = visionBudgetPrompt?.subCriterionId === selectedId ? visionBudgetPrompt : null;
+
+  // Task 2: same read-only past-run viewer as the PPD tab — the current
+  // run stays exactly at `assessment` above.
+  const evidenceHistory = useWorkspaceStore((s) => s.evidenceAssessmentHistory[selectedId] ?? EMPTY_HISTORY);
+  const [historyIdx, setHistoryIdx] = useState<number | null>(null);
+  useEffect(() => { setHistoryIdx(null); }, [selectedId]);
+  const viewedAssessment = historyIdx === null ? assessment : evidenceHistory[historyIdx];
 
   // Fix 1 — reuse the Evidence Folder staged audit's stored per-line results
   // instead of a fresh AI run. When no evidence-tab result exists yet, try to
@@ -1159,6 +1242,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
 
   return (
     <>
+      {budgetPrompt && <VisionBudgetPromptModal prompt={budgetPrompt} onChoose={resolveVisionBudgetPrompt} />}
       {justArrived && !isRunning && (
         <EvidenceArrivalPanel
           state={arrivalState}
@@ -1176,10 +1260,32 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
         >
           {isRunning ? "Assessing…" : assessment ? "Re-run evidence assessment" : "Run evidence assessment"}
         </button>
-        {assessment && (
-          <div style={{ fontSize: 11.5, color: "#6b7280" }}>
-            {assessment.derivedFromAudit ? "Reused from Evidence Folder audit" : "Last run"} {new Date(assessment.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
-            {" · "}{assessment.rows.filter((r) => r.verdict === "Met").length} {evVerdictLabel("Met")}, {assessment.rows.filter((r) => r.verdict === "Partial").length} {evVerdictLabel("Partial")}, {assessment.rows.filter((r) => r.verdict === "Not met").length} {evVerdictLabel("Not met")}
+        {viewedAssessment && (
+          <div style={{ fontSize: 11.5, color: "#6b7280", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>
+              {historyIdx !== null ? "Viewing run" : viewedAssessment.derivedFromAudit ? "Reused from Evidence Folder audit" : "Last run"} {new Date(viewedAssessment.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+              {viewedAssessment.model && <> · {viewedAssessment.model}</>}
+              {" · "}{viewedAssessment.rows.filter((r) => r.verdict === "Met").length} {evVerdictLabel("Met")}, {viewedAssessment.rows.filter((r) => r.verdict === "Partial").length} {evVerdictLabel("Partial")}, {viewedAssessment.rows.filter((r) => r.verdict === "Not met").length} {evVerdictLabel("Not met")}
+            </span>
+            {/* Task 2: past runs are kept, not overwritten — read-only viewer;
+                re-running always targets the current/Latest run. */}
+            {evidenceHistory.length > 0 && (
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <span style={{ fontWeight: 600, color: "#475569" }}>Run:</span>
+                <select
+                  value={historyIdx ?? "latest"}
+                  onChange={(e) => setHistoryIdx(e.target.value === "latest" ? null : Number(e.target.value))}
+                  style={{ fontSize: 11.5, padding: "3px 6px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#334155" }}
+                >
+                  <option value="latest">Latest{assessment ? ` (${new Date(assessment.runAt).toLocaleDateString("en-GB")})` : ""}</option>
+                  {evidenceHistory.map((h, i) => (
+                    <option key={h.runAt} value={i}>
+                      {new Date(h.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}{h.model ? ` — ${h.model}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
         )}
         <button
@@ -1277,7 +1383,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
       {/* Requirement → PPD → Evidence lineage map (reuses stored row data) —
           the primary, always-visible view: per-sub-part expand-to-highlighted-
           source already answers "which file/section backs this line". */}
-      <LineageDiagram mode="evidence" evidence={assessment} ppd={ppd} onOpenLine={openLine} runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()} />
+      <LineageDiagram mode="evidence" evidence={viewedAssessment} ppd={ppd} onOpenLine={openLine} runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()} />
 
       {/* Full per-line table below is secondary detail (same rows the map
           already summarises), so it defaults collapsed. Every row, every

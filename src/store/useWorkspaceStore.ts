@@ -54,7 +54,8 @@ import { selectLineStatusMemories, selectLineStatusCalibration } from "../lib/la
 import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt } from "../types";
+import { aiRateFor } from "../lib/aiCost";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
 import { computePanelConclusion } from "../lib/panelConclusion";
@@ -64,6 +65,7 @@ import { applyCarryover, type PriorCycleArchive } from "../lib/cycleCarryover";
 import { useRuleTuningStore } from "./useRuleTuningStore";
 import { FINDINGS } from "../data/findings";
 import { DEFAULT_SHOW_DEVELOPER_TOOLS } from "../nav";
+import { ppdVerdictLabel, evVerdictLabel } from "../lib/verdictTone";
 
 // Sequential auto-run queue for the review panel (auto modes). Findings are
 // drained one at a time, and only while the store is otherwise idle, so a
@@ -102,6 +104,12 @@ import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 // so a single module-level ref is sufficient.
 let _currentFileAbort: (() => void) | null = null;
 
+// Task 1a: resolver for the pending vision-budget blocking prompt (see
+// VisionBudgetPrompt) — set while runEvidenceAssessment's read loop is
+// paused waiting for "Proceed with all" / "Skip the rest", cleared once
+// answered. Same one-run-at-a-time reasoning as _currentFileAbort above.
+let _pendingVisionBudgetResolve: ((choice: "proceed" | "skip") => void) | null = null;
+
 // Run-level AbortController for the active AI run (staged audit, PPD review,
 // evidence assessment). cancelBusy() aborts it, which propagates through the
 // audit functions into chatComplete → fetch, killing the IN-FLIGHT request
@@ -113,6 +121,10 @@ let _currentRunAbort: AbortController | null = null;
 // Persisted-prompt cap (see partialize): what is WRITTEN to storage is
 // truncated; in-memory state keeps full text for the current session.
 const PROMPT_PERSIST_CAP = 4_000;
+
+// Task 2: how many PAST (non-current) Option A runs to keep per
+// sub-criterion, same cap convention as useCalibrationStore's RUN_HISTORY_CAP.
+const OPTION_A_RUN_HISTORY_CAP = 20;
 function capPersistedText(t: string | undefined): string | undefined {
   if (!t || t.length <= PROMPT_PERSIST_CAP) return t;
   return `${t.slice(0, PROMPT_PERSIST_CAP)}\n…[truncated for storage — full text was available in the session that produced it]`;
@@ -162,10 +174,17 @@ function formatDraftedClosureText(text: string): string {
 // classifyFileBucket now lives in driveGuard.ts (shared with the pre-flight
 // probe) — imported below. Re-aliased here so existing call sites are unchanged.
 
-// Strips savedFindingId back-pointers from evidence-assessment
-// rows when the finding they point at is deleted, so the source row shows
-// "Draft finding" again instead of a dead "View finding" link and can be
-// re-compiled. Returns the original record when nothing matched (no churn).
+// Clears savedFindingId back-pointers off ONE evidence-assessment result's
+// rows when the finding they point at is deleted — the shared per-item logic
+// both stripFindingBackPointers (current result) and
+// stripFindingBackPointersHistory (Task 2's archived past runs) apply, so a
+// deleted finding can never leave a dead "View finding" link in either place.
+// Returns the SAME object when nothing matched (no churn / no needless copy).
+function clearFindingBackPointerRow<R extends { savedFindingId?: string }, T extends { rows: R[] }>(v: T, shouldClear: (findingId: string) => boolean): T {
+  if (!v.rows?.some((r) => r.savedFindingId && shouldClear(r.savedFindingId))) return v;
+  return { ...v, rows: v.rows.map((r) => (r.savedFindingId && shouldClear(r.savedFindingId) ? { ...r, savedFindingId: undefined } : r)) };
+}
+
 function stripFindingBackPointers<R extends { savedFindingId?: string }, T extends { rows: R[] }>(
   record: Record<string, T>,
   shouldClear: (findingId: string) => boolean
@@ -173,12 +192,29 @@ function stripFindingBackPointers<R extends { savedFindingId?: string }, T exten
   let changed = false;
   const out = Object.fromEntries(
     Object.entries(record).map(([k, v]) => {
-      if (!v.rows?.some((r) => r.savedFindingId && shouldClear(r.savedFindingId))) return [k, v];
-      changed = true;
-      return [
-        k,
-        { ...v, rows: v.rows.map((r) => (r.savedFindingId && shouldClear(r.savedFindingId) ? { ...r, savedFindingId: undefined } : r)) },
-      ];
+      const cleared = clearFindingBackPointerRow(v, shouldClear);
+      if (cleared !== v) changed = true;
+      return [k, cleared];
+    })
+  );
+  return changed ? out : record;
+}
+
+// Same sweep, applied to every entry of a Task 2 history array instead of a
+// single current result.
+function stripFindingBackPointersHistory<R extends { savedFindingId?: string }, T extends { rows: R[] }>(
+  record: Record<string, T[]>,
+  shouldClear: (findingId: string) => boolean
+): Record<string, T[]> {
+  let changed = false;
+  const out = Object.fromEntries(
+    Object.entries(record).map(([k, arr]) => {
+      const mapped = arr.map((v) => {
+        const cleared = clearFindingBackPointerRow(v, shouldClear);
+        if (cleared !== v) changed = true;
+        return cleared;
+      });
+      return [k, mapped];
     })
   );
   return changed ? out : record;
@@ -186,6 +222,11 @@ function stripFindingBackPointers<R extends { savedFindingId?: string }, T exten
 
 // Same sweep for PPD contradiction back-pointers (they live on the result,
 // not on rows).
+function clearContradictionBackPointer(v: PPDReviewResult, shouldClear: (findingId: string) => boolean): PPDReviewResult {
+  if (!v.contradictions?.some((c) => c.savedFindingId && shouldClear(c.savedFindingId))) return v;
+  return { ...v, contradictions: v.contradictions.map((c) => (c.savedFindingId && shouldClear(c.savedFindingId) ? { ...c, savedFindingId: undefined } : c)) };
+}
+
 function stripContradictionBackPointers(
   record: Record<string, PPDReviewResult>,
   shouldClear: (findingId: string) => boolean
@@ -193,12 +234,28 @@ function stripContradictionBackPointers(
   let changed = false;
   const out = Object.fromEntries(
     Object.entries(record).map(([k, v]) => {
-      if (!v.contradictions?.some((c) => c.savedFindingId && shouldClear(c.savedFindingId))) return [k, v];
-      changed = true;
-      return [
-        k,
-        { ...v, contradictions: v.contradictions.map((c) => (c.savedFindingId && shouldClear(c.savedFindingId) ? { ...c, savedFindingId: undefined } : c)) },
-      ];
+      const cleared = clearContradictionBackPointer(v, shouldClear);
+      if (cleared !== v) changed = true;
+      return [k, cleared];
+    })
+  );
+  return changed ? out : record;
+}
+
+// Same sweep, applied to every entry of ppdReviewHistory's arrays.
+function stripContradictionBackPointersHistory(
+  record: Record<string, PPDReviewResult[]>,
+  shouldClear: (findingId: string) => boolean
+): Record<string, PPDReviewResult[]> {
+  let changed = false;
+  const out = Object.fromEntries(
+    Object.entries(record).map(([k, arr]) => {
+      const mapped = arr.map((v) => {
+        const cleared = clearContradictionBackPointer(v, shouldClear);
+        if (cleared !== v) changed = true;
+        return cleared;
+      });
+      return [k, mapped];
     })
   );
   return changed ? out : record;
@@ -262,6 +319,12 @@ type VisionReadResult = {
   readMethod: "text" | "vision";
   pdfQuality?: ReturnType<typeof classifyPdfTextQuality>;
   note?: string;                           // reason when text is null (unreadable/cap)
+  // True when this file was skipped SPECIFICALLY because the run's vision
+  // image budget was already exhausted (not a missing-settings/rendering
+  // failure) — Task 1a's trigger for the blocking "Proceed with all / Skip
+  // the rest" prompt in runEvidenceAssessment, instead of silently dropping
+  // the file the way this used to (a real bug: 0 chars extracted, no signal).
+  budgetBlocked?: boolean;
 };
 async function readDriveFileWithVision(
   file: DriveFile & { mimeType: string },
@@ -288,7 +351,7 @@ async function readDriveFileWithVision(
 
   const readScannedPdfViaVision = async (): Promise<VisionReadResult> => {
     if (!ctx.canDescribeImages) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
-    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: `Scanned/image-only PDF not read: the ${ctx.budget.max}-image vision budget for this run was reached.` };
+    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: `Scanned/image-only PDF not read: the ${ctx.budget.max}-image vision budget for this run was reached.`, budgetBlocked: true };
     const pagesToRender = Math.min(ctx.maxPerFile, ctx.budget.max - ctx.budget.count);
     const { images, totalPages } = await exportPdfPageImages(file, token, pagesToRender, signal);
     if (images.length === 0) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: no text could be extracted and its pages could not be rendered for vision." };
@@ -317,13 +380,15 @@ async function readDriveFileWithVision(
     return { text, readMethod: embeddedVisionUsed ? "vision" : "text" };
   }
   // No typed text at all: a standalone image → describe it via vision.
-  if (isImage && ctx.canDescribeImages && ctx.budget.count < ctx.budget.max) {
+  if (isImage) {
+    if (!ctx.canDescribeImages) return { text: null, readMethod: "text", note: "No vision model available to read this image (enable AI and add an API key in Settings)." };
+    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: `Image not read: the ${ctx.budget.max}-image vision budget for this run was reached.`, budgetBlocked: true };
     ctx.budget.count++;
     const dataUrl = await exportFileImageDataUrl(file, token, signal);
     const description = await describeImage(dataUrl, ctx.visionSettings, { signal, onUsage: ctx.onUsage });
     return { text: description.trim() || null, readMethod: "vision", note: description.trim() ? undefined : "Image produced no readable description via the vision model." };
   }
-  return { text: null, readMethod: "text", note: isImage ? "No vision model available to read this image (enable AI and add an API key in Settings)." : undefined };
+  return { text: null, readMethod: "text" };
 }
 
 function inferEvidenceType(lineText: string): string {
@@ -557,6 +622,12 @@ export type WorkspaceState = {
   // inline suggested rewrite. The verdict here feeds the Evidence tab's
   // combined assessment (below) without re-reading the policy.
   ppdReviewResults: Record<string, PPDReviewResult>;
+  // Past (non-current) runs, newest first, capped at RUN_HISTORY_CAP — the
+  // CURRENT run stays exactly at ppdReviewResults[subId] as before (every
+  // existing reader is untouched); a fresh run archives the outgoing value
+  // here instead of discarding it, so "Latest" + history are both viewable
+  // without changing what "the current run" means anywhere else.
+  ppdReviewHistory: Record<string, PPDReviewResult[]>;
   runPPDReview: (subCriterionId: string) => Promise<void>;
   // Last sub-criterion viewed on the PPD Requirements Review page, persisted so
   // returning to that page via the bare sidebar link (no ?item= param) shows
@@ -569,6 +640,9 @@ export type WorkspaceState = {
   // combined Met/Partial/Not met verdict. compileEvidenceFindings raises a
   // Finding per row from that verdict — the single Option A findings compile.
   evidenceAssessments: Record<string, EvidenceAssessmentResult>;
+  // Same additive history pattern as ppdReviewHistory — past runs only, the
+  // current one stays at evidenceAssessments[subId].
+  evidenceAssessmentHistory: Record<string, EvidenceAssessmentResult[]>;
   // Populates evidenceAssessments[sub] by REUSING the Evidence Folder staged
   // audit's stored per-checklist-line results (matched by GD4 requirement
   // ref) — no AI calls. Returns true if any audited line was found.
@@ -589,6 +663,17 @@ export type WorkspaceState = {
   // Live progress for a fresh runEvidenceAssessment (bar + heartbeat on the
   // Evidence tab); null when no assessment is running.
   evidenceAssessmentProgress: EvidenceAssessmentProgress | null;
+  // Task 1a: set the moment runEvidenceAssessment's read loop first hits the
+  // run's vision-image budget (a scanned/image-only PDF or standalone image
+  // it can't read without more budget) — a BLOCKING prompt, not a post-hoc
+  // note, so the run pauses instead of silently producing a false "no
+  // evidence" verdict for the unread file. null when nothing is waiting.
+  visionBudgetPrompt: VisionBudgetPrompt | null;
+  // Answers the pending prompt above: "proceed" raises the budget for the
+  // REST of this run and re-reads the file that triggered it; "skip" keeps
+  // today's behaviour (file stays unread) but as an affirmed user choice.
+  // No-op if nothing is waiting.
+  resolveVisionBudgetPrompt: (choice: "proceed" | "skip") => void;
   // Live heartbeat for the PPD review run (window/batch detail), so the tab
   // shows real progress instead of a static "Reviewing…" button.
   ppdReviewProgress: PPDReviewProgress | null;
@@ -966,9 +1051,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       schoolContext: { text: "", link: "" },
       evidenceAuditReport: null,
       ppdReviewResults: {},
+      ppdReviewHistory: {},
       lastPpdSubCriterionId: null,
       setLastPpdSubCriterion: (subCriterionId) => set({ lastPpdSubCriterionId: subCriterionId }),
       evidenceAssessments: {},
+      evidenceAssessmentHistory: {},
       evidenceAssessmentProgress: null,
       ppdReviewProgress: null,
       analysisPath: {},
@@ -1001,6 +1088,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // the per-file timeout to fire before releasing the busy state.
         _currentFileAbort?.();
         _currentFileAbort = null;
+        // A cancel while the run is paused on the vision-budget prompt must not
+        // leave it awaiting forever — answer it as "skip" (the safe, no-extra-
+        // spend default) so the paused await resolves and the run can unwind.
+        _pendingVisionBudgetResolve?.("skip");
+        _pendingVisionBudgetResolve = null;
         // Abort the run-level controller so any IN-FLIGHT AI call dies now —
         // previously cancel only flipped flags checked between calls, so the
         // current request (and, in the staged audit, every remaining
@@ -1010,7 +1102,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Also clear the skip-stage flag — otherwise a stale `true` (set right
         // before cancel, with no chance for the in-flight stage's reset to run)
         // would silently cut short the very next audit's first stage.
-        set((s) => ({ busy: null, bulkAuditStatus: null, auditRunToken: s.auditRunToken + 1, auditSkipStageFlag: false }));
+        set((s) => ({ busy: null, bulkAuditStatus: null, auditRunToken: s.auditRunToken + 1, auditSkipStageFlag: false, visionBudgetPrompt: null }));
       },
 
       skipCurrentAuditStage: () => set({ auditSkipStageFlag: true }),
@@ -1025,6 +1117,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Abort only the current file — loop continues to the next one.
         _currentFileAbort?.();
         // Note: _currentFileAbort is cleared by the loop itself after the catch.
+      },
+      visionBudgetPrompt: null,
+      resolveVisionBudgetPrompt: (choice) => {
+        _pendingVisionBudgetResolve?.(choice);
+        _pendingVisionBudgetResolve = null;
+        set({ visionBudgetPrompt: null });
       },
       clearAuditProgress: () => set({ auditProgress: null }),
       clearAuditJournal: () => set({ auditJournal: "" }),
@@ -1108,16 +1206,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             completionTokens: usage?.completionTokens,
             totalTokens: usage?.totalTokens,
           };
-          set((st) => ({
-            ppdReviewResults: rows
-              ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()) } }
-              : st.ppdReviewResults,
-            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
-            // Guarded: a timed-out run's late finish must not clear the NEXT
-            // run's busy flag (the full-audit sweep may already have moved on).
-            busy: st.busy === "ppdreview" + subCriterionId ? null : st.busy,
-            ppdReviewProgress: st.ppdReviewProgress?.subCriterionId === subCriterionId ? null : st.ppdReviewProgress,
-          }));
+          set((st) => {
+            // Task 2: archive the OUTGOING result into history before it's
+            // replaced — never on a failed run (rows null leaves the current
+            // result untouched, so there is nothing new to archive either).
+            const prev = rows ? st.ppdReviewResults[subCriterionId] : undefined;
+            return {
+              ppdReviewResults: rows
+                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model } }
+                : st.ppdReviewResults,
+              ppdReviewHistory: prev
+                ? { ...st.ppdReviewHistory, [subCriterionId]: [prev, ...(st.ppdReviewHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
+                : st.ppdReviewHistory,
+              aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
+              // Guarded: a timed-out run's late finish must not clear the NEXT
+              // run's busy flag (the full-audit sweep may already have moved on).
+              busy: st.busy === "ppdreview" + subCriterionId ? null : st.busy,
+              ppdReviewProgress: st.ppdReviewProgress?.subCriterionId === subCriterionId ? null : st.ppdReviewProgress,
+            };
+          });
         };
 
         try {
@@ -1303,9 +1410,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 const cur = curPpd();
                 const ls = { ...(cur.lineStatus ?? {}) };
                 const lv = { ...(cur.lineVerdict ?? {}) };
-                for (const v of ev.verdicts) { ls[v.ref] = "done"; lv[v.ref] = v.verdict; }
+                for (const v of ev.verdicts) { ls[v.ref] = "done"; lv[v.ref] = ppdVerdictLabel(v.verdict); }
                 patchPpd({ lineStatus: ls, lineVerdict: lv });
-                for (const v of ev.verdicts) logPpd(`Assessed ${v.ref} → ${v.verdict}`, v.verdict === "Adequate" ? "good" : v.verdict === "Not documented" ? "bad" : "warn");
+                for (const v of ev.verdicts) logPpd(`Assessed ${v.ref} → ${ppdVerdictLabel(v.verdict)}`, v.verdict === "Adequate" ? "good" : v.verdict === "Not documented" ? "bad" : "warn");
               } else if (ev.type === "batch-failed") {
                 logPpd(`Batch failed for ${ev.refs.join(", ")} — will retry in a later window: ${ev.error}`, "bad");
                 patchPpd({ lastIssue: { at: Date.now(), kind: "call-error", message: ev.error } });
@@ -1409,12 +1516,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         });
         if (matched === 0) return false;
 
-        set((st) => ({
-          evidenceAssessments: {
-            ...st.evidenceAssessments,
-            [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live: true, derivedFromAudit: true },
-          },
-        }));
+        set((st) => {
+          const prev = st.evidenceAssessments[subCriterionId];
+          return {
+            evidenceAssessments: {
+              ...st.evidenceAssessments,
+              [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live: true, derivedFromAudit: true },
+            },
+            evidenceAssessmentHistory: prev
+              ? { ...st.evidenceAssessmentHistory, [subCriterionId]: [prev, ...(st.evidenceAssessmentHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
+              : st.evidenceAssessmentHistory,
+          };
+        });
         return true;
       },
 
@@ -1469,15 +1582,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             completionTokens: usage?.completionTokens,
             totalTokens: usage?.totalTokens,
           };
-          set((st) => ({
-            evidenceAssessments: rows
-              ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()) } }
-              : st.evidenceAssessments,
-            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
-            // Guarded — see runPPDReview's finish.
-            busy: st.busy === "evidenceassess" + subCriterionId ? null : st.busy,
-            evidenceAssessmentProgress: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? null : st.evidenceAssessmentProgress,
-          }));
+          set((st) => {
+            const prev = rows ? st.evidenceAssessments[subCriterionId] : undefined;
+            return {
+              evidenceAssessments: rows
+                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model } }
+                : st.evidenceAssessments,
+              evidenceAssessmentHistory: prev
+                ? { ...st.evidenceAssessmentHistory, [subCriterionId]: [prev, ...(st.evidenceAssessmentHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
+                : st.evidenceAssessmentHistory,
+              aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
+              // Guarded — see runPPDReview's finish.
+              busy: st.busy === "evidenceassess" + subCriterionId ? null : st.busy,
+              evidenceAssessmentProgress: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? null : st.evidenceAssessmentProgress,
+            };
+          });
           // Write the verdicts into the Sub-Criterion Checklist — the same
           // store Option B's staged audit writes to — so Option A results
           // persist across reloads/versions and feed buildScored/computeBand
@@ -1608,6 +1727,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             budget: { count: 0, max: 10 },
             maxPerFile: 5,
           };
+          // Task 1a: once the user has answered the vision-budget prompt for
+          // this run, every later file that also hits the budget follows the
+          // SAME choice without asking again — the prompt is "how should the
+          // rest of this run behave", not "ask me for every file".
+          let budgetChoice: "proceed" | "skip" | null = null;
           for (let fi = 0; fi < evidenceFiles.length; fi++) {
             const file = evidenceFiles[fi];
             const readFileName = file.path.split("/").pop() || file.path;
@@ -1653,14 +1777,47 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   body = null;
                   skipNote = "Skipped by user";
                 } else {
-                  body = raced.text;
-                  readMethod = raced.readMethod;
-                  if (raced.pdfQuality) pdfQuality = raced.pdfQuality;
-                  if (raced.note) skipNote = raced.note;
+                  let result = raced;
+                  // Task 1a: this file hit the run's vision-image budget — STOP
+                  // and ask instead of silently leaving it unread (the old
+                  // behaviour: 0 chars extracted, no signal to the user). Only
+                  // the first budget-blocked file in a run pauses; every later
+                  // one reuses that same answer (budgetChoice, set below).
+                  if (result.budgetBlocked && budgetChoice === null) {
+                    const filesRemaining = evidenceFiles.length - fi - 1;
+                    const estimatedExtraImages = 1 + filesRemaining * evVisionCtx.maxPerFile;
+                    const rate = aiRateFor(evVisionCtx.visionModelId);
+                    // ~1000 tokens/image is a rough, documented estimate (OpenAI
+                    // vision billing varies by image size/detail level) — good
+                    // enough for a ballpark "should I proceed" figure, not a
+                    // promise of the exact spend.
+                    const estimatedCostUSD = (estimatedExtraImages * 1000 * rate.in) / 1e6;
+                    budgetChoice = await new Promise<"proceed" | "skip">((resolve) => {
+                      _pendingVisionBudgetResolve = resolve;
+                      set({
+                        visionBudgetPrompt: {
+                          subCriterionId, fileName: readFileName, budgetMax: evVisionCtx.budget.max,
+                          filesRemaining, estimatedExtraImages, estimatedCostUSD,
+                        },
+                      });
+                    });
+                    set({ visionBudgetPrompt: null });
+                    if (budgetChoice === "proceed") {
+                      // Cover every remaining image this run could plausibly
+                      // need, not an arbitrary "unlimited" — bounded by the
+                      // same per-file cap (maxPerFile) the run already uses.
+                      evVisionCtx.budget.max = evVisionCtx.budget.count + estimatedExtraImages;
+                      result = await readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), evVisionCtx);
+                    }
+                  }
+                  body = result.text;
+                  readMethod = result.readMethod;
+                  if (result.pdfQuality) pdfQuality = result.pdfQuality;
+                  if (result.note) skipNote = result.note;
                   // Only cache genuine (non-empty) extractions — see runPPDReview.
                   if (body != null && body.trim().length > 0) {
                     const text = body;
-                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: readFileName, filePath: file.path, cachedAt: Date.now(), readMethod: raced.readMethod, ...(raced.pdfQuality ? { pdfQuality: raced.pdfQuality } : {}) } } }));
+                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: readFileName, filePath: file.path, cachedAt: Date.now(), readMethod: result.readMethod, ...(result.pdfQuality ? { pdfQuality: result.pdfQuality } : {}) } } }));
                   }
                 }
               } catch (err) {
@@ -1765,11 +1922,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 const cur = curEv();
                 const ls = { ...(cur.lineStatus ?? {}) };
                 const lv = { ...(cur.lineVerdict ?? {}) };
-                for (const v of ev.verdicts) { ls[v.ref] = "done"; lv[v.ref] = v.verdict; }
+                for (const v of ev.verdicts) { ls[v.ref] = "done"; lv[v.ref] = evVerdictLabel(v.verdict); }
                 // usage.totalTokens is CUMULATIVE across batches; count each call.
                 const ai = ev.usage ? { calls: (cur.ai?.calls ?? 0) + 1, model: ev.usage.model, totalTokens: ev.usage.totalTokens } : cur.ai;
                 patchEv({ lineStatus: ls, lineVerdict: lv, ai });
-                for (const v of ev.verdicts) logEv(`Assessed ${v.ref} → ${v.verdict}`, v.verdict === "Met" ? "good" : v.verdict === "Not met" ? "bad" : "warn");
+                for (const v of ev.verdicts) logEv(`Assessed ${v.ref} → ${evVerdictLabel(v.verdict)}`, v.verdict === "Met" ? "good" : v.verdict === "Not met" ? "bad" : "warn");
                 if (ev.usage) logEv(`AI call done — ${ev.usage.model}, ${ev.usage.totalTokens.toLocaleString()} tokens so far`);
               } else if (ev.type === "batch-failed") {
                 logEv(`Batch failed for ${ev.refs.join(", ")} — will retry in a later window: ${ev.error}`, "bad");
@@ -2396,7 +2553,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             pendingCommits: {},
             itemReviews: {},
             ppdReviewResults: {},
+            ppdReviewHistory: {},
             evidenceAssessments: {},
+            evidenceAssessmentHistory: {},
             auditRunHistory: {},
             lastAuditRuns: {},
             ...buildDemoDataset(evidence),
@@ -2428,7 +2587,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           reviewPanelAuditorIds: [],
           itemReviews: {},
           ppdReviewResults: {},
+          ppdReviewHistory: {},
           evidenceAssessments: {},
+          evidenceAssessmentHistory: {},
           analysisPath: {},
           pendingCommits: {},
           auditRunHistory: {},
@@ -2476,7 +2637,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // Log. Note: full prompts embed school-document text and are
             // persisted (Supabase/localStorage).
             ppdReviewResults: s.ppdReviewResults,
+            ppdReviewHistory: s.ppdReviewHistory,
             evidenceAssessments: s.evidenceAssessments,
+            evidenceAssessmentHistory: s.evidenceAssessmentHistory,
             analysisPath: s.analysisPath,
             auditMode: s.auditMode,
             reviewPanelAuditorIds: s.reviewPanelAuditorIds,
@@ -2568,7 +2731,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // customFindings rolled back.
             // Sub-criterion-keyed Option A state, pruned to current sub-criteria.
             ppdReviewResults: pruneRecordByKeys(snap.ppdReviewResults ?? {}, validSub),
+            ppdReviewHistory: pruneRecordByKeys(snap.ppdReviewHistory ?? {}, validSub),
             evidenceAssessments: pruneRecordByKeys(snap.evidenceAssessments ?? {}, validSub),
+            evidenceAssessmentHistory: pruneRecordByKeys(snap.evidenceAssessmentHistory ?? {}, validSub),
             analysisPath: pruneRecordByKeys(snap.analysisPath ?? {}, validSub),
             auditMode: snap.auditMode ?? DEFAULT_AUDIT_MODE,
             reviewPanelAuditorIds: snap.reviewPanelAuditorIds ?? [],
@@ -2621,7 +2786,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // Log. Note: full prompts embed school-document text and are
             // persisted (Supabase/localStorage).
             ppdReviewResults: s.ppdReviewResults,
+            ppdReviewHistory: s.ppdReviewHistory,
             evidenceAssessments: s.evidenceAssessments,
+            evidenceAssessmentHistory: s.evidenceAssessmentHistory,
             analysisPath: s.analysisPath,
             auditMode: s.auditMode,
             reviewPanelAuditorIds: s.reviewPanelAuditorIds,
@@ -2699,7 +2866,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           priorCycleFindings: archive,
           evidenceAuditReport: null,
           ppdReviewResults: {},
+          ppdReviewHistory: {},
           evidenceAssessments: {},
+          evidenceAssessmentHistory: {},
           evidenceAssessmentProgress: null,
           analysisPath: {},
           // auditMode is a cycle-level PREFERENCE, kept across cycles;
@@ -5926,6 +6095,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             closures: remainingClosures,
             evidenceAssessments: stripFindingBackPointers(s.evidenceAssessments, (fid) => fid === id),
             ppdReviewResults: stripContradictionBackPointers(s.ppdReviewResults, (fid) => fid === id),
+            evidenceAssessmentHistory: stripFindingBackPointersHistory(s.evidenceAssessmentHistory, (fid) => fid === id),
+            ppdReviewHistory: stripContradictionBackPointersHistory(s.ppdReviewHistory, (fid) => fid === id),
           };
         });
         useChecklistModuleStore.getState().clearSavedFindingId(id);
@@ -5941,6 +6112,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Same back-pointer sweep as removeCustomFinding, for every id.
           evidenceAssessments: stripFindingBackPointers(s.evidenceAssessments, () => true),
           ppdReviewResults: stripContradictionBackPointers(s.ppdReviewResults, () => true),
+          evidenceAssessmentHistory: stripFindingBackPointersHistory(s.evidenceAssessmentHistory, () => true),
+          ppdReviewHistory: stripContradictionBackPointersHistory(s.ppdReviewHistory, () => true),
         }));
         const cs = useChecklistModuleStore.getState();
         ids.forEach((id) => cs.clearSavedFindingId(id));
@@ -5975,6 +6148,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             closures,
             evidenceAssessments: stripFindingBackPointers(st.evidenceAssessments, (fid) => deleteIds.has(fid)),
             ppdReviewResults: stripContradictionBackPointers(st.ppdReviewResults, (fid) => deleteIds.has(fid)),
+            evidenceAssessmentHistory: stripFindingBackPointersHistory(st.evidenceAssessmentHistory, (fid) => deleteIds.has(fid)),
+            ppdReviewHistory: stripContradictionBackPointersHistory(st.ppdReviewHistory, (fid) => deleteIds.has(fid)),
           };
         });
         const cs = useChecklistModuleStore.getState();
@@ -6170,7 +6345,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Sub-criterion-keyed Option A / analysis state for removed
           // sub-criteria is dropped so nothing renders under a bare "2.1".
           ppdReviewResults: pruneBySubCrit(s.ppdReviewResults),
+          ppdReviewHistory: pruneBySubCrit(s.ppdReviewHistory),
           evidenceAssessments: pruneBySubCrit(s.evidenceAssessments),
+          evidenceAssessmentHistory: pruneBySubCrit(s.evidenceAssessmentHistory),
           analysisPath: pruneBySubCrit(s.analysisPath),
           pendingCommits: pruneBySubCrit(s.pendingCommits),
           // Folder-id-keyed audit run history for dropped folders is discarded.
@@ -6204,13 +6381,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v.promptSent) }]));
         const capEv = (r: Record<string, EvidenceAssessmentResult>) =>
           Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v.promptSent) }]));
+        // Task 2: same promptSent cap, applied to every ARCHIVED run in
+        // history — without this, each past run's full prompt would persist
+        // uncapped, and OPTION_A_RUN_HISTORY_CAP runs of that is exactly the
+        // large-blob-in-persisted-state growth the single-result cap above
+        // exists to prevent.
+        const capPpdHistory = (r: Record<string, PPDReviewResult[]>) =>
+          Object.fromEntries(Object.entries(r).map(([k, arr]) => [k, arr.map((v) => ({ ...v, promptSent: capPersistedText(v.promptSent) }))]));
+        const capEvHistory = (r: Record<string, EvidenceAssessmentResult[]>) =>
+          Object.fromEntries(Object.entries(r).map(([k, arr]) => [k, arr.map((v) => ({ ...v, promptSent: capPersistedText(v.promptSent) }))]));
         return {
           ...s,
           fileTextCache: {},
           changeLog: [],
           aiReviewLog: capLog(s.aiReviewLog),
           ppdReviewResults: capPpd(s.ppdReviewResults),
+          ppdReviewHistory: capPpdHistory(s.ppdReviewHistory),
           evidenceAssessments: capEv(s.evidenceAssessments),
+          evidenceAssessmentHistory: capEvHistory(s.evidenceAssessmentHistory),
           // Historical snapshots: strip the embedded log (new snapshots no
           // longer capture it) and cap embedded Option A prompts.
           versions: s.versions.map((v) => ({
@@ -6219,7 +6407,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ...v.snapshot,
               aiReviewLog: undefined,
               ppdReviewResults: v.snapshot.ppdReviewResults ? capPpd(v.snapshot.ppdReviewResults) : undefined,
+              ppdReviewHistory: v.snapshot.ppdReviewHistory ? capPpdHistory(v.snapshot.ppdReviewHistory) : undefined,
               evidenceAssessments: v.snapshot.evidenceAssessments ? capEv(v.snapshot.evidenceAssessments) : undefined,
+              evidenceAssessmentHistory: v.snapshot.evidenceAssessmentHistory ? capEvHistory(v.snapshot.evidenceAssessmentHistory) : undefined,
             },
           })),
         };

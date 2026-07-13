@@ -381,10 +381,30 @@ function PolicyPromiseCell({ promise, coverage }: { promise?: string; coverage?:
   );
 }
 
+// Task 3: when a line's clauses list is empty ONLY because its coverage came
+// from spread-across passages (no single clause reference per sub-part, not
+// because nothing was found), say so instead of the bare "—" a genuine gap
+// shares. Counts every verified passage across every spread sub-part on the
+// line, not just the first, so a multi-sub-part line reports its true total.
+function spreadClauseHint(line: MatrixLine): string | undefined {
+  if (line.clauses.length > 0) return undefined;
+  const passageCount = line.items.reduce((sum, it) => sum + (it.found && it.spreadQuotes ? it.spreadQuotes.length : 0), 0);
+  return passageCount > 1 ? `Multiple clauses (spread across ${passageCount} passages)` : undefined;
+}
+
 // Up to two entries, then "+N more <thing>(s)". Em-dash when muted (flat row) or empty.
 // Used for the Policy Clause column only — clause text has no Drive link.
-function StackCell({ items, muted, more, mono }: { items: string[]; muted: boolean; more: string; mono?: boolean }) {
-  if (muted || items.length === 0) return <span style={{ color: "#94a3b8" }}>—</span>;
+function StackCell({ items, muted, more, mono, emptyHint }: { items: string[]; muted: boolean; more: string; mono?: boolean; emptyHint?: string }) {
+  // A spread-across sub-part (Task 3) has no single clause reference, so
+  // `items` is empty even though real passages WERE found — distinct from
+  // the genuine "nothing found" case, so it gets its own honest label
+  // instead of the same bare em-dash both states used to share.
+  if (muted) return <span style={{ color: "#94a3b8" }}>—</span>;
+  if (items.length === 0) {
+    return emptyHint
+      ? <span style={{ color: "#64748b", fontStyle: "italic", fontSize: 11 }}>{emptyHint}</span>
+      : <span style={{ color: "#94a3b8" }}>—</span>;
+  }
   const show = items.slice(0, 2);
   const extra = items.length - show.length;
   return (
@@ -551,9 +571,16 @@ function LocatedPassage({ item, resolveText }: { item: SpineItem; resolveText: R
       {hasSpread && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           <div style={{ fontSize: 10.5, color: "#64748b", fontStyle: "italic" }}>Covered — spread across these passages rather than one:</div>
-          {item.spreadQuotes!.slice(0, 5).map((sq, i) => (
+          {item.spreadQuotes!.slice(0, 5).map((sq, i) => {
+            // Same per-passage highlight as the single-quote case above
+            // (excerptAround + ExcerptSpan) — each spread passage has its
+            // own sourceFile, so the excerpt is resolved per-passage, not
+            // reused from the outer item.
+            const sqText = sq.sourceFile?.record ? resolveText(sq.sourceFile.record) : undefined;
+            const sqExcerpt = typeof sqText === "string" ? excerptAround(sqText, sq.quote, 400) : null;
+            return (
             <div key={i} style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.5, paddingLeft: 8, borderLeft: "2px solid #e2e8f0" }}>
-              “{shorten(sq.quote, 600)}”
+              {sqExcerpt ? <>“<ExcerptSpan excerpt={sqExcerpt} />”</> : <>“{shorten(sq.quote, 600)}”</>}
               {sq.sourceFile?.name && (
                 <div style={{ fontSize: 10.5, marginTop: 2 }}>
                   {sq.sourceFile.url
@@ -563,7 +590,8 @@ function LocatedPassage({ item, resolveText }: { item: SpineItem; resolveText: R
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
           {item.spreadQuotes!.length > 5 && (
             <div style={{ fontSize: 10.5, color: "#94a3b8", fontStyle: "italic", paddingLeft: 8 }}>
               …and {item.spreadQuotes!.length - 5} more spread across the document.
@@ -1015,7 +1043,7 @@ export function LineageDiagram({ mode, ppd, evidence, onOpenLine, runLabel }: {
                     <FileListCell files={line.files} muted={!line.expandable} />
                     {isEv
                       ? <PassageCell source={line.passageSource} fallbackText={line.passagePreview} muted={!line.expandable} resolveText={resolveText} />
-                      : <StackCell items={line.clauses} muted={!line.expandable} more="clause" />}
+                      : <StackCell items={line.clauses} muted={!line.expandable} more="clause" emptyHint={spreadClauseHint(line)} />}
                     <RationaleCell text={line.rowRationale} suggestedAction={isEv ? line.suggestedAction : undefined} />
                   </div>
 

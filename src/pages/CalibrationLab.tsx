@@ -29,7 +29,8 @@ import {
 import { OVERFITTING_CAUTION, recommendFromConsistency, recommendFromAB, type Recommendation } from "../lib/tuningAdvisor";
 import { ConsistencyHeatChart, ABHeadToHeadChart, ABWinPatternChart } from "../components/ui/calibrationCharts";
 import { RunDetailColumns } from "../components/ui/RunDetailColumns";
-import type { AuditFileRecord, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue } from "../types";
+import { ppdVerdictLabel, evVerdictLabel } from "../lib/verdictTone";
+import type { AuditFileRecord, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue, PPDVerdict, EvidenceVerdict } from "../types";
 
 const STATUS_COLOR: Record<string, string> = { Met: "#15803d", Partial: "#b45309", "Not met": "#b91c1c" };
 
@@ -545,10 +546,11 @@ function applyScratchLiveEvent(prev: LiveRunState, ev: ScratchLiveEvent): LiveRu
   }
   if (inner.type === "batch-done") {
     const lineStatus = { ...prev.lineStatus }, lineVerdict = { ...prev.lineVerdict };
-    for (const v of inner.verdicts) { lineStatus[v.ref] = "done"; lineVerdict[v.ref] = v.verdict; }
+    const label = (v: string) => (phase === "policy" ? ppdVerdictLabel(v as PPDVerdict) : evVerdictLabel(v as EvidenceVerdict));
+    for (const v of inner.verdicts) { lineStatus[v.ref] = "done"; lineVerdict[v.ref] = label(v.verdict); }
     return {
       ...prev, phase, lineStatus, lineVerdict,
-      log: [...prev.log, ...inner.verdicts.map((v) => ({ at: heartbeatAt, text: `Judged ${v.ref} → ${v.verdict}`, tone: (v.verdict === "Met" || v.verdict === "Adequate" ? "good" : v.verdict === "Not met" || v.verdict === "Not documented" ? "bad" : "warn") as "good" | "bad" | "warn" }))].slice(-LIVE_LOG_CAP),
+      log: [...prev.log, ...inner.verdicts.map((v) => ({ at: heartbeatAt, text: `Judged ${v.ref} → ${label(v.verdict)}`, tone: (v.verdict === "Met" || v.verdict === "Adequate" ? "good" : v.verdict === "Not met" || v.verdict === "Not documented" ? "bad" : "warn") as "good" | "bad" | "warn" }))].slice(-LIVE_LOG_CAP),
       heartbeatAt,
     };
   }

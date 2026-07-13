@@ -7,6 +7,7 @@
 
 import type { ApsrBreakdown, ChecklistLineWrite, EvidenceAssessmentRow, PPDReviewRow, SpecificChecklistLine } from "../types";
 import { normalizeAuditRef } from "./gd4Refs";
+import { ppdVerdictLabel, evVerdictLabel } from "./verdictTone";
 
 // The write shape now lives in types (ChecklistLineWrite) so the pending-
 // commit queue can reference it without importing lib code; the old name is
@@ -23,12 +24,12 @@ function optionAApsr(row: EvidenceAssessmentRow, ppdRow: PPDReviewRow | undefine
   return {
     approach: {
       status: row.ppdVerdict === "Adequate" ? "Meeting" : row.ppdVerdict === "Partial" ? "Beginning" : "Not evident",
-      note: ppdRow?.shortComment || `PPD verdict: ${row.ppdVerdict}.`,
+      note: ppdRow?.shortComment || `PPD verdict: ${ppdVerdictLabel(row.ppdVerdict)}.`,
       sourceChunkIds: ppdRow?.chunkIds ?? [],
     },
     processes: {
       status: row.verdict === "Met" ? "Deployed" : row.verdict === "Partial" ? "Weak" : "Not evident",
-      note: row.evidenceSummary || row.comment || `Combined evidence verdict: ${row.verdict}.`,
+      note: row.evidenceSummary || row.comment || `Combined evidence verdict: ${evVerdictLabel(row.verdict)}.`,
       sourceChunkIds: row.evidenceChunkIds ?? [],
     },
     systemsOutcomes: { status: "Not evident", note: notAssessedNote, sourceChunkIds: [] },
@@ -90,7 +91,7 @@ export function buildOptionALineWrites(
         reviewed: false,
         sufficiency: status === "Met" ? "Present" : status === "Partial" ? "Weak" : "Missing",
         auditorNote: [
-          `PPD verdict: ${row.ppdVerdict}. Combined verdict: ${status}.`,
+          `PPD verdict: ${ppdVerdictLabel(row.ppdVerdict)}. Combined verdict: ${evVerdictLabel(status)}.`,
           row.comment || row.evidenceSummary,
           promiseLines,
           `SOURCE TRACE\nRun: ${opts.runId} (Option A — PPD Requirements Review + Evidence assessment)`,

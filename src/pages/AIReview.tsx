@@ -4,6 +4,7 @@ import type { AIReviewLogEntry, AuditFileRecord } from "../types";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { FileLedger } from "./EvidenceFolder";
+import { aiRateFor, fmtUSD } from "../lib/aiCost";
 
 function verdictTone(v: string) {
   return v === "Acceptable" ? "good" : v === "Partial" || v === "At risk" ? "medium" : v === "Pass" ? "good" : "critical";
@@ -63,27 +64,6 @@ function moduleLabel(t: string): string {
   return MODULE_LABEL[t] || t;
 }
 
-// Rough USD price per 1,000,000 tokens (input / output), matched by model-name
-// prefix. These are ESTIMATES for a ballpark spend figure — adjust here if
-// OpenAI's pricing changes. Order matters: more specific patterns first.
-const PRICING: { match: RegExp; in: number; out: number }[] = [
-  { match: /gpt-5-nano/, in: 0.05, out: 0.4 },
-  { match: /gpt-5-mini/, in: 0.25, out: 2 },
-  { match: /gpt-5/, in: 1.25, out: 10 },
-  { match: /gpt-4o-mini/, in: 0.15, out: 0.6 },
-  { match: /gpt-4o/, in: 2.5, out: 10 },
-  { match: /gpt-4\.1-nano/, in: 0.1, out: 0.4 },
-  { match: /gpt-4\.1-mini/, in: 0.4, out: 1.6 },
-  { match: /gpt-4\.1/, in: 2, out: 8 },
-  { match: /gpt-4-turbo/, in: 10, out: 30 },
-];
-const DEFAULT_RATE = { in: 0.5, out: 1.5 };
-
-function rateFor(model?: string) {
-  if (!model) return DEFAULT_RATE;
-  return PRICING.find((p) => p.match.test(model)) ?? DEFAULT_RATE;
-}
-
 // Analysis/utility cost split for one logged run — analysis tokens priced at
 // the analysis model's rate, auxiliary (utility) tokens at the utility
 // model's rate. For older log entries that only have a combined totalTokens
@@ -93,7 +73,7 @@ function rateFor(model?: string) {
 // below) so the per-model breakdown in the stats useMemo can price each
 // model separately without a second copy of this formula.
 function costParts(e: AIReviewLogEntry): { analysisCost: number; auxCost: number } {
-  const r = rateFor(e.model);
+  const r = aiRateFor(e.model);
   const pt = e.promptTokens || 0;
   const ct = e.completionTokens || 0;
   const analysisCost = pt || ct
@@ -101,7 +81,7 @@ function costParts(e: AIReviewLogEntry): { analysisCost: number; auxCost: number
     : e.totalTokens && !e.auxTotalTokens
       ? (e.totalTokens * 0.75 * r.in + e.totalTokens * 0.25 * r.out) / 1e6
       : 0;
-  const ar = rateFor(e.auxModel);
+  const ar = aiRateFor(e.auxModel);
   const apt = e.auxPromptTokens || 0;
   const act = e.auxCompletionTokens || 0;
   const auxCost = apt || act
@@ -116,12 +96,6 @@ function costParts(e: AIReviewLogEntry): { analysisCost: number; auxCost: number
 function costOf(e: AIReviewLogEntry): number {
   const { analysisCost, auxCost } = costParts(e);
   return analysisCost + auxCost;
-}
-
-function fmtUSD(n: number): string {
-  if (n === 0) return "$0.00";
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(2)}`;
 }
 
 import { FeedbackModal } from "../components/ui/FeedbackModal";

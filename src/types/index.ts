@@ -936,6 +936,11 @@ export type PPDReviewResult = {
   // tab can show the same clickable/inspectable file list (extracted text) the
   // staged audit shows. Metadata only — the extracted text lives in fileTextCache.
   fileLedger?: AuditFileRecord[];
+  // AI model used for this run's verdict calls — carried onto the result so a
+  // history entry (ppdReviewHistory) still shows which model produced it after
+  // a later run overwrites the live AIReviewLog entry it came from. Undefined
+  // on runs from before this field existed.
+  model?: string;
 };
 
 // ─── Evidence Assessment (Option A, Evidence tab) ───────────────────────────
@@ -1012,6 +1017,10 @@ export type EvidenceAssessmentResult = {
   // Undefined when the rows were derived from a prior staged audit (no fresh
   // read happened here).
   fileLedger?: AuditFileRecord[];
+  // AI model used for this run's verdict calls — see PPDReviewResult.model.
+  // Undefined when derivedFromAudit (no fresh AI call happened here) or on
+  // runs from before this field existed.
+  model?: string;
 };
 
 // Result of comparing the Actual Evidence folder's CURRENT Drive listing
@@ -1082,6 +1091,19 @@ export type EvidenceAssessmentProgress = {
   log?: EvidenceRunLogLine[];           // running activity log, newest last
   ai?: { calls: number; model?: string; totalTokens: number }; // live AI usage
   lastIssue?: EvidenceRunIssue; // most recent call/file-read failure, if any
+};
+
+// Task 1a: the blocking choice runEvidenceAssessment presents the FIRST time
+// its read loop hits the run's vision-image budget, instead of silently
+// skipping the file (the old, honesty-guard-violating behaviour). Ephemeral
+// UI state only — never persisted.
+export type VisionBudgetPrompt = {
+  subCriterionId: string;
+  fileName: string;         // the file that hit the budget
+  budgetMax: number;        // the run's current image cap
+  filesRemaining: number;   // evidence files not yet attempted (upper-bound signal, not an exact image count — see runEvidenceAssessment)
+  estimatedExtraImages: number; // rough "up to N more images" if every remaining file needs vision
+  estimatedCostUSD: number; // ballpark spend for estimatedExtraImages, same $ convention as the AI Review Log
 };
 
 // Same shape and intent as EvidenceAssessmentProgress, for the PPD tab's live
@@ -1368,7 +1390,9 @@ export type WorkspaceSnapshot = {
   // clear them rather than keeping current state — stale-but-cleared beats
   // dangling. Optional for backward compatibility.
   ppdReviewResults?: Record<string, PPDReviewResult>;
+  ppdReviewHistory?: Record<string, PPDReviewResult[]>;
   evidenceAssessments?: Record<string, EvidenceAssessmentResult>;
+  evidenceAssessmentHistory?: Record<string, EvidenceAssessmentResult[]>;
   analysisPath?: Record<string, "A" | "B">;
   auditMode?: AuditMode;
   reviewPanelAuditorIds?: string[];
