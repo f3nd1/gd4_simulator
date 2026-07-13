@@ -83,6 +83,32 @@ const EVIDENCE_ASSESSMENT_SCHEMA: ChatSchema = { name: "evidence_assessment", sc
 // from the verified passages alone, ONCE per line (not once per window), so
 // the old cross-window best-verdict merge and its ordering artifacts are gone.
 
+// Verdict/comment self-consistency guard (both judges): the judge returns a
+// verdict enum and freeform comment prose in ONE JSON response with nothing
+// cross-checking them against each other. Confirmed on real exported data
+// that the model can return verdict "Partial" while its own comment's final
+// sentence concludes "...this requirement is assessed as Met." — a genuine
+// LLM self-contradiction, not a code bug. Literal substring patterns only
+// (never fuzzy/semantic matching, per this project's conservative-matching
+// rule), checked ONLY against the comment's last 300 characters (its
+// concluding sentence(s)) so an earlier mid-comment mention — e.g. "this
+// promise was not evidenced, but the requirement is nonetheless assessed as
+// Met overall" — can't false-trigger on language that isn't the model's
+// actual stated conclusion. Option A only (Evidence + PPD judges) — Option
+// B's top-level verdict is derived deterministically from structured dimension
+// data (see buildStagedApsr/apsrAuditNote below), so this class of
+// contradiction cannot occur there by construction; do not wire this in there.
+const POSITIVE_CONCLUSION_PATTERNS = ["assessed as met", "assessed as adequate", "fully satisfies", "fully meets", "fully evidenced"];
+const NEGATIVE_CONCLUSION_PATTERNS = ["assessed as not met", "assessed as partial", "assessed as not documented", "not evidenced", "does not satisfy", "does not meet"];
+function conclusionMismatch(isPositiveVerdict: boolean, comment: string): string | undefined {
+  const tail = comment.slice(-300).toLowerCase();
+  const positiveHit = POSITIVE_CONCLUSION_PATTERNS.find((p) => tail.includes(p));
+  const negativeHit = NEGATIVE_CONCLUSION_PATTERNS.find((p) => tail.includes(p));
+  if (isPositiveVerdict && negativeHit && !positiveHit) return negativeHit;
+  if (!isPositiveVerdict && positiveHit && !negativeHit) return positiveHit;
+  return undefined;
+}
+
 const PPD_EXTRACT_SCHEMA: ChatSchema = { name: "ppd_extract", schema: sObj({
   results: sArr(sObj({
     ref: sStr,
@@ -2399,19 +2425,34 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     // An "Adequate" verdict that cannot point at any supporting PPD chunk is
     // downgraded to "Partial" — same uncited-positive rule as buildStagedApsr.
     const uncitedAdequate = judged.verdict === "Adequate" && judged.chunkIds.length === 0;
-    const verdict: PPDVerdict = uncitedAdequate ? "Partial" : judged.verdict;
+    let verdict: PPDVerdict = uncitedAdequate ? "Partial" : judged.verdict;
     // Quote verification: annotate any quoted excerpt that does not exist
     // verbatim in the source, so hallucinated "quotes" can't pass as real.
-    const verifiedComment = flagUnverifiedQuotes(
+    let verifiedComment = flagUnverifiedQuotes(
       uncitedAdequate ? `${judged.fullComment || ""}\n\n${UNCITED_DOWNGRADE_NOTE}` : (judged.fullComment || ""),
       policyDocText
     );
+    let shortComment = judged.shortComment || "";
+    // Verdict/comment self-consistency guard — skipped when the uncited-
+    // Adequate gate above already fired: that gate's own appended note
+    // already explains its downgrade, and checking the now-stale ORIGINAL
+    // comment (which legitimately concluded "Adequate" before the downgrade)
+    // against the NEW "Partial" verdict would misfire on the gate's own work.
+    if (!uncitedAdequate) {
+      const mismatch = conclusionMismatch(verdict === "Adequate", verifiedComment);
+      if (mismatch) {
+        const originalVerdict = verdict;
+        verdict = "Not assessed";
+        shortComment = `Not assessed — the model's verdict ("${originalVerdict}") and its own comment's stated conclusion ("${mismatch}") disagreed. Re-run to get a consistent assessment.`;
+        verifiedComment = `${verifiedComment}\n\n⚠ Verdict/comment mismatch: the model returned verdict "${originalVerdict}" but its own comment concluded "${mismatch}". Re-run to get a consistent assessment.`;
+      }
+    }
     return {
       ref: r.ref,
       gd4ItemId: r.gd4ItemId,
       requirementText: r.requirementText,
       verdict,
-      shortComment: judged.shortComment || "",
+      shortComment,
       fullComment: verifiedComment,
       suggestedRewrite: judged.suggestedRewrite,
       chunkIds: judged.chunkIds,
@@ -2908,6 +2949,24 @@ Respond with JSON only:
           evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.",
           verdict: "Partial",
           comment: `${verifiedComment ? `${verifiedComment}\n\n` : ""}[Capped at Partial: ${unmetPromises.length} PPD promise${unmetPromises.length === 1 ? "" : "s"} not evidenced — ${unmetPromises.map((p) => `"${p.promiseText}"`).join("; ")}. It was not evident that the PEI had implemented ${unmetPromises.length === 1 ? "this commitment" : "these commitments"} in accordance with its documented PPD.]`,
+          chunkIds: best.chunkIds,
+          promiseChecks: best.promiseChecks,
+          evidenceQuote: best.evidenceQuote,
+          suggestedAction: best.suggestedAction || undefined,
+          extractionStats,
+        };
+      }
+      // Verdict/comment self-consistency guard — only reachable here, past
+      // all three hard-gates above, so a line those already downgraded (and
+      // already appended its own explanatory note to) never also gets this
+      // check applied to its now-gate-modified comment text.
+      const mismatch = conclusionMismatch(best.verdict === "Met", verifiedComment);
+      if (mismatch) {
+        return {
+          ref: inp.ref,
+          evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.",
+          verdict: "Not assessed",
+          comment: `${verifiedComment}\n\n⚠ Verdict/comment mismatch: the model returned verdict "${best.verdict}" but its own comment concluded "${mismatch}". Re-run to get a consistent assessment.`,
           chunkIds: best.chunkIds,
           promiseChecks: best.promiseChecks,
           evidenceQuote: best.evidenceQuote,

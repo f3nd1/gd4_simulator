@@ -11,7 +11,7 @@ import { buildGenericLines } from "../data/checklistSeed";
 import { computeBand, lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
 import { apsrAuditNote } from "../lib/ai/simulateAI";
 import { findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
-import { ppdVerdictLabel, ppdVerdictTone } from "../lib/verdictTone";
+import { ppdVerdictLabel, ppdVerdictTone, evVerdictLabel } from "../lib/verdictTone";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
@@ -813,7 +813,9 @@ export function SubCriterionChecklist() {
                   >
                     {SPECIFIC_OPTIONS.map((o) => <option key={o}>{o}</option>)}
                   </select>
-                  <Pill s={statusTone(l.status)}>{l.status}</Pill>
+                  <Pill s={statusTone(l.status)}>
+                    {l.status === "Met" || l.status === "Partial" || l.status === "Not met" ? evVerdictLabel(l.status) : l.status}
+                  </Pill>
                   {l.generatedBy === "ai" && (
                     <ThumbsButtons
                       onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: l.id, aiOutput: `AI verdict: ${l.status}`, humanDecision: `Accepted: ${l.status}`, changed: false, decisionType: "Accepted", reason: "" })}

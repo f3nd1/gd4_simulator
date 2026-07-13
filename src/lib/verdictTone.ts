@@ -33,6 +33,11 @@ export function ppdVerdictLabel(v: PPDVerdict): string {
   return v === "Adequate" ? "Documented" : v === "Partial" ? "Partly" : v === "Not assessed" ? "Not checked" : "Not covered";
 }
 
+// "Partially met" (not "Partly") deliberately — ppdVerdictLabel's own Partial
+// word IS "Partly", so a shared word here made "Combined verdict: Partly."
+// read as if PPD vocabulary had leaked into the Combined half of a sentence,
+// even when it hadn't (see the investigation this fixes). The two verdict
+// axes must never render identically for their respective Partial states.
 export function evVerdictLabel(v: EvidenceVerdict): string {
-  return v === "Met" ? "Evidenced" : v === "Partial" ? "Partly" : v === "Not assessed" ? "Not checked" : "No evidence";
+  return v === "Met" ? "Evidenced" : v === "Partial" ? "Partially met" : v === "Not assessed" ? "Not checked" : "No evidence";
 }
