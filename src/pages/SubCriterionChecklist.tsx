@@ -26,7 +26,9 @@ import type {
   SpecificLineStatus,
   EvidenceSufficiency,
   SubChecklistEvidenceItem,
+  PendingCommitItem,
 } from "../types";
+import { normalizeAuditRef } from "../lib/gd4Refs";
 
 // ── Display-only parent grouping for the checklist item list ────────────────
 // Items are grouped by their "major.minor" key (e.g. "2.1") so every criterion
@@ -79,6 +81,21 @@ function sourceLabel(sourceType: ChecklistSourceType, sourceIndex: number | null
   if (sourceType === "expectedEvidence") return `Expected Evidence ${(sourceIndex ?? 0) + 1}`;
   if (sourceType === "intent") return "Intent";
   return "Requirement";
+}
+
+// Finds the hybrid-gate item (if any) holding a NEWER, unapproved write for
+// this exact checklist line — matched the same way applyOptionAWrites itself
+// matches a write to a line (existingLineId first, else normalized ref).
+// While this exists, the line's status/evidence/promise text on screen is the
+// last-APPROVED run, not the run this pending item came from — the gap this
+// warning exists to surface (see the investigation this fixes).
+function pendingWriteForLine(items: PendingCommitItem[], line: SpecificChecklistLine): PendingCommitItem | undefined {
+  return items.find((i) => {
+    if (i.write.existingLineId) return i.write.existingLineId === line.id;
+    const ref = i.write.newLine?.sourceRef ?? i.write.newLine?.clause;
+    const lineRef = line.sourceRef ?? line.clause;
+    return !!ref && !!lineRef && normalizeAuditRef(ref) === normalizeAuditRef(lineRef);
+  });
 }
 
 // One-line "why this was Met" summary for the Evidence strength section —
@@ -302,6 +319,24 @@ export function SubCriterionChecklist() {
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const addCalibrationMemory = useWorkspaceStore((s) => s.addCalibrationMemory);
   const closures = useWorkspaceStore((s) => s.closures);
+  // Hybrid-gate visibility fix: a newer Evidence/Audit run can sit unapproved
+  // in pendingCommits while this checklist still shows the last-approved run
+  // (the gate itself is unchanged — this only surfaces that it's holding
+  // something). Keyed by subCriterionId; each run's items carry their own
+  // gd4ItemId, so scoping to req.subCriterionId is correct for this item.
+  const pendingCommits = useWorkspaceStore((s) => s.pendingCommits);
+  const itemPendingItems = useMemo(
+    () => (pendingCommits[req.subCriterionId]?.items ?? []).filter((i) => i.write.gd4ItemId === selectedId),
+    [pendingCommits, req.subCriterionId, selectedId]
+  );
+  const itemPendingRunId = pendingCommits[req.subCriterionId]?.runId;
+  // Every GD4 item id with ANY write awaiting approval, across every sub-
+  // criterion — cheap membership check for the Coverage vs Maturity chips.
+  const pendingItemIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const run of Object.values(pendingCommits)) for (const it of run.items) ids.add(it.write.gd4ItemId);
+    return ids;
+  }, [pendingCommits]);
   const [lineFeedback, setLineFeedback] = useState<{ id: string; text: string } | null>(null);
   const itemAudit = useMemo(() => {
     const item = scored.items.find((i) => i.id === selectedId);
@@ -349,9 +384,9 @@ export function SubCriterionChecklist() {
         .map((e) => {
           const r = GD4_REQUIREMENTS.find((x) => x.id === e.gd4ItemId)!;
           const result = computeBand(e.generic, e.specific, r.gateSensitive);
-          return { id: e.gd4ItemId, title: r.requirement, ...result, quadrant: quadrantLabel(result.coveragePct, result.maturityCeiling) };
+          return { id: e.gd4ItemId, title: r.requirement, ...result, quadrant: quadrantLabel(result.coveragePct, result.maturityCeiling), hasPending: pendingItemIds.has(e.gd4ItemId) };
         }),
-    [entries]
+    [entries, pendingItemIds]
   );
 
   function selectItem(id: string) {
@@ -544,6 +579,18 @@ export function SubCriterionChecklist() {
             </div>
           )}
 
+          {itemPendingItems.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8, background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, color: "#92400e", fontWeight: 600 }}>
+              <span aria-hidden>⚠</span>
+              <span style={{ flex: 1, minWidth: 240 }}>
+                {itemPendingItems.length} line{itemPendingItems.length === 1 ? "" : "s"} on this item {itemPendingItems.length === 1 ? "has" : "have"} a newer evidence run ({itemPendingRunId}) awaiting your review — the status/Band above may not reflect it yet.
+              </span>
+              <Link to={`/evidence-folder?run=${itemPendingRunId}`} style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: "#b45309", borderRadius: 6, padding: "5px 12px", textDecoration: "none", whiteSpace: "nowrap" }}>
+                Review pending run →
+              </Link>
+            </div>
+          )}
+
           <div style={{ marginBottom: 12 }}>
             <button
               onClick={() => setMaturityOpen((o) => !o)}
@@ -697,6 +744,10 @@ export function SubCriterionChecklist() {
             // Option A (buildOptionALineWrites); absent on Option B/manual/seed
             // lines, which show the honest "—" empty state rather than a guess.
             const ppdVerdict = [...l.evidence].reverse().find((e) => e.ppdVerdict)?.ppdVerdict;
+            // Gate-visibility fix: a newer run for THIS line is queued but not
+            // yet approved/rejected — everything above (Policy, Combined,
+            // evidence) is still the last-APPROVED run, not this one.
+            const pendingWrite = pendingWriteForLine(itemPendingItems, l);
 
             // Left border colour by status — strongest signal
             const statusBorder =
@@ -798,6 +849,24 @@ export function SubCriterionChecklist() {
                     ×
                   </button>
                 </div>
+
+                {/* Row 3 — stale-run warning. Always visible when present (never
+                    buried behind expand): the Policy/Combined pills above are
+                    the last-APPROVED run, not the newer one sitting in the gate. */}
+                {pendingWrite && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "6px 10px", borderTop: "1px solid #fde68a", background: "#fffbeb", fontSize: 11.5, color: "#92400e", fontWeight: 600 }}
+                  >
+                    <span aria-hidden>⚠</span>
+                    <span style={{ flex: 1, minWidth: 200 }}>
+                      A newer evidence run ({itemPendingRunId}) is awaiting your review — this entry reflects an older run.
+                    </span>
+                    <Link to={`/evidence-folder?run=${itemPendingRunId}`} style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#b45309", borderRadius: 6, padding: "3px 9px", textDecoration: "none", whiteSpace: "nowrap" }}>
+                      Review pending run →
+                    </Link>
+                  </div>
+                )}
 
                 {expanded && (
                   <div style={{ padding: "0 9px 9px", borderTop: "1px solid #f1f5f9", paddingTop: 8 }}>
@@ -1052,6 +1121,17 @@ export function SubCriterionChecklist() {
                   <b>Evidence cap:</b> {bandResult.evidenceCapWarning}
                 </div>
               )}
+              {itemPendingItems.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10, background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#92400e" }}>
+                  <span aria-hidden>⚠</span>
+                  <span style={{ flex: 1, minWidth: 200 }}>
+                    <b>Possibly stale:</b> a newer evidence run ({itemPendingRunId}) is awaiting review — this Band was computed from the last-approved run, not that one.
+                  </span>
+                  <Link to={`/evidence-folder?run=${itemPendingRunId}`} style={{ fontSize: 11.5, fontWeight: 700, color: "#fff", background: "#b45309", borderRadius: 6, padding: "4px 10px", textDecoration: "none", whiteSpace: "nowrap" }}>
+                    Review →
+                  </Link>
+                </div>
+              )}
             </>
           ) : (
             <p style={{ fontSize: 12, color: "#94a3b8" }}>No band yet — add at least one specific checklist line for this item to compute one.</p>
@@ -1092,7 +1172,7 @@ export function SubCriterionChecklist() {
   );
 }
 
-function Quadrant({ label, items, onPick }: { label: string; items: { id: string; title: string; finalBand: number }[]; onPick: (id: string) => void }) {
+function Quadrant({ label, items, onPick }: { label: string; items: { id: string; title: string; finalBand: number; hasPending?: boolean }[]; onPick: (id: string) => void }) {
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 8, minHeight: 70 }}>
       <Pill s={quadrantTone(label)}>{label}</Pill>
@@ -1101,10 +1181,13 @@ function Quadrant({ label, items, onPick }: { label: string; items: { id: string
           <button
             key={i.id}
             onClick={() => onPick(i.id)}
-            title={i.title}
-            style={{ cursor: "pointer", fontSize: 10.5, padding: "2px 7px", borderRadius: 999, border: "1px solid #cbd5e1", background: "#fff" }}
+            title={i.hasPending ? `${i.title} — a newer evidence run is awaiting review; this band may be stale` : i.title}
+            style={{
+              cursor: "pointer", fontSize: 10.5, padding: "2px 7px", borderRadius: 999,
+              border: i.hasPending ? "1px solid #f59e0b" : "1px solid #cbd5e1", background: i.hasPending ? "#fffbeb" : "#fff",
+            }}
           >
-            {i.id}
+            {i.hasPending && "⚠ "}{i.id}
           </button>
         ))}
         {items.length === 0 && <span style={{ fontSize: 10.5, color: "#cbd5e1" }}>—</span>}
