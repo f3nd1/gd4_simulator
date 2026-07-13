@@ -4566,6 +4566,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               approved: false,
               reviewed: false,
               sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
+              // The run's own combined verdict, for the checklist card's
+              // Evidence tab pill (73d3a66 wired this for Option A only — an
+              // Option B item without it rendered an unexplained "—").
+              // ppdVerdict stays deliberately absent: this path has no
+              // policy-only PPDVerdict, and deriving one from
+              // apsr.approach.status would be the lossy mapping the field's
+              // type comment forbids.
+              evidenceVerdict: v.status,
               auditorNote: `${baseNote}\n\n${sourceLines.join("\n")}`,
               // Persist the structured APSR so a finding raised from this line
               // can explain which rubric dimension (Approach/Processes/Systems &
@@ -5635,6 +5643,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   approved: false,
                   reviewed: false,
                   sufficiency: v.status === "Met" ? "Present" : v.status === "Partial" ? "Weak" : "Missing",
+                  // Same as the classic path above: the run's combined verdict
+                  // for the Evidence tab pill; no ppdVerdict by design.
+                  evidenceVerdict: v.status,
                   auditorNote: `${baseNote}\n\n${sourceLines.join("\n")}`,
                   apsr: v.apsr,
                   runId,

@@ -914,10 +914,19 @@ export function SubCriterionChecklist() {
                           )}
                           {expandTab === "ppd" ? (
                             <>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                                <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Policy verdict</span>
-                                <Pill s={aiItem.ppdVerdict ? ppdVerdictTone(aiItem.ppdVerdict) : "neutral"}>{aiItem.ppdVerdict ? ppdVerdictLabel(aiItem.ppdVerdict) : "—"}</Pill>
-                                <span style={{ fontSize: 10.5, color: "#94a3b8" }}>PPD reasoning as snapshotted by this evidence run</span>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Policy verdict (this run)</span>
+                                {/* Honest labelled absence, never a bare "—": a staged
+                                    (Option B) run has no policy-only PPDVerdict by design
+                                    (its policy view lives in APSR Approach), and an
+                                    Option A item from before the snapshot fields simply
+                                    never recorded one. Neither is fabricated. */}
+                                {aiItem.ppdVerdict ? (
+                                  <Pill s={ppdVerdictTone(aiItem.ppdVerdict)}>{ppdVerdictLabel(aiItem.ppdVerdict)}</Pill>
+                                ) : (
+                                  <span style={{ fontSize: 10.5, color: "#94a3b8", fontStyle: "italic" }}>No policy-only verdict recorded by this run — the reasoning below is its policy assessment.</span>
+                                )}
+                                {aiItem.ppdVerdict && <span style={{ fontSize: 10.5, color: "#94a3b8" }}>PPD reasoning as recorded by this run</span>}
                               </div>
                               {(aiItem.ppdComment || aiItem.apsr?.approach.note) ? (
                                 <div style={{ fontSize: 12, color: "#1e293b", lineHeight: 1.45, whiteSpace: "pre-line" }}>{aiItem.ppdComment || aiItem.apsr?.approach.note}</div>
@@ -927,9 +936,15 @@ export function SubCriterionChecklist() {
                             </>
                           ) : (
                             <>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                                <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Run verdict</span>
-                                <Pill s={aiItem.evidenceVerdict ? statusTone(aiItem.evidenceVerdict) : "neutral"}>{aiItem.evidenceVerdict ? evVerdictLabel(aiItem.evidenceVerdict) : "—"}</Pill>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Combined verdict (this run)</span>
+                                {/* Absent only on items written before the snapshot
+                                    fields existed (both paths write it now). */}
+                                {aiItem.evidenceVerdict ? (
+                                  <Pill s={statusTone(aiItem.evidenceVerdict)}>{evVerdictLabel(aiItem.evidenceVerdict)}</Pill>
+                                ) : (
+                                  <span style={{ fontSize: 10.5, color: "#94a3b8", fontStyle: "italic" }}>Not recorded by this run (older run — a re-run captures it).</span>
+                                )}
                                 {aiItem.evidenceVerdict && aiItem.evidenceVerdict !== l.status && (
                                   <span style={{ fontSize: 10.5, color: "#b45309" }}>differs from the current verdict above (edited after this run)</span>
                                 )}
