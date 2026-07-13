@@ -39,8 +39,36 @@ type RefreshBody = { action: "refresh" };
 type DisconnectBody = { action: "disconnect" };
 type RequestBody = ExchangeBody | RefreshBody | DisconnectBody;
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+// Browser origins allowed to invoke this function. Deliberately NOT a
+// wildcard — this endpoint mints Google Drive access tokens for a workspace
+// holding student/staff records, so only the real app origins may call it.
+// localhost is included so local Vite dev (see CLAUDE.md — dev server on
+// :5173) can exercise the deployed function; add more here, never "*".
+const ALLOWED_ORIGINS = new Set([
+  "https://apps.unitedceres.edu.sg", // production
+  "http://localhost:5173",           // local Vite dev
+]);
+// Fallback Access-Control-Allow-Origin for a disallowed/absent Origin: the
+// production origin, which won't match a disallowed caller's origin, so the
+// browser blocks it — the request is still answered, but never with "*".
+const FALLBACK_ORIGIN = "https://apps.unitedceres.edu.sg";
+
+// CORS headers scoped to THIS request's origin. Access-Control-Allow-Origin
+// can only carry a single origin value (a list or "*" won't do here), so the
+// caller's origin is reflected back only when it's in the allowlist; `Vary:
+// Origin` stops a shared cache from serving one origin's ACAO to another.
+// Allow-Headers is exactly what @supabase/supabase-js's functions.invoke()
+// sends (verified against the installed 2.108.2 client: authorization,
+// apikey, x-client-info, and content-type for a JSON body) — a missing one
+// here fails the browser's preflight the same way no CORS headers at all did.
+function corsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("Origin") ?? "";
+  return {
+    "Access-Control-Allow-Origin": ALLOWED_ORIGINS.has(origin) ? origin : FALLBACK_ORIGIN,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
+    "Vary": "Origin",
+  };
 }
 
 function adminClient() {
@@ -63,6 +91,19 @@ async function callGoogleToken(params: Record<string, string>): Promise<{ ok: tr
 }
 
 Deno.serve(async (req) => {
+  const cors = corsHeaders(req);
+  // Request-scoped so EVERY response below — success and error alike — carries
+  // the CORS headers. Adding them only to the happy path is the classic bug:
+  // errors would still fail opaquely in the browser as a CORS message,
+  // hiding the real error and making the failure much harder to debug.
+  const json = (body: unknown, status = 200): Response =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...cors } });
+
+  // Preflight: answer immediately, before any auth / body-parse / secret
+  // checks — the browser sends this OPTIONS request before the real POST and
+  // aborts the whole call if it doesn't pass.
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
 
   let body: RequestBody;
