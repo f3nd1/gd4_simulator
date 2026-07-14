@@ -98,6 +98,16 @@ Reconstructed formula (see §4 for what is *not* confirmed):
 - Total % → final band in five equal 20-point ranges: 0–20% = Band 1,
   21–40% = Band 2, 41–60% = Band 3, 61–80% = Band 4, 81–100% = Band 5.
 
+**The scale is not hardcoded.** Because every number above is reconstructed,
+the max-%-per-dimension and the four band-threshold cut-offs are editable on the
+**GD4 Scoring Setup** page (`useScoringConfigStore.apsrScale`, default =
+`DEFAULT_APSR_SCALE`). The band is **derived** from the stored `matrixScores`
+under the current scale at every read site (`apsrMatrixResult`,
+`computeChecklistOverrides`), never trusted from a frozen snapshot — so editing
+the scale immediately re-bands every item on the Scorecard, Final Report and
+Sub-Criterion Checklist. Reconfirming the real cut-offs (§5) is then a settings
+edit, not a code change (though this file must still be updated to record it).
+
 **Worked example reproduces exactly:** A = 20% (Band 4) + P = 20% (Band 4) +
 S = 10% (Band 2) + R = 0% = **50% → Band 3**, matching the auditor's stated
 result. This is the regression test in

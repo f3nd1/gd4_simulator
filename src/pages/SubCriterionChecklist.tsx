@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import { NextStepBanner } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
@@ -335,9 +336,14 @@ export function SubCriterionChecklist() {
   // APSR percentage-matrix band state for the selected item. The band is now
   // CALCULATED from the four per-dimension scores (apsrMatrix), not a pick.
   const holisticBand = entry?.holisticBand;
+  const apsrScale = useScoringConfigStore((s) => s.apsrScale);
   const completeness = useMemo(() => lineCompleteness(specific), [specific]);
-  const matrixResult = useMemo(() => apsrMatrixResult(entry?.apsrMatrix), [entry?.apsrMatrix]);
-  const bandAdvisories = useMemo(() => (holisticBand?.matrixScores ? bandEvidenceAdvisories(specific, holisticBand.band) : []), [specific, holisticBand]);
+  const matrixResult = useMemo(() => apsrMatrixResult(entry?.apsrMatrix, apsrScale), [entry?.apsrMatrix, apsrScale]);
+  // Saved band DERIVED live from the stored matrixScores under the current
+  // scale — so editing the %-scale on Setup re-bands this item immediately,
+  // rather than showing the frozen save-time snapshot.
+  const savedBand = useMemo(() => (holisticBand?.matrixScores ? apsrMatrixResult(holisticBand.matrixScores, apsrScale) : null), [holisticBand, apsrScale]);
+  const bandAdvisories = useMemo(() => (savedBand ? bandEvidenceAdvisories(specific, savedBand.band) : []), [specific, savedBand]);
   const itemNeedsReassessment = entry ? needsReassessment(entry) : false;
   // Signature of the current line verdicts; when it drifts from the one the
   // AI suggestion was built on, the suggestion is stale (Task 5).
@@ -416,10 +422,10 @@ export function SubCriterionChecklist() {
           const r = GD4_REQUIREMENTS.find((x) => x.id === e.gd4ItemId)!;
           const c = lineCompleteness(e.specific);
           const completionPct = c.total > 0 ? (c.assessed / c.total) * 100 : 0;
-          const band = e.holisticBand?.band ?? null;
+          const band = e.holisticBand?.matrixScores ? apsrMatrixResult(e.holisticBand.matrixScores, apsrScale).band : null;
           return { id: e.gd4ItemId, title: r.requirement, band, quadrant: quadrantLabel(completionPct, band), hasPending: pendingItemIds.has(e.gd4ItemId) };
         }),
-    [entries, pendingItemIds]
+    [entries, pendingItemIds, apsrScale]
   );
 
   // Migration visibility (holistic-rubric rework): items scored under the old
@@ -530,7 +536,7 @@ export function SubCriterionChecklist() {
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", paddingLeft: 4 }}>{g.key} {g.title}</div>
                 {g.items.map((r) => {
                   const e = entries[r.id];
-                  const b = e?.holisticBand?.band ?? null;
+                  const b = e?.holisticBand?.matrixScores ? apsrMatrixResult(e.holisticBand.matrixScores, apsrScale).band : null;
                   const reassess = !!e && needsReassessment(e);
                   return (
                     <button
@@ -674,11 +680,11 @@ export function SubCriterionChecklist() {
             </div>
           )}
 
-          {holisticBand?.matrixScores ? (
+          {holisticBand?.matrixScores && savedBand ? (
             <div style={{ margin: "6px 0 0" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <Pill s={bandTone(holisticBand.band)}>{bandTitle(holisticBand.band)}</Pill>
-                <span style={{ fontSize: 11.5, color: "#475569", fontFamily: "ui-monospace,monospace" }}>APSR total {holisticBand.totalPct}%</span>
+                <Pill s={bandTone(savedBand.band)}>{bandTitle(savedBand.band)}</Pill>
+                <span style={{ fontSize: 11.5, color: "#475569", fontFamily: "ui-monospace,monospace" }}>APSR total {savedBand.total}%</span>
                 <span style={{ fontSize: 11, color: "#94a3b8" }}>
                   {holisticBand.source === "ai-accepted" ? "AI scores accepted" : "Set"} by reviewer · {new Date(holisticBand.decidedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
                 </span>
@@ -1420,8 +1426,8 @@ export function SubCriterionChecklist() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 }}>
             <Metric
               label="APSR band (para. 23)"
-              value={holisticBand?.matrixScores
-                ? <span><Pill s={bandTone(holisticBand.band)}>{bandTitle(holisticBand.band)}</Pill> <span style={{ fontSize: 11, color: "#94a3b8" }}>{holisticBand.totalPct}%</span></span>
+              value={holisticBand?.matrixScores && savedBand
+                ? <span><Pill s={bandTone(savedBand.band)}>{bandTitle(savedBand.band)}</Pill> <span style={{ fontSize: 11, color: "#94a3b8" }}>{savedBand.total}%</span></span>
                 : itemNeedsReassessment
                   ? <span style={{ fontSize: 12, fontWeight: 700, color: "#b45309" }}>Needs re-assessment</span>
                   : <span style={{ fontSize: 12, color: "#94a3b8" }}>Not set</span>}

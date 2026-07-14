@@ -227,6 +227,27 @@ describe("apsrMatrixResult — sums the four dimension percentages → total →
   });
 });
 
+describe("editable scale — the %-per-band and thresholds are not hardcoded", () => {
+  // Double the max per dimension (50%): band N → N×10%, so the same picks that
+  // gave 50% now give 100%, and with default thresholds that is Band 5.
+  const doubled = { maxPctPerDimension: 50, bandThresholds: [20, 40, 60, 80] as [number, number, number, number] };
+  it("pctForScore respects the max-per-dimension setting", () => {
+    expect(pctForScore(4, doubled)).toBe(40); // 4 × (50/5)
+    expect(pctForScore(0, doubled)).toBe(0);
+  });
+  it("apsrMatrixResult re-bands the worked example when the scale changes", () => {
+    const r = apsrMatrixResult({ approach: 4, processes: 4, systemsOutcomes: 2, review: 0 }, doubled);
+    expect(r.total).toBe(100); // 40+40+20+0
+    expect(r.band).toBe(5);    // vs Band 3 at the default scale
+  });
+  it("finalBandFromPct respects custom thresholds", () => {
+    const skewed = { maxPctPerDimension: 25, bandThresholds: [10, 20, 30, 40] as [number, number, number, number] };
+    expect(finalBandFromPct(50, skewed)).toBe(5); // above the last threshold
+    expect(finalBandFromPct(10, skewed)).toBe(1);
+    expect(finalBandFromPct(25, skewed)).toBe(3);
+  });
+});
+
 describe("bandToScore round-trips back into the same band", () => {
   it("each band maps to a score in its own bucket", () => {
     expect(bandToScore(1)).toBeLessThan(40);

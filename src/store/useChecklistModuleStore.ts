@@ -23,6 +23,7 @@ import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, typ
 import { runLiveChecklistGeneration, runLiveEvidenceFill, runHolisticBandSuggestion, type HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
 import { effectiveSettings, type AIUsage } from "../lib/ai/aiClient";
 import { useAISettingsStore } from "./useAISettingsStore";
+import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useWorkspaceStore, composeSchoolContext } from "./useWorkspaceStore";
 
 let lineCounter = 0;
@@ -172,8 +173,10 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       setHolisticBand: (itemId, input) => {
         const prev = get().entries[itemId]?.holisticBand;
         // Gate 1: every dimension must be scored — an incomplete matrix has no
-        // defensible total.
-        const result = apsrMatrixResult(input.matrixScores);
+        // defensible total. Snapshot band/total under the CURRENT scale (the
+        // scorecard re-derives live from matrixScores, but the saved record
+        // keeps a coherent snapshot of what was shown at save time).
+        const result = apsrMatrixResult(input.matrixScores, useScoringConfigStore.getState().apsrScale);
         if (!result.complete) {
           console.warn("[setHolisticBand] rejected: all four APSR dimensions must be scored (0% or a band) before the band can be saved.");
           return;

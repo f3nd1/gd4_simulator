@@ -4,7 +4,7 @@
 // the findings register with closure (root cause / corrective action) detail.
 import type { Scored } from "./scoring";
 import type { SubCriterionChecklistEntry, Finding, SpecificChecklistLine } from "../types";
-import { lineSufficiency, lineCompleteness, needsReassessment, bandEvidenceAdvisories, type LineCompleteness } from "./checklistBanding";
+import { lineSufficiency, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrMatrixResult, DEFAULT_APSR_SCALE, type LineCompleteness, type ApsrScale } from "./checklistBanding";
 import { bandTitle } from "../data/edutrustRubric";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
 import { GD4_REQUIREMENTS } from "./../data/gd4Requirements";
@@ -70,7 +70,8 @@ function analyseItem(
   gate: boolean,
   band: number,
   started: boolean,
-  entry: SubCriterionChecklistEntry | undefined
+  entry: SubCriterionChecklistEntry | undefined,
+  scale: ApsrScale
 ): ItemReport {
   const specific: SpecificChecklistLine[] = entry?.specific || [];
   const hasChecklist = specific.length > 0;
@@ -118,7 +119,7 @@ function analyseItem(
     completeness,
     needsReassessment: reassess,
     bandRationale: entry?.holisticBand?.rationale,
-    bandTotalPct: entry?.holisticBand?.matrixScores ? entry.holisticBand.totalPct : undefined,
+    bandTotalPct: entry?.holisticBand?.matrixScores ? apsrMatrixResult(entry.holisticBand.matrixScores, scale).total : undefined,
     strengths,
     gaps,
     targetBand,
@@ -130,9 +131,10 @@ export function buildFinalReport(
   scored: Scored,
   entries: Record<string, SubCriterionChecklistEntry>,
   findings: Finding[],
-  closures: Record<string, ClosureLite>
+  closures: Record<string, ClosureLite>,
+  scale: ApsrScale = DEFAULT_APSR_SCALE
 ): FinalReport {
-  const items = scored.items.map((it) => analyseItem(it.id, it.title, it.gate, it.band, it.started, entries[it.id]));
+  const items = scored.items.map((it) => analyseItem(it.id, it.title, it.gate, it.band, it.started, entries[it.id], scale));
 
   const crits = scored.crits.map((c) => ({ id: c.id, title: c.title, band: c.band, scored: c.scored, points: c.points, started: c.started }));
 

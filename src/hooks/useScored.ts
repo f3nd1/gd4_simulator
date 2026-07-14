@@ -15,8 +15,10 @@ export function useScored() {
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
   const awardThresholds = useScoringConfigStore((s) => s.awardThresholds);
+  const apsrScale = useScoringConfigStore((s) => s.apsrScale);
 
-  const checklistBandOverrides = useMemo(() => computeChecklistOverrides(checklistEntries, GD4_REQUIREMENTS), [checklistEntries]);
+  // Scale is a dep: editing the %-scale on Setup re-bands every item live.
+  const checklistBandOverrides = useMemo(() => computeChecklistOverrides(checklistEntries, GD4_REQUIREMENTS, apsrScale), [checklistEntries, apsrScale]);
 
   return useMemo(
     () => buildScored({ evidence, reviewer, confirmed, closures, checklistBandOverrides, customFindings, seedFindingsLoaded, awardThresholds }),

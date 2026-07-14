@@ -32,8 +32,9 @@ export function FinalReport() {
   const schoolContext = useWorkspaceStore((s) => s.schoolContext);
   const aiSettings = useAISettingsStore();
   const awardThresholds = useScoringConfigStore((s) => s.awardThresholds);
+  const apsrScale = useScoringConfigStore((s) => s.apsrScale);
 
-  const report = useMemo(() => buildFinalReport(scored, entries, findings, closures), [scored, entries, findings, closures]);
+  const report = useMemo(() => buildFinalReport(scored, entries, findings, closures, apsrScale), [scored, entries, findings, closures, apsrScale]);
   const a = useMemo(() => buildAnalytics(scored, entries, findings, folders, closures), [scored, entries, findings, folders, closures]);
 
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);

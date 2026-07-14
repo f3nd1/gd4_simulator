@@ -64,20 +64,34 @@ export function lineCompleteness(specific: SpecificChecklistLine[]): LineComplet
 // the total maps to the final band in five equal 20-point ranges.
 //
 // RECONSTRUCTED from ONE example — the exact cut-offs and whether 0% is a
-// valid "below Band 1" score are NOT auditor-confirmed. See
-// docs/edutrust-band-scoring.md. `INFERRED_THRESHOLDS` flags this at the UI.
-export const PCT_PER_BAND = 5; // Band N → N × 5%
+// valid "below Band 1" score are NOT auditor-confirmed, so the scale is NOT
+// hardcoded: it lives in useScoringConfigStore (editable on the GD4 Scoring
+// Setup page) and is threaded in as `scale`. `INFERRED_THRESHOLDS` flags this
+// at the UI. See docs/edutrust-band-scoring.md.
 export const INFERRED_THRESHOLDS = true;
 
-export function pctForScore(s: ApsrDimensionScore): number {
-  return s * PCT_PER_BAND; // 0→0, 1→5, … 5→25
+// The editable percentage scale. `maxPctPerDimension` (default 25 = 100÷4) is
+// split equally across the 5 bands (band N → N × max/5). `bandThresholds` are
+// the inclusive upper %-bounds of bands 1–4; anything above the last is band 5
+// (default [20,40,60,80] = five equal 20-point ranges). Both default to the
+// reconstructed values so every existing caller and test is unchanged.
+export type ApsrScale = {
+  maxPctPerDimension: number;
+  bandThresholds: [number, number, number, number];
+};
+export const DEFAULT_APSR_SCALE: ApsrScale = { maxPctPerDimension: 25, bandThresholds: [20, 40, 60, 80] };
+
+export function pctForScore(s: ApsrDimensionScore, scale: ApsrScale = DEFAULT_APSR_SCALE): number {
+  return (s * scale.maxPctPerDimension) / 5; // 0→0, band N → N × (max/5)
 }
 
-// Total% → final band: 0–20→1, 21–40→2, 41–60→3, 61–80→4, 81–100→5.
-// Math.ceil(total/20) lands each boundary in the lower band (40→2, 50→3),
-// clamped to 1–5 (total 0 → Band 1).
-export function finalBandFromPct(total: number): Band {
-  return Math.min(5, Math.max(1, Math.ceil(total / 20))) as Band;
+// Total% → final band via the (editable) upper-bound thresholds. Each boundary
+// falls in the lower band (total ≤ threshold), matching the default 20-point
+// ranges (0→1, 20→1, 40→2, 50→3, 80→4, 81+→5).
+export function finalBandFromPct(total: number, scale: ApsrScale = DEFAULT_APSR_SCALE): Band {
+  const [t1, t2, t3, t4] = scale.bandThresholds;
+  const b = total <= t1 ? 1 : total <= t2 ? 2 : total <= t3 ? 3 : total <= t4 ? 4 : 5;
+  return b as Band;
 }
 
 export type ApsrMatrixResult = {
@@ -89,20 +103,22 @@ export type ApsrMatrixResult = {
 
 const APSR_DIMS = ["approach", "processes", "systemsOutcomes", "review"] as const;
 
-// Computes the running total + final band from the matrix. Always returns a
-// result (partial totals shown live); `complete` is false until all four are
-// set. A dimension left undefined contributes 0 to the running total but keeps
-// `complete` false, so the save gate can require a real 0-or-band on each.
-export function apsrMatrixResult(m: ApsrMatrixScores | undefined): ApsrMatrixResult {
+// Computes the running total + final band from the matrix under `scale`. Always
+// returns a result (partial totals shown live); `complete` is false until all
+// four are set. A dimension left undefined contributes 0 to the running total
+// but keeps `complete` false, so the save gate can require a real 0-or-band on
+// each. Because the band is DERIVED here (never stored authoritatively),
+// editing the scale immediately re-bands every item that carries matrixScores.
+export function apsrMatrixResult(m: ApsrMatrixScores | undefined, scale: ApsrScale = DEFAULT_APSR_SCALE): ApsrMatrixResult {
   const pcts = { approach: 0, processes: 0, systemsOutcomes: 0, review: 0 };
   let complete = true;
   for (const d of APSR_DIMS) {
     const s = m?.[d];
     if (s === undefined) complete = false;
-    else pcts[d] = pctForScore(s);
+    else pcts[d] = pctForScore(s, scale);
   }
   const total = pcts.approach + pcts.processes + pcts.systemsOutcomes + pcts.review;
-  return { pcts, total, band: finalBandFromPct(total), complete };
+  return { pcts, total, band: finalBandFromPct(total, scale), complete };
 }
 
 // True when the item has checklist lines but no CURRENT-model band — either no
@@ -154,14 +170,20 @@ export type ChecklistOverride = { eff: number; band: Band };
 // the §20 gate and criterion rollup in scoring.ts are untouched.
 export function computeChecklistOverrides(
   entries: Record<string, SubCriterionChecklistEntry>,
-  requirements: GD4Requirement[]
+  requirements: GD4Requirement[],
+  scale: ApsrScale = DEFAULT_APSR_SCALE
 ): Record<string, ChecklistOverride> {
   const map: Record<string, ChecklistOverride> = {};
   Object.values(entries).forEach((entry) => {
     const hb = entry.holisticBand;
-    if (!hb) return;
+    // Only a CURRENT-model band (with matrixScores) feeds scoring; a band-only
+    // old-holistic record is "needs re-assessment", no override. The band is
+    // re-derived from matrixScores under the live scale, so editing the scale
+    // on the Setup page re-scores every item at once — not just new ones.
+    if (!hb?.matrixScores) return;
     if (!requirements.find((r) => r.id === entry.gd4ItemId)) return;
-    map[entry.gd4ItemId] = { eff: bandToScore(hb.band), band: hb.band };
+    const band = apsrMatrixResult(hb.matrixScores, scale).band;
+    map[entry.gd4ItemId] = { eff: bandToScore(band), band };
   });
   return map;
 }
