@@ -838,7 +838,18 @@ export function SubCriterionChecklist() {
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <button
-              onClick={() => generateSpecific(selectedId)}
+              onClick={async () => {
+                await generateSpecific(selectedId);
+                // Match the existing auditFolderContents/auditFolderStaged
+                // precedent (useWorkspaceStore.ts): those pipelines
+                // auto-confirm generated lines with zero gate in hybrid and
+                // full-auto, and only leave manual mode to enter everything
+                // by hand. This button was the one path that never respected
+                // that — it always stopped for a human Confirm/Discard
+                // regardless of mode. Manual mode still requires the human
+                // step; hybrid/full-auto now behave the same as "Run audit".
+                if (auditMode !== "manual") confirmGenerated(selectedId);
+              }}
               disabled={busy === selectedId}
               style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: `1px solid ${BLUE}`, background: "#eaeef6", color: "#4a5a8a" }}
             >
