@@ -40,6 +40,18 @@ export function resolveNcSeverity(f: Finding): NcSeverity | null {
   return f.ncSeverity ?? "Minor";
 }
 
+// A finding is overdue when it carries a due date in the past AND is not yet
+// closed. Finding.overdue was historically hardcoded `false` at every creation
+// site (so it could never become true); compute it live from the due date
+// instead. `closed` = the closure has been accepted. `now` is injectable for
+// tests; defaults to the current time.
+export function isFindingOverdue(dueDate: string | undefined, closed: boolean, now: number = Date.now()): boolean {
+  if (closed || !dueDate) return false;
+  const due = new Date(`${dueDate}T23:59:59`).getTime(); // due end-of-day, local
+  if (Number.isNaN(due)) return false;
+  return due < now;
+}
+
 export function findingTypeTone(t: FindingTypeCode): "critical" | "medium" | "good" {
   return t === "NC" ? "critical" : t === "OFI" ? "medium" : "good";
 }

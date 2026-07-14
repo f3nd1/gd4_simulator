@@ -10,5 +10,11 @@ import type { Finding } from "../types";
 export function useAllFindings(): Finding[] {
   const customFindings = useWorkspaceStore((s) => s.customFindings);
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
-  return [...(seedFindingsLoaded ? FINDINGS : []), ...customFindings];
+  // Dedupe by id, custom winning: editing a seeded demo finding promotes a
+  // patched copy into customFindings (see updateCustomFinding), so without this
+  // the same id would appear twice — once seeded, once edited.
+  const byId = new Map<string, Finding>();
+  for (const f of seedFindingsLoaded ? FINDINGS : []) byId.set(f.id, f);
+  for (const f of customFindings) byId.set(f.id, f);
+  return [...byId.values()];
 }

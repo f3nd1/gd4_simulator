@@ -1316,7 +1316,8 @@ export type HumanDecisionModule =
   | "Panel Conclusion"
   | "Prompt Review"
   | "Run mode gate"
-  | "Holistic Band";
+  | "Holistic Band"
+  | "NC Severity";
 
 export type HumanDecisionType = "Accepted" | "Edited" | "Overridden" | "Dismissed";
 

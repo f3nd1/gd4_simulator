@@ -9,8 +9,11 @@ import { Card, inputStyle, filterSelectStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { BLUE, TONE } from "../lib/theme";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { resolveFindingType, resolveNcSeverity, findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
+import { resolveFindingType, resolveNcSeverity, findingTypeTone, ncSeverityTone, isFindingOverdue } from "../lib/findingClassification";
 import { PanelReviewSection } from "../components/ui/PanelReviewSection";
+import type { ClosureFramework } from "../store/useWorkspaceStore";
+
+const FRAMEWORKS: ClosureFramework[] = ["ISO 9001", "EduTrust"];
 
 export function AFIClosure() {
   const closures = useWorkspaceStore((s) => s.closures);
@@ -36,6 +39,8 @@ export function AFIClosure() {
   const [closureReasons, setClosureReasons] = useState<Record<string, string>>({});
   const [effectivenessNotes, setEffectivenessNotes] = useState<Record<string, string>>({});
   const confirmClosureEffectiveness = useWorkspaceStore((s) => s.confirmClosureEffectiveness);
+  const updateCustomFinding = useWorkspaceStore((s) => s.updateCustomFinding);
+  const toggleClosureFramework = useWorkspaceStore((s) => s.toggleClosureFramework);
   const [closureFeedback, setClosureFeedback] = useState<{ id: string; aiOutput: string } | null>(null);
 
   const subCritOptions = useMemo(
@@ -160,6 +165,7 @@ export function AFIClosure() {
                 const sev = resolveFindingType(f) === "NC" ? resolveNcSeverity(f) : null;
                 return sev ? <Pill s={ncSeverityTone(sev)}>{sev}</Pill> : null;
               })()}
+              {isFindingOverdue(f.dueDate, c.human === "Accepted") && <Pill s="critical">⏰ Overdue</Pill>}
               {c.human === "Accepted" ? (
                 <Pill s="good">closed</Pill>
               ) : (
@@ -178,24 +184,91 @@ export function AFIClosure() {
                     </Link>
                   ) : null}
                 </div>
-                <PanelReviewSection finding={f} />
-                {([
-                  ["root", "Root cause (yours)"],
-                  ["containment", "Immediate correction (containment — what stopped the problem now)"],
-                  ["corr", "Corrective action (what removes the cause)"],
-                  ["prev", "Preventive action"],
-                  ["evid", "Closure evidence (Drive link / record)"],
-                ] as const).map(([field, label]) => (
-                  <label key={field} style={{ display: "block", marginBottom: 7 }}>
-                    <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>{label}</span>
-                    <textarea
-                      rows={2}
-                      value={c[field] || ""}
-                      onChange={(e) => setClosureField(f.id, field, e.target.value)}
-                      style={{ ...inputStyle, resize: "vertical", marginTop: 3 }}
+                {/* Owner + deadline — editable on the existing finding (was
+                    set-once at creation and displayed nowhere). Overdue is
+                    computed live from the due date, not a stored flag. */}
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }}>
+                  <label style={{ display: "block" }}>
+                    <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Action owner</span>
+                    <input
+                      value={f.owner || ""}
+                      placeholder="e.g. Registrar"
+                      onChange={(e) => updateCustomFinding(f.id, { owner: e.target.value })}
+                      style={{ ...inputStyle, marginTop: 3, width: 180, padding: "5px 8px", fontSize: 12 }}
                     />
                   </label>
-                ))}
+                  <label style={{ display: "block" }}>
+                    <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Target close date</span>
+                    <input
+                      type="date"
+                      value={f.dueDate || ""}
+                      onChange={(e) => updateCustomFinding(f.id, { dueDate: e.target.value })}
+                      style={{ ...inputStyle, marginTop: 3, width: 160, padding: "5px 8px", fontSize: 12 }}
+                    />
+                  </label>
+                  {isFindingOverdue(f.dueDate, c.human === "Accepted") && (
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: "#b91c1c", paddingBottom: 6 }}>⏰ Past its target close date — still open</span>
+                  )}
+                </div>
+                <PanelReviewSection finding={f} />
+                {(() => {
+                  // One field renderer, reused across the Plan/Do fields, the
+                  // emphasised Act block, and the evidence field.
+                  const fieldBox = (field: "root" | "containment" | "corr" | "prev" | "evid", label: string) => (
+                    <label key={field} style={{ display: "block", marginBottom: 7 }}>
+                      <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>{label}</span>
+                      <textarea
+                        rows={2}
+                        value={c[field] || ""}
+                        onChange={(e) => setClosureField(f.id, field, e.target.value)}
+                        style={{ ...inputStyle, resize: "vertical", marginTop: 3 }}
+                      />
+                    </label>
+                  );
+                  const actDone = !!c.corr?.trim();
+                  return (
+                    <>
+                      {fieldBox("root", "Root cause (yours)")}
+                      {fieldBox("containment", "Immediate correction (containment — what stopped the problem now)")}
+                      {/* PDCA "Act" — the stage schools most often skip past.
+                          Emphasised as the step that actually closes the loop:
+                          the corrective action removes the cause, the preventive
+                          action stops recurrence, and (below) effectiveness is
+                          verified. Present ≠ done — this is the closing move. */}
+                      <div style={{ border: `2px solid ${actDone ? "#15803d" : "#c9a24a"}`, borderRadius: 10, padding: "9px 11px", margin: "4px 0 9px", background: actDone ? "#f6fff9" : "#fffdf5" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.4, color: actDone ? "#15803d" : "#7a5c12", textTransform: "uppercase" }}>▶ Act — this closes the loop</span>
+                          <span style={{ fontSize: 11, color: "#6b7280", flex: 1, minWidth: 200 }}>
+                            The stage most often left half-done. A corrective action that removes the cause is what actually closes a finding — a containment alone does not. Effectiveness is verified after closure (below).
+                          </span>
+                          {!actDone && <Pill s="medium">not yet done</Pill>}
+                        </div>
+                        {fieldBox("corr", "Corrective action (what removes the cause)")}
+                        {fieldBox("prev", "Preventive action (stops it recurring)")}
+                      </div>
+                      {fieldBox("evid", "Closure evidence (Drive link / record)")}
+                      {/* ISO vs EduTrust coverage — the same evidence can satisfy
+                          different documentation requirements; tag which so shared
+                          docs aren't assumed to cover both. */}
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", margin: "0 0 9px" }}>
+                        <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Evidence satisfies:</span>
+                        {FRAMEWORKS.map((fw) => {
+                          const on = (c.frameworks || []).includes(fw);
+                          return (
+                            <button
+                              key={fw}
+                              onClick={() => toggleClosureFramework(f.id, fw)}
+                              style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, border: on ? "1.5px solid #4f46e5" : "1px solid #e2e8f0", background: on ? "#eef2ff" : "#fff", color: on ? "#4f46e5" : "#94a3b8" }}
+                            >
+                              {on ? "✓ " : ""}{fw}
+                            </button>
+                          );
+                        })}
+                        <span style={{ fontSize: 10.5, color: "#94a3b8" }}>Tag which framework(s) this closure evidence covers — untagged makes no claim.</span>
+                      </div>
+                    </>
+                  );
+                })()}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {aiEnabled && (
                     <>

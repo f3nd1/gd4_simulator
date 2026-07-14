@@ -8,6 +8,9 @@ import { GD4_CRITERIA } from "../data/gd4Requirements";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { TONE, BLUE, INK } from "../lib/theme";
+import { isFindingOverdue } from "../lib/findingClassification";
+
+type ClosureLookup = Record<string, { human?: string }>;
 
 type Status = "Pass" | "Partial" | "Fail";
 type Check = { label: string; status: Status; detail: string };
@@ -18,11 +21,13 @@ const STATUS_TONE: Record<Status, "good" | "medium" | "critical"> = { Pass: "goo
 // Honest per-item checks. The key fix: an item with no evidence at all no
 // longer shows green on age/linkage/etc. — "0 days" is only a Pass when there
 // is actually evidence to be 0 days old.
-function computeChecks(item: ScoredItem, findings: Finding[]): Check[] {
+function computeChecks(item: ScoredItem, findings: Finding[], closures: ClosureLookup): Check[] {
   const ev = item.ev;
   const hasEvidence = !!ev.drive || item.checklistOverride || ev.approach !== "Missing" || ev.processes !== "Missing" || ev.systemsOutcomes !== "Missing" || ev.review !== "Missing";
   const itemFindings = findings.filter((f) => f.gd4ItemId === item.id);
-  const overdue = itemFindings.some((f) => f.overdue);
+  // Overdue is computed live from each finding's due date (open + past due),
+  // not the old hardcoded Finding.overdue flag which was always false.
+  const overdue = itemFindings.some((f) => isFindingOverdue(f.dueDate, (closures[f.id]?.human || "") === "Accepted"));
   return [
     { label: "Evidence age", status: !hasEvidence ? "Fail" : ev.age <= 180 ? "Pass" : "Fail", detail: hasEvidence ? `${ev.age} days` : "No evidence linked yet" },
     { label: "Evidence strength", status: item.ais >= 55 ? "Pass" : item.ais > 0 ? "Partial" : "Fail", detail: `${item.ais}/100` },
@@ -39,13 +44,13 @@ function computeChecks(item: ScoredItem, findings: Finding[]): Check[] {
   ];
 }
 
-const CHECK_LABELS = computeChecks({ ev: {} } as unknown as ScoredItem, []).map((c) => c.label);
+const CHECK_LABELS = computeChecks({ ev: {} } as unknown as ScoredItem, [], {}).map((c) => c.label);
 
 // Tally Pass/Partial/Fail per check across a set of items (for the rollups).
-function aggregate(items: ScoredItem[], findings: Finding[]): Record<string, { Pass: number; Partial: number; Fail: number }> {
+function aggregate(items: ScoredItem[], findings: Finding[], closures: ClosureLookup): Record<string, { Pass: number; Partial: number; Fail: number }> {
   const out: Record<string, { Pass: number; Partial: number; Fail: number }> = {};
   for (const l of CHECK_LABELS) out[l] = { Pass: 0, Partial: 0, Fail: 0 };
-  for (const it of items) for (const c of computeChecks(it, findings)) out[c.label][c.status]++;
+  for (const it of items) for (const c of computeChecks(it, findings, closures)) out[c.label][c.status]++;
   return out;
 }
 
@@ -66,8 +71,8 @@ function CountBar({ counts }: { counts: { Pass: number; Partial: number; Fail: n
   );
 }
 
-function RollupTable({ items, findings }: { items: ScoredItem[]; findings: Finding[] }) {
-  const agg = useMemo(() => aggregate(items, findings), [items, findings]);
+function RollupTable({ items, findings, closures }: { items: ScoredItem[]; findings: Finding[]; closures: ClosureLookup }) {
+  const agg = useMemo(() => aggregate(items, findings, closures), [items, findings, closures]);
   return (
     <table>
       <thead><tr><th>Check</th><th>Pass · Partial · Fail (across {items.length} item{items.length === 1 ? "" : "s"})</th></tr></thead>
@@ -84,6 +89,7 @@ export function EvidenceIntelligence() {
   const scored = useScored();
   const findings = useAllFindings();
   const agents = useWorkspaceStore((s) => s.agents);
+  const closures = useWorkspaceStore((s) => s.closures);
   const itemReviews = useWorkspaceStore((s) => s.itemReviews);
   const runItemAI = useWorkspaceStore((s) => s.runItemAI);
   const busy = useWorkspaceStore((s) => s.busy);
@@ -95,16 +101,16 @@ export function EvidenceIntelligence() {
   const review = itemReviews[item?.id];
 
   const critItems = scored.items.filter((i) => i.crit === selCrit);
-  const itemChecks = item ? computeChecks(item, findings) : [];
+  const itemChecks = item ? computeChecks(item, findings, closures) : [];
 
   // Overall health: count failing checks across everything.
   const overall = useMemo(() => {
-    const agg = aggregate(scored.items, findings);
+    const agg = aggregate(scored.items, findings, closures);
     const totals = Object.values(agg).reduce((a, c) => ({ Pass: a.Pass + c.Pass, Partial: a.Partial + c.Partial, Fail: a.Fail + c.Fail }), { Pass: 0, Partial: 0, Fail: 0 });
     const withEvidence = scored.items.filter((i) => i.ev.drive || i.checklistOverride).length;
     const gateAtRisk = scored.items.filter((i) => i.gate && i.band < 3).length;
     return { totals, withEvidence, gateAtRisk };
-  }, [scored.items, findings]);
+  }, [scored.items, findings, closures]);
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
@@ -137,7 +143,7 @@ export function EvidenceIntelligence() {
           </Card>
           <Card>
             <h4 style={{ marginTop: 0, fontSize: 13 }}>All checks across all {scored.items.length} items</h4>
-            <RollupTable items={scored.items} findings={findings} />
+            <RollupTable items={scored.items} findings={findings} closures={closures} />
           </Card>
         </>
       )}
@@ -151,7 +157,7 @@ export function EvidenceIntelligence() {
             </select>
             <span style={{ fontSize: 11.5, color: "#94a3b8" }}>{critItems.length} item(s)</span>
           </div>
-          <RollupTable items={critItems} findings={findings} />
+          <RollupTable items={critItems} findings={findings} closures={closures} />
           <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
             {critItems.map((i) => (
               <button key={i.id} onClick={() => { setSelItem(i.id); setView("item"); }} style={{ cursor: "pointer", fontSize: 11.5, padding: "4px 9px", borderRadius: 7, border: "1px solid #cbd5e1", background: "#fff" }}>

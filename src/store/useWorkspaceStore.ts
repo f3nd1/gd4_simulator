@@ -21,6 +21,7 @@ import type {
   CalibrationMemory,
   CalibrationMemoryStatus,
   Finding,
+  NcSeverity,
   DriveAccessStatus,
   ApsrBreakdown,
   AuditProgressState,
@@ -428,6 +429,10 @@ function strictnessFromScore(n: number): "Lenient" | "Standard" | "Strict" {
   return "Standard";
 }
 
+// The two certification frameworks whose documentation requirements can differ
+// for the same shared process (Task 3 — ISO vs EduTrust coverage tagging).
+export type ClosureFramework = "ISO 9001" | "EduTrust";
+
 export type ClosureState = {
   root?: string;
   // Immediate correction / containment — ISO 9001 10.2 distinguishes stopping
@@ -450,6 +455,12 @@ export type ClosureState = {
   effectivenessDue?: string;         // ISO date
   effectivenessConfirmedAt?: string; // ISO datetime
   effectivenessNote?: string;
+  // Which certification framework(s) this closure's evidence satisfies. ISO
+  // 9001 and EduTrust have different documentation requirements even when the
+  // underlying process is shared; tagging here stops one shared document being
+  // silently assumed to cover both when it only covers one. Empty/undefined =
+  // untagged (no claim either way).
+  frameworks?: ClosureFramework[];
   // Per-field provenance: true once the user has hand-edited that closure
   // field, so a later panel run defers to it (Fix 3) instead of overwriting.
   // Auto content (finding-writer draft, "Suggest actions" AI, a prior panel
@@ -780,6 +791,10 @@ export type WorkspaceState = {
   runItemAI: (agentId: string, itemId: string) => Promise<void>;
 
   setClosureField: (afiId: string, field: keyof ClosureState, value: string) => void;
+  // Toggle whether this closure's evidence is tagged as satisfying a given
+  // certification framework (ISO 9001 / EduTrust). Task 3 — distinguishes
+  // shared documentation's coverage per framework.
+  toggleClosureFramework: (afiId: string, fw: ClosureFramework) => void;
   // Pre-fills a finding's closure with a derived root cause / corrective /
   // preventive (from buildFindingAnalysis), WITHOUT overwriting anything the
   // user has already written. Used when findings are auto-raised so the AFI
@@ -856,6 +871,9 @@ export type WorkspaceState = {
 
   addCustomFinding: (f: Finding) => void;
   updateCustomFinding: (id: string, patch: Partial<Finding>) => void;
+  // Human override of an NC finding's Major/Minor severity (the AI panel
+  // suggests it; this lets a human set it directly).
+  setNcSeverity: (id: string, severity: NcSeverity) => void;
   removeCustomFinding: (id: string) => void;
   clearAllFindings: () => void;
   // Delete every finding for ONE sub-criterion, leaving all others intact.
@@ -3028,6 +3046,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return { closures: { ...s.closures, [afiId]: { ...cur, [field]: value, manual } } };
         });
       },
+
+      toggleClosureFramework: (afiId, fw) =>
+        set((s) => {
+          const cur = s.closures[afiId] || {};
+          const has = (cur.frameworks || []).includes(fw);
+          const frameworks = has ? (cur.frameworks || []).filter((x) => x !== fw) : [...(cur.frameworks || []), fw];
+          return { closures: { ...s.closures, [afiId]: { ...cur, frameworks } } };
+        }),
 
       applyPanelConclusion: (findingId, opts) => {
         const finding = get().customFindings.find((f) => f.id === findingId);
@@ -6127,7 +6153,43 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       },
 
       updateCustomFinding: (id, patch) =>
-        set((s) => ({ customFindings: s.customFindings.map((f) => (f.id === id ? { ...f, ...patch } : f)) })),
+        set((s) => {
+          if (s.customFindings.some((f) => f.id === id)) {
+            return { customFindings: s.customFindings.map((f) => (f.id === id ? { ...f, ...patch } : f)) };
+          }
+          // The id isn't a runtime finding — it's a seeded demo finding (a
+          // read-only const). Promote a patched copy into customFindings so the
+          // edit (owner/deadline/severity) actually persists; useAllFindings
+          // dedupes by id with custom winning, so it still shows once.
+          const seed = s.seedFindingsLoaded ? FINDINGS.find((f) => f.id === id) : undefined;
+          return seed ? { customFindings: [...s.customFindings, { ...seed, ...patch }] } : {};
+        }),
+
+      // Human Major↔Minor override. Sets classificationManual so the AI panel's
+      // non-forced re-runs defer to the human choice (human-override-wins — the
+      // same guard computePanelConclusion already honours). Only NC findings
+      // carry a severity; logged to the Human Decision Log like every other
+      // scoring/classification override.
+      setNcSeverity: (id, severity) => {
+        // Look in runtime findings AND the seeded register (a seed finding is
+        // promoted into customFindings by updateCustomFinding on edit).
+        const f = get().customFindings.find((x) => x.id === id)
+          ?? (get().seedFindingsLoaded ? FINDINGS.find((x) => x.id === id) : undefined);
+        if (!f || resolveFindingType(f) !== "NC") return;
+        const prev = resolveNcSeverity(f);
+        if (prev === severity && f.classificationManual) return;
+        get().updateCustomFinding(id, { ncSeverity: severity, classificationManual: true });
+        get().logHumanDecision({
+          module: "NC Severity",
+          subjectId: id,
+          field: "ncSeverity",
+          aiOutput: prev ? `AI/rule: ${prev} NC` : "—",
+          humanDecision: `${severity} NC`,
+          changed: prev !== severity,
+          decisionType: "Overridden",
+          reason: "Manual Major/Minor NC classification.",
+        });
+      },
 
       removeCustomFinding: (id) => {
         // Remove the finding and its closure entry, then sweep EVERY store

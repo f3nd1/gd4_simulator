@@ -70,6 +70,7 @@ export function Findings() {
   const clearFindingsForSubCriterion = useWorkspaceStore((s) => s.clearFindingsForSubCriterion);
   const seedFindingsLoaded = useWorkspaceStore((s) => s.seedFindingsLoaded);
   const compileEvidenceFindings = useWorkspaceStore((s) => s.compileEvidenceFindings);
+  const setNcSeverity = useWorkspaceStore((s) => s.setNcSeverity);
   const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
   const raiseAllUnmetFindings = useChecklistModuleStore((s) => s.raiseAllUnmetFindings);
   const scored = useScored();
@@ -305,6 +306,11 @@ export function Findings() {
       setGroupGenNote(result.skipped > 0 ? `All ${result.skipped} groups already have findings — nothing new to create.` : "No failing checklist lines found — run a folder audit or mark lines in the Sub-Criterion Checklist.");
     }
   }
+
+  // The detail modal captures a finding object on open; read the LIVE copy from
+  // the store so in-modal edits (e.g. the Major/Minor severity override) reflect
+  // immediately instead of showing the stale snapshot.
+  const liveDetail = detailFinding ? allFindings.find((x) => x.id === detailFinding.id) ?? detailFinding : null;
 
   const openFindings = allFindings.filter((f) => (closures[f.id]?.human || "") !== "Accepted");
   // 90-day roadmap: group open findings by urgency into three monthly buckets.
@@ -825,38 +831,58 @@ export function Findings() {
       </div>
 
       {/* Centre modal — full finding detail */}
-      {detailFinding && (
+      {liveDetail && (
         <>
           <div onClick={() => setDetailFinding(null)} style={{ position: "fixed", inset: 0, zIndex: 199, background: "rgba(0,0,0,0.45)" }} />
           <div
             style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: "70vw", maxWidth: "70vw", height: "85vh", background: "#fff", borderRadius: 12, boxShadow: "0 8px 40px rgba(0,0,0,0.22)", zIndex: 200, overflowY: "auto", padding: "20px 24px", display: "flex", flexDirection: "column" }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <b style={{ color: "#ce9e5d", fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{detailFinding.id}</b>
-              <Pill s={findingTypeTone(resolveFindingType(detailFinding))}>{resolveFindingType(detailFinding)}</Pill>
-              {resolveNcSeverity(detailFinding) && <Pill s={ncSeverityTone(resolveNcSeverity(detailFinding)!)}>{resolveNcSeverity(detailFinding)}</Pill>}
-              {detailFinding.dimension && <Pill s={dimensionTone(detailFinding.dimension)}>{detailFinding.dimension}</Pill>}
-              <Pill s={(closures[detailFinding.id]?.human || "") === "Accepted" ? "good" : "critical"}>{(closures[detailFinding.id]?.human || "") === "Accepted" ? "Closed" : "Open"}</Pill>
+              <b style={{ color: "#ce9e5d", fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{liveDetail.id}</b>
+              <Pill s={findingTypeTone(resolveFindingType(liveDetail))}>{resolveFindingType(liveDetail)}</Pill>
+              {resolveNcSeverity(liveDetail) && <Pill s={ncSeverityTone(resolveNcSeverity(liveDetail)!)}>{resolveNcSeverity(liveDetail)}</Pill>}
+              {liveDetail.dimension && <Pill s={dimensionTone(liveDetail.dimension)}>{liveDetail.dimension}</Pill>}
+              <Pill s={(closures[liveDetail.id]?.human || "") === "Accepted" ? "good" : "critical"}>{(closures[liveDetail.id]?.human || "") === "Accepted" ? "Closed" : "Open"}</Pill>
               <button onClick={() => setDetailFinding(null)} style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: "transparent", fontSize: 20, color: "#94a3b8", lineHeight: 1, padding: "2px 4px" }} title="Close">✕</button>
             </div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, lineHeight: 1.4 }}>{detailFinding.issue}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, lineHeight: 1.4 }}>{liveDetail.issue}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
               <span style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Type</span>
-              <Pill s={findingTypeTone(resolveFindingType(detailFinding))}>{resolveFindingType(detailFinding)}</Pill>
-              {resolveNcSeverity(detailFinding) && (
+              <Pill s={findingTypeTone(resolveFindingType(liveDetail))}>{resolveFindingType(liveDetail)}</Pill>
+              {resolveFindingType(liveDetail) === "NC" && (
                 <>
                   <span style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3, marginLeft: 4 }}>Severity</span>
-                  <Pill s={ncSeverityTone(resolveNcSeverity(detailFinding)!)}>{resolveNcSeverity(detailFinding)}</Pill>
+                  {/* Major/Minor override — the AI panel suggests severity; a
+                      human can set it directly here (human-override-wins). */}
+                  {(["Major", "Minor"] as const).map((sv) => {
+                    const active = resolveNcSeverity(liveDetail) === sv;
+                    return (
+                      <button
+                        key={sv}
+                        onClick={() => setNcSeverity(liveDetail.id, sv)}
+                        title={sv === "Major" ? "Major NC — e.g. a gate-sensitive breach such as the Criterion 4 cooling-off period" : "Minor NC"}
+                        style={{
+                          cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 999, whiteSpace: "nowrap",
+                          border: active ? `1.5px solid ${sv === "Major" ? "#b91c1c" : "#b45309"}` : "1px solid #e2e8f0",
+                          background: active ? (sv === "Major" ? "#fef2f2" : "#fffbeb") : "#fff",
+                          color: active ? (sv === "Major" ? "#b91c1c" : "#b45309") : "#94a3b8",
+                        }}
+                      >
+                        {sv}{active ? " ✓" : ""}
+                      </button>
+                    );
+                  })}
+                  {liveDetail.classificationManual && <span style={{ fontSize: 10, color: "#64748b" }}>· set by you</span>}
                 </>
               )}
             </div>
-            <FindingDetail finding={detailFinding} />
-            <PanelReviewSection finding={detailFinding} />
+            <FindingDetail finding={liveDetail} />
+            <PanelReviewSection finding={liveDetail} />
             <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
               <Link to="/afi-closure" style={{ fontSize: 12, color: "#15803d", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #bbf7d0", borderRadius: 6, background: "#f0fdf4" }}>
                 Manage closure →
               </Link>
-              <Link to={`/sub-checklist?item=${detailFinding.gd4ItemId}`} style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
+              <Link to={`/sub-checklist?item=${liveDetail.gd4ItemId}`} style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "5px 12px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
                 View checklist →
               </Link>
             </div>
