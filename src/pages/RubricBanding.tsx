@@ -7,14 +7,17 @@ import { GOLD, INK, bandTone } from "../lib/theme";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { getBand } from "../lib/scoring";
 import type { ScoredItem } from "../lib/scoring";
+import { EdutrustBandTable } from "../components/ui/EdutrustBandTable";
+import { bandLevel } from "../data/edutrustRubric";
+import type { Band } from "../types";
 
-const BAND_MEANING: Record<number, string> = {
-  1: "Missing or weak evidence, mostly policy only.",
-  2: "Some implementation evidence, but inconsistent or weakly reviewed.",
-  3: "Evidence exists and implementation is reasonably consistent.",
-  4: "Evidence is systematic, reviewed and improved.",
-  5: "Strong, mature, outcome-driven evidence with continual improvement.",
-};
+// One-line caption per band: the OFFICIAL level name + Approach descriptor
+// (verbatim, edutrustRubric.ts) — the full four-dimension table is rendered
+// above. The old app-invented BAND_MEANING paraphrases are gone.
+function bandCaption(b: number): string {
+  const lvl = bandLevel(b as Band);
+  return `${lvl.name} — ${lvl.approach}`;
+}
 
 type ViewMode = "criterion" | "item";
 
@@ -51,18 +54,11 @@ export function RubricBanding() {
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
       <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Internal band descriptors</h3>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Official EduTrust band rubric (§23)</h3>
         <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
-          The official GD4 rubric should override these descriptors once available; these are internal interpretation only.
+          Quoted verbatim from the EduTrust Guidance Document v4 (Jan 2025). Each item's band is a holistic judgment across all four dimensions of one column — set on the Sub-Criterion Checklist.
         </p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 8 }}>
-          {[1, 2, 3, 4, 5].map((b) => (
-            <div key={b} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 10 }}>
-              <Pill s={bandTone(b)}>Band {b}</Pill>
-              <div style={{ fontSize: 12, marginTop: 4 }}>{BAND_MEANING[b]}</div>
-            </div>
-          ))}
-        </div>
+        <EdutrustBandTable />
       </Card>
 
       <Card>
@@ -112,7 +108,7 @@ export function RubricBanding() {
                   <td>{Math.round(c.avg)}</td>
                   <td>{c.started ? <Pill s={bandTone(c.band)}>Band {c.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
                   <td>{c.scored} / {c.points}</td>
-                  <td style={{ fontSize: 12, color: "#6b7280" }}>{c.started ? BAND_MEANING[c.band] : "No evidence entered yet."}</td>
+                  <td style={{ fontSize: 12, color: "#6b7280" }}>{c.started ? bandCaption(c.band) : "No evidence entered yet."}</td>
                 </tr>
               ))}
             </tbody>
@@ -153,7 +149,7 @@ export function RubricBanding() {
                               <td style={{ fontWeight: 700 }}>{Math.round(group.avg)}</td>
                               <td />
                               <td>{group.started ? <Pill s={bandTone(group.band)}>Band {group.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
-                              <td style={{ fontSize: 12, color: "#6b7280" }}>{group.started ? BAND_MEANING[group.band] : "No evidence entered yet."}</td>
+                              <td style={{ fontSize: 12, color: "#6b7280" }}>{group.started ? bandCaption(group.band) : "No evidence entered yet."}</td>
                             </tr>
                             {items.map((it) => (
                               <tr key={it.id} id={`rb-item-${it.id}`} className="rowh" style={{ cursor: "pointer" }} onClick={() => goToItem(it.id)}>
@@ -161,7 +157,7 @@ export function RubricBanding() {
                                 <td>{it.eff}</td>
                                 <td>{it.started ? Math.round((it.band / 5) * pointsShare) : 0} / {Math.round(pointsShare)}</td>
                                 <td>{it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
-                                <td style={{ fontSize: 12, color: "#6b7280" }}>{it.started ? BAND_MEANING[it.band] : "No evidence entered yet."}</td>
+                                <td style={{ fontSize: 12, color: "#6b7280" }}>{it.started ? bandCaption(it.band) : "No evidence entered yet."}</td>
                               </tr>
                             ))}
                           </Fragment>
@@ -172,7 +168,7 @@ export function RubricBanding() {
                         <td style={{ fontWeight: 700 }}>{Math.round(c.avg)}</td>
                         <td style={{ fontWeight: 700 }}>{c.scored} / {c.points}</td>
                         <td>{c.started ? <Pill s={bandTone(c.band)}>Band {c.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}</td>
-                        <td style={{ fontSize: 12, color: "#6b7280" }}>{c.started ? BAND_MEANING[c.band] : "No evidence entered yet."}</td>
+                        <td style={{ fontSize: 12, color: "#6b7280" }}>{c.started ? bandCaption(c.band) : "No evidence entered yet."}</td>
                       </tr>
                     </Fragment>
                   );

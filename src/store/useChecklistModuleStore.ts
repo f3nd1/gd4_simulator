@@ -3,7 +3,6 @@ import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import type {
   SubCriterionChecklistEntry,
-  GenericChecklistLine,
   GeneratedChecklistLine,
   SpecificChecklistLine,
   SpecificLineStatus,
@@ -12,13 +11,14 @@ import type {
   DraftFindingInfo,
   Finding,
   ChecklistLineWrite,
+  HolisticBandRecord,
 } from "../types";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildDraftFinding, lineSufficiency, lineApsr } from "../lib/checklistBanding";
 import { findingDedupeKey, findingKeyOf, normalizeAuditRef } from "../lib/gd4Refs";
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
-import { runLiveChecklistGeneration, runLiveEvidenceFill } from "../lib/ai/agentRuntime";
+import { runLiveChecklistGeneration, runLiveEvidenceFill, runHolisticBandSuggestion, type HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
 import { effectiveSettings, type AIUsage } from "../lib/ai/aiClient";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useWorkspaceStore, composeSchoolContext } from "./useWorkspaceStore";
@@ -63,7 +63,18 @@ export type ChecklistModuleState = {
   // Only ever called from the Dashboard's "Use demo data" button, alongside
   // useWorkspaceStore.loadDemoDataset.
   loadDemoChecklistData: () => void;
-  setGenericStatus: (itemId: string, lineId: GenericChecklistLine["id"], status: GenericChecklistLine["status"]) => void;
+  // The item's ONE holistic EduTrust band (official §23 rubric) — set only by
+  // an explicit human action (selecting a level in the rubric comparison
+  // table, or accepting an AI suggestion). Logged to the Human Decision Log.
+  setHolisticBand: (itemId: string, record: Omit<HolisticBandRecord, "decidedAt">) => void;
+  clearHolisticBand: (itemId: string) => void;
+  // AI first pass for the HOLISTIC band: one judgment call across all four
+  // official §23 dimension descriptors, returning a suggestion + rationale.
+  // Never commits — the caller shows it and the human accepts via
+  // setHolisticBand. Returns null when AI is unavailable or the call fails
+  // (the failure is recorded in the AI Review Log; no simulated fallback —
+  // a fabricated band judgment would be worse than none).
+  suggestBand: (itemId: string) => Promise<HolisticBandSuggestionResult | null>;
 
   generateSpecific: (itemId: string) => Promise<void>;
   updatePendingLine: (itemId: string, lineId: string, patch: Partial<SpecificChecklistLine>) => void;
@@ -149,8 +160,78 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           return { entries: { ...s.entries, ...seeded } };
         }),
 
-      setGenericStatus: (itemId, lineId, status) =>
-        set((s) => mapEntry(s, itemId, (e) => ({ ...e, generic: e.generic.map((g) => (g.id === lineId ? { ...g, status } : g)) }))),
+      setHolisticBand: (itemId, record) => {
+        const prev = get().entries[itemId]?.holisticBand;
+        get().ensureEntry(itemId);
+        const full: HolisticBandRecord = { ...record, decidedAt: new Date().toISOString() };
+        set((s) => mapEntry(s, itemId, (e) => ({ ...e, holisticBand: full })));
+        // Band selection is a scoring decision — always on the human record.
+        useWorkspaceStore.getState().logHumanDecision({
+          module: "Holistic Band",
+          subjectId: itemId,
+          field: "band",
+          aiOutput: record.source === "ai-accepted" ? `AI suggested Band ${record.band}${record.rationale ? ` — ${record.rationale}` : ""}` : prev ? `Previous: Band ${prev.band}` : "No prior band",
+          humanDecision: `Band ${record.band}${record.rationale ? ` — ${record.rationale}` : ""}`,
+          changed: prev?.band !== record.band,
+          decisionType: record.source === "ai-accepted" ? "Accepted" : prev && prev.band !== record.band ? "Overridden" : "Accepted",
+          reason: record.rationale ?? "",
+        });
+      },
+
+      clearHolisticBand: (itemId) =>
+        set((s) => mapEntry(s, itemId, (e) => ({ ...e, holisticBand: undefined }))),
+
+      suggestBand: async (itemId) => {
+        const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
+        const aiSettings = useAISettingsStore.getState();
+        if (!req || !(aiSettings.enabled && aiSettings.apiKey)) return null;
+        set({ busy: "band:" + itemId });
+        const ws = useWorkspaceStore.getState();
+        // Learning loop (read side): active Holistic Band corrections ride
+        // into the prompt; 👎 feedback on suggestions writes them (page-side
+        // FeedbackModal with module "Holistic Band").
+        const memories = ws.calibrationMemories
+          .filter((m) => m.status === "active" && m.module === "Holistic Band")
+          .sort((a, b) => (b.effectivenessScore ?? 0) - (a.effectivenessScore ?? 0))
+          .slice(0, 5);
+        memories.forEach((m) => ws.incrementMemoryUsage(m.id));
+        let usage: AIUsage | undefined;
+        try {
+          const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(ws.schoolContext) });
+          const result = await runHolisticBandSuggestion(req, get().entries[itemId]?.specific ?? [], settings, { memories, onUsage: (u) => { usage = u; } });
+          ws.pushAIReviewLog({
+            agent: "Holistic Band Assessor",
+            reviewType: "Checklist",
+            subjectId: itemId,
+            verdict: `Suggested Band ${result.band}`,
+            confidence: "Medium",
+            keyConcerns: [result.rationale],
+            recommendedAction: "Compare against the official §23 descriptors on the rubric table and accept or choose differently — the suggestion never commits itself.",
+            live: true,
+            generatedContent: `Suggested Band ${result.band}\n\n${result.rationale}`,
+            promptSent: result.promptSent,
+            usage,
+          });
+          return result;
+        } catch (err) {
+          const liveError = err instanceof Error ? err.message : String(err);
+          ws.pushAIReviewLog({
+            agent: "Holistic Band Assessor",
+            reviewType: "Checklist",
+            subjectId: itemId,
+            verdict: "Suggestion failed",
+            confidence: "Low",
+            keyConcerns: [liveError],
+            recommendedAction: "Retry, or judge the band manually against the official rubric table.",
+            live: false,
+            liveError,
+            usage,
+          });
+          return null;
+        } finally {
+          set({ busy: null });
+        }
+      },
 
       // Tries a live OpenAI call (reusing the same chatComplete client every
       // other AI feature in this app uses) and falls back to the

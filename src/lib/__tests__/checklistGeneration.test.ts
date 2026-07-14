@@ -22,7 +22,6 @@ function makeReq(
     weightage: 0.1,
     gateSensitive: false,
     expectedEvidence: overrides.expectedEvidence ?? ["Governance policy documentation"],
-    bandDescriptors: {},
   };
 }
 

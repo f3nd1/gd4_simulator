@@ -79,7 +79,7 @@ export const NAV: NavGroup[] = [
       { path: "/export", label: "Export Centre", hint: "Export the finished audit pack — closeout step 4" },
     ],
     tools: [
-      { path: "/rubric-banding", label: "Rubric Banding", hint: "Reference: how coverage % and maturity ceiling produce each band" },
+      { path: "/rubric-banding", label: "Rubric Banding", hint: "Reference: the official EduTrust §23 band rubric and each item's applied band" },
     ],
   },
   {

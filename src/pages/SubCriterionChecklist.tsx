@@ -7,8 +7,10 @@ import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { buildGenericLines } from "../data/checklistSeed";
-import { computeBand, lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, type BandResult } from "../lib/checklistBanding";
+import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories } from "../lib/checklistBanding";
+import { bandTitle } from "../data/edutrustRubric";
+import { EdutrustBandTable } from "../components/ui/EdutrustBandTable";
+import type { HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
 import { apsrAuditNote } from "../lib/ai/simulateAI";
 import { findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
 import { ppdVerdictLabel, ppdVerdictTone, evVerdictLabel } from "../lib/verdictTone";
@@ -20,7 +22,6 @@ import { GOLD, BLUE, INK, TONE, bandTone } from "../lib/theme";
 import type {
   GD4Requirement,
   FindingDimension,
-  GenericChecklistLine,
   SpecificChecklistLine,
   ChecklistSourceType,
   SpecificLineStatus,
@@ -119,7 +120,6 @@ function citedChunkIds(apsr: import("../types").ApsrBreakdown): string[] {
   return Array.from(new Set(all));
 }
 
-const GENERIC_OPTIONS: GenericChecklistLine["status"][] = ["Not Started", "Met", "Partial", "Not met"];
 const SPECIFIC_OPTIONS: SpecificLineStatus[] = ["Not Started", "Met", "Partial", "Not met", "Not Applicable"];
 const SUFFICIENCY_OPTIONS: EvidenceSufficiency[] = ["Present", "Weak", "Missing"];
 const EVIDENCE_TYPES = ["Policy/Procedure", "Record/Log", "System screenshot", "Minutes", "Survey/Feedback", "Other"];
@@ -131,39 +131,18 @@ function statusTone(status: string): "good" | "medium" | "critical" | "neutral" 
   return "neutral";
 }
 
-function quadrantLabel(coveragePct: number, ceiling: number): string {
-  const highCoverage = coveragePct >= 50;
-  const highMaturity = ceiling >= 3;
-  if (highMaturity && highCoverage) return "Ready";
-  if (highMaturity && !highCoverage) return "Documentation gap";
-  if (!highMaturity && highCoverage) return "Review gap";
-  return "Needs work";
+// Overview quadrants: requirement-line completion (context) × band state
+// (holistic §23 judgment, or not yet made). Drives the workflow honestly —
+// an item without a holistic band lands in "To band / act on gaps" or
+// "Needs work", never shown with a computed band.
+function quadrantLabel(completionPct: number, band: number | null): string {
+  const highCompletion = completionPct >= 50;
+  if (band != null && band >= 3) return highCompletion ? "Ready" : "Band set — lines incomplete";
+  return highCompletion ? "To band / act on gaps" : "Needs work";
 }
 
 function quadrantTone(label: string): "good" | "medium" | "critical" {
   return label === "Ready" ? "good" : label === "Needs work" ? "critical" : "medium";
-}
-
-// The G1–G4 Maturity assessment is human-only input: no scan ever sets it, it
-// seeds at "Not Started" (= ceiling Band 1) and it lives behind a collapsed
-// "advanced" toggle — so after a scan fills the specific lines, the final band
-// silently stays floored by an input the user never saw. This note makes that
-// cap visible wherever the band is shown, with a jump straight to the panel.
-// Hidden while an evidence cap is active (completing maturity wouldn't lift
-// the band then, and the evidence warning already explains the cap).
-function MaturityCapNote({ br, onOpen }: { br: BandResult; onOpen: () => void }) {
-  if (!br.started || br.evidenceCapped || br.maturityCeiling >= br.coverageCap) return null;
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8, background: "#eef2ff", border: "1px solid #a5b4fc", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, color: "#3730a3", fontWeight: 600 }}>
-      <span aria-hidden>ⓘ</span>
-      <span style={{ flex: 1, minWidth: 240 }}>
-        Your evidence supports Band {br.coverageCap}, but the band is capped at Band {br.maturityCeiling} until the Maturity assessment is completed.
-      </span>
-      <button onClick={onOpen} style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#fff", background: "#4f46e5", border: "none", borderRadius: 6, padding: "5px 12px", whiteSpace: "nowrap" }}>
-        Open Maturity assessment →
-      </button>
-    </div>
-  );
 }
 
 const emptyEvidenceDraft = (): Omit<SubChecklistEvidenceItem, "id"> => ({
@@ -179,20 +158,19 @@ const emptyEvidenceDraft = (): Omit<SubChecklistEvidenceItem, "id"> => ({
 });
 
 // APSR dimension metadata — four evidence types every GD4 audit needs
-const APSR_DIMS: { id: FindingDimension; gId: "G1" | "G2" | "G3" | "G4"; userLabel: string; desc: string }[] = [
-  { id: "Procedure", gId: "G1", userLabel: "Policy & Procedure", desc: "Documented approach in the PPD" },
-  { id: "Evidence",  gId: "G2", userLabel: "Implementation records", desc: "Evidence the procedure is deployed" },
-  { id: "Outcomes",  gId: "G3", userLabel: "Outcome & trend data", desc: "Data showing desired results" },
-  { id: "Review",    gId: "G4", userLabel: "Review & improvement", desc: "Periodic review feeding improvements" },
+const APSR_DIMS: { id: FindingDimension; userLabel: string; desc: string }[] = [
+  { id: "Procedure", userLabel: "Policy & Procedure", desc: "Documented approach in the PPD" },
+  { id: "Evidence",  userLabel: "Implementation records", desc: "Evidence the procedure is deployed" },
+  { id: "Outcomes",  userLabel: "Outcome & trend data", desc: "Data showing desired results" },
+  { id: "Review",    userLabel: "Review & improvement", desc: "Periodic review feeding improvements" },
 ];
 
-function EvidenceGapPanel({ generic, specific, req, itemId }: {
-  generic: GenericChecklistLine[];
+function EvidenceGapPanel({ specific, req, itemId }: {
   specific: SpecificChecklistLine[];
   req: GD4Requirement;
   itemId: string;
 }) {
-  const hasData = specific.length > 0 || generic.some((g) => g.status !== "Not Started");
+  const hasData = specific.length > 0;
   if (!hasData) return null;
 
   // Tally gap counts per APSR dimension from active specific lines
@@ -212,16 +190,14 @@ function EvidenceGapPanel({ generic, specific, req, itemId }: {
   }
 
   const dims = APSR_DIMS.map((d) => {
-    const genericStatus = generic.find((g) => g.id === d.gId)?.status ?? "Not Started";
     const notMet = dimNotMet[d.id] ?? 0;
     const partial = dimPartial[d.id] ?? 0;
-    const isCritical = genericStatus === "Not met" || notMet > 0;
-    const isWeak = !isCritical && (genericStatus === "Partial" || partial > 0);
-    const isGood = !isCritical && !isWeak && genericStatus === "Met";
-    const bg = isCritical ? "#fef2f2" : isWeak ? "#fffbeb" : isGood ? "#f0fdf4" : "#f8fafc";
-    const fg = isCritical ? "#b91c1c" : isWeak ? "#b45309" : isGood ? "#15803d" : "#64748b";
-    const icon = isCritical ? "✗" : isWeak ? "~" : isGood ? "✓" : "–";
-    return { ...d, genericStatus, notMet, partial, isCritical, isGood, isWeak, bg, fg, icon };
+    const isCritical = notMet > 0;
+    const isWeak = !isCritical && partial > 0;
+    const bg = isCritical ? "#fef2f2" : isWeak ? "#fffbeb" : "#f8fafc";
+    const fg = isCritical ? "#b91c1c" : isWeak ? "#b45309" : "#64748b";
+    const icon = isCritical ? "✗" : isWeak ? "~" : "–";
+    return { ...d, notMet, partial, isCritical, isWeak, bg, fg, icon };
   });
 
   // Likely finding type
@@ -253,15 +229,14 @@ function EvidenceGapPanel({ generic, specific, req, itemId }: {
               {d.icon} {d.userLabel}
             </div>
             <div style={{ fontSize: 10.5, color: "#64748b", marginBottom: 4 }}>{d.desc}</div>
-            <div style={{ fontSize: 11, color: d.fg, fontWeight: 600 }}>
-              Maturity: {d.genericStatus}
-            </div>
-            {(d.notMet > 0 || d.partial > 0) && (
-              <div style={{ fontSize: 10, color: d.fg, marginTop: 2 }}>
+            {d.notMet > 0 || d.partial > 0 ? (
+              <div style={{ fontSize: 11, color: d.fg, fontWeight: 600 }}>
                 {d.notMet > 0 && <span>{d.notMet} not met</span>}
                 {d.notMet > 0 && d.partial > 0 && " · "}
                 {d.partial > 0 && <span>{d.partial} partial</span>}
               </div>
+            ) : (
+              <div style={{ fontSize: 11, color: d.fg, fontWeight: 600 }}>No gaps flagged</div>
             )}
           </div>
         ))}
@@ -282,7 +257,7 @@ function EvidenceGapPanel({ generic, specific, req, itemId }: {
         )
       )}
       <p style={{ fontSize: 10.5, color: "#94a3b8", margin: "8px 0 0" }}>
-        Maturity from G1–G4 generic lines (Maturity assessment) · gap counts from specific testable lines · internal simulation only.
+        Gap counts from specific testable lines, grouped by the APSR dimension each gap falls under · internal simulation only.
       </p>
     </Card>
   );
@@ -292,7 +267,9 @@ export function SubCriterionChecklist() {
   const entries = useChecklistModuleStore((s) => s.entries);
   const busy = useChecklistModuleStore((s) => s.busy);
   const ensureEntry = useChecklistModuleStore((s) => s.ensureEntry);
-  const setGenericStatus = useChecklistModuleStore((s) => s.setGenericStatus);
+  const setHolisticBand = useChecklistModuleStore((s) => s.setHolisticBand);
+  const clearHolisticBand = useChecklistModuleStore((s) => s.clearHolisticBand);
+  const suggestBand = useChecklistModuleStore((s) => s.suggestBand);
   const generateSpecific = useChecklistModuleStore((s) => s.generateSpecific);
   const updatePendingLine = useChecklistModuleStore((s) => s.updatePendingLine);
   const removePendingLine = useChecklistModuleStore((s) => s.removePendingLine);
@@ -325,13 +302,12 @@ export function SubCriterionChecklist() {
   const [reuseFrom, setReuseFrom] = useState<{ lineId: string; evidenceId: string } | null>(null);
   const [reuseTargetItem, setReuseTargetItem] = useState("");
   const [reuseTargetLine, setReuseTargetLine] = useState("");
-  const [maturityOpen, setMaturityOpen] = useState(false);
-  // Jump target for the maturity-cap note: open the collapsed panel, then
-  // scroll to it once it exists in the DOM (next tick).
-  const openMaturityPanel = () => {
-    setMaturityOpen(true);
-    setTimeout(() => document.getElementById("maturity-panel")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
-  };
+  // AI band suggestion for the SELECTED item — page-local, never persisted:
+  // a suggestion is only ever a card the human can accept (setHolisticBand)
+  // or ignore. Cleared when switching items.
+  const [bandSuggestion, setBandSuggestion] = useState<HolisticBandSuggestionResult | null>(null);
+  const [bandRationaleDraft, setBandRationaleDraft] = useState("");
+  const [bandFeedback, setBandFeedback] = useState<string | null>(null);
   // Which read-only reasoning tab the expanded line shows — pure UI state,
   // both halves' data are already on the line's stored evidence item.
   const [expandTab, setExpandTab] = useState<"ppd" | "evidence">("evidence");
@@ -339,11 +315,18 @@ export function SubCriterionChecklist() {
   const req = GD4_REQUIREMENTS.find((r) => r.id === selectedId)!;
   const sub = GD4_SUB_CRITERIA.find((s) => s.id === req.subCriterionId)!;
   const entry = entries[selectedId];
-  const generic = entry?.generic.length ? entry.generic : buildGenericLines();
-  const specific = entry?.specific || [];
+  // Stable reference: `entry?.specific || []` minted a fresh array every
+  // render, so every useMemo depending on it recomputed each render (the
+  // long-standing exhaustive-deps warnings on this page).
+  const specific = useMemo(() => entry?.specific ?? [], [entry]);
   const pending = entry?.pendingGenerated || [];
 
-  const bandResult = useMemo(() => computeBand(generic, specific, req.gateSensitive), [generic, specific, req.gateSensitive]);
+  // Holistic band state for the selected item (official §23 rubric — a human
+  // judgment, never computed). Completeness/advisories are context only.
+  const holisticBand = entry?.holisticBand;
+  const completeness = useMemo(() => lineCompleteness(specific), [specific]);
+  const bandAdvisories = useMemo(() => (holisticBand ? bandEvidenceAdvisories(specific, holisticBand.band) : []), [specific, holisticBand]);
+  const itemNeedsReassessment = entry ? needsReassessment(entry) : false;
 
   const scored = useScored();
   const folders = useWorkspaceStore((s) => s.folders);
@@ -415,15 +398,26 @@ export function SubCriterionChecklist() {
         .filter((e) => e.specific.length > 0)
         .map((e) => {
           const r = GD4_REQUIREMENTS.find((x) => x.id === e.gd4ItemId)!;
-          const result = computeBand(e.generic, e.specific, r.gateSensitive);
-          return { id: e.gd4ItemId, title: r.requirement, ...result, quadrant: quadrantLabel(result.coveragePct, result.maturityCeiling), hasPending: pendingItemIds.has(e.gd4ItemId) };
+          const c = lineCompleteness(e.specific);
+          const completionPct = c.total > 0 ? (c.assessed / c.total) * 100 : 0;
+          const band = e.holisticBand?.band ?? null;
+          return { id: e.gd4ItemId, title: r.requirement, band, quadrant: quadrantLabel(completionPct, band), hasPending: pendingItemIds.has(e.gd4ItemId) };
         }),
     [entries, pendingItemIds]
+  );
+
+  // Migration visibility (holistic-rubric rework): items scored under the old
+  // ladder model with no holistic band yet — each needs one human re-band.
+  const reassessItemIds = useMemo(
+    () => Object.values(entries).filter((e) => needsReassessment(e)).map((e) => e.gd4ItemId).sort(),
+    [entries]
   );
 
   function selectItem(id: string) {
     setSelectedId(id);
     setExpandedLine(null);
+    setBandSuggestion(null);
+    setBandRationaleDraft(entries[id]?.holisticBand?.rationale ?? "");
     ensureEntry(id);
   }
 
@@ -487,8 +481,8 @@ export function SubCriterionChecklist() {
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", paddingLeft: 4 }}>{g.key} {g.title}</div>
                 {g.items.map((r) => {
                   const e = entries[r.id];
-                  const used = !!e && e.specific.length > 0;
-                  const b = used ? computeBand(e.generic, e.specific, r.gateSensitive).finalBand : null;
+                  const b = e?.holisticBand?.band ?? null;
+                  const reassess = !!e && needsReassessment(e);
                   return (
                     <button
                       key={r.id}
@@ -511,7 +505,7 @@ export function SubCriterionChecklist() {
                         <b>{r.id}</b> {r.requirement}
                       </span>
                       {r.gateSensitive && <Pill s="high">Gate</Pill>}
-                      {b != null ? <Pill s={bandTone(b)}>B{b}</Pill> : <span style={{ fontSize: 10, color: "#cbd5e1" }}>—</span>}
+                      {b != null ? <Pill s={bandTone(b)}>B{b}</Pill> : reassess ? <span title="Needs re-assessment under the updated EduTrust rubric" style={{ fontSize: 10, color: "#b45309", fontWeight: 800 }}>⚠</span> : <span style={{ fontSize: 10, color: "#cbd5e1" }}>—</span>}
                     </button>
                   );
                 })}
@@ -531,23 +525,37 @@ export function SubCriterionChecklist() {
             ☰ Show item list
           </button>
         )}
+        {reassessItemIds.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 10, padding: "9px 12px", fontSize: 12.5, color: "#92400e", fontWeight: 600 }}>
+            <span aria-hidden>⚠</span>
+            <span>
+              {reassessItemIds.length} item{reassessItemIds.length === 1 ? "" : "s"} need{reassessItemIds.length === 1 ? "s" : ""} re-assessment under the updated EduTrust rubric — the old calculated bands were retired; select each item's holistic band on its official rubric table:
+            </span>
+            {reassessItemIds.map((id) => (
+              <button key={id} onClick={() => selectItem(id)} style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#92400e", background: "#fff", border: "1px solid #f59e0b", borderRadius: 999, padding: "2px 10px" }}>
+                {id}
+              </button>
+            ))}
+          </div>
+        )}
+
         <Card>
-          <h3 style={{ marginTop: 0, fontSize: 14 }}>Coverage vs maturity</h3>
+          <h3 style={{ marginTop: 0, fontSize: 14 }}>Line completion vs band status</h3>
           <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: 0 }}>
-            Plots every item that has at least one specific (Layer 2) checklist line. Internal simulation only — no claim of official SSG result.
+            Plots every item that has at least one specific checklist line. The band is the item's holistic §23 judgment — items without one show ⚠ and need banding. Internal simulation only — no claim of official SSG result.
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr", gridTemplateRows: "1fr 1fr auto", gap: 6 }}>
             <div />
-            <div style={{ fontSize: 10.5, color: "#94a3b8", textAlign: "center" }}>Low coverage</div>
-            <div style={{ fontSize: 10.5, color: "#94a3b8", textAlign: "center" }}>High coverage</div>
+            <div style={{ fontSize: 10.5, color: "#94a3b8", textAlign: "center" }}>Under half of lines assessed</div>
+            <div style={{ fontSize: 10.5, color: "#94a3b8", textAlign: "center" }}>Half or more lines assessed</div>
 
-            <div style={{ fontSize: 10.5, color: "#94a3b8", display: "flex", alignItems: "center", writingMode: "vertical-rl", justifyContent: "center" }}>High maturity</div>
-            <Quadrant label="Documentation gap" items={chartItems.filter((i) => i.quadrant === "Documentation gap")} onPick={selectItem} />
+            <div style={{ fontSize: 10.5, color: "#94a3b8", display: "flex", alignItems: "center", writingMode: "vertical-rl", justifyContent: "center" }}>Band ≥ 3</div>
+            <Quadrant label="Band set — lines incomplete" items={chartItems.filter((i) => i.quadrant === "Band set — lines incomplete")} onPick={selectItem} />
             <Quadrant label="Ready" items={chartItems.filter((i) => i.quadrant === "Ready")} onPick={selectItem} />
 
-            <div style={{ fontSize: 10.5, color: "#94a3b8", display: "flex", alignItems: "center", writingMode: "vertical-rl", justifyContent: "center" }}>Low maturity</div>
+            <div style={{ fontSize: 10.5, color: "#94a3b8", display: "flex", alignItems: "center", writingMode: "vertical-rl", justifyContent: "center" }}>Band &lt; 3 / not set</div>
             <Quadrant label="Needs work" items={chartItems.filter((i) => i.quadrant === "Needs work")} onPick={selectItem} />
-            <Quadrant label="Review gap" items={chartItems.filter((i) => i.quadrant === "Review gap")} onPick={selectItem} />
+            <Quadrant label="To band / act on gaps" items={chartItems.filter((i) => i.quadrant === "To band / act on gaps")} onPick={selectItem} />
           </div>
         </Card>
 
@@ -617,17 +625,30 @@ export function SubCriterionChecklist() {
             </div>
           )}
 
-          {bandResult.started && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0 0" }}>
-              <Pill s={bandTone(bandResult.finalBand)}>Band {bandResult.finalBand}</Pill>
-              {bandResult.evidenceCapWarning && (
-                <span style={{ fontSize: 11.5, color: "#b23121" }}>
-                  ⚠ Capped: {bandResult.evidenceCapWarning}
+          {holisticBand ? (
+            <div style={{ margin: "6px 0 0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <Pill s={bandTone(holisticBand.band)}>{bandTitle(holisticBand.band)}</Pill>
+                <span style={{ fontSize: 11, color: "#94a3b8" }}>
+                  {holisticBand.source === "ai-accepted" ? "AI suggestion accepted" : "Set"} by reviewer · {new Date(holisticBand.decidedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
                 </span>
-              )}
+                <button onClick={() => { if (confirm(`Clear the holistic band for ${selectedId}? The item will show "needs assessment" until re-banded.`)) clearHolisticBand(selectedId); }} style={{ cursor: "pointer", fontSize: 11, color: "#94a3b8", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 6, padding: "2px 8px" }}>
+                  Clear / re-assess
+                </button>
+              </div>
+              {holisticBand.rationale && <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 4 }}>Rationale: {holisticBand.rationale}</div>}
+              {bandAdvisories.map((a) => (
+                <div key={a} style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>⚠ Advisory: {a}</div>
+              ))}
             </div>
-          )}
-          <MaturityCapNote br={bandResult} onOpen={openMaturityPanel} />
+          ) : itemNeedsReassessment ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 6, background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, color: "#92400e", fontWeight: 600 }}>
+              <span aria-hidden>⚠</span>
+              <span style={{ flex: 1, minWidth: 240 }}>
+                Needs re-assessment under the updated EduTrust rubric — the old calculated band was retired. Select the band whose official descriptors best fit, in the rubric table below. Until then this item scores as not started.
+              </span>
+            </div>
+          ) : null}
 
           {itemPendingItems.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8, background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, color: "#92400e", fontWeight: 600 }}>
@@ -641,34 +662,61 @@ export function SubCriterionChecklist() {
             </div>
           )}
 
-          <div style={{ marginBottom: 12 }} id="maturity-panel">
-            <button
-              onClick={() => setMaturityOpen((o) => !o)}
-              style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#6b7280", background: "transparent", border: "none", padding: "4px 0", display: "flex", alignItems: "center", gap: 5 }}
-            >
-              <span style={{ fontSize: 10, color: "#94a3b8" }}>{maturityOpen ? "▾" : "▸"}</span>
-              Maturity assessment (advanced)
-            </button>
-            {maturityOpen && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8, marginTop: 8 }}>
-                {generic.map((g) => (
-                  <div key={g.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 9 }}>
-                    <div style={{ fontSize: 11.5, fontWeight: 700 }}>{g.id} · {g.lens}</div>
-                    <div style={{ fontSize: 11, color: "#6b7280", margin: "3px 0 6px" }}>{g.text}</div>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <select
-                        value={g.status}
-                        onChange={(e) => setGenericStatus(selectedId, g.id, e.target.value as GenericChecklistLine["status"])}
-                        style={{ ...inputStyle, width: "auto", padding: "4px 6px" }}
-                      >
-                        {GENERIC_OPTIONS.map((o) => <option key={o}>{o}</option>)}
-                      </select>
-                      <Pill s={statusTone(g.status)}>{g.status}</Pill>
-                    </div>
-                  </div>
-                ))}
+          {/* Holistic band selector — the official §23 rubric, read as an
+              assessor reads it: all four dimension descriptors of a level,
+              compared column against column, ONE band selected by judgment.
+              The AI suggestion is a card the human can accept; nothing here
+              commits without a click on the table. */}
+          <div style={{ margin: "12px 0" }} id="band-rubric">
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <h4 style={{ margin: 0, fontSize: 13 }}>Holistic band — official EduTrust rubric (§23)</h4>
+              <button
+                onClick={async () => {
+                  const s = await suggestBand(selectedId);
+                  if (s) setBandSuggestion(s);
+                }}
+                disabled={busy === "band:" + selectedId}
+                style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "5px 11px", borderRadius: 8, border: `1px solid ${BLUE}`, background: "#eaeef6", color: "#4a5a8a" }}
+              >
+                {busy === "band:" + selectedId ? "Assessing…" : "AI band suggestion"}
+              </button>
+            </div>
+            <p style={{ fontSize: 11.5, color: "#6b7280", margin: "4px 0 6px" }}>
+              Read the evidence against all four dimension descriptors in each column and select the ONE band that best fits overall — a judgment, not a calculation.
+              {" "}Requirement-line completeness: <b>{completeness.assessed} of {completeness.total}</b> lines assessed{completeness.total > 0 ? <> · {completeness.met} Met · {completeness.partial} Partial · {completeness.notMet} Not met</> : null} — context for your judgment; it does not calculate the band.
+            </p>
+            {bandSuggestion && (
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 8, padding: "8px 11px", marginBottom: 8, fontSize: 12 }}>
+                <span style={{ flex: 1 }}>
+                  <b>AI suggests {bandTitle(bandSuggestion.band)}:</b> {bandSuggestion.rationale}
+                </span>
+                <button
+                  onClick={() => {
+                    setHolisticBand(selectedId, { band: bandSuggestion.band, rationale: bandSuggestion.rationale, source: "ai-accepted" });
+                    setBandRationaleDraft(bandSuggestion.rationale);
+                    setBandSuggestion(null);
+                  }}
+                  style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#fff", background: "#4f46e5", border: "none", borderRadius: 6, padding: "4px 10px", whiteSpace: "nowrap", flexShrink: 0 }}
+                >
+                  Accept Band {bandSuggestion.band}
+                </button>
+                <ThumbsButtons
+                  onAccept={() => logHumanDecision({ module: "Holistic Band", subjectId: selectedId, field: "suggestion", aiOutput: `Band ${bandSuggestion.band}: ${bandSuggestion.rationale}`, humanDecision: "Suggestion acknowledged as reasonable", changed: false, decisionType: "Accepted", reason: "" })}
+                  onReject={() => setBandFeedback(`Band ${bandSuggestion.band}: ${bandSuggestion.rationale}`)}
+                />
               </div>
             )}
+            <input
+              placeholder="Rationale (optional — recorded with your selection: why this band fits)"
+              value={bandRationaleDraft}
+              onChange={(e) => setBandRationaleDraft(e.target.value)}
+              style={{ ...inputStyle, marginBottom: 8 }}
+            />
+            <EdutrustBandTable
+              selected={holisticBand?.band}
+              suggested={bandSuggestion?.band}
+              onSelect={(b) => setHolisticBand(selectedId, { band: b, rationale: bandRationaleDraft.trim() || undefined, source: "human" })}
+            />
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <button
@@ -1277,38 +1325,37 @@ export function SubCriterionChecklist() {
           )}
         </Card>
 
-        <EvidenceGapPanel generic={generic} specific={specific} req={req} itemId={selectedId} />
+        <EvidenceGapPanel specific={specific} req={req} itemId={selectedId} />
 
         <Card>
           <h3 style={{ marginTop: 0, fontSize: 14 }}>Band result</h3>
-          {bandResult.started ? (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 }}>
-                <Metric label="Coverage %" value={`${Math.round(bandResult.coveragePct)}%`} />
-                <Metric label="Maturity ceiling" value={<Pill s={bandTone(bandResult.maturityCeiling)}>Band {bandResult.maturityCeiling}</Pill>} />
-                <Metric label="Coverage cap" value={<Pill s={bandTone(bandResult.coverageCap)}>Band {bandResult.coverageCap}</Pill>} />
-                <Metric label="Final band" value={<Pill s={bandTone(bandResult.finalBand)}>Band {bandResult.finalBand}</Pill>} />
-              </div>
-              <MaturityCapNote br={bandResult} onOpen={openMaturityPanel} />
-              {bandResult.evidenceCapWarning && (
-                <div style={{ marginTop: 10, background: "#fbe7e3", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#b23121" }}>
-                  <b>Evidence cap:</b> {bandResult.evidenceCapWarning}
-                </div>
-              )}
-              {itemPendingItems.length > 0 && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10, background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#92400e" }}>
-                  <span aria-hidden>⚠</span>
-                  <span style={{ flex: 1, minWidth: 200 }}>
-                    <b>Possibly stale:</b> a newer evidence run ({itemPendingRunId}) is awaiting review — this Band was computed from the last-approved run, not that one.
-                  </span>
-                  <Link to={`/evidence-folder?run=${itemPendingRunId}`} style={{ fontSize: 11.5, fontWeight: 700, color: "#fff", background: "#b45309", borderRadius: 6, padding: "4px 10px", textDecoration: "none", whiteSpace: "nowrap" }}>
-                    Review →
-                  </Link>
-                </div>
-              )}
-            </>
-          ) : (
-            <p style={{ fontSize: 12, color: "#94a3b8" }}>No band yet — add at least one specific checklist line for this item to compute one.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8 }}>
+            <Metric
+              label="Holistic band (§23)"
+              value={holisticBand
+                ? <Pill s={bandTone(holisticBand.band)}>{bandTitle(holisticBand.band)}</Pill>
+                : itemNeedsReassessment
+                  ? <span style={{ fontSize: 12, fontWeight: 700, color: "#b45309" }}>Needs re-assessment</span>
+                  : <span style={{ fontSize: 12, color: "#94a3b8" }}>Not set</span>}
+            />
+            <Metric label="Lines assessed (context)" value={`${completeness.assessed} of ${completeness.total}`} />
+            <Metric label="Line outcomes (context)" value={`${completeness.met} Met · ${completeness.partial} Partial · ${completeness.notMet} Not met`} />
+          </div>
+          {bandAdvisories.map((a) => (
+            <div key={a} style={{ marginTop: 10, background: "#fbe7e3", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#b23121" }}>
+              <b>Advisory:</b> {a} <span style={{ color: "#6b7280" }}>(Your selection stands — this is a flag, not a cap.)</span>
+            </div>
+          ))}
+          {itemPendingItems.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10, background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#92400e" }}>
+              <span aria-hidden>⚠</span>
+              <span style={{ flex: 1, minWidth: 200 }}>
+                <b>Possibly stale:</b> a newer evidence run ({itemPendingRunId}) is awaiting review — re-check your band judgment against it once reviewed.
+              </span>
+              <Link to={`/evidence-folder?run=${itemPendingRunId}`} style={{ fontSize: 11.5, fontWeight: 700, color: "#fff", background: "#b45309", borderRadius: 6, padding: "4px 10px", textDecoration: "none", whiteSpace: "nowrap" }}>
+                Review →
+              </Link>
+            </div>
           )}
           <div style={{ marginTop: 10 }}>
             {itemAudit.length === 0 ? (
@@ -1324,8 +1371,7 @@ export function SubCriterionChecklist() {
             )}
           </div>
           <p style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 10, marginBottom: 0 }}>
-            This module feeds its band back into the workspace's overall scoring engine once it has at least one specific line for this item. Internal
-            simulation only — no claim of official SSG result anywhere in this tool.
+            The selected holistic band feeds the workspace's overall scoring engine (band/5 × criterion points). Line counts are evidence context only — they never calculate the band. Internal simulation only — no claim of official SSG result anywhere in this tool.
           </p>
         </Card>
       </div>
@@ -1341,12 +1387,27 @@ export function SubCriterionChecklist() {
           setLineFeedback(null);
         }}
       />
+      {/* Feedback on an AI band suggestion — closes the learning loop: a 👎
+          with a correction becomes an active "Holistic Band" calibration
+          memory that rides into the next suggestion's prompt (suggestBand). */}
+      <FeedbackModal
+        open={!!bandFeedback}
+        aiOutput={bandFeedback ?? ""}
+        onClose={() => setBandFeedback(null)}
+        onSubmit={(fb) => {
+          logHumanDecision({ module: "Holistic Band", subjectId: selectedId, field: "suggestion", aiOutput: bandFeedback ?? "", humanDecision: fb.correction || "Rejected", changed: true, decisionType: "Overridden", reason: fb.reason });
+          if (!fb.correct && fb.correction) {
+            addCalibrationMemory({ module: "Holistic Band", subjectId: selectedId, context: bandFeedback ?? "", aiOutput: bandFeedback ?? "", staffCorrection: fb.correction, keyLearning: fb.reason, status: "active", tokenCount: Math.round((bandFeedback?.length ?? 0) / 4) });
+          }
+          setBandFeedback(null);
+        }}
+      />
     </div>
     </div>
   );
 }
 
-function Quadrant({ label, items, onPick }: { label: string; items: { id: string; title: string; finalBand: number; hasPending?: boolean }[]; onPick: (id: string) => void }) {
+function Quadrant({ label, items, onPick }: { label: string; items: { id: string; title: string; band: number | null; hasPending?: boolean }[]; onPick: (id: string) => void }) {
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 8, minHeight: 70 }}>
       <Pill s={quadrantTone(label)}>{label}</Pill>
@@ -1361,7 +1422,7 @@ function Quadrant({ label, items, onPick }: { label: string; items: { id: string
               border: i.hasPending ? "1px solid #f59e0b" : "1px solid #cbd5e1", background: i.hasPending ? "#fffbeb" : "#fff",
             }}
           >
-            {i.hasPending && "⚠ "}{i.id}
+            {i.hasPending && "⚠ "}{i.id}{i.band == null && " (to band)"}
           </button>
         ))}
         {items.length === 0 && <span style={{ fontSize: 10.5, color: "#cbd5e1" }}>—</span>}

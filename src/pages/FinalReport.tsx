@@ -247,7 +247,7 @@ export function FinalReport() {
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Banding by item — strengths, gaps & how to reach a higher band</h3>
         <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
-          Strengths and gaps are derived from the Sub-Criterion Checklist. "How to reach Band N" is computed from the same coverage/maturity/evidence rules that set the band.
+          Strengths and gaps are derived from the Sub-Criterion Checklist. "How to reach Band N" points at the evidence gaps and the official §23 descriptors of the next band — the band itself is the reviewer's holistic judgment.
         </div>
         <div style={{ display: "grid", gap: 8 }}>
           {report.items.map((it) => <ItemBlock key={it.id} it={it} />)}
@@ -295,11 +295,13 @@ function ItemBlock({ it }: { it: ItemReport }) {
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px" }}>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <Pill s={bandTone(it.band)}>Band {it.band}</Pill>
+        {it.needsReassessment
+          ? <Pill s="medium">Needs re-assessment</Pill>
+          : <Pill s={bandTone(it.band)}>Band {it.band}</Pill>}
         {it.gate && <Pill s="high">Gate</Pill>}
         <b style={{ fontSize: 12.5 }}>{it.id}</b>
         <span style={{ fontSize: 12.5 }}>{it.title}</span>
-        {it.hasChecklist && <span style={{ fontSize: 11, color: "#94a3b8" }}>· coverage {it.coveragePct}% · maturity ceiling Band {it.maturityCeiling}</span>}
+        {it.hasChecklist && <span style={{ fontSize: 11, color: "#94a3b8" }}>· {it.completeness.assessed} of {it.completeness.total} lines assessed ({it.completeness.met} Met · {it.completeness.partial} Partial · {it.completeness.notMet} Not met)</span>}
       </div>
       {it.strengths.length > 0 && (
         <Bullets title="Strengths" color="#15803d" items={it.strengths} />

@@ -159,7 +159,9 @@ export type GD4Requirement = {
   weightage: number;
   gateSensitive: boolean;
   expectedEvidence: string[];
-  bandDescriptors: Record<string, string>;
+  // Band descriptors live in the ONE official table (data/edutrustRubric.ts)
+  // — the per-item bandDescriptors field was removed with the app-invented
+  // descriptor sets it carried.
   scoringNotes?: string;
   flatAuditPoints?: FlatAuditPoint[];
 };
@@ -265,10 +267,10 @@ export type Finding = {
   panelConflict?: { fields: string[] };
 };
 
-// Two-layer sub-criterion checklist module: a generic 4-line maturity check
-// (Layer 1, fixed per the four rubric lenses) plus AI-generated/seeded atomic
-// testable statements (Layer 2) per GD4 item, used to compute a band that
-// feeds back into the official scoring engine (see lib/checklistBanding.ts).
+// Sub-criterion checklist module: AI-generated/seeded atomic testable
+// statements per GD4 item (evidence context), plus the item's ONE holistic
+// band (HolisticBandRecord below) judged against the official §23 rubric —
+// the band feeds the scoring engine (see lib/checklistBanding.ts).
 export type ChecklistLineStatus = "Met" | "Partial" | "Not met";
 export type GenericLineStatus = ChecklistLineStatus | "Not Started";
 export type SpecificLineStatus = ChecklistLineStatus | "Not Applicable" | "Not Started";
@@ -531,10 +533,35 @@ export type SpecificChecklistLine = {
 // Keyed by GD4 item id (the testable requirements) rather than the
 // sub-criteria, so every checklist line can cite a single, unambiguous
 // clause. The sub-criterion/criterion grouping is reconstructed in the UI.
+// The item's ONE holistic EduTrust band (official §23 rubric): a human
+// judgment made by reading the evidence against all four dimension
+// descriptors at each level and picking the level that best fits overall —
+// never computed by a formula. Set only via an explicit human action
+// (setHolisticBand); an AI suggestion becomes a band only when the human
+// accepts it (source: "ai-accepted").
+export type HolisticBandRecord = {
+  band: Band;
+  // Why this level fits — the reviewer's own words, or the accepted AI
+  // rationale (which cites the official descriptors it matched).
+  rationale?: string;
+  source: "human" | "ai-accepted";
+  decidedAt: string;
+  decidedBy?: string;
+};
+
 export type SubCriterionChecklistEntry = {
   gd4ItemId: string;
+  // LEGACY (pre-holistic-rubric): the old G1-G4 maturity tick lines. No
+  // longer read or rendered anywhere — kept only so existing persisted
+  // workspaces round-trip without data loss (audit trail of how old bands
+  // were derived). An entry with specific lines but no holisticBand shows
+  // "needs re-assessment" rather than any band derived from this field.
   generic: GenericChecklistLine[];
   specific: SpecificChecklistLine[];
+  // Absent = no holistic assessment yet. With specific lines present, that
+  // means "needs re-assessment under the updated EduTrust rubric" — old
+  // ladder-model bands are never silently reinterpreted as holistic bands.
+  holisticBand?: HolisticBandRecord;
   pendingGenerated?: SpecificChecklistLine[];
   generatedAt?: string;
   generatedLive?: boolean;
@@ -1265,7 +1292,8 @@ export type HumanDecisionModule =
   | "AI Review Log Feedback"
   | "Panel Conclusion"
   | "Prompt Review"
-  | "Run mode gate";
+  | "Run mode gate"
+  | "Holistic Band";
 
 export type HumanDecisionType = "Accepted" | "Edited" | "Overridden" | "Dismissed";
 

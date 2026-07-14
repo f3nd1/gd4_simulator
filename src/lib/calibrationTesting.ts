@@ -8,7 +8,6 @@
 // ppdReviewResults or evidenceAssessments — scratch runs are stored only in
 // useCalibrationStore.
 
-import { coverageCap } from "./checklistBanding";
 
 // Single "Run on 04 Jul 2026, 14:30" formatter, used identically on both
 // tabs' result blocks and re-used (as ISO) in the CSV exports, so timestamps
@@ -50,17 +49,20 @@ export function countByType(statuses: (ScratchStatus | null)[]): { NC: number; O
   };
 }
 
-// Coverage-cap band ESTIMATE from line statuses alone, reusing the real
-// coverageCap thresholds (checklistBanding). Deliberately labelled an
-// estimate everywhere it is shown: the full computeBand also weighs evidence
-// attachments and maturity lenses, which a scratch run has no data for.
+// Band ESTIMATE from line statuses alone — a MEASUREMENT heuristic for
+// comparing scratch runs' consistency, nothing more. The real band is a
+// holistic human judgment against the official §23 rubric (edutrustRubric.ts)
+// and is never computed; these thresholds are the retired coverage-cap
+// ladder's, kept ONLY so run-to-run consistency remains comparable on the
+// same scale as historical measurements. Deliberately labelled an estimate
+// everywhere it is shown.
 export function bandEstimate(statuses: (ScratchStatus | null)[]): number | null {
   const assessed = statuses.filter((s): s is ScratchStatus => s != null);
   if (assessed.length === 0) return null;
   const met = assessed.filter((s) => s === "Met").length;
   const partial = assessed.filter((s) => s === "Partial").length;
   const pct = ((met + partial * 0.5) / assessed.length) * 100;
-  return coverageCap(pct);
+  return pct >= 85 ? 5 : pct >= 70 ? 4 : pct >= 50 ? 3 : 2;
 }
 
 // ── Consistency (repeatability of one path) ─────────────────────────────

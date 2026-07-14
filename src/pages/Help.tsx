@@ -52,15 +52,15 @@ const DETAILS: Record<string, Detail> = {
     how: "Paste the folder link, 'Check access' to confirm Drive can see it, then 'Run audit' — it reads the files (PDF/Word/text/images/spreadsheets) in three staged passes and routes the results to PPD Review or the checklist depending on the analysis path you chose.",
   },
   "/sub-checklist": {
-    what: "The source of truth for scoring. Each item is broken into testable Layer 2 lines with evidence attached and a maturity (Layer 1) check.",
-    how: "Generate lines (AI or manual), attach evidence, mark each Met / Partial / Not met. The coverage % and maturity ceiling produce the band that feeds the overall score.",
+    what: "The source of truth for scoring. Each item is broken into testable requirement lines with evidence attached, plus the item's ONE holistic band judged against the official EduTrust §23 rubric.",
+    how: "Generate lines (AI or manual), attach evidence, mark each Met / Partial / Not met, then select the band whose four dimension descriptors best fit the evidence — a judgment on the rubric table, not a calculation. The selected band feeds the overall score.",
   },
   "/scorecard": {
     what: "The official band per item, per criterion and overall.",
     how: "Review the resulting bands; justify or override where needed.",
   },
   "/rubric-banding": {
-    what: "Shows how coverage % and maturity ceiling combine to produce each band.",
+    what: "The official EduTrust §23 band rubric (verbatim) and every item's applied band and points.",
     how: "Use it to understand why an item landed on its band and what would move it up.",
   },
   "/evidence-intelligence": {

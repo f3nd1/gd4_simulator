@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { EdutrustBandTable } from "../components/ui/EdutrustBandTable";
 
 export function GD4Library() {
   const [selId, setSelId] = useState(GD4_REQUIREMENTS[0]?.id);
@@ -48,12 +49,10 @@ export function GD4Library() {
           </ul>
         </div>
         <div style={{ marginBottom: 8 }}>
-          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Band descriptors</span>
-          {Object.entries(req.bandDescriptors).map(([band, desc]) => (
-            <div key={band} style={{ fontSize: 12.5, padding: "4px 0", borderBottom: "1px solid #eef1f5" }}>
-              <b>{band}:</b> {desc}
-            </div>
-          ))}
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Official band rubric (§23 — same table for every item)</span>
+          <div style={{ marginTop: 6 }}>
+            <EdutrustBandTable />
+          </div>
         </div>
         {req.scoringNotes && <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 8 }}>{req.scoringNotes}</div>}
       </Card>

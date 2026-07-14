@@ -1,17 +1,18 @@
-# Band Calibration — What Each Band Looks Like at a Singapore PEI
+# Band Calibration — the Official Rubric, Then What It Looks Like at a Singapore PEI
 
-Use this as a cross-check when you have assessed each APSR dimension and are calibrating whether the overall picture is consistent with the band the scoring engine will assign.
+## THE OFFICIAL BAND TABLE (EduTrust Guidance Document v4, Jan 2025, §23 — VERBATIM; the single authority for band wording)
 
-## One-line interpretation (use in summaries and recommendations)
+The band is HOLISTIC: one band per item, judged by reading the evidence against all four dimension descriptors of a level together. It is never computed per-dimension or by formula.
 
-| Band | Core meaning | What the institution needs to do next |
-|---|---|---|
-| Band 1–2 | **Exist but not controlled** — systems are absent or ad-hoc; compliance is accidental, not designed | Establish documented, owned processes and generate consistent implementation records |
-| Band 3 | **Exist and review** — systems are documented and running; review happens but rarely drives change | Close the loop: show that each review produces an improvement, not just a sign-off |
-| Band 4 | **Review, Learn and Adjust** — the institution uses evidence from its own operations to improve; cycle visible in records | Extend learning outward: benchmark against external standards, not just internal targets |
-| Band 5 | **Anticipate, prevent, stability** — the institution identifies risks before they materialise; systems are resilient to staff changes and proactively strengthened | Sustain and document resilience; demonstrate the system works without relying on specific individuals |
+| Band | Name | Approach | Processes | Systems & Outcomes | Review |
+|---|---|---|---|---|---|
+| 1 | Not evident | No organised approach to item requirements is evident | Processes are not in place or in their infancy stage | Systems and outcomes are non-existent | No planned review; no improvement is made |
+| 2 | Beginning | The beginning of an organised approach is evident | Processes are established but with weak deployment in key areas | Systems do not interact with one another; there are limited outcomes | Early stages of review; improvements to systems and processes are limited |
+| 3 | Meeting Expectation | An effective and organised approach meeting the minimum requirement is evident | Processes are deployed and well-managed by owners in key areas | Key systems are established, producing limited outcomes | There is evidence that the systems and processes are regularly reviewed and action plans for improvement are implemented |
+| 4 | Exceeding | An effective, efficient and organised approach meeting overall requirements is evident | Intended processes are well-managed by owners; desired outputs are produced by these processes | Key systems are interacting with one another, producing desired outcomes with no conflicts | Implemented action plans for improvement are monitored for effectiveness and to bring about positive impact resulting in favourable outcomes |
+| 5 | Excellent | An effective, efficient and well-integrated approach meeting all requirements is evident | All processes are well-managed by owners leading to quality outputs by all processes | All systems are interacting with one another, producing good quality outcomes | Many to most trends and current performance levels are evaluated against relevant comparisons and/or benchmarks |
 
-When writing recommendations, frame the gap in these terms: "You are currently at Band X (exist but not controlled / exist and review / review-learn-adjust / anticipate-prevent). To move to Band X+1, you need to…"
+Everything below is CALIBRATION COMMENTARY — internal field notes on what each official level typically looks like on the ground at a Singapore PEI. It never overrides the official wording above.
 
 ## Band 1 — No system in place
 

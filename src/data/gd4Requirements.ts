@@ -616,20 +616,9 @@ function deriveItemFlatAuditPoints(raw: RawItem): FlatAuditPoint[] {
   return points;
 }
 
-// Contextualised band descriptors: the generic four-dimension rubric
-// (Approach / Processes / Systems & Outcomes / Review) phrased against THIS
-// item's actual subject, instead of the same placeholder line for every item.
-// Still an internal simulation aid, not official SSG wording.
-function bandDescriptorsFor(raw: RawItem): Record<string, string> {
-  const subject = raw.title.toLowerCase();
-  return {
-    "Band 1": `Not evident — no documented or deployed approach to ${subject} can be verified from the evidence.`,
-    "Band 2": `Beginning — an approach to ${subject} is documented, but it is only partly deployed and supporting records are thin.`,
-    "Band 3": `Meeting expectation — ${subject} is documented and deployed across the institution, with records evidencing implementation and periodic review.`,
-    "Band 4": `Exceeding — ${subject} is well-managed with supporting systems and outcome data, broad stakeholder coverage, and evidence of acting on review findings.`,
-    "Band 5": `Excellent — ${subject} is fully embedded and continually improved, with measurable outcomes and best-practice review driving refinements.`,
-  };
-}
+// Band descriptors: the app-invented per-item paraphrase set that lived here
+// (bandDescriptorsFor) was removed — the OFFICIAL EduTrust §23 band table in
+// data/edutrustRubric.ts is the single source of descriptor text now.
 
 export const GD4_REQUIREMENTS: GD4Requirement[] = RAW_ITEMS.map((raw) => {
   const sub = GD4_SUB_CRITERIA.find((s) => s.id === raw.subCriterionId)!;
@@ -650,7 +639,6 @@ export const GD4_REQUIREMENTS: GD4Requirement[] = RAW_ITEMS.map((raw) => {
     weightage: Math.round((1 / itemCount) * 10000) / 10000,
     gateSensitive,
     expectedEvidence: raw.expectedEvidence,
-    bandDescriptors: bandDescriptorsFor(raw),
     scoringNotes: gateSensitive ? "Gate-sensitive: official GD4 section 20 requires an average minimum of Band 3 in this sub-criterion/criterion." : undefined,
     flatAuditPoints: deriveItemFlatAuditPoints(raw),
   };

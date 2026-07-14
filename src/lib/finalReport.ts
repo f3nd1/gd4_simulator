@@ -3,8 +3,9 @@
 // band" analysis derived from the same checklist banding the score uses, plus
 // the findings register with closure (root cause / corrective action) detail.
 import type { Scored } from "./scoring";
-import type { SubCriterionChecklistEntry, Finding, GenericChecklistLine, SpecificChecklistLine } from "../types";
-import { computeBand, lineSufficiency } from "./checklistBanding";
+import type { SubCriterionChecklistEntry, Finding, SpecificChecklistLine } from "../types";
+import { lineSufficiency, lineCompleteness, needsReassessment, bandEvidenceAdvisories, type LineCompleteness } from "./checklistBanding";
+import { bandTitle } from "../data/edutrustRubric";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
 import { GD4_REQUIREMENTS } from "./../data/gd4Requirements";
 
@@ -17,8 +18,11 @@ export type ItemReport = {
   band: number;
   started: boolean;
   hasChecklist: boolean;
-  coveragePct: number;
-  maturityCeiling: number;
+  // Requirement-line completeness — evidence context, not a band input.
+  completeness: LineCompleteness;
+  // True when the item has old-model checklist data but no holistic band yet
+  // — its band needs re-assessment under the official §23 rubric.
+  needsReassessment: boolean;
   strengths: string[];
   gaps: string[];
   targetBand: number;
@@ -47,8 +51,6 @@ export type FinalReport = {
   findings: FindingReport[];
 };
 
-const COVERAGE_THRESHOLD: Record<number, number> = { 2: 0, 3: 50, 4: 70, 5: 85 };
-
 function lineLabel(l: SpecificChecklistLine): string {
   return l.clause ? `${l.clause}: ${l.text}` : l.text;
 }
@@ -65,10 +67,10 @@ function analyseItem(
   started: boolean,
   entry: SubCriterionChecklistEntry | undefined
 ): ItemReport {
-  const generic: GenericChecklistLine[] = entry?.generic || [];
   const specific: SpecificChecklistLine[] = entry?.specific || [];
   const hasChecklist = specific.length > 0;
-  const r = computeBand(generic, specific, gate);
+  const completeness = lineCompleteness(specific);
+  const reassess = entry ? needsReassessment(entry) : false;
   const graded = specific.filter((l) => l.status !== "Not Applicable");
 
   const strengths = graded
@@ -82,25 +84,23 @@ function analyseItem(
     ...missingEv.filter((l) => l.status === "Met").map((l) => `${lineLabel(l)} — marked Met but evidence is missing`),
   ];
 
+  // The band is a holistic judgment (official §23 rubric) — improvement
+  // advice points at the evidence gaps and the target band's official
+  // descriptors, never at a coverage-% formula (the retired engine's model).
   const targetBand = Math.min(band + 1, 5);
   const howToImprove: string[] = [];
   if (!hasChecklist) {
-    howToImprove.push("Generate the Sub-Criterion Checklist for this item (run the Evidence Folder audit, or generate it on the Sub-Criterion Checklist page), then attach evidence.");
+    howToImprove.push("Generate the Sub-Criterion Checklist for this item (run the Evidence Folder audit, or generate it on the Sub-Criterion Checklist page), then attach evidence and set its holistic band.");
+  } else if (reassess) {
+    howToImprove.push("Re-assess this item's band under the official EduTrust §23 rubric: open the Sub-Criterion Checklist and select the band level whose four dimension descriptors best fit the evidence.");
   } else if (band >= 5) {
     howToImprove.push("Already at Band 5 — keep evidence current and the review cadence going to hold it.");
   } else {
-    if (r.evidenceCapped && r.evidenceCapWarning) howToImprove.push(r.evidenceCapWarning);
-    const need = COVERAGE_THRESHOLD[targetBand] ?? 85;
-    if (r.coverageCap < targetBand && notMet.length) {
-      howToImprove.push(`Raise coverage from ${Math.round(r.coveragePct)}% to ≥${need}% for Band ${targetBand}: move these line(s) to Met — ${brief(notMet.map(lineLabel))}.`);
-    }
-    if (r.maturityCeiling < targetBand) {
-      const lensId = `G${targetBand - 1}`;
-      const lens = generic.find((g) => g.id === lensId)?.lens;
-      howToImprove.push(`Demonstrate higher maturity: mark generic lens ${lensId}${lens ? ` (${lens})` : ""} as Met with evidence.`);
-    }
+    const hb = entry?.holisticBand;
+    if (hb) howToImprove.push(...bandEvidenceAdvisories(specific, hb.band));
+    if (notMet.length) howToImprove.push(`Close the requirement-line gaps: ${brief(notMet.map(lineLabel))}.`);
     if (missingEv.length) howToImprove.push(`Attach or strengthen evidence on: ${brief(missingEv.map(lineLabel))}.`);
-    if (howToImprove.length === 0) howToImprove.push(`Sustain current evidence and aim coverage toward ≥${need}% to consolidate Band ${targetBand}.`);
+    howToImprove.push(`Then compare the evidence against the official ${bandTitle(targetBand as 1 | 2 | 3 | 4 | 5)} descriptors on the Sub-Criterion Checklist and re-judge the band.`);
   }
 
   return {
@@ -110,8 +110,8 @@ function analyseItem(
     band,
     started,
     hasChecklist,
-    coveragePct: Math.round(r.coveragePct),
-    maturityCeiling: r.maturityCeiling,
+    completeness,
+    needsReassessment: reassess,
     strengths,
     gaps,
     targetBand,

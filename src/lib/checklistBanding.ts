@@ -1,23 +1,24 @@
-// Banding formula for the Sub-Criterion Checklist module.
+// Banding for the Sub-Criterion Checklist module — HOLISTIC per the official
+// EduTrust Guidance Document v4 §23 (see data/edutrustRubric.ts, the verbatim
+// band table): the item's ONE band is a human judgment made by reading the
+// evidence against all four dimension descriptors (Approach / Processes /
+// Systems & Outcomes / Review) at each level and selecting the level that
+// best fits overall. There is NO formula — the previous engine here (a
+// coverage % cap × G1-G4 maturity-ceiling ladder × evidence caps, all
+// app-invented) computed a band the official rubric never defines, and was
+// replaced 2026-07 with the stored HolisticBandRecord.
 //
-// Step 1: coverage % from Layer 2 (specific) lines only — Met counts in
-//   full, Partial counts at half weight, Not Applicable lines are excluded
-//   from the denominator entirely.
-// Step 2: a maturity ceiling from Layer 1 (generic, G1-G4) — the highest
-//   rubric lens marked "Met" sets the ceiling band.
-// Step 3: a coverage cap from the Step 1 percentage.
-// Step 4: finalBand = min(maturity ceiling, coverage cap).
-// Step 5: evidence weakest-link rule, applied to every GD4 item (not just
-//   gate-sensitive ones) — a "Met"/"Partial" status with no real evidence
-//   attached is not evidence, so it cannot carry a high band on its own:
-//     - if every non-NA line has zero evidence items attached anywhere,
-//       the band is floored at Band 1 (status text alone, no evidence at all).
-//     - otherwise, if any non-NA line's evidence sufficiency is "Missing",
-//       the band is capped at Band 2 (gate-sensitive items keep the same
-//       cap, just with sharper wording since recurrence risk there is higher).
-//   This cannot be overridden except by fixing the evidence, because the
-//   band is always recomputed from current state.
-import type { Band, GD4Requirement, GenericChecklistLine, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
+// What remains in code:
+//   - lineCompleteness(): how much of the requirement-line evidence has been
+//     assessed — CONTEXT for the band judgment, never a band input.
+//   - bandEvidenceAdvisories(): honesty warnings when the selected band
+//     outruns the attached evidence — ADVISORY only, the human's judgment
+//     stands (the old hard caps silently overrode it).
+//   - computeChecklistOverrides(): feeds the selected holistic band into the
+//     official scoring engine (band/5 × criterion points), same shape as
+//     before — the §20 gate and criterion rollup are unchanged.
+import type { Band, GD4Requirement, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
+import { bandTitle } from "../data/edutrustRubric";
 import { findingTypeForStatus, ncSeverityFor } from "./findingClassification";
 
 export function lineSufficiency(line: SpecificChecklistLine): EvidenceSufficiency {
@@ -27,98 +28,64 @@ export function lineSufficiency(line: SpecificChecklistLine): EvidenceSufficienc
   return "Present";
 }
 
-export function maturityCeiling(generic: GenericChecklistLine[]): Band {
-  const met = (id: string) => generic.find((g) => g.id === id)?.status === "Met";
-  if (met("G4")) return 5;
-  if (met("G3")) return 4;
-  if (met("G2")) return 3;
-  if (met("G1")) return 2;
-  return 1;
-}
-
-export function coveragePercent(specific: SpecificChecklistLine[]): number {
-  const lines = specific.filter((l) => l.status !== "Not Applicable");
-  if (lines.length === 0) return 0;
-  const metCount = lines.filter((l) => l.status === "Met").length;
-  const weakCount = lines.filter((l) => l.status === "Partial").length;
-  return ((metCount + weakCount * 0.5) / lines.length) * 100;
-}
-
-export function coverageCap(pct: number): Band {
-  if (pct >= 85) return 5;
-  if (pct >= 70) return 4;
-  if (pct >= 50) return 3;
-  return 2;
-}
-
-export type BandResult = {
-  coveragePct: number;
-  maturityCeiling: Band;
-  coverageCap: Band;
-  finalBand: Band;
-  // False when this item has no Layer 2 (specific) lines at all — coverageCap
-  // has no floor below Band 2, so an untouched item would otherwise still
-  // compute a real-looking Band 1/2 result on a brand-new workspace.
-  started: boolean;
-  evidenceCapped: boolean;
-  evidenceCapWarning?: string;
+// Requirement-line completeness: how many of the item's specific lines have
+// been assessed, and how they came out. Shown beside the band selector as
+// evidence context ("11 of 14 lines assessed · 8 Met · 6 Partial") — it does
+// NOT calculate or cap the band (the old coverage % did; the official rubric
+// has no such input).
+export type LineCompleteness = {
+  total: number;      // all lines except Not Applicable
+  assessed: number;   // status set to Met/Partial/Not met
+  met: number;
+  partial: number;
+  notMet: number;
+  na: number;
 };
 
-export function computeBand(generic: GenericChecklistLine[], specific: SpecificChecklistLine[], gateSensitive: boolean): BandResult {
-  const coveragePct = coveragePercent(specific);
-  const cap = coverageCap(coveragePct);
-  const started = specific.length > 0;
+export function lineCompleteness(specific: SpecificChecklistLine[]): LineCompleteness {
+  const graded = specific.filter((l) => l.status !== "Not Applicable");
+  return {
+    total: graded.length,
+    assessed: graded.filter((l) => l.status === "Met" || l.status === "Partial" || l.status === "Not met").length,
+    met: graded.filter((l) => l.status === "Met").length,
+    partial: graded.filter((l) => l.status === "Partial").length,
+    notMet: graded.filter((l) => l.status === "Not met").length,
+    na: specific.length - graded.length,
+  };
+}
 
-  const gradedLines = specific.filter((l) => l.status !== "Not Applicable");
-  const hasMissingEvidenceLine = gradedLines.some((l) => lineSufficiency(l) === "Missing");
-  const hasNoEvidenceAnywhere = gradedLines.length > 0 && gradedLines.every((l) => l.evidence.length === 0);
+// True when this item was scored under the OLD ladder model (it has specific
+// lines) but has no holistic band yet — its old computed band is never
+// reinterpreted as a holistic one; the UI shows "needs re-assessment" and the
+// item contributes to scoring as not-started until a human re-bands it.
+export function needsReassessment(entry: Pick<SubCriterionChecklistEntry, "specific" | "holisticBand">): boolean {
+  return entry.specific.length > 0 && !entry.holisticBand;
+}
 
-  // A hand-set G-lens "Met" only counts toward the ceiling when at least one
-  // graded line has evidence attached — self-declared maturity with zero
-  // attached evidence anywhere cannot raise the band on its own. (With lines
-  // present but no evidence, the Band-1 floor below also fires; this rule
-  // additionally covers the all-lines-Not-Applicable case, where the floor's
-  // gradedLines guard would otherwise leave a hand-set ceiling standing.)
-  const evidenceBackedLines = gradedLines.filter((l) => l.evidence.length > 0);
-  const rawCeiling = maturityCeiling(generic);
-  const ceiling = (evidenceBackedLines.length > 0 ? rawCeiling : Math.min(rawCeiling, 1)) as Band;
-
-  let finalBand = Math.min(ceiling, cap) as Band;
-
-  // Mass "Not Applicable" hole: marking most lines NA shrinks the coverage
-  // denominator, letting a single remaining line carry 100% coverage.
-  const naRatio = specific.length > 0 ? (specific.length - gradedLines.length) / specific.length : 0;
-  // All-Weak hole: "Weak" everywhere previously triggered no cap at all —
-  // only "Missing" did.
-  const allEvidenceWeak = gradedLines.length > 0 && gradedLines.every((l) => lineSufficiency(l) === "Weak");
-
-  let evidenceCapped = false;
-  let evidenceCapWarning: string | undefined;
-
-  // No `finalBand > 1` guard here: the evidence-gated ceiling above already
-  // collapses this case to Band 1, but the capped flag + warning must still
-  // fire so the user sees WHY the band is 1.
-  if (hasNoEvidenceAnywhere) {
-    finalBand = 1;
-    evidenceCapped = true;
-    evidenceCapWarning = "No evidence is attached to any checklist line, so a Met/Partial status alone cannot score above Band 1 — attach evidence to substantiate it.";
-  } else if (hasMissingEvidenceLine && finalBand > 2) {
-    finalBand = 2;
-    evidenceCapped = true;
-    evidenceCapWarning = gateSensitive
-      ? "Gate-sensitive item: at least one checklist line has evidence marked Missing, so the band is capped at Band 2 until that evidence is fixed."
-      : "At least one checklist line has evidence marked Missing, so the band is capped at Band 2 until that evidence is fixed.";
-  } else if (naRatio > 0.5 && finalBand > 3) {
-    finalBand = 3;
-    evidenceCapped = true;
-    evidenceCapWarning = "More than half the checklist lines are marked Not Applicable, so the band is capped at Band 3 — a single remaining line cannot carry the item to a top band. Re-assess whether those lines truly do not apply.";
-  } else if (allEvidenceWeak && finalBand > 3) {
-    finalBand = 3;
-    evidenceCapped = true;
-    evidenceCapWarning = "Every checklist line's evidence is marked Weak, so the band is capped at Band 3 until stronger evidence is attached.";
+// Honesty advisories for a selected band — the ported spirit of the old
+// evidence weakest-link caps, now ADVISORY: the reviewer's holistic judgment
+// stands (the official rubric is judgment, and reviewer overrides are this
+// app's pattern), but a band the attached evidence cannot support is flagged
+// plainly instead of silently accepted. Returns [] when nothing to flag.
+export function bandEvidenceAdvisories(specific: SpecificChecklistLine[], band: Band): string[] {
+  const graded = specific.filter((l) => l.status !== "Not Applicable");
+  if (graded.length === 0) return band > 1 ? [`${bandTitle(band)} selected but this item has no assessed checklist lines — there is nothing on file for an assessor to verify.`] : [];
+  const advisories: string[] = [];
+  const noEvidenceAnywhere = graded.every((l) => l.evidence.length === 0);
+  const missingLines = graded.filter((l) => lineSufficiency(l) === "Missing");
+  const allWeak = graded.every((l) => lineSufficiency(l) === "Weak");
+  const naRatio = specific.length > 0 ? (specific.length - graded.length) / specific.length : 0;
+  if (noEvidenceAnywhere && band > 1) {
+    advisories.push(`${bandTitle(band)} selected but no evidence is attached to any checklist line — an SSG assessor would treat this as unverifiable.`);
+  } else if (missingLines.length > 0 && band > 2) {
+    advisories.push(`${bandTitle(band)} selected but ${missingLines.length} line(s) have evidence marked Missing — strengthen that evidence or the band is hard to defend.`);
+  } else if (allWeak && band > 3) {
+    advisories.push(`${bandTitle(band)} selected but every line's evidence is marked Weak — a top band needs stronger records.`);
   }
-
-  return { coveragePct, maturityCeiling: ceiling, coverageCap: cap, finalBand, started, evidenceCapped, evidenceCapWarning };
+  if (naRatio > 0.5 && band > 3) {
+    advisories.push(`${bandTitle(band)} selected with more than half the lines marked Not Applicable — re-check that those lines truly do not apply.`);
+  }
+  return advisories;
 }
 
 // Representative effective score for a band, chosen so it falls back into
@@ -129,20 +96,22 @@ export function bandToScore(b: Band): number {
 
 export type ChecklistOverride = { eff: number; band: Band };
 
-// Per the "feed into overall score" decision: any GD4 item that has at
-// least one Layer 2 line (i.e. the module has actually been used on it)
-// gets its scoring.ts band/effective score replaced by this module's band.
+// Per the "feed into overall score" decision: any GD4 item with a HOLISTIC
+// band selected gets its scoring.ts band/effective score replaced by it.
+// An item with old-model data but no holistic band deliberately produces NO
+// override — it scores as not-started ("needs re-assessment") rather than
+// carrying a fabricated band forward. Same {eff, band} shape as always, so
+// the §20 gate and criterion rollup in scoring.ts are untouched.
 export function computeChecklistOverrides(
   entries: Record<string, SubCriterionChecklistEntry>,
   requirements: GD4Requirement[]
 ): Record<string, ChecklistOverride> {
   const map: Record<string, ChecklistOverride> = {};
   Object.values(entries).forEach((entry) => {
-    if (!entry.specific.length) return;
-    const req = requirements.find((r) => r.id === entry.gd4ItemId);
-    if (!req) return;
-    const result = computeBand(entry.generic, entry.specific, req.gateSensitive);
-    map[entry.gd4ItemId] = { eff: bandToScore(result.finalBand), band: result.finalBand };
+    const hb = entry.holisticBand;
+    if (!hb) return;
+    if (!requirements.find((r) => r.id === entry.gd4ItemId)) return;
+    map[entry.gd4ItemId] = { eff: bandToScore(hb.band), band: hb.band };
   });
   return map;
 }
@@ -332,12 +301,16 @@ export function buildDraftFinding(req: GD4Requirement, line: SpecificChecklistLi
         : "";
   const observation = `It was not evident that the PEI had ${dimVerb} ${reqLabel} (rated ${line.status}).${exampleBlock}`;
 
+  // Effects anchored to the OFFICIAL §23 band descriptors (edutrustRubric.ts)
+  // — stated as how an assessor reads the gap against the rubric text, not as
+  // automatic caps (the old engine's hard caps are gone; the band is holistic
+  // judgment now).
   const effectByDim: Record<string, string> = {
-    Procedure: `Without a documented, institution-specific procedure, this requirement cannot be consistently met. Under the EduTrust APSR rubric, an Approach rated "Beginning" or "Not evident" caps this sub-criterion at Band 2 regardless of any other evidence.`,
-    Evidence: `Without implementation records, this requirement is unverifiable at audit. A Processes dimension rated "Not evident" caps this sub-criterion at Band 2 even if the policy document is strong.`,
-    Outcomes: `Outcome data is required to demonstrate the process is producing the desired results. Without it, this sub-criterion cannot exceed Band 3 under the APSR rubric.`,
-    Review: `A formal review with documented improvement action is required for Band 4 or above. Without it, this sub-criterion is capped at Band 3 regardless of how complete the implementation records are.`,
-    Unverified: `This line is marked as met but has no evidence attached. An SSG assessor will treat it as unverified — it cannot contribute to the band until evidence is linked.`,
+    Procedure: `Without a documented, institution-specific procedure, this requirement cannot be consistently met. Against the official §23 rubric an assessor reads this as Band 1–2 ("No organised approach to item requirements is evident" / "The beginning of an organised approach is evident").`,
+    Evidence: `Without implementation records, this requirement is unverifiable at audit. Against the official §23 rubric this reads as Band 1–2 on Processes ("Processes are not in place or in their infancy stage" / "established but with weak deployment in key areas"), even if the policy document is strong.`,
+    Outcomes: `Outcome data is required to demonstrate the process is producing the desired results. The official Band 4 descriptor expects systems "producing desired outcomes with no conflicts" — without outcome data the item reads at Band 3 or below.`,
+    Review: `The official Band 3 descriptor requires evidence that "the systems and processes are regularly reviewed and action plans for improvement are implemented" — without a documented review the item reads at Band 2 or below.`,
+    Unverified: `This line is marked as met but has no evidence attached. An SSG assessor will treat it as unverified — it cannot support the item's band until evidence is linked.`,
   };
 
   const evidenceNames = line.evidence.length > 0

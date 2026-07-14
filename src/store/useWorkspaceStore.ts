@@ -92,7 +92,7 @@ import { buildOptionALineWrites, buildOptionASourceTrace } from "../lib/optionAC
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, partitionOptionAWrites, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
 import { effectiveVerdictTemp, describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
-import { computeBand, lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
+import { lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 
@@ -4619,14 +4619,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return names.length > NAME_CAP ? `${shown}, +${names.length - NAME_CAP} more` : shown;
         };
 
-        // Resulting band per item — same band computeChecklistOverrides feeds
-        // into the overall score, shown here so it's visible at the point of audit.
+        // Band per item — the band is a HOLISTIC human judgment now (official
+        // §23 rubric), never computed by a run: report the existing selection
+        // if one stands, otherwise flag that the holistic assessment is
+        // pending. A run updating the lines does not move the band by itself.
         const freshEntries = useChecklistModuleStore.getState().entries;
         const bandParts = items
           .map((item) => {
             const e = freshEntries[item.id];
             if (!e || e.specific.length === 0) return null;
-            return `${item.id} → Band ${computeBand(e.generic, e.specific, item.gateSensitive).finalBand}`;
+            const hb = e.holisticBand;
+            return `${item.id} → ${hb ? `Band ${hb.band} (holistic — review it against this run's results)` : "band pending holistic assessment (Sub-Criterion Checklist)"}`;
           })
           .filter(Boolean);
 
@@ -5704,14 +5707,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return base.slice(0, 3).join(", ") + ` … +${base.length - 3} more`;
         };
 
-        // Band per GD4 item (computed from fresh checklist state, same as classic audit)
+        // Band per GD4 item — holistic human judgment, never computed by a
+        // run (see the classic path above for the same rule).
         const freshEntriesStaged = useChecklistModuleStore.getState().entries;
         const req = GD4_REQUIREMENTS.find((r) => r.subCriterionId === folder.subCriterionId);
         const bandPartsStaged: string[] = [];
         if (req) {
           const e = freshEntriesStaged[req.id];
           if (e && e.specific.length > 0) {
-            bandPartsStaged.push(`${req.id} → Band ${computeBand(e.generic, e.specific, req.gateSensitive).finalBand}`);
+            const hb = e.holisticBand;
+            bandPartsStaged.push(`${req.id} → ${hb ? `Band ${hb.band} (holistic — review it against this run's results)` : "band pending holistic assessment (Sub-Criterion Checklist)"}`);
           }
         }
 

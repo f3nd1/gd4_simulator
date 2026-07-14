@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, Band, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, SpecificChecklistLine, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
 import { chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage, type ChatSchema } from "./aiClient";
 import { sObj, sArr, sStr, sBool, sEnum } from "./schemaHelpers";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
@@ -15,6 +15,8 @@ import { domainExpertiseFor } from "../../data/skills/domainExpertise";
 import type { AuditorProfile, PanelAuditorReview, PanelCallLog, PanelReviewPosition, PanelReviewResult, PanelSynthesis } from "../../types";
 import { perspectiveOf, perspectiveLabel, perspectiveGuidance, detectPanelDisagreement } from "../reviewPanel";
 import { normalizeAuditRef } from "../gd4Refs";
+import { lineSufficiency, lineApsr } from "../checklistBanding";
+import { EDUTRUST_BANDS, EDUTRUST_DIMENSIONS } from "../../data/edutrustRubric";
 
 // ─── Strict Structured Outputs schemas for every verdict-producing call ─────
 // Each mirrors the response shape its prompt already describes — the schema
@@ -241,6 +243,80 @@ export async function runLiveItemReview(
     live: true,
     usage,
   };
+}
+
+// ─── Holistic band suggestion (official §23 rubric) ─────────────────────────
+// A JUDGMENT task, not a calculation: the model reads the item's per-line
+// evidence digest against the verbatim official band table and proposes the
+// ONE band whose four dimension descriptors, read together, best fit — with a
+// rationale citing which descriptors matched. It never commits anything: the
+// human accepts (or ignores) the suggestion on the checklist's rubric table.
+// Deliberately separate from the per-line Met/Partial/Not-met machinery,
+// which answers a different question at a different granularity.
+export type HolisticBandSuggestionResult = {
+  band: Band;
+  rationale: string;
+  promptSent?: string;
+};
+
+function buildBandEvidenceDigest(specific: SpecificChecklistLine[]): string {
+  const graded = specific.filter((l) => l.status !== "Not Applicable");
+  const lines = graded.map((l) => {
+    const suff = lineSufficiency(l);
+    const apsr = lineApsr(l);
+    const apsrPart = apsr
+      ? ` | APSR: Approach ${apsr.approach.status}; Processes ${apsr.processes.status}; Systems&Outcomes ${apsr.systemsOutcomes.status}; Review ${apsr.review.status}${apsr.review.note ? ` (${apsr.review.note.slice(0, 160)})` : ""}`
+      : "";
+    return `- [${l.clause || l.sourceRef || "manual"}] ${l.text.slice(0, 180)} → status: ${l.status || "Not Started"}; evidence: ${suff}${apsrPart}`;
+  });
+  const na = specific.length - graded.length;
+  return `${lines.join("\n")}${na > 0 ? `\n(${na} line(s) marked Not Applicable — excluded)` : ""}`.slice(0, 9000);
+}
+
+function officialBandTableBlock(): string {
+  return EDUTRUST_BANDS.map((b) =>
+    `Band ${b.band} — ${b.name}\n  Approach: ${b.approach}\n  Processes: ${b.processes}\n  Systems & Outcomes: ${b.systemsOutcomes}\n  Review: ${b.review}`
+  ).join("\n") + "\n\nDimension definitions:\n" + EDUTRUST_DIMENSIONS.map((d) => `  ${d.label}: ${d.definition}`).join("\n");
+}
+
+export async function runHolisticBandSuggestion(
+  req: GD4Requirement,
+  specific: SpecificChecklistLine[],
+  settings: AISettings,
+  opts?: { memories?: SkillCalibrationMemory[]; onUsage?: (u: AIUsage) => void }
+): Promise<HolisticBandSuggestionResult> {
+  const domainSkill = domainExpertiseFor(req.id);
+  const system = `You are a GD4 EduTrust assessor placing ONE sub-criterion item in a band using the OFFICIAL rubric from the EduTrust Guidance Document v4 (Jan 2025), §23, quoted verbatim below. The rubric is HOLISTIC: read the evidence picture against ALL FOUR dimension descriptors at each band level and select the ONE level that, as a whole, best describes it. Do NOT score the dimensions separately, do NOT average or compute anything — this is a judgment across each column.
+
+OFFICIAL BAND TABLE (verbatim):
+${officialBandTableBlock()}
+
+Rules:
+- Choose exactly one band, 1 to 5.
+- The rationale MUST cite which official descriptors matched (quote their key phrases) and name the dimension that most limits the item.
+- Judge ONLY from the evidence digest given. Never assume records that are not listed; missing or weak evidence reads DOWN, per the descriptors.
+- A suggestion, not a decision — a human reviewer makes the final call.
+Respond with JSON only: {"band": 1 | 2 | 3 | 4 | 5, "rationale": string}.${buildSystemPrompt("bandRecommend", null, "runHolisticBandSuggestion", req.id, domainSkill, undefined, opts?.memories)}${buildDomainBlock(domainSkill)}`;
+  const user = `GD4 item ${req.id}: "${req.requirement}"${req.gateSensitive ? " (gate-sensitive)" : ""}.
+
+Per-requirement-line evidence digest (status from the audits/reviewer, evidence sufficiency, per-line APSR notes where a live audit recorded them):
+${buildBandEvidenceDigest(specific) || "(no checklist lines exist yet — there is nothing on file for this item)"}
+
+Place this item in ONE official band.`;
+
+  const content = await chatComplete(
+    [{ role: "system", content: system }, { role: "user", content: user }],
+    settings,
+    { onUsage: opts?.onUsage }
+  );
+  const parsed = parseJSONObject(content, ["band", "rationale"]);
+  const rawBand = Number(parsed.band);
+  if (!Number.isInteger(rawBand) || rawBand < 1 || rawBand > 5) {
+    throw new Error(`Band suggestion returned an invalid band (${String(parsed.band)}).`);
+  }
+  const rationale = String(parsed.rationale || "").trim();
+  if (!rationale) throw new Error("Band suggestion returned no rationale — a bare number is not reviewable.");
+  return { band: rawBand as Band, rationale, promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}` };
 }
 
 function extractFirstJSONArray(text: string): string | null {

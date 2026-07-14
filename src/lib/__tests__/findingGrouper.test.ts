@@ -39,7 +39,6 @@ function makeReq(overrides: Partial<GD4Requirement> = {}): GD4Requirement {
     weightage: 5,
     gateSensitive: false,
     expectedEvidence: ["Student Support Policy", "Counselling Records"],
-    bandDescriptors: {},
     ...overrides,
   };
 }
