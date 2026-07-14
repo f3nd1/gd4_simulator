@@ -128,6 +128,44 @@ export function needsReassessment(entry: Pick<SubCriterionChecklistEntry, "speci
   return entry.specific.length > 0 && !entry.holisticBand?.matrixScores;
 }
 
+// ── "Why this band / how to improve" derived views ──────────────────────────
+// Both functions below are PLAIN ARITHMETIC over an already-computed
+// ApsrMatrixResult — no new scoring/business logic, no AI call. They exist so
+// the improvement panel doesn't duplicate this math inline.
+
+// The dimension(s) tied for the lowest current %, i.e. the weakest link(s).
+// Since raising ANY dimension by one band step adds the same % (see
+// fastestPathToNextBand), the weakest dimension is also normally the cheapest
+// one to raise. Returns all four when the matrix is empty/undefined.
+export function weakestDimensions(pcts: ApsrMatrixResult["pcts"]): (keyof ApsrMatrixScores)[] {
+  const min = Math.min(pcts.approach, pcts.processes, pcts.systemsOutcomes, pcts.review);
+  return APSR_DIMS.filter((d) => pcts[d] === min);
+}
+
+export type FastestPath = {
+  nextBand: Band;
+  shortfallPct: number; // total % still needed to cross into nextBand
+  stepPct: number;      // % gained by raising ANY one dimension by one band (same for all four)
+  dims: (keyof ApsrMatrixScores)[]; // the cheapest dimension(s) to raise — lowest-scoring first
+};
+
+// Which dimension(s) to raise, and by how much, to reach the next band —
+// pure display logic over `result` + `scale`, both already computed. Because
+// pctForScore is linear (band N → N × max/5), one band-step on ANY dimension
+// always costs the same %, so "cheapest" reduces to "fewest dimensions
+// touched", picked as the currently-lowest-scoring ones. Returns null once
+// already at Band 5 (nothing to reach) or the matrix isn't fully scored.
+export function fastestPathToNextBand(result: ApsrMatrixResult, scale: ApsrScale = DEFAULT_APSR_SCALE): FastestPath | null {
+  if (!result.complete || result.band >= 5) return null;
+  const nextThreshold = scale.bandThresholds[result.band - 1];
+  const shortfallPct = nextThreshold - result.total + 1;
+  if (shortfallPct <= 0) return null; // guard: band/threshold disagreement shouldn't happen
+  const stepPct = scale.maxPctPerDimension / 5;
+  const stepsNeeded = Math.max(1, Math.ceil(shortfallPct / stepPct));
+  const ranked = [...APSR_DIMS].sort((a, b) => result.pcts[a] - result.pcts[b]);
+  return { nextBand: (result.band + 1) as Band, shortfallPct, stepPct, dims: ranked.slice(0, Math.min(stepsNeeded, APSR_DIMS.length)) };
+}
+
 // Honesty advisories for a selected band — the ported spirit of the old
 // evidence weakest-link caps, now ADVISORY: the reviewer's holistic judgment
 // stands (the official rubric is judgment, and reviewer overrides are this

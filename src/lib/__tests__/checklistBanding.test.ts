@@ -10,6 +10,8 @@ import {
   apsrMatrixResult,
   finalBandFromPct,
   pctForScore,
+  weakestDimensions,
+  fastestPathToNextBand,
 } from "../checklistBanding";
 import { EDUTRUST_BANDS, bandTitle } from "../../data/edutrustRubric";
 import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
@@ -252,5 +254,49 @@ describe("bandToScore round-trips back into the same band", () => {
   it("each band maps to a score in its own bucket", () => {
     expect(bandToScore(1)).toBeLessThan(40);
     expect(bandToScore(5)).toBeGreaterThanOrEqual(85);
+  });
+});
+
+describe("weakestDimensions — the tied-lowest dimension(s), for the improvement panel", () => {
+  it("picks the single lowest dimension", () => {
+    expect(weakestDimensions({ approach: 20, processes: 20, systemsOutcomes: 10, review: 0 })).toEqual(["review"]);
+  });
+  it("ties are all returned", () => {
+    expect(weakestDimensions({ approach: 10, processes: 10, systemsOutcomes: 25, review: 25 })).toEqual(["approach", "processes"]);
+  });
+  it("all four when every dimension is equal (incl. all-zero/unscored)", () => {
+    expect(weakestDimensions({ approach: 0, processes: 0, systemsOutcomes: 0, review: 0 })).toEqual(["approach", "processes", "systemsOutcomes", "review"]);
+    expect(weakestDimensions({ approach: 25, processes: 25, systemsOutcomes: 25, review: 25 })).toEqual(["approach", "processes", "systemsOutcomes", "review"]);
+  });
+});
+
+describe("fastestPathToNextBand — pure arithmetic over the matrix, no AI call", () => {
+  it("null when already Band 5 (nothing to reach)", () => {
+    const r = apsrMatrixResult({ approach: 5, processes: 5, systemsOutcomes: 5, review: 5 });
+    expect(fastestPathToNextBand(r)).toBeNull();
+  });
+  it("null when the matrix isn't fully scored", () => {
+    const r = apsrMatrixResult({ approach: 4, processes: 4 });
+    expect(fastestPathToNextBand(r)).toBeNull();
+  });
+  it("worked example (50% → Band 3): Review (0%) is the cheapest single dimension to raise", () => {
+    const r = apsrMatrixResult({ approach: 4, processes: 4, systemsOutcomes: 2, review: 0 });
+    const path = fastestPathToNextBand(r);
+    expect(path).not.toBeNull();
+    expect(path!.nextBand).toBe(4);
+    expect(path!.stepPct).toBe(5); // 25/5
+    expect(path!.shortfallPct).toBe(11); // threshold 60, total 50 -> 60-50+1
+    // 11% needed, 5% per step -> ceil(11/5) = 3 steps -> 3 cheapest dimensions
+    expect(path!.dims).toEqual(["review", "systemsOutcomes", "approach"].sort((a, b) => r.pcts[a as keyof typeof r.pcts] - r.pcts[b as keyof typeof r.pcts]));
+  });
+  it("a single band-step is enough when already close to the threshold", () => {
+    // total 55%, next threshold 60 -> shortfall 6%, one 5%-step isn't quite
+    // enough on its own (needs 2), confirming ceil() rounds up, not down.
+    const r = apsrMatrixResult({ approach: 5, processes: 4, systemsOutcomes: 2, review: 0 }); // 25+20+10+0=55
+    const path = fastestPathToNextBand(r)!;
+    expect(r.total).toBe(55);
+    expect(path.shortfallPct).toBe(6);
+    expect(path.dims.length).toBe(2); // ceil(6/5) = 2
+    expect(path.dims[0]).toBe("review"); // lowest first
   });
 });

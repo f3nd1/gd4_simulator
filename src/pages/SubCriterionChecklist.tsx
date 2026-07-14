@@ -9,6 +9,7 @@ import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrMatrixResult } from "../lib/checklistBanding";
+import { BandImprovementPanel } from "../components/ui/BandImprovementPanel";
 import { bandTitle, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
 import { ApsrMatrixSelector } from "../components/ui/ApsrMatrixSelector";
 import type { HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
@@ -502,6 +503,20 @@ export function SubCriterionChecklist() {
     }
   }
 
+  // "open line →" from the Band Improvement panel — unlike toggleEvidence,
+  // this always EXPANDS (never collapses an already-open line) and scrolls it
+  // into view. No route change: the target line is already rendered further
+  // down this same page — there is no existing per-line anchor/scroll pattern
+  // on this page to reuse (the existing "View finding →" links are item-level,
+  // `/findings?item=`), so this is a small additive in-page scroll instead.
+  function openLine(lineId: string) {
+    setExpandedLine(lineId);
+    setExpandTab("evidence");
+    setEvidenceDraft(emptyEvidenceDraft());
+    setSamplingDraft({});
+    requestAnimationFrame(() => document.getElementById(`line-${lineId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  }
+
   const reuseTargets = GD4_REQUIREMENTS.filter((r) => r.id !== selectedId && (entries[r.id]?.specific.length || 0) > 0);
   const reuseTargetLines = reuseTargetItem ? entries[reuseTargetItem]?.specific || [] : [];
   const cameFromRubricBanding = searchParams.get("from") === "rubric-banding";
@@ -811,6 +826,15 @@ export function SubCriterionChecklist() {
             >
               Save band {matrixResult.complete ? `(Band ${matrixResult.band} — ${matrixResult.total}%)` : ""}
             </button>
+
+            {/* Additive, read-only view built entirely from data the matrix,
+                buildDraftFinding and each line's own apsrDimension tag already
+                produce — see BandImprovementPanel.tsx header comment. Only
+                shown once a band is actually saved (savedBand); nothing to
+                explain before that. */}
+            {savedBand && (
+              <BandImprovementPanel req={req} specific={specific} matrixResult={savedBand} scale={apsrScale} onOpenLine={openLine} />
+            )}
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <button
@@ -965,7 +989,7 @@ export function SubCriterionChecklist() {
               "#f8fafc";
 
             return (
-              <div key={l.id} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${statusBorder}`, borderRadius: 10, marginBottom: 6, overflow: "hidden" }}>
+              <div key={l.id} id={`line-${l.id}`} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${statusBorder}`, borderRadius: 10, marginBottom: 6, overflow: "hidden" }}>
                 {/* Row 1 — full text + ref/APSR pills — click to expand evidence panel */}
                 <div
                   onClick={() => toggleEvidence(l.id)}
