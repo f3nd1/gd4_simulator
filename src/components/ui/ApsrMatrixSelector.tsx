@@ -17,13 +17,10 @@ import { Pill } from "./Pill";
 
 const SCORE_CHOICES: ApsrDimensionScore[] = [0, 1, 2, 3, 4, 5];
 
-// Short in-cell label; the full text (incl. the 0% caveat) is the hover title.
+// Full text shown in-cell, no truncation — the 0% floor caveat is spelled out
+// per-cell too, since it no longer has a hover title to fall back on.
 function descriptorFor(dimKey: string, score: ApsrDimensionScore): string {
-  if (score === 0) return "No evidence — below Band 1";
-  return (EDUTRUST_BANDS[score - 1] as unknown as Record<string, string>)[dimKey];
-}
-function descriptorTitle(dimKey: string, score: ApsrDimensionScore): string {
-  if (score === 0) return "No evidence / not yet assessed — a genuine 0% floor, below Band 1. (Whether 0% is a valid score is NOT auditor-confirmed.)";
+  if (score === 0) return "No evidence / not yet assessed — a genuine 0% floor, below Band 1.";
   return (EDUTRUST_BANDS[score - 1] as unknown as Record<string, string>)[dimKey];
 }
 
@@ -85,18 +82,17 @@ export function ApsrMatrixSelector({
                         <button
                           type="button"
                           onClick={() => onSet(dim.key, s)}
-                          title={descriptorTitle(dim.key, s)}
                           style={{
-                            display: "flex", gap: 2, width: "100%", height: "100%", minHeight: 22, cursor: "pointer", textAlign: "left",
-                            fontSize: 8, lineHeight: 1.15, padding: "2px 3px", borderRadius: 4,
+                            display: "flex", gap: 2, width: "100%", height: "100%", cursor: "pointer", textAlign: "left",
+                            fontFamily: "inherit", fontSize: 8, lineHeight: 1.15, padding: "2px 3px", borderRadius: 4,
                             border: sel ? "1.5px solid #15803d" : isSug ? "1.5px solid #4f46e5" : "1px solid #e2e8f0",
                             background: sel ? "#f0fdf4" : isSug ? "#eef2ff" : s === 0 ? "#f8fafc" : "#fff",
-                            color: s === 0 ? "#94a3b8" : "#334155", font: "inherit",
+                            color: s === 0 ? "#94a3b8" : "#334155",
                           }}
                         >
                           {(sel || isSug) && <span style={{ fontSize: 7, fontWeight: 800, color: sel ? "#15803d" : "#4f46e5", flexShrink: 0 }}>{sel ? "✓" : "◂AI"}</span>}
-                          {/* Clamp to 2 lines — full descriptor is the hover title, keeps rows short. */}
-                          <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{descriptorFor(dim.key, s)}</span>
+                          {/* Full text, no truncation — the button grows to fit. */}
+                          <span>{descriptorFor(dim.key, s)}</span>
                         </button>
                       </td>
                     );
