@@ -5,6 +5,7 @@ import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { Card } from "../components/ui/Card";
+import { ThreePillarNote, THREE_PILLAR_NOTE } from "../components/ui/ThreePillarNote";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 import { resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
@@ -73,6 +74,7 @@ export function ExportCentre() {
         .join("\n") +
       "\n\n";
     md += `_Internal simulation. Band over 5 times criterion points. Not an official SSG result._\n`;
+    md += `_${THREE_PILLAR_NOTE}_\n`;
     downloadMd(md, "GD4_Management_Pack.md");
   }
 
@@ -178,6 +180,7 @@ export function ExportCentre() {
         <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 12 }}>
           Internal simulation only. Not an official SSG or EduTrust result. AI agents assist and challenge but do not finalise.
         </div>
+        <ThreePillarNote />
       </Card>
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Export log ({exportLog.length})</h3>

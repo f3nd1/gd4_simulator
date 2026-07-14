@@ -8,6 +8,7 @@ import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { Card } from "../components/ui/Card";
+import { ThreePillarNote } from "../components/ui/ThreePillarNote";
 import { Pill } from "../components/ui/Pill";
 import { Bar } from "../components/ui/Bar";
 import { GOLD, INK, TONE } from "../lib/theme";
@@ -210,6 +211,7 @@ export function Dashboard() {
           {scored.gatePass ? "Score gate met (4.2, 4.6, C5 at Band 3+)" : `Score gate NOT met: ${scored.gateFail.map((g) => g.id).join(", ")}`}
         </div>
         <div style={{ fontSize: 11, color: "#7e8da0", marginTop: 8 }}>Not an official SSG or EduTrust result. Placeholder scoring table pending UCC's official GD4 rubric.</div>
+        <ThreePillarNote dark />
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <button
             onClick={() => {

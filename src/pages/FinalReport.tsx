@@ -12,6 +12,7 @@ import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import { composeSchoolContext } from "../store/useWorkspaceStore";
 import { Card } from "../components/ui/Card";
+import { ThreePillarNote } from "../components/ui/ThreePillarNote";
 import { Pill } from "../components/ui/Pill";
 import { Gauge, HBars, VBars, BAND_COLOR, AttainmentLadder } from "../components/ui/charts";
 import { GOLD, INK, bandTone } from "../lib/theme";
@@ -129,6 +130,7 @@ export function FinalReport() {
               {" · generated "}
               {new Date().toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
             </div>
+            <ThreePillarNote dark />
           </div>
           <div className="no-print" style={{ display: "flex", gap: 8 }}>
             <button onClick={() => window.print()} style={{ cursor: "pointer", border: "1px solid #3a4660", background: "transparent", color: GOLD, fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12 }}>
