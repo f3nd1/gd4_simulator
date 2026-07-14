@@ -55,12 +55,12 @@ export function ApsrMatrixSelector({
         <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 640 }}>
           <thead>
             <tr>
-              <th style={{ width: 92 }} />
+              <th style={{ width: 84 }} />
               {SCORE_CHOICES.map((s) => (
-                <th key={s} style={{ padding: "0 2px 3px", verticalAlign: "bottom", textAlign: "center" }}>
+                <th key={s} style={{ padding: "0 2px 2px", verticalAlign: "bottom", textAlign: "center" }}>
                   {s === 0
-                    ? <><div style={{ fontSize: 9, fontWeight: 800, color: "#64748b" }}>0%</div><div style={{ fontSize: 7.5, color: "#94a3b8" }}>no ev.</div></>
-                    : <div style={{ fontSize: 9, fontWeight: 800, color: bandTone(s) === "good" ? "#15803d" : "#475569" }}>B{s} · {pctForScore(s, scale)}%</div>}
+                    ? <><div style={{ fontSize: 8, fontWeight: 800, color: "#64748b" }}>0%</div><div style={{ fontSize: 7, color: "#94a3b8" }}>no ev.</div></>
+                    : <div style={{ fontSize: 8, fontWeight: 800, color: bandTone(s) === "good" ? "#15803d" : "#475569" }}>B{s} · {pctForScore(s, scale)}%</div>}
                 </th>
               ))}
             </tr>
@@ -71,9 +71,9 @@ export function ApsrMatrixSelector({
               const sug = suggestion?.[dim.key];
               return (
                 <tr key={dim.key}>
-                  <td style={{ fontSize: 9.5, fontWeight: 700, color: "#334155", padding: "3px 5px 3px 0", verticalAlign: "top", borderTop: "1px solid #f1f5f9" }} title={dim.definition}>
+                  <td style={{ fontSize: 8.5, fontWeight: 700, color: "#334155", padding: "2px 4px 2px 0", verticalAlign: "top", borderTop: "1px solid #f1f5f9" }} title={dim.definition}>
                     {dim.label}
-                    <div style={{ fontSize: 8.5, fontWeight: 600, color: val === undefined ? "#cbd5e1" : "#15803d" }}>
+                    <div style={{ fontSize: 8, fontWeight: 600, color: val === undefined ? "#cbd5e1" : "#15803d" }}>
                       {val === undefined ? "—" : `${pctForScore(val, scale)}%`}
                     </div>
                   </td>
@@ -87,16 +87,16 @@ export function ApsrMatrixSelector({
                           onClick={() => onSet(dim.key, s)}
                           title={descriptorTitle(dim.key, s)}
                           style={{
-                            display: "flex", gap: 2, width: "100%", height: "100%", minHeight: 28, cursor: "pointer", textAlign: "left",
-                            fontSize: 8.5, lineHeight: 1.2, padding: "3px 4px", borderRadius: 5,
+                            display: "flex", gap: 2, width: "100%", height: "100%", minHeight: 22, cursor: "pointer", textAlign: "left",
+                            fontSize: 8, lineHeight: 1.15, padding: "2px 3px", borderRadius: 4,
                             border: sel ? "1.5px solid #15803d" : isSug ? "1.5px solid #4f46e5" : "1px solid #e2e8f0",
                             background: sel ? "#f0fdf4" : isSug ? "#eef2ff" : s === 0 ? "#f8fafc" : "#fff",
                             color: s === 0 ? "#94a3b8" : "#334155", font: "inherit",
                           }}
                         >
-                          {(sel || isSug) && <span style={{ fontSize: 7.5, fontWeight: 800, color: sel ? "#15803d" : "#4f46e5", flexShrink: 0 }}>{sel ? "✓" : "◂AI"}</span>}
-                          {/* Clamp to 3 lines — full descriptor is the hover title, keeps rows short. */}
-                          <span style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{descriptorFor(dim.key, s)}</span>
+                          {(sel || isSug) && <span style={{ fontSize: 7, fontWeight: 800, color: sel ? "#15803d" : "#4f46e5", flexShrink: 0 }}>{sel ? "✓" : "◂AI"}</span>}
+                          {/* Clamp to 2 lines — full descriptor is the hover title, keeps rows short. */}
+                          <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{descriptorFor(dim.key, s)}</span>
                         </button>
                       </td>
                     );
@@ -107,7 +107,7 @@ export function ApsrMatrixSelector({
           </tbody>
         </table>
       </div>
-      <p style={{ fontSize: 9.5, color: "#94a3b8", margin: "4px 0 0" }}>
+      <p style={{ fontSize: 8.5, color: "#94a3b8", margin: "3px 0 0" }}>
         Descriptors quoted verbatim from the EduTrust Guidance Document v4 (Jan 2025), para. 23. The 0% column is the honest floor for a dimension below Band 1 (the Review=0% case in the auditor's example).
       </p>
 
