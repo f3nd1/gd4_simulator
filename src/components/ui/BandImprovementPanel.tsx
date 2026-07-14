@@ -96,8 +96,17 @@ export function BandImprovementPanel({
                       })}
                     </div>
                   ) : (
-                    <div style={{ marginTop: 4, fontSize: 10.5, color: "#94a3b8" }}>
-                      No AI-drafted lines are tagged to this dimension yet — check the checklist lines below manually, or run "AI first pass" to generate them.
+                    // Honest, precise fallback (fixed 2026-07-14 — the prior
+                    // wording named "AI first pass" unqualified, but TWO
+                    // differently-behaved buttons share that label on this
+                    // page; it also implied a one-click fix and a manual
+                    // fallback that don't exist. This re-renders unchanged if
+                    // a generate+confirm cycle still doesn't tag a line here
+                    // — that's an honest restatement of current fact, not a
+                    // bug to special-case.
+                    <div style={{ marginTop: 4, fontSize: 10.5, color: "#94a3b8", lineHeight: 1.4 }}>
+                      No lines are currently mapped to {dim.label} with an open gap. Dimension tags are set only when lines are AI-drafted — use the plain <b>"AI first pass"</b> button further down this page, near "Add line" (not the <b>"AI first pass (suggest scores)"</b> button above the matrix, which only sets dimension scores and never touches lines). Drafting stages a batch for the <b>whole item</b> in Pending — you then need <b>"Confirm into checklist"</b> before anything shows here.
+                      {specific.length > 0 && " This item already has lines, so re-running will draft an additional batch rather than filling just this dimension — check that's really what you want first."}
                     </div>
                   )
                 )}
