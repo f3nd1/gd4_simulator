@@ -83,7 +83,7 @@ export function ApsrMatrixSelector({
                           type="button"
                           onClick={() => onSet(dim.key, s)}
                           style={{
-                            display: "flex", gap: 2, width: "100%", height: "100%", cursor: "pointer", textAlign: "left",
+                            display: "flex", gap: 2, width: "100%", height: "100%", minHeight: 60, cursor: "pointer", textAlign: "left",
                             fontFamily: "inherit", fontSize: 8, lineHeight: 1.15, padding: "2px 3px", borderRadius: 4,
                             border: sel ? "1.5px solid #15803d" : isSug ? "1.5px solid #4f46e5" : "1px solid #e2e8f0",
                             background: sel ? "#f0fdf4" : isSug ? "#eef2ff" : s === 0 ? "#f8fafc" : "#fff",
