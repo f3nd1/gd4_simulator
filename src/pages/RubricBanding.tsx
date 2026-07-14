@@ -54,7 +54,7 @@ export function RubricBanding() {
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
       <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Official EduTrust band rubric (§23)</h3>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Official EduTrust band rubric (para. 23)</h3>
         <p style={{ fontSize: 12, color: "#6b7280", marginTop: 0 }}>
           Quoted verbatim from the EduTrust Guidance Document v4 (Jan 2025). Each item's band is a holistic judgment across all four dimensions of one column — set on the Sub-Criterion Checklist.
         </p>

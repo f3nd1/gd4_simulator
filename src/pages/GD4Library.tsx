@@ -49,7 +49,7 @@ export function GD4Library() {
           </ul>
         </div>
         <div style={{ marginBottom: 8 }}>
-          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Official band rubric (§23 — same table for every item)</span>
+          <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Official band rubric (para. 23 — same table for every item)</span>
           <div style={{ marginTop: 6 }}>
             <EdutrustBandTable />
           </div>

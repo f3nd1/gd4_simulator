@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, Band, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, SpecificChecklistLine, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, ApsrWorkingScores, Band, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, SpecificChecklistLine, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
 import { chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage, type ChatSchema } from "./aiClient";
 import { sObj, sArr, sStr, sBool, sEnum } from "./schemaHelpers";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
@@ -62,6 +62,20 @@ const FOLDER_AUDIT_SCHEMA: ChatSchema = { name: "folder_audit_batch", schema: sO
 
 const PPD_CONTRADICTION_SCHEMA: ChatSchema = { name: "ppd_contradictions", schema: sObj({
   contradictions: sArr(sObj({ description: sStr, quoteA: sStr, chunkA: sStr, quoteB: sStr, chunkB: sStr })),
+}) };
+
+// Holistic band suggestion (structured): each dimension reports the band its
+// evidence best matches + a short reason that cites the requirement-line refs
+// / file·chunk references already in the digest (never invents citations),
+// then the ONE holistic overall band (a judgment, NOT the average of the four
+// — no arithmetic) with the dimension(s) that limit it. Field order puts the
+// four dimensions + limiting factor BEFORE the overall band so the model
+// reasons across the columns before committing the holistic pick.
+const bandEnum = sEnum("1", "2", "3", "4", "5");
+const holisticDim = sObj({ reason: sStr, band: bandEnum });
+const HOLISTIC_BAND_SCHEMA: ChatSchema = { name: "holistic_band", schema: sObj({
+  approach: holisticDim, processes: holisticDim, systemsOutcomes: holisticDim, review: holisticDim,
+  limitingFactor: sStr, band: bandEnum,
 }) };
 
 const EVIDENCE_ASSESSMENT_SCHEMA: ChatSchema = { name: "evidence_assessment", schema: sObj({
@@ -245,16 +259,32 @@ export async function runLiveItemReview(
   };
 }
 
-// ─── Holistic band suggestion (official §23 rubric) ─────────────────────────
+// ─── Holistic band suggestion (official EduTrust rubric, paragraph 23) ───────
 // A JUDGMENT task, not a calculation: the model reads the item's per-line
-// evidence digest against the verbatim official band table and proposes the
-// ONE band whose four dimension descriptors, read together, best fit — with a
-// rationale citing which descriptors matched. It never commits anything: the
-// human accepts (or ignores) the suggestion on the checklist's rubric table.
-// Deliberately separate from the per-line Met/Partial/Not-met machinery,
-// which answers a different question at a different granularity.
+// evidence digest against the verbatim official band table and returns, for
+// EACH of the four dimensions, the band its evidence best matches + a short
+// cited reason — then the ONE holistic overall band (a judgment across the
+// columns, explicitly NOT the average of the four) and the dimension(s) that
+// limit it. It never commits anything: the human accepts (or ignores) the
+// suggestion on the checklist's rubric table. Deliberately separate from the
+// per-line Met/Partial/Not-met machinery, which answers a different question.
+export type HolisticDimensionAssessment = { band: Band; reason: string };
 export type HolisticBandSuggestionResult = {
-  band: Band;
+  band: Band; // the holistic overall pick — NOT an average of the four below
+  dimensions: {
+    approach: HolisticDimensionAssessment;
+    processes: HolisticDimensionAssessment;
+    systemsOutcomes: HolisticDimensionAssessment;
+    review: HolisticDimensionAssessment;
+  };
+  // The four per-dimension bands, in the ApsrWorkingScores shape, so the
+  // reviewer's "YOUR OWN WORKING" box can be auto-populated from the AI's
+  // diagnostic guess (an internal aid, never the official score).
+  dimensionBands: ApsrWorkingScores;
+  limitingFactor: string; // which dimension(s) hold the holistic pick down
+  // Human-readable summary composed from the structured output above — this
+  // is what fills the mandatory justification when the human accepts the AI's
+  // own band (it cites all four dimensions, satisfying the requirement).
   rationale: string;
   promptSent?: string;
 };
@@ -286,37 +316,67 @@ export async function runHolisticBandSuggestion(
   opts?: { memories?: SkillCalibrationMemory[]; onUsage?: (u: AIUsage) => void }
 ): Promise<HolisticBandSuggestionResult> {
   const domainSkill = domainExpertiseFor(req.id);
-  const system = `You are a GD4 EduTrust assessor placing ONE sub-criterion item in a band using the OFFICIAL rubric from the EduTrust Guidance Document v4 (Jan 2025), §23, quoted verbatim below. The rubric is HOLISTIC: read the evidence picture against ALL FOUR dimension descriptors at each band level and select the ONE level that, as a whole, best describes it. Do NOT score the dimensions separately, do NOT average or compute anything — this is a judgment across each column.
+  const system = `You are a GD4 EduTrust assessor placing ONE sub-criterion item in a band using the OFFICIAL rubric from the EduTrust Guidance Document v4 (Jan 2025), paragraph 23, quoted verbatim below.
 
 OFFICIAL BAND TABLE (verbatim):
 ${officialBandTableBlock()}
 
+Do TWO things:
+1. DIAGNOSE each of the four dimensions (Approach, Processes, Systems & Outcomes, Review) SEPARATELY: for each, say which band level (1–5) its own evidence best matches, and a SHORT reason. The reason MUST cite the evidence it relies on using the references already present in the digest — the requirement-line ref (e.g. "6.2.1.DS1") and any "file · chunk" reference shown in a line's APSR note. Never invent a citation or a record not in the digest; missing/weak evidence reads DOWN per the descriptors.
+2. JUDGE the ONE holistic overall band for the whole item. This is a judgment reading the four descriptors of a level together — it is NOT the average, sum, or any calculation of the four dimension bands above. It may sit below the strongest dimension when a weak dimension limits the whole (the official rubric's descriptors gate this way). State which dimension(s) are the limiting factor for your holistic pick.
+
 Rules:
-- Choose exactly one band, 1 to 5.
-- The rationale MUST cite which official descriptors matched (quote their key phrases) and name the dimension that most limits the item.
-- Judge ONLY from the evidence digest given. Never assume records that are not listed; missing or weak evidence reads DOWN, per the descriptors.
+- Every band is 1 to 5.
 - A suggestion, not a decision — a human reviewer makes the final call.
-Respond with JSON only: {"band": 1 | 2 | 3 | 4 | 5, "rationale": string}.${buildSystemPrompt("bandRecommend", null, "runHolisticBandSuggestion", req.id, domainSkill, undefined, opts?.memories)}${buildDomainBlock(domainSkill)}`;
+Respond with JSON only: {"approach": {"reason": string, "band": "1".."5"}, "processes": {...}, "systemsOutcomes": {...}, "review": {...}, "limitingFactor": string, "band": "1".."5"}.${buildSystemPrompt("bandRecommend", null, "runHolisticBandSuggestion", req.id, domainSkill, undefined, opts?.memories)}${buildDomainBlock(domainSkill)}`;
   const user = `GD4 item ${req.id}: "${req.requirement}"${req.gateSensitive ? " (gate-sensitive)" : ""}.
 
-Per-requirement-line evidence digest (status from the audits/reviewer, evidence sufficiency, per-line APSR notes where a live audit recorded them):
+Per-requirement-line evidence digest (status from the audits/reviewer, evidence sufficiency, per-line APSR notes with any file·chunk citations where a live audit recorded them):
 ${buildBandEvidenceDigest(specific) || "(no checklist lines exist yet — there is nothing on file for this item)"}
 
-Place this item in ONE official band.`;
+Diagnose each dimension, then place this item in ONE holistic official band.`;
 
   const content = await chatComplete(
     [{ role: "system", content: system }, { role: "user", content: user }],
     settings,
-    { onUsage: opts?.onUsage }
+    { schema: HOLISTIC_BAND_SCHEMA, onUsage: opts?.onUsage }
   );
-  const parsed = parseJSONObject(content, ["band", "rationale"]);
-  const rawBand = Number(parsed.band);
-  if (!Number.isInteger(rawBand) || rawBand < 1 || rawBand > 5) {
-    throw new Error(`Band suggestion returned an invalid band (${String(parsed.band)}).`);
-  }
-  const rationale = String(parsed.rationale || "").trim();
-  if (!rationale) throw new Error("Band suggestion returned no rationale — a bare number is not reviewable.");
-  return { band: rawBand as Band, rationale, promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}` };
+  const parsed = parseJSONObject(content, ["approach", "processes", "systemsOutcomes", "review", "band"]);
+  const toBand = (v: unknown, where: string): Band => {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1 || n > 5) throw new Error(`Band suggestion returned an invalid band for ${where} (${String(v)}).`);
+    return n as Band;
+  };
+  const readDim = (key: string): HolisticDimensionAssessment => {
+    const d = (parsed[key] ?? {}) as Record<string, unknown>;
+    const reason = String(d.reason || "").trim();
+    if (!reason) throw new Error(`Band suggestion returned no reason for ${key}.`);
+    return { band: toBand(d.band, key), reason };
+  };
+  const dimensions = {
+    approach: readDim("approach"),
+    processes: readDim("processes"),
+    systemsOutcomes: readDim("systemsOutcomes"),
+    review: readDim("review"),
+  };
+  const band = toBand(parsed.band, "overall");
+  const limitingFactor = String(parsed.limitingFactor || "").trim();
+  const dimensionBands: ApsrWorkingScores = {
+    approach: dimensions.approach.band,
+    processes: dimensions.processes.band,
+    systemsOutcomes: dimensions.systemsOutcomes.band,
+    review: dimensions.review.band,
+  };
+  // Composed justification (satisfies the mandatory-rationale requirement when
+  // the human accepts the AI's own band): names each dimension's band + the
+  // limiting factor — no arithmetic, just the structured judgment in prose.
+  const dimLabel: Record<string, string> = { approach: "Approach", processes: "Processes", systemsOutcomes: "Systems & Outcomes", review: "Review" };
+  const rationale =
+    (Object.keys(dimensions) as (keyof typeof dimensions)[])
+      .map((k) => `${dimLabel[k]}: Band ${dimensions[k].band} — ${dimensions[k].reason}`)
+      .join(" ") +
+    ` Overall: Band ${band}${limitingFactor ? ` (limiting factor: ${limitingFactor})` : ""}.`;
+  return { band, dimensions, dimensionBands, limitingFactor, rationale, promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}` };
 }
 
 function extractFirstJSONArray(text: string): string | null {

@@ -5,12 +5,19 @@
 // Banding page, GD4 Library). Holistic by design: selecting a band means the
 // reviewer judged that column's four descriptors, read together, best fit the
 // evidence — there is no per-dimension scoring.
-import type { Band } from "../../types";
+import type { ApsrWorkingScores, Band } from "../../types";
 import { EDUTRUST_BANDS, EDUTRUST_DIMENSIONS } from "../../data/edutrustRubric";
 import { bandTone, TONE } from "../../lib/theme";
 import { Pill } from "./Pill";
 
-export function EdutrustBandTable({ selected, suggested, onSelect }: { selected?: Band; suggested?: Band; onSelect?: (band: Band) => void }) {
+// selected  — the ONE official band, highlighted column-wide (green).
+// suggested — the AI's holistic overall band, column-wide (indigo).
+// rowBestFit — per-DIMENSION best-fit band (from the reviewer's own working /
+//   the AI's per-dimension diagnosis): a read-only ◆ marker on that dimension's
+//   own cell, distinct from the column highlights. It is NOT a second
+//   selectable/official value — the human still picks ONE band for the item.
+export function EdutrustBandTable({ selected, suggested, rowBestFit, onSelect }: { selected?: Band; suggested?: Band; rowBestFit?: ApsrWorkingScores; onSelect?: (band: Band) => void }) {
+  const hasRowFit = !!rowBestFit && Object.values(rowBestFit).some((v) => v != null);
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", minWidth: 860 }}>
@@ -53,20 +60,28 @@ export function EdutrustBandTable({ selected, suggested, onSelect }: { selected?
               {EDUTRUST_BANDS.map((b) => {
                 const isSel = selected === b.band;
                 const isSug = !isSel && suggested === b.band;
+                const isRowFit = rowBestFit?.[dim.key] === b.band;
                 const last = di === EDUTRUST_DIMENSIONS.length - 1;
                 return (
                   <td
                     key={b.band}
+                    title={isRowFit ? `${dim.label}: this dimension's own evidence best matches Band ${b.band} (diagnostic only — not the official band)` : undefined}
                     style={{
+                      position: "relative",
                       fontSize: 11.5, color: "#334155", lineHeight: 1.45, padding: "7px 9px", verticalAlign: "top",
                       borderLeft: `2px solid ${isSel ? "#15803d" : isSug ? "#4f46e5" : "#e2e8f0"}`,
                       borderRight: `2px solid ${isSel ? "#15803d" : isSug ? "#4f46e5" : "#e2e8f0"}`,
                       borderTop: "1px solid #f1f5f9",
                       borderBottom: last ? `2px solid ${isSel ? "#15803d" : isSug ? "#4f46e5" : "#e2e8f0"}` : undefined,
                       borderRadius: last ? "0 0 10px 10px" : undefined,
-                      background: isSel ? "#f6fff9" : isSug ? "#fbfcff" : "#fff",
+                      // The per-dimension best-fit marker is an inset amber ring
+                      // on the specific cell — distinct from the green/indigo
+                      // column highlights, and never changes what's selectable.
+                      background: isRowFit ? "#fffbeb" : isSel ? "#f6fff9" : isSug ? "#fbfcff" : "#fff",
+                      boxShadow: isRowFit ? "inset 0 0 0 2px #f59e0b" : undefined,
                     }}
                   >
+                    {isRowFit && <span aria-hidden style={{ position: "absolute", top: 2, right: 4, fontSize: 9, fontWeight: 800, color: "#b45309" }}>◆ best fit</span>}
                     {b[dim.key]}
                   </td>
                 );
@@ -76,7 +91,8 @@ export function EdutrustBandTable({ selected, suggested, onSelect }: { selected?
         </tbody>
       </table>
       <p style={{ fontSize: 10.5, color: "#94a3b8", margin: "6px 0 0" }}>
-        Official EduTrust band rubric, quoted verbatim from the EduTrust Guidance Document v4 (Jan 2025), §23. Hover a dimension name for its official definition.
+        Official EduTrust band rubric, quoted verbatim from the EduTrust Guidance Document v4 (Jan 2025), paragraph 23. Hover a dimension name for its official definition.
+        {hasRowFit && <span style={{ color: "#b45309" }}> ◆ marks each dimension's own best-fit band — a diagnostic aid, not a second official score; the item still takes ONE holistic band.</span>}
       </p>
     </div>
   );
