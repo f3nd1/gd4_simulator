@@ -97,6 +97,12 @@ export type ChecklistModuleState = {
   removeSpecificLine: (itemId: string, lineId: string) => void;
   clearSpecificLines: (itemId: string) => void;
   setSpecificStatus: (itemId: string, lineId: string, status: SpecificLineStatus) => void;
+  // Tags (or re-tags) an EXISTING, already-confirmed line's APSR dimension
+  // directly — reuses the same field/enum generateSpecific already writes on
+  // freshly-generated lines, without regenerating or duplicating any content.
+  // A human classification, not an AI call: manual/seed lines never get this
+  // field any other way (fix (b), 2026-07-14).
+  setLineApsrDimension: (itemId: string, lineId: string, dim: SpecificChecklistLine["apsrDimension"]) => void;
 
   addEvidence: (itemId: string, lineId: string, evidence: Omit<SubChecklistEvidenceItem, "id">) => void;
   // Replaces all auto-generated audit evidence (items that have a runId, i.e.
@@ -420,6 +426,23 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           });
         }
         set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, status }))));
+      },
+
+      setLineApsrDimension: (itemId, lineId, dim) => {
+        const line = get().entries[itemId]?.specific.find((l) => l.id === lineId);
+        if (line && line.apsrDimension !== dim) {
+          useWorkspaceStore.getState().logHumanDecision({
+            module: "Checklist Line Edit",
+            subjectId: itemId,
+            aiOutput: line.apsrDimension ?? "(untagged)",
+            humanDecision: dim ?? "(untagged)",
+            changed: true,
+            decisionType: line.generatedBy === "ai" && line.apsrDimension ? "Overridden" : "Edited",
+            reason: "",
+            field: lineId,
+          });
+        }
+        set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, apsrDimension: dim }))));
       },
 
       // Drafts evidence metadata (title/type/date/sufficiency/auditorNote)

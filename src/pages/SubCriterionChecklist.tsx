@@ -287,6 +287,7 @@ export function SubCriterionChecklist() {
   const removeSpecificLine = useChecklistModuleStore((s) => s.removeSpecificLine);
   const clearSpecificLines = useChecklistModuleStore((s) => s.clearSpecificLines);
   const setSpecificStatus = useChecklistModuleStore((s) => s.setSpecificStatus);
+  const setLineApsrDimension = useChecklistModuleStore((s) => s.setLineApsrDimension);
   const addEvidence = useChecklistModuleStore((s) => s.addEvidence);
   const fillEvidenceFromLink = useChecklistModuleStore((s) => s.fillEvidenceFromLink);
   const updateEvidence = useChecklistModuleStore((s) => s.updateEvidence);
@@ -1043,6 +1044,21 @@ export function SubCriterionChecklist() {
                   <Pill s={statusTone(l.status)}>
                     {l.status === "Met" || l.status === "Partial" || l.status === "Not met" ? evVerdictLabel(l.status) : l.status}
                   </Pill>
+                  {/* Fix (b) — tag an EXISTING line's APSR dimension directly.
+                      Reuses the same field/enum generateSpecific already
+                      writes on freshly-generated lines (EDUTRUST_DIMENSIONS'
+                      labels are exactly the apsrDimension union values) —
+                      manual/seed lines never get this any other way, and this
+                      does not regenerate or duplicate any line content. */}
+                  <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Dimension</span>
+                  <select
+                    value={l.apsrDimension ?? ""}
+                    onChange={(e) => setLineApsrDimension(selectedId, l.id, (e.target.value || undefined) as SpecificChecklistLine["apsrDimension"])}
+                    style={{ ...inputStyle, width: "auto", padding: "3px 5px", fontSize: 11 }}
+                  >
+                    <option value="">— untagged —</option>
+                    {EDUTRUST_DIMENSIONS.map((d) => <option key={d.key} value={d.label}>{d.label}</option>)}
+                  </select>
                   {l.generatedBy === "ai" && (
                     <ThumbsButtons
                       onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: l.id, aiOutput: `AI verdict: ${l.status}`, humanDecision: `Accepted: ${l.status}`, changed: false, decisionType: "Accepted", reason: "" })}

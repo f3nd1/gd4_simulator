@@ -66,6 +66,58 @@ describe("setHolisticBand — complete-matrix gate + calculated band", () => {
   });
 });
 
+describe("setLineApsrDimension — tags an EXISTING confirmed line, no regeneration (fix b)", () => {
+  const LINE_ID = "L1";
+  beforeEach(() => {
+    useChecklistModuleStore.setState({
+      entries: {
+        [ITEM]: {
+          gd4ItemId: ITEM,
+          generic: [],
+          pendingGenerated: [],
+          specific: [{ id: LINE_ID, text: "A manual line with no dimension tag", status: "Not met", evidence: [], generatedBy: "manual" }],
+        },
+      },
+    });
+  });
+
+  it("tags a manual line that never had a dimension (no other writer sets it)", () => {
+    useChecklistModuleStore.getState().setLineApsrDimension(ITEM, LINE_ID, "Review");
+    const line = useChecklistModuleStore.getState().entries[ITEM]!.specific[0];
+    expect(line.apsrDimension).toBe("Review");
+  });
+
+  it("re-tags an already-tagged line without touching its text/status/evidence", () => {
+    useChecklistModuleStore.setState((s) => ({
+      entries: { ...s.entries, [ITEM]: { ...s.entries[ITEM]!, specific: [{ ...s.entries[ITEM]!.specific[0], apsrDimension: "Approach" }] } },
+    }));
+    useChecklistModuleStore.getState().setLineApsrDimension(ITEM, LINE_ID, "Systems & Outcomes");
+    const line = useChecklistModuleStore.getState().entries[ITEM]!.specific[0];
+    expect(line.apsrDimension).toBe("Systems & Outcomes");
+    expect(line.text).toBe("A manual line with no dimension tag");
+    expect(line.status).toBe("Not met");
+  });
+
+  it("un-tags when passed undefined", () => {
+    useChecklistModuleStore.getState().setLineApsrDimension(ITEM, LINE_ID, "Processes");
+    useChecklistModuleStore.getState().setLineApsrDimension(ITEM, LINE_ID, undefined);
+    expect(useChecklistModuleStore.getState().entries[ITEM]!.specific[0].apsrDimension).toBeUndefined();
+  });
+
+  it("leaves every other line's dimension tag alone", () => {
+    useChecklistModuleStore.setState((s) => ({
+      entries: {
+        ...s.entries,
+        [ITEM]: { ...s.entries[ITEM]!, specific: [...s.entries[ITEM]!.specific, { id: "L2", text: "Another line", status: "Met", evidence: [], generatedBy: "manual", apsrDimension: "Approach" as const }] },
+      },
+    }));
+    useChecklistModuleStore.getState().setLineApsrDimension(ITEM, LINE_ID, "Review");
+    const specific = useChecklistModuleStore.getState().entries[ITEM]!.specific;
+    expect(specific.find((l) => l.id === "L2")!.apsrDimension).toBe("Approach");
+    expect(specific.find((l) => l.id === LINE_ID)!.apsrDimension).toBe("Review");
+  });
+});
+
 describe("setApsrMatrix — the official per-dimension input", () => {
   it("stores each dimension score independently, including a genuine 0", () => {
     const s = useChecklistModuleStore.getState();
