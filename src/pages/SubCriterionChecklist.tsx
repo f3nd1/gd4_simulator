@@ -830,12 +830,12 @@ export function SubCriterionChecklist() {
             </button>
 
             {/* Additive, read-only view built entirely from data the matrix,
-                buildDraftFinding and each line's own apsrDimension tag already
-                produce — see BandImprovementPanel.tsx header comment. Only
-                shown once a band is actually saved (savedBand); nothing to
-                explain before that. */}
+                each audited line's own APSR notes, and each line's
+                apsrDimension tag already produce — see BandImprovementPanel.tsx
+                header comment. Only shown once a band is actually saved
+                (savedBand); nothing to explain before that. */}
             {savedBand && (
-              <BandImprovementPanel req={req} specific={specific} matrixResult={savedBand} scale={apsrScale} onOpenLine={openLine} />
+              <BandImprovementPanel specific={specific} matrixResult={savedBand} scale={apsrScale} onOpenLine={openLine} />
             )}
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>

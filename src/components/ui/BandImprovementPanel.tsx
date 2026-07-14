@@ -1,6 +1,7 @@
 // "Why this band / how to improve" — a read-only VIEW over data the APSR
-// matrix, buildDraftFinding, and each line's own apsrDimension tag already
-// produce. No new scoring, no new AI call, no new "how to fix" text:
+// matrix, each audited line's own APSR notes, and each line's apsrDimension
+// tag already produce. No new scoring, no new AI call, no new "how to fix"
+// text:
 //   - band/pcts/total: the matrix's own apsrMatrixResult (savedBand).
 //   - weakest dimension(s) + fastest path: pure arithmetic over those numbers
 //     (weakestDimensions/fastestPathToNextBand in lib/checklistBanding.ts).
@@ -8,12 +9,16 @@
 //     the AI line-generation pass's own structured field (set from a fixed
 //     enum at generation time, never free-text-parsed) — absent on manual/
 //     seed lines, which honestly don't appear in a dimension's line list.
-//   - "how to fix" text: buildDraftFinding(req, line).suggestedAction,
-//     VERBATIM — the same text driving the page's own "Draft finding" banner.
+//   - "how to fix" text: lineDimensionDiagnosis(line, dim.key), VERBATIM —
+//     the real per-dimension AI note an audit run recorded for that line
+//     (fixed 2026-07-14: this used to be buildDraftFinding's synthesised
+//     "Replace the insufficient evidence..." template, a generic boilerplate
+//     string that ignored the line's own real diagnosis already shown a few
+//     clicks away in its expanded PPD/Evidence tabs).
 import { EDUTRUST_DIMENSIONS, bandTitle } from "../../data/edutrustRubric";
-import { buildDraftFinding, lineSufficiency, weakestDimensions, fastestPathToNextBand, type ApsrMatrixResult, type ApsrScale } from "../../lib/checklistBanding";
+import { lineDimensionDiagnosis, lineSufficiency, weakestDimensions, fastestPathToNextBand, type ApsrMatrixResult, type ApsrScale } from "../../lib/checklistBanding";
 import { bandTone } from "../../lib/theme";
-import type { GD4Requirement, SpecificChecklistLine } from "../../types";
+import type { SpecificChecklistLine } from "../../types";
 import { Pill } from "./Pill";
 
 function isActionable(l: SpecificChecklistLine): boolean {
@@ -21,9 +26,8 @@ function isActionable(l: SpecificChecklistLine): boolean {
 }
 
 export function BandImprovementPanel({
-  req, specific, matrixResult, scale, onOpenLine,
+  specific, matrixResult, scale, onOpenLine,
 }: {
-  req: GD4Requirement;
   specific: SpecificChecklistLine[];
   matrixResult: ApsrMatrixResult;
   scale: ApsrScale;
@@ -78,14 +82,15 @@ export function BandImprovementPanel({
                   lines.length > 0 ? (
                     <div style={{ marginTop: 4, display: "grid", gap: 4 }}>
                       {lines.map((l) => {
-                        const draftableStatus = l.status === "Not met" || l.status === "Partial" || l.status === "Met";
-                        const draft = draftableStatus ? buildDraftFinding(req, l) : null;
+                        const diagnosis = lineDimensionDiagnosis(l, dim.key);
                         return (
                           <div key={l.id} style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 11, background: "#f8fafc", border: "1px solid #f1f5f9", borderRadius: 6, padding: "5px 7px" }}>
                             <span style={{ flex: 1, minWidth: 0 }}>
                               <span style={{ fontWeight: 600, color: "#334155" }}>{l.clause ? `${l.clause}: ` : ""}{l.text.length > 90 ? `${l.text.slice(0, 90)}…` : l.text}</span>
-                              {draft?.suggestedAction && (
-                                <span style={{ display: "block", color: "#6b7280", marginTop: 1 }}>How to fix: {draft.suggestedAction}</span>
+                              {diagnosis ? (
+                                <span style={{ display: "block", color: "#6b7280", marginTop: 1 }}>How to fix: {diagnosis.length > 240 ? `${diagnosis.slice(0, 240)}…` : diagnosis}</span>
+                              ) : (
+                                <span style={{ display: "block", color: "#94a3b8", marginTop: 1, fontStyle: "italic" }}>No detailed diagnosis recorded for this line — open it to review the evidence directly.</span>
                               )}
                             </span>
                             <button onClick={() => onOpenLine(l.id)} style={{ cursor: "pointer", fontSize: 10.5, fontWeight: 700, color: "#4f46e5", background: "transparent", border: "none", padding: 0, whiteSpace: "nowrap", flexShrink: 0 }}>

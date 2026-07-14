@@ -234,6 +234,16 @@ export function lineApsr(line: SpecificChecklistLine): ApsrBreakdown | undefined
   return undefined;
 }
 
+// The real, AI-written diagnosis for ONE dimension of a line — the exact
+// text an audit run recorded (same source the checklist card's expanded
+// PPD/Evidence tabs read from), never a synthesised template. Undefined only
+// when the line has no APSR at all (manual/seed/never-audited) — callers
+// must show an honest "no diagnosis recorded" state, not fall back to
+// invented text.
+export function lineDimensionDiagnosis(line: SpecificChecklistLine, dimKey: keyof ApsrBreakdown): string | undefined {
+  return lineApsr(line)?.[dimKey]?.note?.trim() || undefined;
+}
+
 // In-depth, plain-language analysis of WHY a line failed and how to fix it,
 // derived from the APSR dimension that fell short (or, with no APSR, from the
 // status / evidence). This is what makes a raised finding read deeper than

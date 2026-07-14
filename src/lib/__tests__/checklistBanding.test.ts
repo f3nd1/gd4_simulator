@@ -12,6 +12,7 @@ import {
   pctForScore,
   weakestDimensions,
   fastestPathToNextBand,
+  lineDimensionDiagnosis,
 } from "../checklistBanding";
 import { EDUTRUST_BANDS, bandTitle } from "../../data/edutrustRubric";
 import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
@@ -298,5 +299,33 @@ describe("fastestPathToNextBand — pure arithmetic over the matrix, no AI call"
     expect(path.shortfallPct).toBe(6);
     expect(path.dims.length).toBe(2); // ceil(6/5) = 2
     expect(path.dims[0]).toBe("review"); // lowest first
+  });
+});
+
+describe("lineDimensionDiagnosis — the Band Improvement Panel's real 'how to fix' source", () => {
+  it("returns the audited dimension's own AI note verbatim, not a generic template", () => {
+    const a = apsr({});
+    a.processes.note = "There are no recruitment files or selection records such as job advertisements, shortlisting matrices, or interview assessment forms.";
+    const l = line("Not met", [ev("Missing", a)]);
+    expect(lineDimensionDiagnosis(l, "processes")).toBe(a.processes.note);
+  });
+  it("is undefined for a line with no APSR at all (manual/seed/never-audited) — honest fallback, not fabricated text", () => {
+    const l = line("Not met", []);
+    expect(lineDimensionDiagnosis(l, "approach")).toBeUndefined();
+  });
+  it("is undefined when the dimension's note is empty/whitespace, even if APSR exists", () => {
+    const a = apsr({});
+    a.review.note = "   ";
+    const l = line("Not met", [ev("Missing", a)]);
+    expect(lineDimensionDiagnosis(l, "review")).toBeUndefined();
+  });
+  it("each dimension reads its own note independently — no cross-dimension bleed", () => {
+    const a = apsr({});
+    a.approach.note = "Approach gap text.";
+    a.review.note = "Review gap text.";
+    const l = line("Partial", [ev("Weak", a)]);
+    expect(lineDimensionDiagnosis(l, "approach")).toBe("Approach gap text.");
+    expect(lineDimensionDiagnosis(l, "review")).toBe("Review gap text.");
+    expect(lineDimensionDiagnosis(l, "processes")).toBeUndefined();
   });
 });
