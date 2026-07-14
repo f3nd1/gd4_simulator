@@ -272,7 +272,6 @@ export type Finding = {
 // band (HolisticBandRecord below) judged against the official §23 rubric —
 // the band feeds the scoring engine (see lib/checklistBanding.ts).
 export type ChecklistLineStatus = "Met" | "Partial" | "Not met";
-export type GenericLineStatus = ChecklistLineStatus | "Not Started";
 export type SpecificLineStatus = ChecklistLineStatus | "Not Applicable" | "Not Started";
 export type EvidenceSufficiency = "Present" | "Weak" | "Missing";
 
@@ -428,13 +427,6 @@ export type GroupedFindingDraft = {
   aiSnapshot?: { title?: string; observation?: string; criteria?: string; effect?: string; rootCause?: string; corrective?: string; preventive?: string };
 };
 
-export type GenericChecklistLine = {
-  id: "G1" | "G2" | "G3" | "G4";
-  lens: "Approach" | "Processes" | "Systems & Outcomes" | "Review";
-  text: string;
-  status: GenericLineStatus;
-};
-
 // Which official GD4 field a generated line traces back to.
 // ─── Audit modes ─────────────────────────────────────────────────────────────
 // ONE cycle-level choice of how much the AI does, made upfront on the Start
@@ -573,9 +565,6 @@ export type HolisticBandRecord = {
 
 export type SubCriterionChecklistEntry = {
   gd4ItemId: string;
-  // LEGACY (pre-matrix models): the old G1-G4 maturity tick lines. No longer
-  // read or rendered — kept only so existing persisted workspaces round-trip.
-  generic: GenericChecklistLine[];
   specific: SpecificChecklistLine[];
   // Absent, OR present without matrixScores (an older ladder/holistic record),
   // means "needs re-assessment under the confirmed APSR percentage method" —

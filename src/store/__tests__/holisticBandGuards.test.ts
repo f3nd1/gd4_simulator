@@ -73,7 +73,6 @@ describe("setLineApsrDimension — tags an EXISTING confirmed line, no regenerat
       entries: {
         [ITEM]: {
           gd4ItemId: ITEM,
-          generic: [],
           pendingGenerated: [],
           specific: [{ id: LINE_ID, text: "A manual line with no dimension tag", status: "Not met", evidence: [], generatedBy: "manual" }],
         },

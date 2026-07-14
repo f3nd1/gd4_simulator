@@ -18,7 +18,7 @@ import type {
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildDraftFinding, lineSufficiency, lineApsr, apsrMatrixResult } from "../lib/checklistBanding";
 import { findingDedupeKey, findingKeyOf, normalizeAuditRef } from "../lib/gd4Refs";
-import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
+import { buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill, runHolisticBandSuggestion, type HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
 import { effectiveSettings, type AIUsage } from "../lib/ai/aiClient";
@@ -43,7 +43,7 @@ function newFindingId() {
 }
 
 function emptyEntry(itemId: string): SubCriterionChecklistEntry {
-  return { gd4ItemId: itemId, generic: buildGenericLines(), specific: [], pendingGenerated: [] };
+  return { gd4ItemId: itemId, specific: [], pendingGenerated: [] };
 }
 
 // A brand-new workspace starts with no checklist entries at all — the three

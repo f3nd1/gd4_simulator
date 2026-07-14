@@ -1,24 +1,12 @@
-// Seed data for the Sub-Criterion Checklist module's Layer 1 (generic) and
-// Layer 2 (specific) lines. Layer 1 is the same four fixed lines, one per
-// rubric lens, for every GD4 item. Layer 2 below is hand-seeded for three
-// items so the module is usable without an AI call; every other item is
-// decomposed on demand from its real describeShow/notes text (see
-// lib/ai/simulateAI.ts's simulateChecklistGeneration). The seeded lines are
-// atomic statements drawn directly from those items' real Describe/Show
-// bullets in gd4Requirements.ts — nothing here is invented. AFI tags (B11,
-// B13) reference the real findings in data/findings.ts for the same items.
-import type { GenericChecklistLine, SpecificChecklistLine, SubCriterionChecklistEntry } from "../types";
-
-export const GENERIC_LINE_DEFS: { id: GenericChecklistLine["id"]; lens: GenericChecklistLine["lens"]; text: string }[] = [
-  { id: "G1", lens: "Approach", text: "Is there a documented, organised policy or procedure covering this requirement?" },
-  { id: "G2", lens: "Processes", text: "Are the processes actually deployed and managed by a named owner, not just documented?" },
-  { id: "G3", lens: "Systems & Outcomes", text: "Do records or systems show the activity happening and producing the intended outcomes?" },
-  { id: "G4", lens: "Review", text: "Is there a review cycle that uses these outcomes to drive improvement?" },
-];
-
-export function buildGenericLines(): GenericChecklistLine[] {
-  return GENERIC_LINE_DEFS.map((g) => ({ ...g, status: "Not Started" }));
-}
+// Seed data for the Sub-Criterion Checklist module's specific lines:
+// hand-seeded for three items so the module is usable without an AI call;
+// every other item is decomposed on demand from its real describeShow/notes
+// text (see lib/ai/simulateAI.ts's simulateChecklistGeneration). The seeded
+// lines are atomic statements drawn directly from those items' real
+// Describe/Show bullets in gd4Requirements.ts — nothing here is invented.
+// AFI tags (B11, B13) reference the real findings in data/findings.ts for
+// the same items.
+import type { SpecificChecklistLine, SubCriterionChecklistEntry } from "../types";
 
 function specLine(id: string, text: string, clause: string, afiTag?: string): SpecificChecklistLine {
   return { id, text, clause, status: "Not Started", afiTag, evidence: [], generatedBy: "seed" };
@@ -60,7 +48,6 @@ export const SEED_SPECIFIC_LINES: Record<string, SpecificChecklistLine[]> = {
 export function buildSeedEntry(itemId: string): SubCriterionChecklistEntry {
   return {
     gd4ItemId: itemId,
-    generic: buildGenericLines(),
     specific: (SEED_SPECIFIC_LINES[itemId] || []).map((l) => ({ ...l, evidence: [] })),
     pendingGenerated: [],
   };

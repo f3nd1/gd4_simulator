@@ -370,7 +370,8 @@ export function SubCriterionChecklist() {
   );
   const itemPendingRunId = pendingCommits[req.subCriterionId]?.runId;
   // Every GD4 item id with ANY write awaiting approval, across every sub-
-  // criterion — cheap membership check for the Coverage vs Maturity chips.
+  // criterion — cheap membership check for the "Line completion vs band
+  // status" quadrant chart's hasPending flag.
   const pendingItemIds = useMemo(() => {
     const ids = new Set<string>();
     for (const run of Object.values(pendingCommits)) for (const it of run.items) ids.add(it.write.gd4ItemId);

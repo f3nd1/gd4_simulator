@@ -35,7 +35,7 @@ function line(status: SpecificChecklistLine["status"], evidence: SubChecklistEvi
 }
 
 function entry(over: Partial<SubCriterionChecklistEntry> & { gd4ItemId: string }): SubCriterionChecklistEntry {
-  return { generic: [], specific: [], pendingGenerated: [], ...over };
+  return { specific: [], pendingGenerated: [], ...over };
 }
 
 describe("official EduTrust rubric table (edutrustRubric.ts)", () => {
