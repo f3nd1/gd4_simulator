@@ -533,62 +533,58 @@ export type SpecificChecklistLine = {
 // Keyed by GD4 item id (the testable requirements) rather than the
 // sub-criteria, so every checklist line can cite a single, unambiguous
 // clause. The sub-criterion/criterion grouping is reconstructed in the UI.
-// The item's ONE holistic EduTrust band (official §23 rubric): a human
-// judgment made by reading the evidence against all four dimension
-// descriptors at each level and picking the level that best fits overall —
-// never computed by a formula. Set only via an explicit human action
-// (setHolisticBand); an AI suggestion becomes a band only when the human
-// accepts it (source: "ai-accepted").
-// The reviewer's OWN per-dimension 1-5 working — an internal diagnostic aid,
-// explicitly NOT the official method (the EduTrust Guidance Document defines
-// no per-dimension scores or combination formula; confirmed by exhaustive
-// search). Partial while being filled in; the average only exists once all
-// four are set. Never becomes the official band.
-export type ApsrWorkingScores = {
-  approach?: Band;
-  processes?: Band;
-  systemsOutcomes?: Band;
-  review?: Band;
+// APSR PERCENTAGE-MATRIX scoring model (2026-07-14) — the OFFICIAL band
+// mechanism, per an SSG auditor's direct clarification that A/P/S/R are scored
+// SEPARATELY and SUMMED (superseding the "one holistic pick" model, which took
+// the Guidance Document's literal "a band" wording at face value). Each
+// dimension scores a band (1–5 → 5–25%) or 0% ("not evident", below Band 1);
+// the four percentages sum to a total that maps to the final band. See
+// lib/checklistBanding.ts (apsrMatrixResult) and docs/edutrust-band-scoring.md
+// for the reconstructed formula and the parts still awaiting auditor
+// confirmation (exact cut-offs, the 0% question). 0 = 0%, 1–5 = that band.
+export type ApsrDimensionScore = 0 | Band;
+export type ApsrMatrixScores = {
+  approach?: ApsrDimensionScore;
+  processes?: ApsrDimensionScore;
+  systemsOutcomes?: ApsrDimensionScore;
+  review?: ApsrDimensionScore;
 };
+// Deprecated alias — the AI suggestion still types its per-dimension bands as
+// this shape (values 1–5); assignable into ApsrMatrixScores.
+export type ApsrWorkingScores = ApsrMatrixScores;
 
 export type HolisticBandRecord = {
+  // The CALCULATED final band — sum of the four dimension percentages mapped
+  // through the inferred thresholds (apsrMatrixResult). Not a free pick.
   band: Band;
-  // Why this level fits, citing the four APSR dimensions — REQUIRED on every
-  // save (enforced in setHolisticBand + the UI): a band with no stated reason
-  // is not useful for improvement tracking. The accepted AI rationale
-  // satisfies this only when the human accepts the AI's OWN band; a different
-  // final choice needs the human's own words. Optional in the type solely for
-  // records saved before this rule existed.
+  // The four per-dimension scores this band was calculated from, and the
+  // summed percentage — stored so the arithmetic is auditable after the fact.
+  matrixScores: ApsrMatrixScores;
+  totalPct: number;
+  // Why these scores fit, citing the four APSR dimensions — REQUIRED on every
+  // save (enforced in setHolisticBand + the UI). The accepted AI rationale
+  // satisfies it when the human accepts the AI's own scores. Optional in the
+  // type solely for older records.
   rationale?: string;
   source: "human" | "ai-accepted";
   decidedAt: string;
   decidedBy?: string;
-  // Snapshot of the reviewer's per-dimension working at the moment the band
-  // was saved (see ApsrWorkingScores — internal aid, not official).
-  dimensionScores?: ApsrWorkingScores;
-  // Required when the working's rounded average differs from the selected
-  // band by ≥1 full band: the one-line reason the official judgment differs
-  // from the reviewer's own dimension average (enforced in setHolisticBand).
-  mismatchReason?: string;
 };
 
 export type SubCriterionChecklistEntry = {
   gd4ItemId: string;
-  // LEGACY (pre-holistic-rubric): the old G1-G4 maturity tick lines. No
-  // longer read or rendered anywhere — kept only so existing persisted
-  // workspaces round-trip without data loss (audit trail of how old bands
-  // were derived). An entry with specific lines but no holisticBand shows
-  // "needs re-assessment" rather than any band derived from this field.
+  // LEGACY (pre-matrix models): the old G1-G4 maturity tick lines. No longer
+  // read or rendered — kept only so existing persisted workspaces round-trip.
   generic: GenericChecklistLine[];
   specific: SpecificChecklistLine[];
-  // Absent = no holistic assessment yet. With specific lines present, that
-  // means "needs re-assessment under the updated EduTrust rubric" — old
-  // ladder-model bands are never silently reinterpreted as holistic bands.
+  // Absent, OR present without matrixScores (an older ladder/holistic record),
+  // means "needs re-assessment under the confirmed APSR percentage method" —
+  // neither old model's band is ever carried forward as a matrix band.
   holisticBand?: HolisticBandRecord;
-  // Live per-dimension working (persists as the user fills it, independent of
-  // whether a band has been saved yet) — snapshotted onto holisticBand at
-  // save time. Optional by design: not every item warrants this detail.
-  apsrWorking?: ApsrWorkingScores;
+  // Live per-dimension matrix scores (persist as the user fills them in) —
+  // snapshotted onto holisticBand at save time. This is now the OFFICIAL input
+  // (the "your own working / not official" framing is retired).
+  apsrMatrix?: ApsrMatrixScores;
   pendingGenerated?: SpecificChecklistLine[];
   generatedAt?: string;
   generatedLive?: boolean;

@@ -27,7 +27,7 @@ export type ItemReport = {
   // why this band (mandatory at selection), and — when their own APSR working
   // disagreed by ≥1 band — why the official judgment differs from it.
   bandRationale?: string;
-  bandMismatchReason?: string;
+  bandTotalPct?: number;
   strengths: string[];
   gaps: string[];
   targetBand: number;
@@ -118,7 +118,7 @@ function analyseItem(
     completeness,
     needsReassessment: reassess,
     bandRationale: entry?.holisticBand?.rationale,
-    bandMismatchReason: entry?.holisticBand?.mismatchReason,
+    bandTotalPct: entry?.holisticBand?.matrixScores ? entry.holisticBand.totalPct : undefined,
     strengths,
     gaps,
     targetBand,

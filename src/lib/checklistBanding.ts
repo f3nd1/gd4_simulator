@@ -1,12 +1,15 @@
-// Banding for the Sub-Criterion Checklist module — HOLISTIC per the official
-// EduTrust Guidance Document v4 §23 (see data/edutrustRubric.ts, the verbatim
-// band table): the item's ONE band is a human judgment made by reading the
-// evidence against all four dimension descriptors (Approach / Processes /
-// Systems & Outcomes / Review) at each level and selecting the level that
-// best fits overall. There is NO formula — the previous engine here (a
-// coverage % cap × G1-G4 maturity-ceiling ladder × evidence caps, all
-// app-invented) computed a band the official rubric never defines, and was
-// replaced 2026-07 with the stored HolisticBandRecord.
+// Banding for the Sub-Criterion Checklist module — APSR PERCENTAGE MATRIX per
+// an SSG auditor's clarification (see docs/edutrust-band-scoring.md): each of
+// the four dimensions (Approach / Processes / Systems & Outcomes / Review) is
+// scored SEPARATELY against the verbatim §23 descriptors (data/edutrustRubric.ts)
+// as 0% or a band 1-5 (band N = N×5%), the four percentages SUM to a 0-100%
+// total, and the total maps to the final band. See the APSR formula section
+// below (pctForScore / finalBandFromPct / apsrMatrixResult). This replaced two
+// earlier models — an app-invented coverage×maturity ladder, then a "one
+// holistic band" pick built on the document's literal wording — after the
+// auditor confirmed dimensions are scored separately and summed. The cut-offs
+// and the 0% question are reconstructed from ONE example, not confirmed
+// (INFERRED_THRESHOLDS); the UI flags this.
 //
 // What remains in code:
 //   - lineCompleteness(): how much of the requirement-line evidence has been
@@ -17,7 +20,7 @@
 //   - computeChecklistOverrides(): feeds the selected holistic band into the
 //     official scoring engine (band/5 × criterion points), same shape as
 //     before — the §20 gate and criterion rollup are unchanged.
-import type { ApsrWorkingScores, Band, GD4Requirement, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
+import type { ApsrDimensionScore, ApsrMatrixScores, Band, GD4Requirement, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
 import { bandTitle } from "../data/edutrustRubric";
 import { findingTypeForStatus, ncSeverityFor } from "./findingClassification";
 
@@ -54,34 +57,59 @@ export function lineCompleteness(specific: SpecificChecklistLine[]): LineComplet
   };
 }
 
-// The reviewer's own per-dimension working, averaged — an internal diagnostic
-// SUGGESTION, never the official band (no combination formula exists in the
-// official rubric). Returns null until all four dimensions are scored.
-// Rounding: Math.round on the plain mean — no prior band-averaging precedent
-// exists in this codebase (the §20 gate compares raw averages to a threshold,
-// it never rounds to a band), so standard rounding is the deliberate choice.
-export function apsrWorkingAverage(w: ApsrWorkingScores | undefined): { avg: number; rounded: Band } | null {
-  if (!w || !w.approach || !w.processes || !w.systemsOutcomes || !w.review) return null;
-  const avg = (w.approach + w.processes + w.systemsOutcomes + w.review) / 4;
-  return { avg, rounded: Math.min(5, Math.max(1, Math.round(avg))) as Band };
+// ── APSR percentage-matrix formula ──────────────────────────────────────────
+// Per an SSG auditor's worked example (A=20%, P=20%, S=10%, R=0% = 50% → Band
+// 3): each dimension scores a band (1–5) or 0; band N is worth N×5% (Band
+// 1=5% … Band 5=25%, max 25% per dimension); the four sum to a 0–100% total;
+// the total maps to the final band in five equal 20-point ranges.
+//
+// RECONSTRUCTED from ONE example — the exact cut-offs and whether 0% is a
+// valid "below Band 1" score are NOT auditor-confirmed. See
+// docs/edutrust-band-scoring.md. `INFERRED_THRESHOLDS` flags this at the UI.
+export const PCT_PER_BAND = 5; // Band N → N × 5%
+export const INFERRED_THRESHOLDS = true;
+
+export function pctForScore(s: ApsrDimensionScore): number {
+  return s * PCT_PER_BAND; // 0→0, 1→5, … 5→25
 }
 
-// The disagreement gate: significant = the working's ROUNDED average differs
-// from the selected official band by ≥1 full band. Returns the comparison
-// when the gate fires, null when it doesn't (including when the working is
-// incomplete — nothing to compare against).
-export function bandMismatch(band: Band, w: ApsrWorkingScores | undefined): { avg: number; rounded: Band } | null {
-  const result = apsrWorkingAverage(w);
-  if (!result) return null;
-  return Math.abs(band - result.rounded) >= 1 ? result : null;
+// Total% → final band: 0–20→1, 21–40→2, 41–60→3, 61–80→4, 81–100→5.
+// Math.ceil(total/20) lands each boundary in the lower band (40→2, 50→3),
+// clamped to 1–5 (total 0 → Band 1).
+export function finalBandFromPct(total: number): Band {
+  return Math.min(5, Math.max(1, Math.ceil(total / 20))) as Band;
 }
 
-// True when this item was scored under the OLD ladder model (it has specific
-// lines) but has no holistic band yet — its old computed band is never
-// reinterpreted as a holistic one; the UI shows "needs re-assessment" and the
-// item contributes to scoring as not-started until a human re-bands it.
+export type ApsrMatrixResult = {
+  pcts: { approach: number; processes: number; systemsOutcomes: number; review: number };
+  total: number;
+  band: Band;
+  complete: boolean; // all four dimensions have a score (0 counts as scored)
+};
+
+const APSR_DIMS = ["approach", "processes", "systemsOutcomes", "review"] as const;
+
+// Computes the running total + final band from the matrix. Always returns a
+// result (partial totals shown live); `complete` is false until all four are
+// set. A dimension left undefined contributes 0 to the running total but keeps
+// `complete` false, so the save gate can require a real 0-or-band on each.
+export function apsrMatrixResult(m: ApsrMatrixScores | undefined): ApsrMatrixResult {
+  const pcts = { approach: 0, processes: 0, systemsOutcomes: 0, review: 0 };
+  let complete = true;
+  for (const d of APSR_DIMS) {
+    const s = m?.[d];
+    if (s === undefined) complete = false;
+    else pcts[d] = pctForScore(s);
+  }
+  const total = pcts.approach + pcts.processes + pcts.systemsOutcomes + pcts.review;
+  return { pcts, total, band: finalBandFromPct(total), complete };
+}
+
+// True when the item has checklist lines but no CURRENT-model band — either no
+// holisticBand at all (old ladder), or a holisticBand from the retired holistic
+// model (no matrixScores). Neither is carried forward as a matrix band.
 export function needsReassessment(entry: Pick<SubCriterionChecklistEntry, "specific" | "holisticBand">): boolean {
-  return entry.specific.length > 0 && !entry.holisticBand;
+  return entry.specific.length > 0 && !entry.holisticBand?.matrixScores;
 }
 
 // Honesty advisories for a selected band — the ported spirit of the old

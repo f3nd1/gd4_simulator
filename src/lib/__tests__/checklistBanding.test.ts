@@ -7,8 +7,9 @@ import {
   computeChecklistOverrides,
   bandToScore,
   findingDimension,
-  apsrWorkingAverage,
-  bandMismatch,
+  apsrMatrixResult,
+  finalBandFromPct,
+  pctForScore,
 } from "../checklistBanding";
 import { EDUTRUST_BANDS, bandTitle } from "../../data/edutrustRubric";
 import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
@@ -85,17 +86,20 @@ describe("needsReassessment — old-model items are flagged, never silently re-b
     expect(needsReassessment(entry({ gd4ItemId: "6.2.1", specific: [line("Met")] }))).toBe(true);
   });
   it("false once a holistic band is set", () => {
-    expect(needsReassessment(entry({ gd4ItemId: "6.2.1", specific: [line("Met")], holisticBand: { band: 3, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" } }))).toBe(false);
+    expect(needsReassessment(entry({ gd4ItemId: "6.2.1", specific: [line("Met")], holisticBand: { band: 3, matrixScores: { approach: 4, processes: 4, systemsOutcomes: 2, review: 0 }, totalPct: 50, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" } }))).toBe(false);
   });
   it("false for an untouched item (no lines at all)", () => {
     expect(needsReassessment(entry({ gd4ItemId: "6.2.1" }))).toBe(false);
+  });
+  it("true for an old holistic-model band (band set but no APSR matrixScores) — must be re-assessed under the percentage method", () => {
+    expect(needsReassessment(entry({ gd4ItemId: "6.2.1", specific: [line("Met")], holisticBand: { band: 4, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" } as never }))).toBe(true);
   });
 });
 
 describe("computeChecklistOverrides — the holistic band feeds scoring; nothing is computed", () => {
   it("produces an override only for items with a holistic band", () => {
     const entries = {
-      "6.2.1": entry({ gd4ItemId: "6.2.1", specific: [line("Met", [ev("Present")])], holisticBand: { band: 4, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" } }),
+      "6.2.1": entry({ gd4ItemId: "6.2.1", specific: [line("Met", [ev("Present")])], holisticBand: { band: 4, matrixScores: { approach: 4, processes: 4, systemsOutcomes: 4, review: 4 }, totalPct: 80, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" } }),
       // old-model item: lines but no holistic band → NO override (needs re-assessment)
       "6.3.1": entry({ gd4ItemId: "6.3.1", specific: [line("Met", [ev("Present")]), line("Met", [ev("Present")])] }),
     };
@@ -107,11 +111,11 @@ describe("computeChecklistOverrides — the holistic band feeds scoring; nothing
     // Band 5 with zero evidence would have been floored to Band 1 by the old
     // engine; under the holistic model the human judgment stands (the
     // advisories below flag it instead).
-    const entries = { "1.1.1": entry({ gd4ItemId: "1.1.1", specific: [line("Met")], holisticBand: { band: 5, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" } }) };
+    const entries = { "1.1.1": entry({ gd4ItemId: "1.1.1", specific: [line("Met")], holisticBand: { band: 5, matrixScores: { approach: 5, processes: 5, systemsOutcomes: 5, review: 5 }, totalPct: 100, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" } }) };
     expect(computeChecklistOverrides(entries, GD4_REQUIREMENTS)["1.1.1"].band).toBe(5);
   });
   it("skips unknown item ids", () => {
-    const entries = { "9.9.9": entry({ gd4ItemId: "9.9.9", holisticBand: { band: 3, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" } }) };
+    const entries = { "9.9.9": entry({ gd4ItemId: "9.9.9", holisticBand: { band: 3, matrixScores: { approach: 4, processes: 4, systemsOutcomes: 2, review: 0 }, totalPct: 50, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" } }) };
     expect(computeChecklistOverrides(entries, GD4_REQUIREMENTS)).toEqual({});
   });
 });
@@ -166,37 +170,60 @@ describe("findingDimension — splits procedure (policy) from evidence (implemen
   });
 });
 
-describe("apsrWorkingAverage — internal working average, never the official band", () => {
-  it("null until all four dimensions are scored", () => {
-    expect(apsrWorkingAverage(undefined)).toBeNull();
-    expect(apsrWorkingAverage({})).toBeNull();
-    expect(apsrWorkingAverage({ approach: 3, processes: 3, systemsOutcomes: 3 })).toBeNull();
-  });
-  it("averages all four and rounds half up (3,3,4,4 → 3.5 → Band 4)", () => {
-    expect(apsrWorkingAverage({ approach: 3, processes: 3, systemsOutcomes: 4, review: 4 })).toEqual({ avg: 3.5, rounded: 4 });
-  });
-  it("uniform scores round-trip exactly", () => {
-    expect(apsrWorkingAverage({ approach: 2, processes: 2, systemsOutcomes: 2, review: 2 })!.rounded).toBe(2);
+describe("pctForScore — each dimension score converts to its percentage (Band N × 5%, 0 → 0%)", () => {
+  it("0 is a genuine 0% (below Band 1), not folded into a band", () => expect(pctForScore(0)).toBe(0));
+  it("Band N → N × 5%", () => {
+    expect(pctForScore(1)).toBe(5);
+    expect(pctForScore(2)).toBe(10);
+    expect(pctForScore(4)).toBe(20);
+    expect(pctForScore(5)).toBe(25);
   });
 });
 
-describe("bandMismatch — the disagreement gate (≥1 full band vs rounded average)", () => {
-  const working = { approach: 2 as const, processes: 2 as const, systemsOutcomes: 2 as const, review: 2 as const }; // avg Band 2
-  it("fires when the selected band differs from the rounded average by ≥1", () => {
-    expect(bandMismatch(4, working)).toEqual({ avg: 2, rounded: 2 });
-    expect(bandMismatch(1, working)).toEqual({ avg: 2, rounded: 2 });
+describe("finalBandFromPct — inferred five equal 20-point ranges (0-20=B1 … 81-100=B5)", () => {
+  it("maps the range boundaries", () => {
+    expect(finalBandFromPct(0)).toBe(1);
+    expect(finalBandFromPct(20)).toBe(1);
+    expect(finalBandFromPct(40)).toBe(2);
+    expect(finalBandFromPct(50)).toBe(3);
+    expect(finalBandFromPct(60)).toBe(3);
+    expect(finalBandFromPct(80)).toBe(4);
+    expect(finalBandFromPct(100)).toBe(5);
   });
-  it("does not fire when they agree", () => {
-    expect(bandMismatch(2, working)).toBeNull();
+  it("clamps out-of-range input to 1..5", () => {
+    expect(finalBandFromPct(-10)).toBe(1);
+    expect(finalBandFromPct(999)).toBe(5);
   });
-  it("does not fire when the working is incomplete — nothing to compare against", () => {
-    expect(bandMismatch(5, { approach: 1 })).toBeNull();
-    expect(bandMismatch(5, undefined)).toBeNull();
+});
+
+describe("apsrMatrixResult — sums the four dimension percentages → total → final band", () => {
+  it("reproduces the SSG auditor's worked example: A=20 + P=20 + S=10 + R=0 = 50% → Band 3", () => {
+    const r = apsrMatrixResult({ approach: 4, processes: 4, systemsOutcomes: 2, review: 0 });
+    expect(r.pcts).toEqual({ approach: 20, processes: 20, systemsOutcomes: 10, review: 0 });
+    expect(r.total).toBe(50);
+    expect(r.band).toBe(3);
+    expect(r.complete).toBe(true);
   });
-  it("rounding boundary: avg 3.5 rounds to 4, so official Band 4 agrees but Band 3 fires", () => {
-    const w = { approach: 3 as const, processes: 3 as const, systemsOutcomes: 4 as const, review: 4 as const };
-    expect(bandMismatch(4, w)).toBeNull();
-    expect(bandMismatch(3, w)).not.toBeNull();
+  it("all-Band-5 → 100% → Band 5", () => {
+    const r = apsrMatrixResult({ approach: 5, processes: 5, systemsOutcomes: 5, review: 5 });
+    expect(r.total).toBe(100);
+    expect(r.band).toBe(5);
+  });
+  it("incomplete (not all four scored) → complete false, total counts only what is scored", () => {
+    const r = apsrMatrixResult({ approach: 4, processes: 4 });
+    expect(r.complete).toBe(false);
+    expect(r.total).toBe(40);
+  });
+  it("undefined → zeros, not complete", () => {
+    const r = apsrMatrixResult(undefined);
+    expect(r.total).toBe(0);
+    expect(r.complete).toBe(false);
+  });
+  it("R=0 counts as a scored dimension (0% is a real input, distinct from unscored)", () => {
+    const r = apsrMatrixResult({ approach: 4, processes: 4, systemsOutcomes: 4, review: 0 });
+    expect(r.complete).toBe(true);
+    expect(r.total).toBe(60);
+    expect(r.band).toBe(3);
   });
 });
 

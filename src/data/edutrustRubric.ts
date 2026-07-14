@@ -8,10 +8,14 @@
 // gd4Requirements' bandDescriptorsFor, band-calibration.md's narratives) were
 // exactly that mistake.
 //
-// The rubric is HOLISTIC: §23 places "your Approach, Processes, Systems (or
-// Outcomes) and Review ... in a band" — ONE band, judged by reading across
-// all four dimension descriptors at a level, not four independent scores
-// combined by a formula. There is deliberately NO combination function here.
+// The document phrases the result as placing "your Approach, Processes,
+// Systems (or Outcomes) and Review ... in a band" (singular) and gives no
+// combination formula. An SSG auditor later clarified that actual practice
+// scores the four dimensions SEPARATELY and sums them (A=20%+P=20%+S=10%+R=0%
+// = 50% → Band 3). The descriptor text below stays verbatim from the document
+// and is the source of truth for descriptors; the summing arithmetic lives in
+// checklistBanding.ts (pctForScore/finalBandFromPct). Full history and what is
+// still unconfirmed: docs/edutrust-band-scoring.md.
 
 import type { Band } from "../types";
 

@@ -29,7 +29,9 @@ function entry(itemId: string, band?: Band): SubCriterionChecklistEntry {
     gd4ItemId: itemId,
     generic: [],
     specific: [specific(band ? "Met" : "Not met")],
-    holisticBand: band ? { band, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" } : undefined,
+    holisticBand: band
+      ? { band, matrixScores: { approach: band, processes: band, systemsOutcomes: band, review: band }, totalPct: band * 20, source: "human", decidedAt: "2026-07-14T00:00:00.000Z" }
+      : undefined,
     pendingGenerated: [],
   };
 }

@@ -277,11 +277,12 @@ export type HolisticBandSuggestionResult = {
     systemsOutcomes: HolisticDimensionAssessment;
     review: HolisticDimensionAssessment;
   };
-  // The four per-dimension bands, in the ApsrWorkingScores shape, so the
-  // reviewer's "YOUR OWN WORKING" box can be auto-populated from the AI's
-  // diagnostic guess (an internal aid, never the official score).
+  // The four per-dimension scores, in the ApsrMatrixScores shape, so the
+  // reviewer's APSR matrix can be auto-populated from the AI's first-pass
+  // suggestion (the human accepts or overrides — this IS the official input
+  // now, not a side diagnostic).
   dimensionBands: ApsrWorkingScores;
-  limitingFactor: string; // which dimension(s) hold the holistic pick down
+  limitingFactor: string; // which dimension(s) hold the total down
   // Human-readable summary composed from the structured output above — this
   // is what fills the mandatory justification when the human accepts the AI's
   // own band (it cites all four dimensions, satisfying the requirement).

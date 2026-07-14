@@ -305,8 +305,7 @@ function ItemBlock({ it }: { it: ItemReport }) {
       </div>
       {it.bandRationale && (
         <div style={{ fontSize: 11.5, color: "#475569", marginTop: 4 }}>
-          <b>Band justification:</b> {it.bandRationale}
-          {it.bandMismatchReason && <span style={{ display: "block", color: "#92400e", marginTop: 2 }}><b>⚖ Differs from reviewer's own APSR working:</b> {it.bandMismatchReason}</span>}
+          <b>Band justification{it.bandTotalPct != null ? ` (APSR total ${it.bandTotalPct}%)` : ""}:</b> {it.bandRationale}
         </div>
       )}
       {it.strengths.length > 0 && (
