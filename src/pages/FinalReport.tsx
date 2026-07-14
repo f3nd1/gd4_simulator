@@ -303,6 +303,12 @@ function ItemBlock({ it }: { it: ItemReport }) {
         <span style={{ fontSize: 12.5 }}>{it.title}</span>
         {it.hasChecklist && <span style={{ fontSize: 11, color: "#94a3b8" }}>· {it.completeness.assessed} of {it.completeness.total} lines assessed ({it.completeness.met} Met · {it.completeness.partial} Partial · {it.completeness.notMet} Not met)</span>}
       </div>
+      {it.bandRationale && (
+        <div style={{ fontSize: 11.5, color: "#475569", marginTop: 4 }}>
+          <b>Band justification:</b> {it.bandRationale}
+          {it.bandMismatchReason && <span style={{ display: "block", color: "#92400e", marginTop: 2 }}><b>⚖ Differs from reviewer's own APSR working:</b> {it.bandMismatchReason}</span>}
+        </div>
+      )}
       {it.strengths.length > 0 && (
         <Bullets title="Strengths" color="#15803d" items={it.strengths} />
       )}

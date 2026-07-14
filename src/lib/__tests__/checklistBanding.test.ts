@@ -7,6 +7,8 @@ import {
   computeChecklistOverrides,
   bandToScore,
   findingDimension,
+  apsrWorkingAverage,
+  bandMismatch,
 } from "../checklistBanding";
 import { EDUTRUST_BANDS, bandTitle } from "../../data/edutrustRubric";
 import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
@@ -161,6 +163,40 @@ describe("findingDimension — splits procedure (policy) from evidence (implemen
   });
   it("no APSR + Not met → Evidence", () => {
     expect(findingDimension(line("Not met"))).toBe("Evidence");
+  });
+});
+
+describe("apsrWorkingAverage — internal working average, never the official band", () => {
+  it("null until all four dimensions are scored", () => {
+    expect(apsrWorkingAverage(undefined)).toBeNull();
+    expect(apsrWorkingAverage({})).toBeNull();
+    expect(apsrWorkingAverage({ approach: 3, processes: 3, systemsOutcomes: 3 })).toBeNull();
+  });
+  it("averages all four and rounds half up (3,3,4,4 → 3.5 → Band 4)", () => {
+    expect(apsrWorkingAverage({ approach: 3, processes: 3, systemsOutcomes: 4, review: 4 })).toEqual({ avg: 3.5, rounded: 4 });
+  });
+  it("uniform scores round-trip exactly", () => {
+    expect(apsrWorkingAverage({ approach: 2, processes: 2, systemsOutcomes: 2, review: 2 })!.rounded).toBe(2);
+  });
+});
+
+describe("bandMismatch — the disagreement gate (≥1 full band vs rounded average)", () => {
+  const working = { approach: 2 as const, processes: 2 as const, systemsOutcomes: 2 as const, review: 2 as const }; // avg Band 2
+  it("fires when the selected band differs from the rounded average by ≥1", () => {
+    expect(bandMismatch(4, working)).toEqual({ avg: 2, rounded: 2 });
+    expect(bandMismatch(1, working)).toEqual({ avg: 2, rounded: 2 });
+  });
+  it("does not fire when they agree", () => {
+    expect(bandMismatch(2, working)).toBeNull();
+  });
+  it("does not fire when the working is incomplete — nothing to compare against", () => {
+    expect(bandMismatch(5, { approach: 1 })).toBeNull();
+    expect(bandMismatch(5, undefined)).toBeNull();
+  });
+  it("rounding boundary: avg 3.5 rounds to 4, so official Band 4 agrees but Band 3 fires", () => {
+    const w = { approach: 3 as const, processes: 3 as const, systemsOutcomes: 4 as const, review: 4 as const };
+    expect(bandMismatch(4, w)).toBeNull();
+    expect(bandMismatch(3, w)).not.toBeNull();
   });
 });
 

@@ -17,7 +17,7 @@
 //   - computeChecklistOverrides(): feeds the selected holistic band into the
 //     official scoring engine (band/5 × criterion points), same shape as
 //     before — the §20 gate and criterion rollup are unchanged.
-import type { Band, GD4Requirement, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
+import type { ApsrWorkingScores, Band, GD4Requirement, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
 import { bandTitle } from "../data/edutrustRubric";
 import { findingTypeForStatus, ncSeverityFor } from "./findingClassification";
 
@@ -52,6 +52,28 @@ export function lineCompleteness(specific: SpecificChecklistLine[]): LineComplet
     notMet: graded.filter((l) => l.status === "Not met").length,
     na: specific.length - graded.length,
   };
+}
+
+// The reviewer's own per-dimension working, averaged — an internal diagnostic
+// SUGGESTION, never the official band (no combination formula exists in the
+// official rubric). Returns null until all four dimensions are scored.
+// Rounding: Math.round on the plain mean — no prior band-averaging precedent
+// exists in this codebase (the §20 gate compares raw averages to a threshold,
+// it never rounds to a band), so standard rounding is the deliberate choice.
+export function apsrWorkingAverage(w: ApsrWorkingScores | undefined): { avg: number; rounded: Band } | null {
+  if (!w || !w.approach || !w.processes || !w.systemsOutcomes || !w.review) return null;
+  const avg = (w.approach + w.processes + w.systemsOutcomes + w.review) / 4;
+  return { avg, rounded: Math.min(5, Math.max(1, Math.round(avg))) as Band };
+}
+
+// The disagreement gate: significant = the working's ROUNDED average differs
+// from the selected official band by ≥1 full band. Returns the comparison
+// when the gate fires, null when it doesn't (including when the working is
+// incomplete — nothing to compare against).
+export function bandMismatch(band: Band, w: ApsrWorkingScores | undefined): { avg: number; rounded: Band } | null {
+  const result = apsrWorkingAverage(w);
+  if (!result) return null;
+  return Math.abs(band - result.rounded) >= 1 ? result : null;
 }
 
 // True when this item was scored under the OLD ladder model (it has specific

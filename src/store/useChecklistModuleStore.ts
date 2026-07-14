@@ -12,9 +12,11 @@ import type {
   Finding,
   ChecklistLineWrite,
   HolisticBandRecord,
+  ApsrWorkingScores,
+  Band,
 } from "../types";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { buildDraftFinding, lineSufficiency, lineApsr } from "../lib/checklistBanding";
+import { buildDraftFinding, lineSufficiency, lineApsr, bandMismatch } from "../lib/checklistBanding";
 import { findingDedupeKey, findingKeyOf, normalizeAuditRef } from "../lib/gd4Refs";
 import { buildGenericLines, buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
@@ -66,8 +68,17 @@ export type ChecklistModuleState = {
   // The item's ONE holistic EduTrust band (official §23 rubric) — set only by
   // an explicit human action (selecting a level in the rubric comparison
   // table, or accepting an AI suggestion). Logged to the Human Decision Log.
-  setHolisticBand: (itemId: string, record: Omit<HolisticBandRecord, "decidedAt">) => void;
+  // HARD GATES (mirrored in the UI, enforced here so the rule holds for every
+  // caller, like setClosureHuman's closure gate):
+  //   1. rationale is REQUIRED — a band with no stated reason is rejected.
+  //   2. when the item's apsrWorking is complete and its rounded average
+  //      differs from the band by ≥1, mismatchReason is REQUIRED too.
+  // The current apsrWorking is snapshotted onto the record automatically.
+  setHolisticBand: (itemId: string, record: Omit<HolisticBandRecord, "decidedAt" | "dimensionScores">) => void;
   clearHolisticBand: (itemId: string) => void;
+  // The reviewer's own per-dimension 1-5 working (internal aid, NOT official;
+  // optional). Pass undefined to un-set a dimension.
+  setApsrWorking: (itemId: string, dim: keyof ApsrWorkingScores, value: Band | undefined) => void;
   // AI first pass for the HOLISTIC band: one judgment call across all four
   // official §23 dimension descriptors, returning a suggestion + rationale.
   // Never commits — the caller shows it and the human accepts via
@@ -161,9 +172,32 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         }),
 
       setHolisticBand: (itemId, record) => {
-        const prev = get().entries[itemId]?.holisticBand;
+        const existing = get().entries[itemId];
+        const prev = existing?.holisticBand;
+        // Gate 1: a band without a written justification is not a usable
+        // record — reject for every caller, not just the UI.
+        if (!record.rationale?.trim()) {
+          console.warn("[setHolisticBand] rejected: a written justification citing the four APSR dimensions is required.");
+          return;
+        }
+        // Gate 2: the reviewer's own complete dimension working disagrees by
+        // ≥1 band — the tension must be resolved in writing, not glossed over.
+        const mismatch = bandMismatch(record.band, existing?.apsrWorking);
+        if (mismatch && !record.mismatchReason?.trim()) {
+          console.warn(`[setHolisticBand] rejected: official Band ${record.band} differs from the reviewer's own dimension average (Band ${mismatch.rounded}) — a one-line mismatch reason is required.`);
+          return;
+        }
         get().ensureEntry(itemId);
-        const full: HolisticBandRecord = { ...record, decidedAt: new Date().toISOString() };
+        const working = get().entries[itemId]?.apsrWorking ?? existing?.apsrWorking;
+        const full: HolisticBandRecord = {
+          ...record,
+          rationale: record.rationale.trim(),
+          // Only keep the mismatch reason when the gate actually fired — a
+          // stale reason on an agreeing save would read as a phantom conflict.
+          mismatchReason: mismatch ? record.mismatchReason?.trim() : undefined,
+          dimensionScores: working && Object.values(working).some((v) => v != null) ? { ...working } : undefined,
+          decidedAt: new Date().toISOString(),
+        };
         set((s) => mapEntry(s, itemId, (e) => ({ ...e, holisticBand: full })));
         // Band selection is a scoring decision — always on the human record.
         useWorkspaceStore.getState().logHumanDecision({
@@ -171,7 +205,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           subjectId: itemId,
           field: "band",
           aiOutput: record.source === "ai-accepted" ? `AI suggested Band ${record.band}${record.rationale ? ` — ${record.rationale}` : ""}` : prev ? `Previous: Band ${prev.band}` : "No prior band",
-          humanDecision: `Band ${record.band}${record.rationale ? ` — ${record.rationale}` : ""}`,
+          humanDecision: `Band ${record.band} — ${full.rationale}${full.mismatchReason ? ` | Differs from own APSR working average (Band ${mismatch!.rounded}): ${full.mismatchReason}` : ""}`,
           changed: prev?.band !== record.band,
           decisionType: record.source === "ai-accepted" ? "Accepted" : prev && prev.band !== record.band ? "Overridden" : "Accepted",
           reason: record.rationale ?? "",
@@ -180,6 +214,11 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
 
       clearHolisticBand: (itemId) =>
         set((s) => mapEntry(s, itemId, (e) => ({ ...e, holisticBand: undefined }))),
+
+      setApsrWorking: (itemId, dim, value) => {
+        get().ensureEntry(itemId);
+        set((s) => mapEntry(s, itemId, (e) => ({ ...e, apsrWorking: { ...(e.apsrWorking ?? {}), [dim]: value } })));
+      },
 
       suggestBand: async (itemId) => {
         const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);

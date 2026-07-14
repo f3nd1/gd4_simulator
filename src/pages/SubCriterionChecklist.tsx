@@ -7,8 +7,8 @@ import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories } from "../lib/checklistBanding";
-import { bandTitle } from "../data/edutrustRubric";
+import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrWorkingAverage, bandMismatch } from "../lib/checklistBanding";
+import { bandTitle, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
 import { EdutrustBandTable } from "../components/ui/EdutrustBandTable";
 import type { HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
 import { apsrAuditNote } from "../lib/ai/simulateAI";
@@ -20,6 +20,7 @@ import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { GOLD, BLUE, INK, TONE, bandTone } from "../lib/theme";
 import type {
+  Band,
   GD4Requirement,
   FindingDimension,
   SpecificChecklistLine,
@@ -269,6 +270,7 @@ export function SubCriterionChecklist() {
   const ensureEntry = useChecklistModuleStore((s) => s.ensureEntry);
   const setHolisticBand = useChecklistModuleStore((s) => s.setHolisticBand);
   const clearHolisticBand = useChecklistModuleStore((s) => s.clearHolisticBand);
+  const setApsrWorking = useChecklistModuleStore((s) => s.setApsrWorking);
   const suggestBand = useChecklistModuleStore((s) => s.suggestBand);
   const generateSpecific = useChecklistModuleStore((s) => s.generateSpecific);
   const updatePendingLine = useChecklistModuleStore((s) => s.updatePendingLine);
@@ -307,6 +309,14 @@ export function SubCriterionChecklist() {
   // or ignore. Cleared when switching items.
   const [bandSuggestion, setBandSuggestion] = useState<HolisticBandSuggestionResult | null>(null);
   const [bandRationaleDraft, setBandRationaleDraft] = useState("");
+  // Which band the CURRENT draft justification was written for, when it was
+  // pre-filled (from a stored record or an AI suggestion) rather than typed
+  // fresh. Guards the "AI rationale silently covers a different human
+  // choice" hole: picking a band the draft wasn't written for is blocked
+  // until the human types their own words (typing sets this back to null).
+  const [rationaleOrigin, setRationaleOrigin] = useState<{ band: Band; fromAi: boolean } | null>(null);
+  const [mismatchReasonDraft, setMismatchReasonDraft] = useState("");
+  const [bandSaveError, setBandSaveError] = useState<string | null>(null);
   const [bandFeedback, setBandFeedback] = useState<string | null>(null);
   // Which read-only reasoning tab the expanded line shows — pure UI state,
   // both halves' data are already on the line's stored evidence item.
@@ -417,8 +427,42 @@ export function SubCriterionChecklist() {
     setSelectedId(id);
     setExpandedLine(null);
     setBandSuggestion(null);
-    setBandRationaleDraft(entries[id]?.holisticBand?.rationale ?? "");
+    const stored = entries[id]?.holisticBand;
+    setBandRationaleDraft(stored?.rationale ?? "");
+    setRationaleOrigin(stored?.rationale ? { band: stored.band, fromAi: stored.source === "ai-accepted" } : null);
+    setMismatchReasonDraft(stored?.mismatchReason ?? "");
+    setBandSaveError(null);
     ensureEntry(id);
+  }
+
+  // Every path that saves the official band funnels through here, so the two
+  // mandatory gates (justification; mismatch reason when the own-working
+  // average disagrees by ≥1 band) hold for column clicks AND the AI-accept
+  // button. Mirrors the store-side guards in setHolisticBand.
+  function trySaveBand(b: Band, opts?: { viaAiAccept?: boolean; rationale?: string }) {
+    const rationale = (opts?.rationale ?? bandRationaleDraft).trim();
+    if (!rationale) {
+      setBandSaveError("A justification is required before the band can be saved — explain why this band fits using Approach, Processes, Systems & Outcomes, and Review.");
+      return;
+    }
+    if (!opts?.viaAiAccept && rationaleOrigin && rationaleOrigin.band !== b) {
+      setBandSaveError(`The justification in the box was written for Band ${rationaleOrigin.band}${rationaleOrigin.fromAi ? " (the AI's rationale)" : ""} — write your own reason why Band ${b} fits before saving.`);
+      return;
+    }
+    const mismatch = bandMismatch(b, entry?.apsrWorking);
+    if (mismatch && !mismatchReasonDraft.trim()) {
+      setBandSaveError(`Your own dimension working averages Band ${mismatch.rounded}, but you are selecting Band ${b} — write a one-line reason for the difference in the mismatch box before saving.`);
+      return;
+    }
+    setBandSaveError(null);
+    setHolisticBand(selectedId, {
+      band: b,
+      rationale,
+      source: opts?.viaAiAccept ? "ai-accepted" : "human",
+      mismatchReason: mismatch ? mismatchReasonDraft.trim() : undefined,
+    });
+    setBandRationaleDraft(rationale);
+    setRationaleOrigin({ band: b, fromAi: !!opts?.viaAiAccept });
   }
 
   useEffect(() => {
@@ -636,7 +680,12 @@ export function SubCriterionChecklist() {
                   Clear / re-assess
                 </button>
               </div>
-              {holisticBand.rationale && <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 4 }}>Rationale: {holisticBand.rationale}</div>}
+              {holisticBand.rationale && <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 4 }}>Justification: {holisticBand.rationale}</div>}
+              {holisticBand.mismatchReason && (
+                <div style={{ fontSize: 11.5, color: "#92400e", marginTop: 4 }}>
+                  ⚖ Differs from own APSR working{(() => { const w = apsrWorkingAverage(holisticBand.dimensionScores); return w ? ` (average Band ${w.rounded})` : ""; })()}: {holisticBand.mismatchReason}
+                </div>
+              )}
               {bandAdvisories.map((a) => (
                 <div key={a} style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>⚠ Advisory: {a}</div>
               ))}
@@ -692,9 +741,13 @@ export function SubCriterionChecklist() {
                 </span>
                 <button
                   onClick={() => {
-                    setHolisticBand(selectedId, { band: bandSuggestion.band, rationale: bandSuggestion.rationale, source: "ai-accepted" });
+                    // Accepting the AI's OWN band: its rationale (which must
+                    // cite the descriptors it matched) satisfies the
+                    // justification requirement. The mismatch gate still
+                    // applies inside trySaveBand.
                     setBandRationaleDraft(bandSuggestion.rationale);
-                    setBandSuggestion(null);
+                    setRationaleOrigin({ band: bandSuggestion.band, fromAi: true });
+                    trySaveBand(bandSuggestion.band, { viaAiAccept: true, rationale: bandSuggestion.rationale });
                   }}
                   style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#fff", background: "#4f46e5", border: "none", borderRadius: 6, padding: "4px 10px", whiteSpace: "nowrap", flexShrink: 0 }}
                 >
@@ -706,17 +759,97 @@ export function SubCriterionChecklist() {
                 />
               </div>
             )}
-            <input
-              placeholder="Rationale (optional — recorded with your selection: why this band fits)"
-              value={bandRationaleDraft}
-              onChange={(e) => setBandRationaleDraft(e.target.value)}
-              style={{ ...inputStyle, marginBottom: 8 }}
-            />
+            <label style={{ display: "block", marginBottom: 8 }}>
+              <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Why this band? <b style={{ color: "#b23121" }}>Required</b> — explain using Approach, Processes, Systems &amp; Outcomes, and Review</span>
+              <textarea
+                rows={2}
+                placeholder="Why this band? Explain using Approach, Processes, Systems & Outcomes, and Review."
+                value={bandRationaleDraft}
+                onChange={(e) => { setBandRationaleDraft(e.target.value); setRationaleOrigin(null); setBandSaveError(null); }}
+                style={{ ...inputStyle, marginTop: 3, resize: "vertical" }}
+              />
+            </label>
+            {(() => {
+              const working = apsrWorkingAverage(entry?.apsrWorking);
+              return working ? (
+                <label style={{ display: "block", marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Mismatch reason — required only if the band you pick differs from your own working average (Band {working.rounded})</span>
+                  <input
+                    placeholder="One line: why does your official judgment differ from your own dimension average?"
+                    value={mismatchReasonDraft}
+                    onChange={(e) => { setMismatchReasonDraft(e.target.value); setBandSaveError(null); }}
+                    style={{ ...inputStyle, marginTop: 3 }}
+                  />
+                </label>
+              ) : null;
+            })()}
+            {bandSaveError && (
+              <div style={{ background: "#fbe7e3", border: "1px solid #e3b7b0", borderRadius: 8, padding: "8px 11px", marginBottom: 8, fontSize: 12.5, color: "#b23121", fontWeight: 600 }}>
+                ✋ Not saved: {bandSaveError}
+              </div>
+            )}
             <EdutrustBandTable
               selected={holisticBand?.band}
               suggested={bandSuggestion?.band}
-              onSelect={(b) => setHolisticBand(selectedId, { band: b, rationale: bandRationaleDraft.trim() || undefined, source: "human" })}
+              onSelect={(b) => trySaveBand(b)}
             />
+
+            {/* The reviewer's own per-dimension working — an internal
+                diagnostic aid the official rubric does NOT define (no
+                combination formula exists in the Guidance Document; confirmed
+                by exhaustive search). Optional; its average is a suggestion
+                the disagreement gate compares against, never the band. */}
+            <div style={{ marginTop: 12, border: "1px dashed #f59e0b", borderRadius: 10, padding: "10px 12px", background: "#fffdf5" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+                <b style={{ fontSize: 10.5, letterSpacing: 0.5, color: "#92400e", background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 4, padding: "2px 8px" }}>YOUR OWN WORKING — NOT OFFICIAL</b>
+                <span style={{ fontSize: 11.5, color: "#6b7280" }}>Optional: score each dimension 1–5 for your own diagnosis. The official band above stays one holistic pick.</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 8 }}>
+                {EDUTRUST_DIMENSIONS.map((dim) => {
+                  const val = entry?.apsrWorking?.[dim.key];
+                  return (
+                    <div key={dim.key} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 9px", background: "#fff" }}>
+                      <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 4 }} title={dim.definition}>{dim.label}</div>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        {([1, 2, 3, 4, 5] as Band[]).map((b) => (
+                          <button
+                            key={b}
+                            onClick={() => setApsrWorking(selectedId, dim.key, val === b ? undefined : b)}
+                            title={`${dim.label}: your own score ${b} (click again to clear)`}
+                            style={{
+                              cursor: "pointer", width: 28, height: 26, borderRadius: 6, fontSize: 12, fontWeight: 700,
+                              border: val === b ? "2px solid #b45309" : "1px solid #e2e8f0",
+                              background: val === b ? "#fffbeb" : "#fff", color: val === b ? "#92400e" : "#64748b",
+                            }}
+                          >
+                            {b}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {(() => {
+                const working = apsrWorkingAverage(entry?.apsrWorking);
+                const anySet = Object.values(entry?.apsrWorking ?? {}).some((v) => v != null);
+                if (working) {
+                  const disagrees = holisticBand ? bandMismatch(holisticBand.band, entry?.apsrWorking) : null;
+                  return (
+                    <div style={{ fontSize: 12, marginTop: 8, color: "#92400e", fontWeight: 600 }}>
+                      Your average suggests: Band {working.rounded} — not the official score{" "}
+                      <span style={{ color: "#94a3b8", fontWeight: 400 }}>(mean {working.avg.toFixed(2)})</span>
+                      {disagrees && (
+                        <span style={{ display: "block", color: "#b23121", marginTop: 2 }}>
+                          ⚖ Differs from the official Band {holisticBand!.band} — the recorded mismatch reason: {holisticBand!.mismatchReason || "(none on record — re-save the band to add one)"}
+                        </span>
+                      )}
+                    </div>
+                  );
+                }
+                return anySet ? <div style={{ fontSize: 11.5, marginTop: 8, color: "#94a3b8" }}>Score all four dimensions to see your average.</div> : null;
+              })()}
+            </div>
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <button
@@ -1341,6 +1474,16 @@ export function SubCriterionChecklist() {
             <Metric label="Lines assessed (context)" value={`${completeness.assessed} of ${completeness.total}`} />
             <Metric label="Line outcomes (context)" value={`${completeness.met} Met · ${completeness.partial} Partial · ${completeness.notMet} Not met`} />
           </div>
+          {holisticBand?.rationale && (
+            <div style={{ marginTop: 10, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#475569" }}>
+              <b>Justification:</b> {holisticBand.rationale}
+              {holisticBand.mismatchReason && (
+                <div style={{ marginTop: 4, color: "#92400e" }}>
+                  <b>⚖ Mismatch vs own APSR working{(() => { const w = apsrWorkingAverage(holisticBand.dimensionScores); return w ? ` (average Band ${w.rounded})` : ""; })()}:</b> {holisticBand.mismatchReason}
+                </div>
+              )}
+            </div>
+          )}
           {bandAdvisories.map((a) => (
             <div key={a} style={{ marginTop: 10, background: "#fbe7e3", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#b23121" }}>
               <b>Advisory:</b> {a} <span style={{ color: "#6b7280" }}>(Your selection stands — this is a flag, not a cap.)</span>

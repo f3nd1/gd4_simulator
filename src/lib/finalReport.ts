@@ -23,6 +23,11 @@ export type ItemReport = {
   // True when the item has old-model checklist data but no holistic band yet
   // — its band needs re-assessment under the official §23 rubric.
   needsReassessment: boolean;
+  // The reviewer's recorded justifications, carried wherever the band shows:
+  // why this band (mandatory at selection), and — when their own APSR working
+  // disagreed by ≥1 band — why the official judgment differs from it.
+  bandRationale?: string;
+  bandMismatchReason?: string;
   strengths: string[];
   gaps: string[];
   targetBand: number;
@@ -112,6 +117,8 @@ function analyseItem(
     hasChecklist,
     completeness,
     needsReassessment: reassess,
+    bandRationale: entry?.holisticBand?.rationale,
+    bandMismatchReason: entry?.holisticBand?.mismatchReason,
     strengths,
     gaps,
     targetBand,
