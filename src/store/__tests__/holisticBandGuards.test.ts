@@ -162,6 +162,45 @@ describe("applyLineDimensionTags — batched auto-tag on accepting an AI band su
   });
 });
 
+describe("clearSpecificLines — 'Remove all' genuinely resets the item to unassessed (2026-07-15 fix)", () => {
+  // Before the fix, clearSpecificLines only emptied `specific`/`pendingGenerated`,
+  // leaving `holisticBand` (and its matrixScores) behind — a stale band with
+  // zero supporting lines that computeChecklistOverrides still fed into the
+  // certification score, and that the Final Report still rendered as a
+  // populated table. "Remove all" must now clear the band and the live
+  // (unsaved) matrix working state too, alongside the lines.
+  beforeEach(() => {
+    useChecklistModuleStore.setState({
+      entries: {
+        [ITEM]: {
+          gd4ItemId: ITEM,
+          pendingGenerated: [{ id: "P1", text: "pending", status: "Not met", evidence: [], generatedBy: "ai" }],
+          specific: [{ id: "L1", text: "A real line", status: "Met", evidence: [], generatedBy: "ai" }],
+          holisticBand: { band: 3, totalPct: 50, matrixScores: WORKED, rationale: "x", source: "human", decidedAt: "2026-07-15T00:00:00.000Z" },
+          apsrMatrix: { approach: 4 },
+        },
+      },
+    });
+  });
+
+  it("clears specific and pendingGenerated (existing behaviour)", () => {
+    useChecklistModuleStore.getState().clearSpecificLines(ITEM);
+    const e = useChecklistModuleStore.getState().entries[ITEM]!;
+    expect(e.specific).toEqual([]);
+    expect(e.pendingGenerated).toEqual([]);
+  });
+
+  it("also clears the saved holisticBand — no stale band/matrixScores survive", () => {
+    useChecklistModuleStore.getState().clearSpecificLines(ITEM);
+    expect(useChecklistModuleStore.getState().entries[ITEM]!.holisticBand).toBeUndefined();
+  });
+
+  it("also clears the live apsrMatrix working state", () => {
+    useChecklistModuleStore.getState().clearSpecificLines(ITEM);
+    expect(useChecklistModuleStore.getState().entries[ITEM]!.apsrMatrix).toBeUndefined();
+  });
+});
+
 describe("setApsrMatrix — the official per-dimension input", () => {
   it("stores each dimension score independently, including a genuine 0", () => {
     const s = useChecklistModuleStore.getState();

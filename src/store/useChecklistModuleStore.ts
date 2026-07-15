@@ -415,8 +415,15 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       removeSpecificLine: (itemId, lineId) => set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: e.specific.filter((l) => l.id !== lineId) }))),
 
       // Wipe all Layer 2 lines for an item (e.g. to regenerate from scratch).
-      // Also clears any unconfirmed pending lines so the slate is truly clean.
-      clearSpecificLines: (itemId) => set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: [], pendingGenerated: [] }))),
+      // Also clears any unconfirmed pending lines, the saved band record, and
+      // the live (unsaved) matrix working state, so the item genuinely resets
+      // to "unassessed" rather than leaving a stale band/percentages behind
+      // with zero lines to support them (a band with no evidence backing it
+      // is meaningless, and computeChecklistOverrides would otherwise keep
+      // feeding that stale band into the certification score — a real bug
+      // found 2026-07-15).
+      clearSpecificLines: (itemId) =>
+        set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: [], pendingGenerated: [], holisticBand: undefined, apsrMatrix: undefined }))),
 
       setSpecificStatus: (itemId, lineId, status) => {
         const line = get().entries[itemId]?.specific.find((l) => l.id === lineId);

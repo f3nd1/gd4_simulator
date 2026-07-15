@@ -905,7 +905,7 @@ export function SubCriterionChecklist() {
             {specific.length > 0 && (
               <button
                 onClick={() => {
-                  if (confirm(`Remove all ${specific.length} checklist line(s) for ${selectedId}? This clears their statuses and attached evidence too, so you can regenerate from scratch.`)) clearSpecificLines(selectedId);
+                  if (confirm(`Remove all ${specific.length} checklist line(s) for ${selectedId}? This clears their statuses and attached evidence, AND resets the saved band for this item — it goes back to "not started" with no band or percentages until you regenerate lines and re-assess.`)) clearSpecificLines(selectedId);
                 }}
                 style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #e3b7b0", background: "#fff", color: "#b23121", marginLeft: "auto" }}
               >
