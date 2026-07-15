@@ -73,8 +73,11 @@ const PPD_CONTRADICTION_SCHEMA: ChatSchema = { name: "ppd_contradictions", schem
 // reasons across the columns before committing the holistic pick.
 const bandEnum = sEnum("1", "2", "3", "4", "5");
 const holisticDim = sObj({ reason: sStr, band: bandEnum });
+const apsrDimEnum = sEnum("Approach", "Processes", "Systems & Outcomes", "Review");
+const lineDimTag = sObj({ ref: sStr, dimension: apsrDimEnum });
 const HOLISTIC_BAND_SCHEMA: ChatSchema = { name: "holistic_band", schema: sObj({
   approach: holisticDim, processes: holisticDim, systemsOutcomes: holisticDim, review: holisticDim,
+  lineDimensions: sArr(lineDimTag),
   limitingFactor: sStr, band: bandEnum,
 }) };
 
@@ -269,6 +272,12 @@ export async function runLiveItemReview(
 // suggestion on the checklist's rubric table. Deliberately separate from the
 // per-line Met/Partial/Not-met machinery, which answers a different question.
 export type HolisticDimensionAssessment = { band: Band; reason: string };
+// A structured citation of the SAME per-line reasoning the model already
+// writes into each dimension's free-text `reason` (it names requirement-line
+// refs there today) — captured as data instead of prose so the checklist can
+// auto-tag lines on accept, rather than requiring a fully separate line-
+// generation pass or manual tagging for lines the AI already reasoned about.
+export type HolisticLineDimensionTag = { ref: string; dimension: "Approach" | "Processes" | "Systems & Outcomes" | "Review" };
 export type HolisticBandSuggestionResult = {
   band: Band; // the holistic overall pick — NOT an average of the four below
   dimensions: {
@@ -287,6 +296,11 @@ export type HolisticBandSuggestionResult = {
   // is what fills the mandatory justification when the human accepts the AI's
   // own band (it cites all four dimensions, satisfying the requirement).
   rationale: string;
+  // Per-line dimension tags the model cited while reasoning above. Only ever
+  // matched against REAL checklist lines by normalized ref (never guessed —
+  // see matchLineDimensionTags in checklistBanding.ts), and only ever applied
+  // to lines that are currently untagged (a human's manual pick always wins).
+  lineDimensions: HolisticLineDimensionTag[];
   promptSent?: string;
 };
 
@@ -322,14 +336,15 @@ export async function runHolisticBandSuggestion(
 OFFICIAL BAND TABLE (verbatim):
 ${officialBandTableBlock()}
 
-Do TWO things:
+Do THREE things:
 1. DIAGNOSE each of the four dimensions (Approach, Processes, Systems & Outcomes, Review) SEPARATELY: for each, say which band level (1–5) its own evidence best matches, and a SHORT reason. The reason MUST cite the evidence it relies on using the references already present in the digest — the requirement-line ref (e.g. "6.2.1.DS1") and any "file · chunk" reference shown in a line's APSR note. Never invent a citation or a record not in the digest; missing/weak evidence reads DOWN per the descriptors.
 2. JUDGE the ONE holistic overall band for the whole item. This is a judgment reading the four descriptors of a level together — it is NOT the average, sum, or any calculation of the four dimension bands above. It may sit below the strongest dimension when a weak dimension limits the whole (the official rubric's descriptors gate this way). State which dimension(s) are the limiting factor for your holistic pick.
+3. TAG each individual requirement-line ref you cited above with the ONE dimension it belongs to, in lineDimensions. Copy each ref EXACTLY as it appears in the digest — never invent, reformat or abbreviate one. Only include a line you actually reasoned about in step 1; omit any line you did not cite. This lets the checklist auto-tag those lines instead of a human re-doing what you already worked out.
 
 Rules:
 - Every band is 1 to 5.
 - A suggestion, not a decision — a human reviewer makes the final call.
-Respond with JSON only: {"approach": {"reason": string, "band": "1".."5"}, "processes": {...}, "systemsOutcomes": {...}, "review": {...}, "limitingFactor": string, "band": "1".."5"}.${buildSystemPrompt("bandRecommend", null, "runHolisticBandSuggestion", req.id, domainSkill, undefined, opts?.memories)}${buildDomainBlock(domainSkill)}`;
+Respond with JSON only: {"approach": {"reason": string, "band": "1".."5"}, "processes": {...}, "systemsOutcomes": {...}, "review": {...}, "lineDimensions": [{"ref": string, "dimension": "Approach"|"Processes"|"Systems & Outcomes"|"Review"}], "limitingFactor": string, "band": "1".."5"}.${buildSystemPrompt("bandRecommend", null, "runHolisticBandSuggestion", req.id, domainSkill, undefined, opts?.memories)}${buildDomainBlock(domainSkill)}`;
   const user = `GD4 item ${req.id}: "${req.requirement}"${req.gateSensitive ? " (gate-sensitive)" : ""}.
 
 Per-requirement-line evidence digest (status from the audits/reviewer, evidence sufficiency, per-line APSR notes with any file·chunk citations where a live audit recorded them):
@@ -377,7 +392,17 @@ Diagnose each dimension, then place this item in ONE holistic official band.`;
       .map((k) => `${dimLabel[k]}: Band ${dimensions[k].band} — ${dimensions[k].reason}`)
       .join(" ") +
     ` Overall: Band ${band}${limitingFactor ? ` (limiting factor: ${limitingFactor})` : ""}.`;
-  return { band, dimensions, dimensionBands, limitingFactor, rationale, promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}` };
+  // Best-effort, never fatal: a malformed or missing entry is dropped, not
+  // thrown — this side data must never break the band suggestion itself.
+  // Ref/line matching (never guessed) happens downstream in
+  // matchLineDimensionTags; here we only validate shape.
+  const VALID_LINE_DIMS: HolisticLineDimensionTag["dimension"][] = ["Approach", "Processes", "Systems & Outcomes", "Review"];
+  const rawLineDims = Array.isArray(parsed.lineDimensions) ? parsed.lineDimensions as unknown[] : [];
+  const lineDimensions: HolisticLineDimensionTag[] = rawLineDims
+    .filter((d): d is Record<string, unknown> => !!d && typeof d === "object")
+    .map((d) => ({ ref: String(d.ref ?? "").trim(), dimension: String(d.dimension ?? "").trim() }))
+    .filter((d): d is HolisticLineDimensionTag => d.ref.length > 0 && (VALID_LINE_DIMS as string[]).includes(d.dimension));
+  return { band, dimensions, dimensionBands, limitingFactor, rationale, lineDimensions, promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}` };
 }
 
 function extractFirstJSONArray(text: string): string | null {

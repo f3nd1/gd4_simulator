@@ -13,6 +13,7 @@ import {
   weakestDimensions,
   fastestPathToNextBand,
   lineDimensionDiagnosis,
+  matchLineDimensionTags,
 } from "../checklistBanding";
 import { EDUTRUST_BANDS, bandTitle } from "../../data/edutrustRubric";
 import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
@@ -327,5 +328,53 @@ describe("lineDimensionDiagnosis — the Band Improvement Panel's real 'how to f
     expect(lineDimensionDiagnosis(l, "approach")).toBe("Approach gap text.");
     expect(lineDimensionDiagnosis(l, "review")).toBe("Review gap text.");
     expect(lineDimensionDiagnosis(l, "processes")).toBeUndefined();
+  });
+});
+
+describe("matchLineDimensionTags — the AI band-suggestion accept flow's line auto-tagger", () => {
+  function taggableLine(over: Partial<SpecificChecklistLine> & { id: string }): SpecificChecklistLine {
+    return { text: "x", status: "Not met", evidence: [], generatedBy: "ai", ...over };
+  }
+
+  it("matches by sourceRef and tags a currently-untagged line", () => {
+    const specific = [taggableLine({ id: "L1", sourceRef: "2.1.1.DS1.a" })];
+    const out = matchLineDimensionTags([{ ref: "2.1.1.DS1.a", dimension: "Processes" }], specific);
+    expect(out).toEqual([{ lineId: "L1", dimension: "Processes" }]);
+  });
+
+  it("matches through ref-format drift via normalizeAuditRef, falling back to clause when sourceRef is absent", () => {
+    const specific = [taggableLine({ id: "L1", clause: "2.1.1.DS1.a" })];
+    const out = matchLineDimensionTags([{ ref: "ds: 2.1.1.ds1.a ", dimension: "Approach" }], specific);
+    expect(out).toEqual([{ lineId: "L1", dimension: "Approach" }]);
+  });
+
+  it("drops a tag whose ref matches no real line — never guessed or force-matched", () => {
+    const specific = [taggableLine({ id: "L1", sourceRef: "2.1.1.DS1.a" })];
+    const out = matchLineDimensionTags([{ ref: "2.1.1.DS9.z", dimension: "Review" }], specific);
+    expect(out).toEqual([]);
+  });
+
+  it("never returns a tag for a line that already has a human-set apsrDimension — the manual pick always wins", () => {
+    const specific = [taggableLine({ id: "L1", sourceRef: "2.1.1.DS1.a", apsrDimension: "Review" })];
+    const out = matchLineDimensionTags([{ ref: "2.1.1.DS1.a", dimension: "Processes" }], specific);
+    expect(out).toEqual([]);
+  });
+
+  it("tags every matching line across a full batch", () => {
+    const specific = [
+      taggableLine({ id: "L1", sourceRef: "2.1.1.DS1.a" }),
+      taggableLine({ id: "L2", sourceRef: "2.1.1.DS1.b" }),
+      taggableLine({ id: "L3", sourceRef: "2.1.1.DS2", apsrDimension: "Approach" }), // already tagged — excluded
+    ];
+    const tags = [
+      { ref: "2.1.1.DS1.a", dimension: "Processes" },
+      { ref: "2.1.1.DS1.b", dimension: "Systems & Outcomes" },
+      { ref: "2.1.1.DS2", dimension: "Review" }, // would retag L3 — must be dropped
+    ];
+    const out = matchLineDimensionTags(tags, specific);
+    expect(out).toEqual([
+      { lineId: "L1", dimension: "Processes" },
+      { lineId: "L2", dimension: "Systems & Outcomes" },
+    ]);
   });
 });

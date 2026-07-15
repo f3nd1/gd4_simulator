@@ -8,7 +8,7 @@ import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrMatrixResult } from "../lib/checklistBanding";
+import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrMatrixResult, matchLineDimensionTags } from "../lib/checklistBanding";
 import { BandImprovementPanel } from "../components/ui/BandImprovementPanel";
 import { bandTitle, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
 import { ApsrMatrixSelector } from "../components/ui/ApsrMatrixSelector";
@@ -288,6 +288,7 @@ export function SubCriterionChecklist() {
   const clearSpecificLines = useChecklistModuleStore((s) => s.clearSpecificLines);
   const setSpecificStatus = useChecklistModuleStore((s) => s.setSpecificStatus);
   const setLineApsrDimension = useChecklistModuleStore((s) => s.setLineApsrDimension);
+  const applyLineDimensionTags = useChecklistModuleStore((s) => s.applyLineDimensionTags);
   const addEvidence = useChecklistModuleStore((s) => s.addEvidence);
   const fillEvidenceFromLink = useChecklistModuleStore((s) => s.fillEvidenceFromLink);
   const updateEvidence = useChecklistModuleStore((s) => s.updateEvidence);
@@ -790,7 +791,14 @@ export function SubCriterionChecklist() {
                     The scores are already in the matrix. Add a justification and Save, or edit any dimension first.{bandSuggestion.limitingFactor && <> Limiting factor: {bandSuggestion.limitingFactor}.</>}
                   </span>
                   <button
-                    onClick={() => saveBand({ viaAiAccept: true, rationale: bandSuggestion.rationale })}
+                    onClick={() => {
+                      saveBand({ viaAiAccept: true, rationale: bandSuggestion.rationale });
+                      // Auto-tag the same lines the AI already reasoned about above
+                      // (fix, 2026-07-15) — matched to real, currently-untagged
+                      // lines only; a human's manual tag (Fix b picker) always wins.
+                      const tags = matchLineDimensionTags(bandSuggestion.lineDimensions, specific);
+                      if (tags.length > 0) applyLineDimensionTags(selectedId, tags);
+                    }}
                     style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#fff", background: "#4f46e5", border: "none", borderRadius: 6, padding: "4px 10px", whiteSpace: "nowrap", flexShrink: 0 }}
                   >
                     Accept AI scores &amp; save

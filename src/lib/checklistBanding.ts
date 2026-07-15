@@ -23,6 +23,7 @@
 import type { ApsrDimensionScore, ApsrMatrixScores, Band, GD4Requirement, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
 import { bandTitle } from "../data/edutrustRubric";
 import { findingTypeForStatus, ncSeverityFor } from "./findingClassification";
+import { normalizeAuditRef } from "./gd4Refs";
 
 export function lineSufficiency(line: SpecificChecklistLine): EvidenceSufficiency {
   if (line.evidence.length === 0) return "Missing";
@@ -242,6 +243,30 @@ export function lineApsr(line: SpecificChecklistLine): ApsrBreakdown | undefined
 // invented text.
 export function lineDimensionDiagnosis(line: SpecificChecklistLine, dimKey: keyof ApsrBreakdown): string | undefined {
   return lineApsr(line)?.[dimKey]?.note?.trim() || undefined;
+}
+
+// Matches the band-scoring AI's structured per-line dimension tags
+// (HolisticBandSuggestionResult.lineDimensions — see runHolisticBandSuggestion
+// in agentRuntime.ts, which already cites these same refs in its per-
+// dimension prose) against REAL checklist lines, by normalized ref — the
+// same ref-matching rule buildOptionALineWrites uses (sourceRef, falling
+// back to clause). A tag whose ref matches no line is dropped, never
+// guessed or force-matched. Only lines that are CURRENTLY untagged are
+// returned: a human's manual apsrDimension pick (the Fix-b picker) is never
+// silently overwritten by an AI suggestion accepted afterwards.
+export function matchLineDimensionTags(
+  tags: { ref: string; dimension: string }[],
+  specific: SpecificChecklistLine[]
+): { lineId: string; dimension: NonNullable<SpecificChecklistLine["apsrDimension"]> }[] {
+  const out: { lineId: string; dimension: NonNullable<SpecificChecklistLine["apsrDimension"]> }[] = [];
+  for (const tag of tags) {
+    const normRef = normalizeAuditRef(tag.ref);
+    const line = specific.find(
+      (l) => !l.apsrDimension && ((l.sourceRef && normalizeAuditRef(l.sourceRef) === normRef) || (l.clause && normalizeAuditRef(l.clause) === normRef))
+    );
+    if (line) out.push({ lineId: line.id, dimension: tag.dimension as NonNullable<SpecificChecklistLine["apsrDimension"]> });
+  }
+  return out;
 }
 
 // The Evidence judge's own concrete "what would make this Met" text (Option

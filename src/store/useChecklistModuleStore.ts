@@ -103,6 +103,13 @@ export type ChecklistModuleState = {
   // A human classification, not an AI call: manual/seed lines never get this
   // field any other way (fix (b), 2026-07-14).
   setLineApsrDimension: (itemId: string, lineId: string, dim: SpecificChecklistLine["apsrDimension"]) => void;
+  // Batched, AI-suggestion-driven counterpart to setLineApsrDimension: applies
+  // the tags accepting an AI band suggestion produced (already matched to
+  // real, currently-untagged lines by matchLineDimensionTags — see
+  // runBandSuggestion's accept flow in SubCriterionChecklist.tsx). Re-checks
+  // "currently untagged" against live state at write time too, so a human
+  // tag applied between suggestion and accept always wins.
+  applyLineDimensionTags: (itemId: string, tags: { lineId: string; dimension: NonNullable<SpecificChecklistLine["apsrDimension"]> }[]) => void;
 
   addEvidence: (itemId: string, lineId: string, evidence: Omit<SubChecklistEvidenceItem, "id">) => void;
   // Replaces all auto-generated audit evidence (items that have a runId, i.e.
@@ -443,6 +450,15 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           });
         }
         set((s) => mapEntry(s, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, apsrDimension: dim }))));
+      },
+
+      applyLineDimensionTags: (itemId, tags) => {
+        if (tags.length === 0) return;
+        const byLineId = new Map(tags.map((t) => [t.lineId, t.dimension]));
+        set((s) => mapEntry(s, itemId, (e) => ({
+          ...e,
+          specific: e.specific.map((l) => (!l.apsrDimension && byLineId.has(l.id) ? { ...l, apsrDimension: byLineId.get(l.id) } : l)),
+        })));
       },
 
       // Drafts evidence metadata (title/type/date/sufficiency/auditorNote)

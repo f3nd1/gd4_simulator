@@ -117,6 +117,51 @@ describe("setLineApsrDimension — tags an EXISTING confirmed line, no regenerat
   });
 });
 
+describe("applyLineDimensionTags — batched auto-tag on accepting an AI band suggestion (2026-07-15)", () => {
+  beforeEach(() => {
+    useChecklistModuleStore.setState({
+      entries: {
+        [ITEM]: {
+          gd4ItemId: ITEM,
+          pendingGenerated: [],
+          specific: [
+            { id: "L1", text: "Untagged line", status: "Not met", evidence: [], generatedBy: "ai" },
+            { id: "L2", text: "Already human-tagged line", status: "Not met", evidence: [], generatedBy: "ai", apsrDimension: "Approach" },
+          ],
+        },
+      },
+    });
+  });
+
+  it("tags a currently-untagged line", () => {
+    useChecklistModuleStore.getState().applyLineDimensionTags(ITEM, [{ lineId: "L1", dimension: "Processes" }]);
+    const specific = useChecklistModuleStore.getState().entries[ITEM]!.specific;
+    expect(specific.find((l) => l.id === "L1")!.apsrDimension).toBe("Processes");
+  });
+
+  it("never overwrites a line that already has a dimension — the human's manual pick always wins", () => {
+    useChecklistModuleStore.getState().applyLineDimensionTags(ITEM, [{ lineId: "L2", dimension: "Review" }]);
+    const specific = useChecklistModuleStore.getState().entries[ITEM]!.specific;
+    expect(specific.find((l) => l.id === "L2")!.apsrDimension).toBe("Approach"); // unchanged
+  });
+
+  it("applies a full batch in one call, tagging only the untagged lines within it", () => {
+    useChecklistModuleStore.getState().applyLineDimensionTags(ITEM, [
+      { lineId: "L1", dimension: "Systems & Outcomes" },
+      { lineId: "L2", dimension: "Review" }, // already tagged — must be ignored
+    ]);
+    const specific = useChecklistModuleStore.getState().entries[ITEM]!.specific;
+    expect(specific.find((l) => l.id === "L1")!.apsrDimension).toBe("Systems & Outcomes");
+    expect(specific.find((l) => l.id === "L2")!.apsrDimension).toBe("Approach");
+  });
+
+  it("is a no-op on an empty tag list", () => {
+    const before = useChecklistModuleStore.getState().entries[ITEM];
+    useChecklistModuleStore.getState().applyLineDimensionTags(ITEM, []);
+    expect(useChecklistModuleStore.getState().entries[ITEM]).toBe(before); // same reference — no state churn
+  });
+});
+
 describe("setApsrMatrix — the official per-dimension input", () => {
   it("stores each dimension score independently, including a genuine 0", () => {
     const s = useChecklistModuleStore.getState();
