@@ -15,6 +15,7 @@ import {
   lineDimensionDiagnosis,
   classifyApsrByContent,
   classifyUntaggedLinesByContent,
+  resolveLineDimension,
 } from "../checklistBanding";
 import { EDUTRUST_BANDS, bandTitle } from "../../data/edutrustRubric";
 import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
@@ -375,5 +376,25 @@ describe("classifyUntaggedLinesByContent — the AI band-suggestion accept flow'
   it("skips Not Applicable lines (they never appear in a dimension group)", () => {
     const specific = [taggableLine({ id: "L1", text: "Implement an improvement plan", status: "Not Applicable" })];
     expect(classifyUntaggedLinesByContent(specific)).toEqual([]);
+  });
+});
+
+describe("resolveLineDimension — authoritative dimension from the official ref (Task 3)", () => {
+  it("resolves from the official source ref, ignoring the stored (or absent) apsrDimension", () => {
+    // Real 6.2.1 refs: DS1.a→Systems & Outcomes, DS2→Review, EE2→Processes,
+    // DS1.b→Approach. The line's stored tag / rephrased text does NOT decide it.
+    expect(resolveLineDimension({ sourceRef: "6.2.1.DS1.a", clause: "", text: "anything" })).toBe("Systems & Outcomes");
+    expect(resolveLineDimension({ sourceRef: "6.2.1.DS2", clause: "", text: "anything" })).toBe("Review");
+    expect(resolveLineDimension({ sourceRef: "6.2.1.EE2", clause: "", text: "anything" })).toBe("Processes");
+    expect(resolveLineDimension({ sourceRef: "6.2.1.DS1.b", clause: "", text: "anything" })).toBe("Approach");
+  });
+
+  it("uses the clause when sourceRef is absent", () => {
+    expect(resolveLineDimension({ sourceRef: undefined, clause: "6.2.1.DS2", text: "x" })).toBe("Review");
+  });
+
+  it("falls back to classifying the line's own text when the ref matches no GD4 point", () => {
+    expect(resolveLineDimension({ sourceRef: "9.9.9.ZZ1", clause: "", text: "Evaluate the effectiveness of the process" })).toBe("Review");
+    expect(resolveLineDimension({ sourceRef: undefined, clause: undefined, text: "A documented policy" })).toBe("Approach");
   });
 });

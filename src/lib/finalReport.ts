@@ -7,7 +7,7 @@ import { getBand } from "./scoring";
 import type { SubCriterionChecklistEntry, Finding, SpecificChecklistLine, ApsrDimensionScore, Band } from "../types";
 import {
   lineSufficiency, lineCompleteness, needsReassessment, apsrMatrixResult, bandToScore, fastestPathToNextBand,
-  lineDimensionDiagnosis, lineSuggestedAction, DEFAULT_APSR_SCALE, type LineCompleteness, type ApsrScale, type ApsrMatrixResult,
+  lineDimensionDiagnosis, lineSuggestedAction, resolveLineDimension, DEFAULT_APSR_SCALE, type LineCompleteness, type ApsrScale, type ApsrMatrixResult,
 } from "./checklistBanding";
 import { EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
@@ -177,7 +177,12 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
     const score = hb.matrixScores[key];
     if (score === undefined) continue;
     const label = EDUTRUST_DIMENSIONS.find((d) => d.key === key)!.label;
-    const dimLines = specific.filter((l) => l.apsrDimension === label && l.status !== "Not Applicable");
+    // Group by the line's AUTHORITATIVE dimension (resolved from its official
+    // source ref), NOT its stored apsrDimension — so a line the Option A audit
+    // wrote with a ref but no tag, or one the live-gen AI mis-tagged, still
+    // lands under the correct dimension (Task 3 fix, 2026-07-15). Grouping only;
+    // no band/verdict/score is affected.
+    const dimLines = specific.filter((l) => resolveLineDimension(l) === label && l.status !== "Not Applicable");
     const rows: ItemFindingRow[] = dimLines.map((l) => {
       const itemRef = l.clause || l.sourceRef || l.id;
       const text = lineDimensionDiagnosis(l, key);

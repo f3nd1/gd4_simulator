@@ -80,37 +80,40 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     };
   }
 
+  // Lines are grouped by their AUTHORITATIVE dimension — resolved from the
+  // official source ref (resolveLineDimension), NOT the stored apsrDimension.
+  // Real 6.2.1 ref → dimension: DS1.b→Approach, EE2/EE3→Processes, DS1.a→
+  // Systems & Outcomes, DS2/DS4→Review.
   const ENTRY: SubCriterionChecklistEntry = {
     gd4ItemId: "6.2.1",
     specific: [
-      // Approach: TWO Met/sufficient lines -> strength.
-      line({ id: "L1", clause: "6.2.1.DS1.a", apsrDimension: "Approach", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("approach", "The management review procedure names its own owner and cadence.") })] }),
-      line({ id: "L2", clause: "6.2.1.DS1.b", apsrDimension: "Approach", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("approach", "A second, unrelated strength note.") })] }),
-      // Processes: one strength, one weakness, each with real text.
-      line({ id: "L3", clause: "6.2.1.DS2", apsrDimension: "Processes", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("processes", "Management review minutes are documented and evidenced for every quarter.") })] }),
+      // Approach (DS1.b): a Met/sufficient line -> strength.
+      line({ id: "L1", clause: "6.2.1.DS1.b", apsrDimension: "Approach", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("approach", "The management review procedure names its own owner and cadence.") })] }),
+      // Processes (EE2): a strength.
+      line({ id: "L3", clause: "6.2.1.EE2", apsrDimension: "Processes", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("processes", "Management review minutes are documented and evidenced for every quarter.") })] }),
+      // Processes (EE3): a weakness with real text.
       line({
-        id: "L4", clause: "6.2.1.DS3", apsrDimension: "Processes", status: "Not met",
+        id: "L4", clause: "6.2.1.EE3", apsrDimension: "Processes", status: "Not met",
         evidence: [ev({
           sufficiency: "Missing",
           suggestedAction: "File the missing follow-up action log for Q3.",
           apsr: apsrFor("processes", "There is no follow-up action log for the Q3 management review."),
         })],
       }),
-      // Systems & Outcomes: the SAME clause ref as Processes' L3 (6.2.1.DS2)
-      // backs a DIFFERENT line tagged to a different dimension, with its own
-      // distinct weakness — must appear as its own row, never merged with L3.
+      // Systems & Outcomes (DS1.a): a weakness.
       line({
-        id: "L5", clause: "6.2.1.DS2", apsrDimension: "Systems & Outcomes", status: "Partial",
+        id: "L5", clause: "6.2.1.DS1.a", apsrDimension: "Systems & Outcomes", status: "Partial",
         evidence: [ev({
           sufficiency: "Weak",
           suggestedAction: "Add outcome trend data for the last two review cycles.",
           apsr: apsrFor("systemsOutcomes", "Outcome trend data is not tracked across review cycles."),
         })],
       }),
-      // Review: a real gap line with NO recorded diagnosis or action -> honest per-line fallback.
-      line({ id: "L6", clause: "6.2.1.EE9", apsrDimension: "Review", status: "Not met", evidence: [] }),
-      // Untagged line — must not feed any dimension.
-      line({ id: "L7", apsrDimension: undefined, status: "Not met", evidence: [] }),
+      // Review (DS2): a real gap line with NO recorded diagnosis or action -> honest per-line fallback.
+      line({ id: "L6", clause: "6.2.1.DS2", apsrDimension: "Review", status: "Not met", evidence: [] }),
+      // Review (DS4) but MIS-TAGGED "Approach" in the stored field — the Task 3
+      // fix must group it by its ref (Review), never by the wrong stored tag.
+      line({ id: "L-mis", clause: "6.2.1.DS4", apsrDimension: "Approach", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("review", "The management-review process is reviewed annually for effectiveness.") })] }),
     ],
     // pcts: approach 25, processes 15, systemsOutcomes 15, review 5 -> total
     // 60%, Band 3 (threshold 60), and Review (the unique lowest) is exactly
@@ -155,7 +158,7 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     const processes = item.findingsGroups.find((g) => g.key === "processes")!;
     const strengthRow = processes.rows.find((r) => r.lineId === "L3")!;
     expect(strengthRow.verdict).toBe("strength");
-    expect(strengthRow.itemRef).toBe("6.2.1.DS2");
+    expect(strengthRow.itemRef).toBe("6.2.1.EE2");
     expect(strengthRow.finding).toBe("Management review minutes are documented and evidenced for every quarter.");
     // Task 2: strengths are not automatically audit-proof below Band 5.
     expect(strengthRow.afi).toBe("Keep this in place and re-evidence it at each review cycle so it stays audit-ready.");
@@ -167,22 +170,27 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     const processes = item.findingsGroups.find((g) => g.key === "processes")!;
     const weaknessRow = processes.rows.find((r) => r.lineId === "L4")!;
     expect(weaknessRow.verdict).toBe("weakness");
-    expect(weaknessRow.itemRef).toBe("6.2.1.DS3");
+    expect(weaknessRow.itemRef).toBe("6.2.1.EE3");
     expect(weaknessRow.finding).toBe("There is no follow-up action log for the Q3 management review.");
     expect(weaknessRow.finding).not.toMatch(/weakness/i);
     expect(weaknessRow.afi).toBe("File the missing follow-up action log for Q3.");
   });
 
-  it("(c) a clause ref shared across two dimensions produces two DISTINCT rows, one per dimension, never merged", () => {
+  it("(Task 3) a line is grouped by its OFFICIAL ref, not its stored apsrDimension — a mis-tagged line lands under the right dimension", () => {
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
-    const processesRow = item.findingsGroups.find((g) => g.key === "processes")!.rows.find((r) => r.itemRef === "6.2.1.DS2")!;
-    const outcomesRow = item.findingsGroups.find((g) => g.key === "systemsOutcomes")!.rows.find((r) => r.itemRef === "6.2.1.DS2")!;
-    expect(processesRow.lineId).toBe("L3");
-    expect(processesRow.verdict).toBe("strength");
-    expect(outcomesRow.lineId).toBe("L5");
+    // L-mis carries a stored tag of "Approach" but its ref 6.2.1.DS4 is a Review
+    // point — the report must show it under Review, and NEVER under Approach.
+    const approach = item.findingsGroups.find((g) => g.key === "approach")!;
+    const review = item.findingsGroups.find((g) => g.key === "review")!;
+    expect(approach.rows.map((r) => r.lineId)).not.toContain("L-mis");
+    expect(review.rows.map((r) => r.lineId)).toContain("L-mis");
+    // The Systems & Outcomes gap line (DS1.a) also lands by ref, not by needing
+    // the one "Accept" button to have tagged it.
+    const outcomes = item.findingsGroups.find((g) => g.key === "systemsOutcomes")!;
+    const outcomesRow = outcomes.rows.find((r) => r.lineId === "L5")!;
+    expect(outcomesRow.itemRef).toBe("6.2.1.DS1.a");
     expect(outcomesRow.verdict).toBe("weakness");
-    expect(outcomesRow.finding).toBe("Outcome trend data is not tracked across review cycles.");
     expect(outcomesRow.afi).toBe("Add outcome trend data for the last two review cycles.");
   });
 
@@ -190,18 +198,24 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
     const review = item.findingsGroups.find((g) => g.key === "review")!;
-    expect(review.rows).toHaveLength(1);
-    expect(review.rows[0].lineId).toBe("L6");
-    expect(review.rows[0].verdict).toBe("weakness");
-    expect(review.rows[0].finding).toBe("No detailed diagnosis recorded for this line.");
-    expect(review.rows[0].afi).toBe("No concrete suggested action recorded for this line.");
+    const l6 = review.rows.find((r) => r.lineId === "L6")!;
+    expect(l6.verdict).toBe("weakness");
+    expect(l6.finding).toBe("No detailed diagnosis recorded for this line.");
+    expect(l6.afi).toBe("No concrete suggested action recorded for this line.");
   });
 
-  it("an untagged line never feeds any dimension group", () => {
-    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+  it("(Task 3) an untagged Option-A-style line (a ref but no apsrDimension) is still grouped by its ref, never dropped", () => {
+    // Exactly what optionAChecklistWrite writes: sourceRef + text, no tag.
+    const untagged: SubCriterionChecklistEntry = {
+      gd4ItemId: "6.2.1",
+      specific: [line({ id: "U1", sourceRef: "6.2.1.DS2", text: "Make use of the findings from the management review for continual improvement", apsrDimension: undefined, status: "Not met", evidence: [] })],
+      holisticBand: { band: 2, totalPct: 35, matrixScores: { approach: 4, processes: 1, systemsOutcomes: 1, review: 1 }, rationale: "x", source: "human", decidedAt: "2026-07-15T00:00:00.000Z" },
+      pendingGenerated: [],
+    };
+    const report = buildFinalReport(scored, { "6.2.1": untagged }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
-    const allRowIds = item.findingsGroups.flatMap((g) => g.rows.map((r) => r.lineId));
-    expect(allRowIds).not.toContain("L7");
+    const review = item.findingsGroups.find((g) => g.key === "review")!;
+    expect(review.rows.map((r) => r.lineId)).toContain("U1"); // DS2 → Review, by ref
   });
 
   it("an item with no holisticBand.matrixScores yet has an empty findingsGroups and no overallSummary — never a fabricated breakdown", () => {
@@ -248,19 +262,19 @@ describe("buildFinalReport — 'not assessed' is a distinct third state, never a
     };
   }
 
+  // Grouped by ref (resolveLineDimension): DS1.a→Systems & Outcomes, DS2→
+  // Review, EE2→Processes — the dimensions Option A does vs does not assess.
   const ENTRY: SubCriterionChecklistEntry = {
-    gd4ItemId: "6.3.1",
+    gd4ItemId: "6.2.1",
     specific: [
-      // A line tagged to Systems & Outcomes, Not met — WITHOUT the third
-      // state this would read as a red "Weakness" even though Option A never
-      // assessed the dimension.
-      line({ id: "S1", clause: "6.3.1.DS1", apsrDimension: "Systems & Outcomes", status: "Not met", evidence: [ev({ sufficiency: "Missing", apsr: optionAApsr() })] }),
-      // A line tagged to Review, Met — WITHOUT the third state this would read
-      // as a green strength quoting the not-assessed note. Same fact, two
-      // colours: exactly the bug being fixed.
-      line({ id: "R1", clause: "6.3.1.DS2", apsrDimension: "Review", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: optionAApsr() })] }),
-      // A genuinely-assessed Processes weakness stays a weakness.
-      line({ id: "P1", clause: "6.3.1.DS3", apsrDimension: "Processes", status: "Not met", evidence: [ev({ sufficiency: "Missing", suggestedAction: "File the records.", apsr: optionAApsr() })] }),
+      // Systems & Outcomes (DS1.a), Not met — WITHOUT the third state this would
+      // read as a red "Weakness" even though Option A never assessed it.
+      line({ id: "S1", clause: "6.2.1.DS1.a", apsrDimension: "Systems & Outcomes", status: "Not met", evidence: [ev({ sufficiency: "Missing", apsr: optionAApsr() })] }),
+      // Review (DS2), Met — WITHOUT the third state this would read as a green
+      // strength quoting the not-assessed note. Same fact, two colours.
+      line({ id: "R1", clause: "6.2.1.DS2", apsrDimension: "Review", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: optionAApsr() })] }),
+      // A genuinely-assessed Processes (EE2) weakness stays a weakness.
+      line({ id: "P1", clause: "6.2.1.EE2", apsrDimension: "Processes", status: "Not met", evidence: [ev({ sufficiency: "Missing", suggestedAction: "File the records.", apsr: optionAApsr() })] }),
     ],
     holisticBand: {
       band: 2, totalPct: 35,
@@ -271,8 +285,8 @@ describe("buildFinalReport — 'not assessed' is a distinct third state, never a
   };
 
   it("a line whose dimension note is the Option A not-assessed sentinel renders as 'not-assessed', regardless of the line's status", () => {
-    const report = buildFinalReport(scored, { "6.3.1": ENTRY }, [], {});
-    const item = report.items.find((i) => i.id === "6.3.1")!;
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
     const soRow = item.findingsGroups.find((g) => g.key === "systemsOutcomes")!.rows[0];
     const reviewRow = item.findingsGroups.find((g) => g.key === "review")!.rows[0];
     // Not met (S1) and Met (R1) — same underlying not-assessed state, so BOTH
@@ -291,16 +305,16 @@ describe("buildFinalReport — 'not assessed' is a distinct third state, never a
   });
 
   it("a genuinely-assessed line on the same item is still a weakness (the sentinel check does not swallow real findings)", () => {
-    const report = buildFinalReport(scored, { "6.3.1": ENTRY }, [], {});
-    const item = report.items.find((i) => i.id === "6.3.1")!;
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
     const pRow = item.findingsGroups.find((g) => g.key === "processes")!.rows[0];
     expect(pRow.verdict).toBe("weakness");
     expect(pRow.afi).toBe("File the records.");
   });
 
   it("(Task 1) the overall summary is a tight diagnosis + one priority action, with no band/% restatement", () => {
-    const report = buildFinalReport(scored, { "6.3.1": ENTRY }, [], {});
-    const item = report.items.find((i) => i.id === "6.3.1")!;
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
     const s = item.overallSummary!;
     const sentenceCount = s.split(/(?<=[.!?])\s+/).filter(Boolean).length;
     expect(sentenceCount).toBeGreaterThanOrEqual(2);

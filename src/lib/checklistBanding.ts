@@ -23,6 +23,8 @@
 import type { ApsrDimensionScore, ApsrMatrixScores, Band, GD4Requirement, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
 import { bandTitle } from "../data/edutrustRubric";
 import { findingTypeForStatus, ncSeverityFor } from "./findingClassification";
+import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { normalizeAuditRef } from "./gd4Refs";
 
 export function lineSufficiency(line: SpecificChecklistLine): EvidenceSufficiency {
   if (line.evidence.length === 0) return "Missing";
@@ -281,6 +283,30 @@ export function classifyUntaggedLinesByContent(
   return specific
     .filter((l) => !l.apsrDimension && l.status !== "Not Applicable")
     .map((l) => ({ lineId: l.id, dimension: classifyApsrByContent(l.text) }));
+}
+
+// Normalised official ref -> its APSR dimension, precomputed ONCE from the fixed
+// GD4 requirement text (the same classifier, but run on the OFFICIAL wording of
+// the point a line traces to, not the AI's rephrasing of it).
+const REF_DIMENSION = new Map<string, NonNullable<SpecificChecklistLine["apsrDimension"]>>();
+for (const req of GD4_REQUIREMENTS) for (const fp of req.flatAuditPoints ?? []) {
+  REF_DIMENSION.set(normalizeAuditRef(fp.ref), classifyApsrByContent(fp.text));
+}
+
+// The AUTHORITATIVE dimension a line belongs to (2026-07-15). A line's dimension
+// is a property of the official requirement point it traces to, NOT of who last
+// tagged it or how the AI reworded it — so it is resolved from the line's own
+// official source ref (stable) whenever that ref matches a GD4 point, and only
+// falls back to classifying the line's own text when it has no matching ref
+// (e.g. a free-text manual line). This is what the Final Report groups by, so a
+// line always lands under the right dimension regardless of the path that
+// created it — fixing the "No lines currently tagged" bug for lines the Option A
+// audit writes with a ref but no apsrDimension, and for lines the live-gen AI
+// mis-tagged. It never touches a band, verdict or score — grouping only.
+export function resolveLineDimension(line: Pick<SpecificChecklistLine, "sourceRef" | "clause" | "text">): NonNullable<SpecificChecklistLine["apsrDimension"]> {
+  const ref = line.sourceRef || line.clause;
+  const byRef = ref ? REF_DIMENSION.get(normalizeAuditRef(ref)) : undefined;
+  return byRef ?? classifyApsrByContent(line.text);
 }
 
 // The Evidence judge's own concrete "what would make this Met" text (Option
