@@ -15,7 +15,7 @@ import { Card } from "../components/ui/Card";
 import { ThreePillarNote } from "../components/ui/ThreePillarNote";
 import { Pill } from "../components/ui/Pill";
 import { Gauge, HBars, VBars, BAND_COLOR, AttainmentLadder } from "../components/ui/charts";
-import { GOLD, INK, bandTone } from "../lib/theme";
+import { GOLD, INK, BLUE, bandTone } from "../lib/theme";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { buildProvenance, provenanceLine } from "../lib/provenance";
 
@@ -45,8 +45,20 @@ export function FinalReport() {
   const [editedSummary, setEditedSummary] = useState("");
   const [summaryFeedbackOpen, setSummaryFeedbackOpen] = useState(false);
   const [summarySaved, setSummarySaved] = useState(false);
+  const [bandingTab, setBandingTab] = useState<"criterion" | "subcriterion">("criterion");
+  const [filterCrit, setFilterCrit] = useState("All");
+  const [filterSubCrit, setFilterSubCrit] = useState("All");
 
   useEffect(() => { if (aiSummary) setEditedSummary(aiSummary); }, [aiSummary]);
+
+  const subCritOptions = useMemo(
+    () => report.subCriteria.filter((sc) => filterCrit === "All" || sc.criterionId === filterCrit),
+    [report.subCriteria, filterCrit]
+  );
+  const filteredItems = useMemo(
+    () => report.items.filter((it) => (filterCrit === "All" || it.criterion === filterCrit) && (filterSubCrit === "All" || it.subCriterionId === filterSubCrit)),
+    [report.items, filterCrit, filterSubCrit]
+  );
 
   function handleSummaryThumbsUp() {
     logHumanDecision({ module: "Final Report", subjectId: "executive-summary", aiOutput: aiSummary || "", humanDecision: aiSummary || "", changed: false, decisionType: "Accepted", reason: "" });
@@ -232,19 +244,65 @@ export function FinalReport() {
 
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Banding by criterion</h3>
-        <table>
-          <thead><tr><th>Criterion</th><th>Band</th><th>Points</th><th>Status</th></tr></thead>
-          <tbody>
-            {report.crits.map((c) => (
-              <tr key={c.id}>
-                <td><b>C{c.id}</b> {c.title}</td>
-                <td><Pill s={bandTone(c.band)}>Band {c.band}</Pill></td>
-                <td>{c.scored} / {c.points}</td>
-                <td>{c.started ? <Pill s="good">Scored</Pill> : <Pill s="medium">Not started</Pill>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="no-print" style={{ display: "flex", gap: 4, marginBottom: 10 }}>
+          {(["criterion", "subcriterion"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setBandingTab(tab)}
+              style={{
+                cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "5px 12px", borderRadius: 8,
+                border: `1px solid ${bandingTab === tab ? BLUE : "#e2e8f0"}`,
+                background: bandingTab === tab ? "#eaeef6" : "transparent",
+                color: bandingTab === tab ? "#4a5a8a" : "#6b7280",
+              }}
+            >
+              {tab === "criterion" ? "By Criterion" : "By Sub-criterion"}
+            </button>
+          ))}
+        </div>
+        {bandingTab === "criterion" ? (
+          <table>
+            <thead><tr><th>Criterion</th><th>Band</th><th>Points</th><th>Status</th></tr></thead>
+            <tbody>
+              {report.crits.map((c) => (
+                <tr key={c.id}>
+                  <td><b>C{c.id}</b> {c.title}</td>
+                  <td><Pill s={bandTone(c.band)}>Band {c.band}</Pill></td>
+                  <td>{c.scored} / {c.points}</td>
+                  <td>{c.started ? <Pill s="good">Scored</Pill> : <Pill s="medium">Not started</Pill>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={{ fontSize: 11, color: "#6b7280" }}>
+              Points are each sub-criterion's proportional share of its criterion's official points (by item count) — GD4 itself only allocates points at criterion level, so this is a readability split, not a separately certified figure.
+            </div>
+            {report.crits.map((c) => {
+              const subs = report.subCriteria.filter((sc) => sc.criterionId === c.id);
+              if (subs.length === 0) return null;
+              return (
+                <div key={c.id}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}><b>C{c.id}</b> {c.title} <span style={{ fontWeight: 400, color: "#6b7280" }}>· Band {c.band} overall</span></div>
+                  <table>
+                    <thead><tr><th>Sub-criterion</th><th>Band</th><th>Points</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {subs.map((sc) => (
+                        <tr key={sc.id}>
+                          <td><b>{sc.id}</b> {sc.title}</td>
+                          <td><Pill s={bandTone(sc.band)}>Band {sc.band}</Pill></td>
+                          <td>{sc.scored} / {Math.round(sc.points)}</td>
+                          <td>{sc.started ? <Pill s="good">Scored</Pill> : <Pill s="medium">Not started</Pill>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </Card>
 
       <Card>
@@ -252,8 +310,34 @@ export function FinalReport() {
         <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
           Strengths and gaps are derived from the Sub-Criterion Checklist. "How to reach Band N" points at the evidence gaps and the official §23 descriptors of the next band — the band itself is the reviewer's holistic judgment.
         </div>
+        <div className="no-print" style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+          <label style={{ fontSize: 12, color: "#374151" }}>
+            Criterion{" "}
+            <select
+              value={filterCrit}
+              onChange={(e) => { setFilterCrit(e.target.value); setFilterSubCrit("All"); }}
+              style={{ fontSize: 12, padding: "4px 6px", borderRadius: 6, border: "1px solid #e2e8f0" }}
+            >
+              <option value="All">All</option>
+              {report.crits.map((c) => <option key={c.id} value={c.id}>C{c.id} {c.title}</option>)}
+            </select>
+          </label>
+          <label style={{ fontSize: 12, color: "#374151" }}>
+            Sub-criterion{" "}
+            <select
+              value={filterSubCrit}
+              onChange={(e) => setFilterSubCrit(e.target.value)}
+              style={{ fontSize: 12, padding: "4px 6px", borderRadius: 6, border: "1px solid #e2e8f0" }}
+            >
+              <option value="All">All</option>
+              {subCritOptions.map((sc) => <option key={sc.id} value={sc.id}>{sc.id} {sc.title}</option>)}
+            </select>
+          </label>
+        </div>
         <div style={{ display: "grid", gap: 8 }}>
-          {report.items.map((it) => <ItemBlock key={it.id} it={it} />)}
+          {filteredItems.length === 0
+            ? <div style={{ fontSize: 12.5, color: "#6b7280" }}>No items match this filter.</div>
+            : filteredItems.map((it) => <ItemBlock key={it.id} it={it} />)}
         </div>
       </Card>
 
@@ -306,10 +390,36 @@ function ItemBlock({ it }: { it: ItemReport }) {
         <span style={{ fontSize: 12.5 }}>{it.title}</span>
         {it.hasChecklist && <span style={{ fontSize: 11, color: "#94a3b8" }}>· {it.completeness.assessed} of {it.completeness.total} lines assessed ({it.completeness.met} Met · {it.completeness.partial} Partial · {it.completeness.notMet} Not met)</span>}
       </div>
-      {it.bandRationale && (
-        <div style={{ fontSize: 11.5, color: "#475569", marginTop: 4 }}>
-          <b>Band justification{it.bandTotalPct != null ? ` (APSR total ${it.bandTotalPct}%)` : ""}:</b> {it.bandRationale}
+      {it.dimensionSummaries.length > 0 && (
+        <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
+          {it.dimensionSummaries.map((d) => (
+            <div key={d.key} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 9px", background: "#f8fafc" }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 3 }}>
+                <Pill s={bandTone(d.band)}>Band {d.band} · {d.pct}%</Pill>
+                <b style={{ fontSize: 11.5 }}>{d.label}</b>
+              </div>
+              <div style={{ fontSize: 11.5, color: "#374151" }}><b>Finding:</b> {d.finding}</div>
+              {d.hasGap && (
+                <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 2 }}>
+                  <b>What's missing:</b> {d.missing ?? "No detailed diagnosis recorded for this dimension — open the Sub-Criterion Checklist to review the evidence directly."}
+                </div>
+              )}
+              {d.hasGap && (
+                <div style={{ fontSize: 11.5, color: "#2563eb", marginTop: 2 }}>
+                  <b>How to improve:</b> {d.howToImprove ?? "No concrete suggested action recorded for this dimension — open the Sub-Criterion Checklist to review the evidence directly."}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
+      )}
+      {it.bandRationale && (
+        <details style={{ marginTop: 6 }}>
+          <summary style={{ fontSize: 10.5, color: "#94a3b8", cursor: "pointer" }}>
+            Full band justification as recorded{it.bandTotalPct != null ? ` (APSR total ${it.bandTotalPct}%)` : ""}
+          </summary>
+          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>{it.bandRationale}</div>
+        </details>
       )}
       {it.strengths.length > 0 && (
         <Bullets title="Strengths" color="#15803d" items={it.strengths} />
