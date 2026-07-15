@@ -15,6 +15,20 @@ import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "./../data/gd4Requirements";
 
 export type ClosureLite = { root?: string; corr?: string; prev?: string; evid?: string; human?: "" | "Accepted"; aiNeed?: string };
 
+// ONE real gap on ONE tagged line, paired with that SAME line's real fix —
+// never merged with another line's gap, so a dimension with three distinct
+// gaps reports three, not one blended paragraph.
+export type DimensionGapFix = {
+  lineId: string;
+  // Single-sentence, trimmed from the real lineDimensionDiagnosis text (see
+  // firstSentence) — or an honest "no diagnosis recorded" note when the line
+  // is a real gap (Not met/Partial/insufficient) but carries no AI note.
+  gap: string;
+  // The SAME line's lineSuggestedAction, lightly trimmed — undefined when
+  // none was recorded (never fabricated).
+  fix?: string;
+};
+
 // Plain-language rendering of ONE dimension's judgment for one item — built
 // entirely from already-computed, already-real data (the official §23
 // descriptor text for the scored band, and the SAME per-line APSR note /
@@ -30,20 +44,30 @@ export type ItemDimensionSummary = {
   // "What's actually true right now" — the verbatim official §23 descriptor
   // for the band this dimension was scored at (or the honest 0%-floor note).
   finding: string;
-  // True when this dimension's % is below the scale's max — same "room to
-  // improve" test BandImprovementPanel's hasHeadroom uses. Deliberately a
-  // property of the SCORE, not of whether a line happens to be tagged to
-  // this dimension: a Band 1-3 dimension is a real gap even with zero
-  // tagged lines, and must never be silently hidden for that reason.
-  hasGap: boolean;
-  // Real per-line diagnosis (lineDimensionDiagnosis), verbatim — undefined
-  // when hasGap is false (nothing to report) OR when no line under this
-  // dimension carries a recorded diagnosis (honest fallback in the UI).
-  missing?: string;
-  // Real per-line "what would make this Met" (lineSuggestedAction), verbatim
-  // — same undefined rule as missing.
-  howToImprove?: string;
+  // One entry per line under this dimension with a real gap (Not met/
+  // Partial, or Met without sufficient evidence). Empty when the dimension
+  // is fully strong (every tagged line is Met with sufficient evidence).
+  gaps: DimensionGapFix[];
+  // One sentence stating why this dimension is a genuine strength — only
+  // set when gaps is empty AND at least one Met/sufficient line under this
+  // dimension carries real diagnosis text to quote. Never a bare label,
+  // never fabricated when the real text doesn't support one.
+  strengthReason?: string;
+  // True when this dimension has neither a real gap nor a real strength
+  // reason to show (no lines tagged to it, or tagged lines with no usable
+  // text) — the UI shows an honest placeholder, never a fabricated claim.
+  noLinesTagged: boolean;
 };
+
+// Trims real AI-authored text to ONE sentence for a report line, without
+// inventing wording: the first sentence up to its terminal punctuation, or a
+// hard character cap with an ellipsis when no sentence boundary exists.
+function firstSentence(text: string, cap = 220): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^[^.!?]*[.!?]/);
+  if (match) return match[0].trim();
+  return trimmed.length > cap ? `${trimmed.slice(0, cap).trim()}…` : trimmed;
+}
 
 export type ItemReport = {
   id: string;
@@ -142,15 +166,36 @@ function buildDimensionSummaries(entry: SubCriterionChecklistEntry | undefined, 
     const label = EDUTRUST_DIMENSIONS.find((d) => d.key === key)!.label;
     const dimLines = specific.filter((l) => l.apsrDimension === label && l.status !== "Not Applicable");
     const gapLines = dimLines.filter((l) => l.status !== "Met" || lineSufficiency(l) !== "Present");
-    const missing = gapLines.map((l) => lineDimensionDiagnosis(l, key)).find((t) => !!t);
-    const howToImprove = gapLines.map((l) => lineSuggestedAction(l)).find((t) => !!t);
-    // "Has room to improve" is a property of the SCORE (below the scale's max
-    // — same test as BandImprovementPanel's hasHeadroom), not of whether any
-    // line happens to be tagged to this dimension. A Band 1-3 dimension with
-    // zero tagged lines still has a real gap; it must show the honest
-    // "no diagnosis on file" fallback, never be silently omitted.
-    const hasGap = result.pcts[key] < scale.maxPctPerDimension;
-    out.push({ key, label, band: score, pct: result.pcts[key], finding: dimensionDescriptor(key, score), hasGap, missing, howToImprove });
+    const strongLines = dimLines.filter((l) => l.status === "Met" && lineSufficiency(l) === "Present");
+
+    // One entry PER real gap line, never merged — a dimension with three
+    // distinct gaps must report three, not one blended paragraph. A gap
+    // line with no recorded diagnosis still gets its own entry (honest
+    // fallback text), never silently dropped.
+    const gaps: DimensionGapFix[] = gapLines.map((l) => {
+      const diag = lineDimensionDiagnosis(l, key);
+      const action = lineSuggestedAction(l);
+      return {
+        lineId: l.id,
+        gap: diag ? firstSentence(diag) : "No detailed diagnosis recorded for this line.",
+        fix: action ? firstSentence(action) : undefined,
+      };
+    });
+
+    // A genuine strength: every tagged line is Met with sufficient evidence
+    // (gaps is empty) AND at least one of those lines has real text to quote
+    // — the SAME per-dimension note field lineDimensionDiagnosis already
+    // reads (it carries the evidence summary/comment regardless of verdict),
+    // never a bare "Strength" label.
+    const strengthReason = gaps.length === 0
+      ? strongLines.map((l) => lineDimensionDiagnosis(l, key)).find((t) => !!t)
+      : undefined;
+
+    out.push({
+      key, label, band: score, pct: result.pcts[key], finding: dimensionDescriptor(key, score),
+      gaps, strengthReason: strengthReason ? firstSentence(strengthReason) : undefined,
+      noLinesTagged: gaps.length === 0 && !strengthReason,
+    });
   }
   return out;
 }

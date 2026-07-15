@@ -394,22 +394,37 @@ function ItemBlock({ it }: { it: ItemReport }) {
         <div style={{ marginTop: 6, border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
           <table>
             <thead>
-              <tr><th>Dimension</th><th>Band</th><th>Finding</th><th>What's missing</th><th>How to improve</th></tr>
+              <tr><th>Dimension</th><th>Band</th><th>Finding</th><th>Gaps and how to reach the next band</th></tr>
             </thead>
             <tbody>
-              {it.dimensionSummaries.map((d) => (
-                <tr key={d.key}>
-                  <td style={{ verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 700, fontSize: 11.5 }}>{d.label}</td>
-                  <td style={{ verticalAlign: "top", whiteSpace: "nowrap" }}><Pill s={bandTone(d.band)}>B{d.band} · {d.pct}%</Pill></td>
-                  <td style={{ verticalAlign: "top", fontSize: 11.5, color: "#374151" }}>{d.finding}</td>
-                  <td style={{ verticalAlign: "top", fontSize: 11.5, color: d.hasGap ? "#b23121" : "#cbd5e1" }}>
-                    {d.hasGap ? (d.missing ?? "No detailed diagnosis recorded — open the Sub-Criterion Checklist to review the evidence directly.") : "—"}
-                  </td>
-                  <td style={{ verticalAlign: "top", fontSize: 11.5, color: d.hasGap ? "#2563eb" : "#cbd5e1" }}>
-                    {d.hasGap ? (d.howToImprove ?? "No concrete suggested action recorded — open the Sub-Criterion Checklist to review the evidence directly.") : "—"}
-                  </td>
-                </tr>
-              ))}
+              {it.dimensionSummaries.map((d) => {
+                const nextBand = Math.min(d.band + 1, 5);
+                return (
+                  <tr key={d.key}>
+                    <td style={{ verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 700, fontSize: 11.5 }}>{d.label}</td>
+                    <td style={{ verticalAlign: "top", whiteSpace: "nowrap" }}><Pill s={bandTone(d.band)}>B{d.band} · {d.pct}%</Pill></td>
+                    <td style={{ verticalAlign: "top", fontSize: 11.5, color: "#374151" }}>{d.finding}</td>
+                    <td style={{ verticalAlign: "top", fontSize: 11.5 }}>
+                      {d.gaps.length > 0 ? (
+                        <ol style={{ margin: 0, paddingLeft: 16, display: "grid", gap: 6 }}>
+                          {d.gaps.map((g) => (
+                            <li key={g.lineId} style={{ color: "#b23121" }}>
+                              {g.gap}
+                              {g.fix && (
+                                <div style={{ color: "#2563eb", marginTop: 2 }}>→ How to reach Band {nextBand}: {g.fix}</div>
+                              )}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : d.strengthReason ? (
+                        <span style={{ color: "#15803d" }}><b>Strength:</b> {d.strengthReason}</span>
+                      ) : (
+                        <span style={{ color: "#94a3b8", fontStyle: "italic" }}>No lines currently tagged to this dimension.</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
