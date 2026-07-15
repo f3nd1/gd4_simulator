@@ -17,11 +17,11 @@ import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "./../data/gd4Requirements";
 // House-style restatement of the Option A not-assessed note for the report,
 // no em dash. Detection uses the raw sentinel (isOptionANotAssessedNote); the
 // displayed text is this clean version, saying the same thing.
-const NOT_ASSESSED_FINDING = "Not assessed by Option A (PPD and Evidence). Run the staged audit or attach outcome or review evidence to assess this dimension.";
+export const NOT_ASSESSED_FINDING = "Not assessed by Option A (PPD and Evidence). Run the staged audit or attach outcome or review evidence to assess this dimension.";
 // The actionable half of the note, surfaced in the AFI column so a not-assessed
 // row never shows a blank next-action (Task 4) — a reader scanning the AFI
 // column sees a concrete step on every non-strength row.
-const NOT_ASSESSED_AFI = "Run the staged audit or attach outcome or review evidence to assess this dimension.";
+export const NOT_ASSESSED_AFI = "Run the staged audit or attach outcome or review evidence to assess this dimension.";
 // An honest, generic maintenance AFI for a STRENGTH row while the item's
 // overall band is still below the top (5): a point that is strong today is not
 // automatically audit-proof for the next cycle. Deliberately generic — there is
