@@ -22,6 +22,14 @@ const NOT_ASSESSED_FINDING = "Not assessed by Option A (PPD and Evidence). Run t
 // row never shows a blank next-action (Task 4) — a reader scanning the AFI
 // column sees a concrete step on every non-strength row.
 const NOT_ASSESSED_AFI = "Run the staged audit or attach outcome or review evidence to assess this dimension.";
+// An honest, generic maintenance AFI for a STRENGTH row while the item's
+// overall band is still below the top (5): a point that is strong today is not
+// automatically audit-proof for the next cycle. Deliberately generic — there is
+// no per-line "next step" recorded for a strength (strengths carry no
+// suggestedAction), so this is the honest most-specific thing we can say
+// without fabricating detail. Suppressed at Band 5, where there is genuinely
+// nothing higher to reach (see buildFindingsGroups).
+const STRENGTH_MAINTENANCE_AFI = "Keep this in place and re-evidence it at each review cycle so it stays audit-ready.";
 
 export type ClosureLite = { root?: string; corr?: string; prev?: string; evid?: string; human?: "" | "Accepted"; aiNeed?: string };
 
@@ -190,9 +198,14 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
           afi: action ? firstSentence(action) : "No concrete suggested action recorded for this line.",
         };
       }
+      // A strength still gets an AFI unless the item is already at the top band
+      // (5) — a strong point under a Band 2/3 item isn't necessarily audit-proof
+      // yet (Task 2). At Band 5 there is nothing higher to reach, so it stays
+      // blank.
       return {
         lineId: l.id, itemRef, verdict: "strength",
         finding: text ? firstSentence(text) : "No evidence summary recorded for this line.",
+        afi: result.band < 5 ? STRENGTH_MAINTENANCE_AFI : undefined,
       };
     });
     out.push({ key, label, band: score, pct: result.pcts[key], rows });
@@ -200,68 +213,96 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
   return out;
 }
 
-// A plain-English rendering of ONE dimension's assessed band — a faithful
-// restatement of the band the reviewer/AI already set (the official rubric
-// descriptor in words a non-technical reader gets at a glance), never a new
-// judgment. band 0 = "Not evident" on the scale; bands 1-5 climb the rubric.
-function plainDimensionState(key: DimensionFindingsGroup["key"], band: ApsrDimensionScore): string {
-  const P: Record<DimensionFindingsGroup["key"], string[]> = {
-    // index by band 0..5
-    approach: ["no documented approach yet", "little organised approach", "a partially developed approach", "an established approach", "a well-developed approach", "a mature, fully embedded approach"],
-    processes: ["no evidence of implementation", "little evidence of implementation", "limited evidence of implementation", "some evidence of implementation", "strong evidence of implementation", "consistent, fully deployed implementation"],
-    systemsOutcomes: ["no outcome data yet", "little outcome data", "limited outcome data", "some outcome data", "clear outcome data", "strong, sustained outcome data"],
-    review: ["no review activity yet", "little review activity", "limited review activity", "some review activity", "regular review activity", "systematic, embedded review"],
-  };
-  return P[key][band];
-}
+// Per-dimension English used by the overall summary. Each dimension has a
+// plain "face": a strong clause, a weak clause, a short noun, and a concrete
+// verb-led action. Chosen so several can be joined and still read naturally.
+const DIM_FACE: Record<DimensionFindingsGroup["key"], { noun: string; strong: string; weak: string; act: string }> = {
+  approach: {
+    noun: "the approach",
+    strong: "the approach is clearly documented",
+    weak: "the approach itself is barely documented",
+    act: "document the approach for this area and get it formally approved",
+  },
+  processes: {
+    noun: "how it is carried out",
+    strong: "there is solid evidence it is being carried out",
+    weak: "there is little to show these plans are actually being carried out",
+    act: "produce records that show these plans are actually being acted on",
+  },
+  systemsOutcomes: {
+    noun: "outcome measurement",
+    strong: "outcomes are being measured",
+    weak: "its results are not being measured",
+    act: "start capturing outcome or results data that shows the impact",
+  },
+  review: {
+    noun: "the review process",
+    strong: "it is being reviewed for effectiveness",
+    weak: "nothing shows it is reviewed for effectiveness afterwards",
+    act: "put a review in place that evaluates effectiveness and feeds improvements back in",
+  },
+};
 
-// Ten-second read above the findings table. LEADS with a plain general
-// assessment of how the item is actually performing (Task 2) — a faithful
-// plain-English restatement of the four per-dimension bands, carrying the
-// weight of the summary — THEN, separately, the band/% and what closing the
-// gap would take. No new AI call, no invented content: every phrase is a
-// deterministic rendering of data already on the entry (per-dimension bands
-// from matrixScores, fastestPathToNextBand's limiting-factor logic).
+const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+const lowerFirst = (s: string) => (s ? s[0].toLowerCase() + s.slice(1) : s);
+
+// The ten-second read above the findings table. ANALYTICAL, not descriptive
+// (Task 1, 2026-07-15): it diagnoses the PATTERN behind the gaps — where the
+// item is strong versus where it falls off — then states the SINGLE
+// highest-priority action, and deliberately never repeats the band number or
+// percentage (both already shown in the panel header just above it). Every
+// clause is a deterministic reading of data already on the entry (per-dimension
+// bands from matrixScores, the limiting dimension from fastestPathToNextBand,
+// and the real per-line weakness text for the priority dimension). No new AI
+// call, no invented content.
 function buildOverallSummary(result: ApsrMatrixResult, groups: DimensionFindingsGroup[], scale: ApsrScale): string {
-  const sentences: string[] = [];
+  if (groups.length === 0) return "";
+  const byKey = Object.fromEntries(groups.map((g) => [g.key, g])) as Record<DimensionFindingsGroup["key"], DimensionFindingsGroup>;
+  const keys = groups.map((g) => g.key);
+  const bandOf = (k: DimensionFindingsGroup["key"]) => byKey[k]?.band ?? 0;
+  const joinFaces = (ks: DimensionFindingsGroup["key"][], which: "strong" | "weak") => {
+    const parts = ks.map((k) => DIM_FACE[k][which]);
+    return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  };
 
-  // 1) The general performance statement, first and carrying the weight:
-  // the item's four dimensions described plainly, in APSR order.
-  const parts = groups.map((g) => plainDimensionState(g.key, g.band));
-  if (parts.length === 4) {
-    sentences.push(`Overall, this area shows ${parts[0]}, with ${parts[1]}, ${parts[2]}, and ${parts[3]}.`);
-  } else if (parts.length) {
-    sentences.push(`Overall, this area shows ${parts.join(", ")}.`);
-  }
-
-  // 2) The band and %, noted separately after the general read.
-  sentences.push(`It is banded at Band ${result.band} (${result.total}%).`);
-
-  // 3) What closing the gap would take — the limiting dimension(s) and the
-  // count of open AFIs there, from the SAME logic the Band Improvement Panel
-  // uses. Skipped at Band 5 (nothing to reach).
-  const path = fastestPathToNextBand(result, scale);
-  if (!path) {
-    sentences.push("All four dimensions are already at the scale's maximum, so no further action is needed to raise the band.");
+  // ── 1) Diagnose the pattern (strong >=4, weak/absent <=2). ──
+  const strongKeys = keys.filter((k) => bandOf(k) >= 4);
+  const weakKeys = keys.filter((k) => bandOf(k) <= 2);
+  let diagnosis: string;
+  if (weakKeys.length === 0) {
+    diagnosis = strongKeys.length === keys.length
+      ? "Every dimension holds up here — the approach is documented, carried out, measured and reviewed."
+      : "This area is reasonably solid across the board, with no single dimension clearly dragging it down.";
   } else {
-    const limitingLabels = path.dims.map((d) => EDUTRUST_DIMENSIONS.find((x) => x.key === d)!.label);
-    const afiCount = groups.filter((g) => path.dims.includes(g.key)).reduce((a, g) => a + g.rows.filter((r) => r.verdict === "weakness").length, 0);
-    sentences.push(afiCount > 0
-      ? `Closing ${afiCount} AFI${afiCount === 1 ? "" : "s"} in ${limitingLabels.join(" and ")} would raise it to Band ${path.nextBand}.`
-      : `Raising ${limitingLabels.join(" and ")} would take it to Band ${path.nextBand}.`);
+    const strongPhrase = strongKeys.length
+      ? cap(joinFaces(strongKeys, "strong"))
+      : `${cap(DIM_FACE[keys.reduce((a, b) => (bandOf(b) > bandOf(a) ? b : a))].noun)} is the most developed part`;
+    diagnosis = `${strongPhrase}, but ${joinFaces(weakKeys, "weak")}.`;
   }
 
-  // 4) An honest note when a dimension was structurally not assessed on this
-  // run, so the reader knows the band rests on partial coverage.
-  const naGroups = groups.filter((g) => g.rows.length > 0 && g.rows.every((r) => r.verdict === "not-assessed"));
-  if (naGroups.length) {
-    const labels = naGroups.map((g) => g.label);
-    sentences.push(`${labels.join(" and ")} ${labels.length > 1 ? "were" : "was"} not assessed on this run, so ${labels.length > 1 ? "those bands rest" : "that band rests"} on the band-scoring judgment rather than fresh evidence.`);
+  // ── 2) The single highest-priority action (the lowest-scoring dimension is
+  // the highest-leverage one to raise — same logic as the Band Improvement
+  // Panel). A dimension Option A never assessed needs assessing, not fixing. ──
+  const path = fastestPathToNextBand(result, scale);
+  let action: string;
+  if (!path) {
+    action = "Every dimension is already at the top of the scale — keep re-evidencing it at each review cycle so it stays there.";
+  } else {
+    const dim = path.dims[0];
+    const g = byKey[dim];
+    const allNotAssessed = g && g.rows.length > 0 && g.rows.every((r) => r.verdict === "not-assessed");
+    if (allNotAssessed) {
+      action = `The single highest-priority step is to get ${DIM_FACE[dim].noun} assessed at all — run the staged audit or attach ${dim === "review" ? "review" : "outcome"} evidence.`;
+    } else {
+      // Ground the action in a REAL per-line weakness reason when one exists —
+      // never the "No detailed diagnosis recorded" placeholder fallback (that
+      // would read as invented filler).
+      const reason = g?.rows.find((r) => r.verdict === "weakness" && !/^No (detailed diagnosis|concrete|evidence)/i.test(r.finding))?.finding;
+      action = `The single highest-priority step is to ${DIM_FACE[dim].act}${reason ? ` — for example, ${lowerFirst(reason.replace(/\.$/, ""))}.` : "."}`;
+    }
   }
 
-  // Keep it to at most four sentences (general read + band + path + optional
-  // not-assessed caveat) so it stays a ten-second read.
-  return sentences.slice(0, 4).join(" ");
+  return `${diagnosis} ${action}`;
 }
 
 // Sub-criterion rollup — the SAME band/points formula the criterion level

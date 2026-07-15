@@ -131,34 +131,34 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     expect(item.findingsGroups.map((g) => g.key)).toEqual(["approach", "processes", "systemsOutcomes", "review"]);
   });
 
-  it("(a) the overall summary LEADS with a plain general read, then states band, %, and the limiting dimension with a real AFI count", () => {
+  it("(a-Task1) the overall summary is analytical/prescriptive: diagnoses the pattern + one priority action, and NEVER repeats the band number or %", () => {
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
-    // Task 2: the general performance statement comes first and carries the
-    // weight — a plain-English rendering of the four per-dimension bands
-    // (approach 5, processes 3, systemsOutcomes 3, review 1), not band jargon.
-    expect(item.overallSummary!.startsWith("Overall, this area shows")).toBe(true);
-    expect(item.overallSummary).toContain("a mature, fully embedded approach"); // approach band 5
-    expect(item.overallSummary).toContain("little review activity"); // review band 1
-    // The band mechanics come AFTER the general read.
-    expect(item.overallSummary).toContain("Band 3");
-    expect(item.overallSummary).toContain("60%");
-    expect(item.overallSummary).toContain("Review"); // the limiting (cheapest-to-raise) dimension
-    expect(item.overallSummary).toContain("1 AFI"); // Review's single real weakness row
-    expect(item.overallSummary).toContain("Band 4"); // the next band
-    // The general read leads, the band line follows it.
-    expect(item.overallSummary!.indexOf("Overall,")).toBeLessThan(item.overallSummary!.indexOf("Band 3"));
+    const s = item.overallSummary!;
+    // approach 5 (strong), review 1 (weak) → diagnosis contrasts the two.
+    expect(s).toContain("The approach is clearly documented");
+    expect(s).toMatch(/reviewed for effectiveness/i);
+    // Prescriptive: names a single highest-priority step, phrased as an action
+    // (a verb), not a bare list of dimension names to "raise".
+    expect(s).toContain("The single highest-priority step is to");
+    // Must NOT restate the band/% already shown in the panel header above it.
+    expect(s).not.toMatch(/Band \d/);
+    expect(s).not.toMatch(/\d+%/);
+    expect(s).not.toMatch(/\bAFIs?\b/); // no "Closing N AFIs" restatement either
   });
 
-  it("(b) a strength row states plainly what's evidenced (no 'Weakness' prefix in the text), with a blank AFI", () => {
+  it("(b-Task2) a strength row under a sub-Band-5 item now carries a maintenance AFI, not a blank", () => {
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
+    // This ENTRY's holistic matrix sums to 60% → Band 3 (below 5).
+    expect(item.bandTotalPct).toBe(60);
     const processes = item.findingsGroups.find((g) => g.key === "processes")!;
     const strengthRow = processes.rows.find((r) => r.lineId === "L3")!;
     expect(strengthRow.verdict).toBe("strength");
     expect(strengthRow.itemRef).toBe("6.2.1.DS2");
     expect(strengthRow.finding).toBe("Management review minutes are documented and evidenced for every quarter.");
-    expect(strengthRow.afi).toBeUndefined();
+    // Task 2: strengths are not automatically audit-proof below Band 5.
+    expect(strengthRow.afi).toBe("Keep this in place and re-evidence it at each review cycle so it stays audit-ready.");
   });
 
   it("(b) a weakness row carries the clean real diagnosis (label lives in the UI, not the text) with the real AFI text", () => {
@@ -298,12 +298,18 @@ describe("buildFinalReport — 'not assessed' is a distinct third state, never a
     expect(pRow.afi).toBe("File the records.");
   });
 
-  it("(Task 2) the overall summary is 2-4 sentences and names the not-assessed dimensions honestly", () => {
+  it("(Task 1) the overall summary is a tight diagnosis + one priority action, with no band/% restatement", () => {
     const report = buildFinalReport(scored, { "6.3.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.3.1")!;
-    const sentenceCount = item.overallSummary!.split(/(?<=[.!?])\s+/).filter(Boolean).length;
+    const s = item.overallSummary!;
+    const sentenceCount = s.split(/(?<=[.!?])\s+/).filter(Boolean).length;
     expect(sentenceCount).toBeGreaterThanOrEqual(2);
     expect(sentenceCount).toBeLessThanOrEqual(4);
-    expect(item.overallSummary).toContain("Band 2");
+    // approach 4 (strong) vs processes/systemsOutcomes/review 1 (weak): the
+    // classic "documented but not acted on / measured / reviewed" pattern.
+    expect(s).toContain("The approach is clearly documented");
+    expect(s).toContain("The single highest-priority step is to");
+    expect(s).not.toMatch(/Band \d/);
+    expect(s).not.toMatch(/\d+%/);
   });
 });
