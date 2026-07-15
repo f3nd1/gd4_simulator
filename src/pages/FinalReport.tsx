@@ -306,9 +306,9 @@ export function FinalReport() {
       </Card>
 
       <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Banding by item — strengths, gaps & how to reach a higher band</h3>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Banding by item — findings and AFIs</h3>
         <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
-          Strengths and gaps are derived from the Sub-Criterion Checklist. "How to reach Band N" points at the evidence gaps and the official §23 descriptors of the next band — the band itself is the reviewer's holistic judgment.
+          Findings and AFIs are derived from the Sub-Criterion Checklist, one row per requirement line grouped by APSR dimension — the band itself is the reviewer's holistic judgment.
         </div>
         <div className="no-print" style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <label style={{ fontSize: 12, color: "#374151" }}>
@@ -390,40 +390,39 @@ function ItemBlock({ it }: { it: ItemReport }) {
         <span style={{ fontSize: 12.5 }}>{it.title}</span>
         {it.hasChecklist && <span style={{ fontSize: 11, color: "#94a3b8" }}>· {it.completeness.assessed} of {it.completeness.total} lines assessed ({it.completeness.met} Met · {it.completeness.partial} Partial · {it.completeness.notMet} Not met)</span>}
       </div>
-      {it.dimensionSummaries.length > 0 && (
+      {it.overallSummary && (
+        <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.5, margin: "6px 0 0" }}>{it.overallSummary}</p>
+      )}
+      {it.findingsGroups.length > 0 && (
         <div style={{ marginTop: 6, border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
           <table>
             <thead>
-              <tr><th>Dimension</th><th>Band</th><th>Finding</th><th>Gaps and how to reach the next band</th></tr>
+              <tr><th>Dimension</th><th>Band</th><th>Item</th><th>Finding</th><th>AFI (to reach next band)</th></tr>
             </thead>
             <tbody>
-              {it.dimensionSummaries.map((d) => {
-                const nextBand = Math.min(d.band + 1, 5);
-                return (
-                  <tr key={d.key}>
-                    <td style={{ verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 700, fontSize: 11.5 }}>{d.label}</td>
-                    <td style={{ verticalAlign: "top", whiteSpace: "nowrap" }}><Pill s={bandTone(d.band)}>B{d.band} · {d.pct}%</Pill></td>
-                    <td style={{ verticalAlign: "top", fontSize: 11.5, color: "#374151" }}>{d.finding}</td>
-                    <td style={{ verticalAlign: "top", fontSize: 11.5 }}>
-                      {d.gaps.length > 0 ? (
-                        <ol style={{ margin: 0, paddingLeft: 16, display: "grid", gap: 6 }}>
-                          {d.gaps.map((g) => (
-                            <li key={g.lineId} style={{ color: "#b23121" }}>
-                              {g.gap}
-                              {g.fix && (
-                                <div style={{ color: "#2563eb", marginTop: 2 }}>→ How to reach Band {nextBand}: {g.fix}</div>
-                              )}
-                            </li>
-                          ))}
-                        </ol>
-                      ) : d.strengthReason ? (
-                        <span style={{ color: "#15803d" }}><b>Strength:</b> {d.strengthReason}</span>
-                      ) : (
-                        <span style={{ color: "#94a3b8", fontStyle: "italic" }}>No lines currently tagged to this dimension.</span>
-                      )}
-                    </td>
-                  </tr>
+              {it.findingsGroups.flatMap((g) => {
+                const dimCell = (rowSpan: number) => (
+                  <>
+                    <td rowSpan={rowSpan} style={{ verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 700, fontSize: 11.5 }}>{g.label}</td>
+                    <td rowSpan={rowSpan} style={{ verticalAlign: "top", whiteSpace: "nowrap" }}><Pill s={bandTone(g.band)}>B{g.band} · {g.pct}%</Pill></td>
+                  </>
                 );
+                if (g.rows.length === 0) {
+                  return [
+                    <tr key={g.key}>
+                      {dimCell(1)}
+                      <td colSpan={3} style={{ color: "#94a3b8", fontStyle: "italic", fontSize: 11.5 }}>No lines currently tagged to this dimension.</td>
+                    </tr>,
+                  ];
+                }
+                return g.rows.map((r, i) => (
+                  <tr key={r.lineId}>
+                    {i === 0 && dimCell(g.rows.length)}
+                    <td style={{ verticalAlign: "top", whiteSpace: "nowrap", fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{r.itemRef}</td>
+                    <td style={{ verticalAlign: "top", fontSize: 11.5, color: r.isWeakness ? "#b23121" : "#15803d" }}>{r.finding}</td>
+                    <td style={{ verticalAlign: "top", fontSize: 11.5, color: "#2563eb" }}>{r.afi ?? ""}</td>
+                  </tr>
+                ));
               })}
             </tbody>
           </table>
@@ -437,24 +436,9 @@ function ItemBlock({ it }: { it: ItemReport }) {
           <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>{it.bandRationale}</div>
         </details>
       )}
-      {it.strengths.length > 0 && (
-        <Bullets title="Strengths" color="#15803d" items={it.strengths} />
+      {it.generalNote && (
+        <p style={{ fontSize: 11.5, color: "#2563eb", marginTop: 6 }}>{it.generalNote}</p>
       )}
-      {it.gaps.length > 0 && (
-        <Bullets title="Gaps / what's missing" color="#b23121" items={it.gaps} />
-      )}
-      <Bullets title={`How to reach Band ${it.targetBand}`} color="#2563eb" items={it.howToImprove} />
-    </div>
-  );
-}
-
-function Bullets({ title, color, items }: { title: string; color: string; items: string[] }) {
-  return (
-    <div style={{ marginTop: 5 }}>
-      <span style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: 0.3 }}>{title}</span>
-      <ul style={{ margin: "2px 0 0", paddingLeft: 18, fontSize: 12.5, color: "#374151" }}>
-        {items.map((s, i) => <li key={i}>{s}</li>)}
-      </ul>
     </div>
   );
 }

@@ -63,7 +63,7 @@ describe("buildFinalReport — subCriteria rollup (Task 1)", () => {
   });
 });
 
-describe("buildFinalReport — dimensionSummaries (numbered gap/fix pairs + strength reasons)", () => {
+describe("buildFinalReport — findingsGroups (overall summary + per-line findings table)", () => {
   function ev(over: Partial<SubChecklistEvidenceItem> = {}): SubChecklistEvidenceItem {
     return { id: "e1", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency: "Present", ...over };
   }
@@ -80,100 +80,141 @@ describe("buildFinalReport — dimensionSummaries (numbered gap/fix pairs + stre
   }
 
   const ENTRY: SubCriterionChecklistEntry = {
-    gd4ItemId: "2.1.1",
+    gd4ItemId: "6.2.1",
     specific: [
-      // Approach: TWO Met/sufficient lines with real text -> strength, first one's text quoted.
-      line({ id: "L1", apsrDimension: "Approach", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("approach", "The HR policy names the recruitment owner and approval chain.") })] }),
-      line({ id: "L2", apsrDimension: "Approach", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("approach", "A second, unrelated strength note.") })] }),
-      // Processes: TWO DISTINCT real gaps, each with its own diagnosis and fix.
+      // Approach: TWO Met/sufficient lines -> strength.
+      line({ id: "L1", clause: "6.2.1.DS1.a", apsrDimension: "Approach", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("approach", "The management review procedure names its own owner and cadence.") })] }),
+      line({ id: "L2", clause: "6.2.1.DS1.b", apsrDimension: "Approach", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("approach", "A second, unrelated strength note.") })] }),
+      // Processes: one strength, one weakness, each with real text.
+      line({ id: "L3", clause: "6.2.1.DS2", apsrDimension: "Processes", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("processes", "Management review minutes are documented and evidenced for every quarter.") })] }),
       line({
-        id: "L3", apsrDimension: "Processes", status: "Not met",
+        id: "L4", clause: "6.2.1.DS3", apsrDimension: "Processes", status: "Not met",
         evidence: [ev({
           sufficiency: "Missing",
-          suggestedAction: "Add the missing shortlisting matrix for the two recent appointments.",
-          apsr: apsrFor("processes", "There are no shortlisting matrices on file for any appointment this cycle."),
+          suggestedAction: "File the missing follow-up action log for Q3.",
+          apsr: apsrFor("processes", "There is no follow-up action log for the Q3 management review."),
         })],
       }),
+      // Systems & Outcomes: the SAME clause ref as Processes' L3 (6.2.1.DS2)
+      // backs a DIFFERENT line tagged to a different dimension, with its own
+      // distinct weakness — must appear as its own row, never merged with L3.
       line({
-        id: "L4", apsrDimension: "Processes", status: "Partial",
+        id: "L5", clause: "6.2.1.DS2", apsrDimension: "Systems & Outcomes", status: "Partial",
         evidence: [ev({
           sufficiency: "Weak",
-          suggestedAction: "File the missing appraisal forms for the two staff hired in Q2.",
-          apsr: apsrFor("processes", "Appraisal records exist for most staff but two recent hires have none on file."),
+          suggestedAction: "Add outcome trend data for the last two review cycles.",
+          apsr: apsrFor("systemsOutcomes", "Outcome trend data is not tracked across review cycles."),
         })],
       }),
       // Review: a real gap line with NO recorded diagnosis or action -> honest per-line fallback.
-      line({ id: "L5", apsrDimension: "Review", status: "Not met", evidence: [] }),
+      line({ id: "L6", clause: "6.2.1.EE9", apsrDimension: "Review", status: "Not met", evidence: [] }),
       // Untagged line — must not feed any dimension.
-      line({ id: "L6", apsrDimension: undefined, status: "Not met", evidence: [] }),
+      line({ id: "L7", apsrDimension: undefined, status: "Not met", evidence: [] }),
     ],
+    // pcts: approach 25, processes 15, systemsOutcomes 15, review 5 -> total
+    // 60%, Band 3 (threshold 60), and Review (the unique lowest) is exactly
+    // one band-step from crossing into Band 4 -- a clean single-dimension
+    // "limiting factor" case for the overall summary to state plainly.
     holisticBand: {
-      band: 2, totalPct: 30,
-      matrixScores: { approach: 5, processes: 1, systemsOutcomes: 0, review: 1 },
-      rationale: "Approach: Band 5. Processes: Band 1. Systems & Outcomes: Band 0. Review: Band 1. Overall: Band 2.",
+      band: 3, totalPct: 60,
+      matrixScores: { approach: 5, processes: 3, systemsOutcomes: 3, review: 1 },
+      rationale: "Approach: Band 5. Processes: Band 3. Systems & Outcomes: Band 3. Review: Band 1. Overall: Band 3.",
       source: "human", decidedAt: "2026-07-15T00:00:00.000Z",
     },
     pendingGenerated: [],
   };
 
-  it("returns all four scored dimensions", () => {
-    const report = buildFinalReport(scored, { "2.1.1": ENTRY }, [], {});
-    const item = report.items.find((i) => i.id === "2.1.1")!;
-    expect(item.dimensionSummaries.map((d) => d.key)).toEqual(["approach", "processes", "systemsOutcomes", "review"]);
+  it("returns all four scored dimension groups, in order", () => {
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    expect(item.findingsGroups.map((g) => g.key)).toEqual(["approach", "processes", "systemsOutcomes", "review"]);
   });
 
-  it("a genuine strength dimension gets a one-sentence reason, not a bare label, quoting the real per-line text", () => {
-    const report = buildFinalReport(scored, { "2.1.1": ENTRY }, [], {});
-    const item = report.items.find((i) => i.id === "2.1.1")!;
-    const approach = item.dimensionSummaries.find((d) => d.key === "approach")!;
-    expect(approach.band).toBe(5);
-    expect(approach.gaps).toEqual([]);
-    expect(approach.strengthReason).toBe("The HR policy names the recruitment owner and approval chain.");
-    expect(approach.noLinesTagged).toBe(false);
+  it("(a) the overall summary states band, %, strong dimension and the limiting dimension with a real AFI count", () => {
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    expect(item.overallSummary).toContain("Band 3");
+    expect(item.overallSummary).toContain("60%");
+    expect(item.overallSummary).toContain("Approach"); // the strong dimension
+    expect(item.overallSummary).toContain("Review"); // the limiting (cheapest-to-raise) dimension
+    expect(item.overallSummary).toContain("1 AFI"); // Review's single real weakness row
+    expect(item.overallSummary).toContain("Band 4"); // the next band
   });
 
-  it("a dimension with TWO distinct real gaps reports TWO separate gap/fix pairs, never merged into one paragraph", () => {
-    const report = buildFinalReport(scored, { "2.1.1": ENTRY }, [], {});
-    const item = report.items.find((i) => i.id === "2.1.1")!;
-    const processes = item.dimensionSummaries.find((d) => d.key === "processes")!;
-    expect(processes.gaps).toHaveLength(2);
-    expect(processes.gaps[0]).toEqual({
-      lineId: "L3",
-      gap: "There are no shortlisting matrices on file for any appointment this cycle.",
-      fix: "Add the missing shortlisting matrix for the two recent appointments.",
-    });
-    expect(processes.gaps[1]).toEqual({
-      lineId: "L4",
-      gap: "Appraisal records exist for most staff but two recent hires have none on file.",
-      fix: "File the missing appraisal forms for the two staff hired in Q2.",
-    });
-    expect(processes.strengthReason).toBeUndefined();
-    expect(processes.noLinesTagged).toBe(false);
+  it("(b) a strength row states plainly what's evidenced, with a blank AFI", () => {
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    const processes = item.findingsGroups.find((g) => g.key === "processes")!;
+    const strengthRow = processes.rows.find((r) => r.lineId === "L3")!;
+    expect(strengthRow.isWeakness).toBe(false);
+    expect(strengthRow.itemRef).toBe("6.2.1.DS2");
+    expect(strengthRow.finding).toBe("Management review minutes are documented and evidenced for every quarter.");
+    expect(strengthRow.afi).toBeUndefined();
   });
 
-  it("a real gap line with no recorded diagnosis still gets its own honest entry, never dropped", () => {
-    const report = buildFinalReport(scored, { "2.1.1": ENTRY }, [], {});
-    const item = report.items.find((i) => i.id === "2.1.1")!;
-    const review = item.dimensionSummaries.find((d) => d.key === "review")!;
-    expect(review.gaps).toHaveLength(1);
-    expect(review.gaps[0].lineId).toBe("L5");
-    expect(review.gaps[0].gap).toBe("No detailed diagnosis recorded for this line.");
-    expect(review.gaps[0].fix).toBeUndefined();
+  it("(b) a weakness row states 'Weakness — ' plus the real diagnosis, with the real AFI text", () => {
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    const processes = item.findingsGroups.find((g) => g.key === "processes")!;
+    const weaknessRow = processes.rows.find((r) => r.lineId === "L4")!;
+    expect(weaknessRow.isWeakness).toBe(true);
+    expect(weaknessRow.itemRef).toBe("6.2.1.DS3");
+    expect(weaknessRow.finding).toBe("Weakness — There is no follow-up action log for the Q3 management review.");
+    expect(weaknessRow.afi).toBe("File the missing follow-up action log for Q3.");
   });
 
-  it("a scored-but-untagged dimension shows the honest 'no lines tagged' placeholder, never a fabricated strength", () => {
-    const report = buildFinalReport(scored, { "2.1.1": ENTRY }, [], {});
-    const item = report.items.find((i) => i.id === "2.1.1")!;
-    const outcomes = item.dimensionSummaries.find((d) => d.key === "systemsOutcomes")!;
-    expect(outcomes.band).toBe(0);
-    expect(outcomes.gaps).toEqual([]);
-    expect(outcomes.strengthReason).toBeUndefined();
-    expect(outcomes.noLinesTagged).toBe(true);
+  it("(c) a clause ref shared across two dimensions produces two DISTINCT rows, one per dimension, never merged", () => {
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    const processesRow = item.findingsGroups.find((g) => g.key === "processes")!.rows.find((r) => r.itemRef === "6.2.1.DS2")!;
+    const outcomesRow = item.findingsGroups.find((g) => g.key === "systemsOutcomes")!.rows.find((r) => r.itemRef === "6.2.1.DS2")!;
+    expect(processesRow.lineId).toBe("L3");
+    expect(processesRow.isWeakness).toBe(false);
+    expect(outcomesRow.lineId).toBe("L5");
+    expect(outcomesRow.isWeakness).toBe(true);
+    expect(outcomesRow.finding).toBe("Weakness — Outcome trend data is not tracked across review cycles.");
+    expect(outcomesRow.afi).toBe("Add outcome trend data for the last two review cycles.");
   });
 
-  it("an item with no holisticBand.matrixScores yet has an empty dimensionSummaries — never a fabricated breakdown", () => {
+  it("(d) a weakness line with no recorded diagnosis/action still gets an honest fallback row, never dropped", () => {
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    const review = item.findingsGroups.find((g) => g.key === "review")!;
+    expect(review.rows).toHaveLength(1);
+    expect(review.rows[0].lineId).toBe("L6");
+    expect(review.rows[0].finding).toBe("Weakness — No detailed diagnosis recorded for this line.");
+    expect(review.rows[0].afi).toBe("No concrete suggested action recorded for this line.");
+  });
+
+  it("an untagged line never feeds any dimension group", () => {
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    const allRowIds = item.findingsGroups.flatMap((g) => g.rows.map((r) => r.lineId));
+    expect(allRowIds).not.toContain("L7");
+  });
+
+  it("an item with no holisticBand.matrixScores yet has an empty findingsGroups and no overallSummary — never a fabricated breakdown", () => {
     const report = buildFinalReport(scored, {}, [], {});
-    const item = report.items.find((i) => i.id === "2.1.1")!;
-    expect(item.dimensionSummaries).toEqual([]);
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    expect(item.findingsGroups).toEqual([]);
+    expect(item.overallSummary).toBeUndefined();
+  });
+
+  it("a scored dimension with zero tagged lines still gets a group with an empty rows array, never omitted", () => {
+    const sparse: SubCriterionChecklistEntry = {
+      gd4ItemId: "6.2.1",
+      specific: [line({ id: "L1", clause: "6.2.1.DS1.a", apsrDimension: "Approach", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: apsrFor("approach", "Real strength text.") })] })],
+      holisticBand: {
+        band: 1, totalPct: 20,
+        matrixScores: { approach: 5, processes: 0, systemsOutcomes: 0, review: 0 },
+        rationale: "x", source: "human", decidedAt: "2026-07-15T00:00:00.000Z",
+      },
+      pendingGenerated: [],
+    };
+    const report = buildFinalReport(scored, { "6.2.1": sparse }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    const processes = item.findingsGroups.find((g) => g.key === "processes")!;
+    expect(processes).toBeDefined();
+    expect(processes.rows).toEqual([]);
   });
 });

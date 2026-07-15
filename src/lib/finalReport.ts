@@ -1,62 +1,49 @@
 // Builds the read-only Final Report: overall + per-criterion + per-item
-// banding, strengths, AFIs/gaps, and a deterministic "how to reach a higher
-// band" analysis derived from the same checklist banding the score uses, plus
-// the findings register with closure (root cause / corrective action) detail.
+// banding, a findings table of real per-line strengths/weaknesses with AFIs,
+// and the findings register with closure (root cause / corrective action)
+// detail.
 import type { Scored } from "./scoring";
 import { getBand } from "./scoring";
 import type { SubCriterionChecklistEntry, Finding, SpecificChecklistLine, ApsrDimensionScore, Band } from "../types";
 import {
-  lineSufficiency, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrMatrixResult, bandToScore,
-  lineDimensionDiagnosis, lineSuggestedAction, DEFAULT_APSR_SCALE, type LineCompleteness, type ApsrScale,
+  lineSufficiency, lineCompleteness, needsReassessment, apsrMatrixResult, bandToScore, fastestPathToNextBand,
+  lineDimensionDiagnosis, lineSuggestedAction, DEFAULT_APSR_SCALE, type LineCompleteness, type ApsrScale, type ApsrMatrixResult,
 } from "./checklistBanding";
-import { bandTitle, EDUTRUST_BANDS, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
+import { EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
 import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "./../data/gd4Requirements";
 
 export type ClosureLite = { root?: string; corr?: string; prev?: string; evid?: string; human?: "" | "Accepted"; aiNeed?: string };
 
-// ONE real gap on ONE tagged line, paired with that SAME line's real fix —
-// never merged with another line's gap, so a dimension with three distinct
-// gaps reports three, not one blended paragraph.
-export type DimensionGapFix = {
+// ONE real requirement line's row in the findings table — grouped under its
+// dimension (see DimensionFindingsGroup). A line that carries a distinct
+// weakness under two different dimensions (rare, but real — the same clause
+// ref can back two separately-tagged lines) produces two separate rows, one
+// per group, never merged.
+export type ItemFindingRow = {
   lineId: string;
-  // Single-sentence, trimmed from the real lineDimensionDiagnosis text (see
-  // firstSentence) — or an honest "no diagnosis recorded" note when the line
-  // is a real gap (Not met/Partial/insufficient) but carries no AI note.
-  gap: string;
-  // The SAME line's lineSuggestedAction, lightly trimmed — undefined when
-  // none was recorded (never fabricated).
-  fix?: string;
+  // The line's own ref (clause, falling back to sourceRef then the line id)
+  // — e.g. "6.2.1.DS2". Never invented when a line genuinely has no ref.
+  itemRef: string;
+  isWeakness: boolean;
+  // Strength: the real evidence summary/comment for this line, one sentence.
+  // Weakness: "Weakness — " + the real diagnosis, one sentence, or an honest
+  // "no diagnosis recorded" note when the line has none on file.
+  finding: string;
+  // The real suggested action for a weakness row (or an honest "no action
+  // recorded" note when none exists) — always undefined for strength rows,
+  // since there is nothing to close.
+  afi?: string;
 };
 
-// Plain-language rendering of ONE dimension's judgment for one item — built
-// entirely from already-computed, already-real data (the official §23
-// descriptor text for the scored band, and the SAME per-line APSR note /
-// suggestedAction fields the Band Improvement Panel already shows), never a
-// new AI call and never parsed out of the dense, citation-heavy composed
-// holisticBand.rationale (which stays available separately, unabridged, for
-// anyone who wants the AI's original wording).
-export type ItemDimensionSummary = {
+export type DimensionFindingsGroup = {
   key: "approach" | "processes" | "systemsOutcomes" | "review";
   label: string;
   band: ApsrDimensionScore;
   pct: number;
-  // "What's actually true right now" — the verbatim official §23 descriptor
-  // for the band this dimension was scored at (or the honest 0%-floor note).
-  finding: string;
-  // One entry per line under this dimension with a real gap (Not met/
-  // Partial, or Met without sufficient evidence). Empty when the dimension
-  // is fully strong (every tagged line is Met with sufficient evidence).
-  gaps: DimensionGapFix[];
-  // One sentence stating why this dimension is a genuine strength — only
-  // set when gaps is empty AND at least one Met/sufficient line under this
-  // dimension carries real diagnosis text to quote. Never a bare label,
-  // never fabricated when the real text doesn't support one.
-  strengthReason?: string;
-  // True when this dimension has neither a real gap nor a real strength
-  // reason to show (no lines tagged to it, or tagged lines with no usable
-  // text) — the UI shows an honest placeholder, never a fabricated claim.
-  noLinesTagged: boolean;
+  // Empty when no line is tagged to this dimension — the UI shows an honest
+  // placeholder row, never a fabricated finding.
+  rows: ItemFindingRow[];
 };
 
 // Trims real AI-authored text to ONE sentence for a report line, without
@@ -85,15 +72,21 @@ export type ItemReport = {
   needsReassessment: boolean;
   // The AI's or reviewer's own composed rationale, dense and citation-heavy
   // by design (it's the record of exactly what was judged and why) — kept
-  // for full traceability, shown collapsed behind the plain-language
-  // dimensionSummaries below rather than as the primary reading.
+  // for full traceability, shown collapsed behind the summary+table below
+  // rather than as the primary reading.
   bandRationale?: string;
   bandTotalPct?: number;
-  dimensionSummaries: ItemDimensionSummary[];
-  strengths: string[];
-  gaps: string[];
-  targetBand: number;
-  howToImprove: string[];
+  // Ten-second read above the findings table: band, %, which dimensions are
+  // strong/limiting, and roughly how many AFIs would close the gap to the
+  // next band — built from apsrMatrixResult/fastestPathToNextBand, the SAME
+  // limiting-factor logic the Band Improvement Panel already uses. Undefined
+  // when no holisticBand.matrixScores exists yet (nothing to summarise).
+  overallSummary?: string;
+  findingsGroups: DimensionFindingsGroup[];
+  // A general instruction for the ONE case the summary+table can't cover at
+  // all: no per-line data exists yet (no checklist, or an old-model item
+  // needing re-assessment). Undefined once real per-line data exists.
+  generalNote?: string;
 };
 
 export type SubCriterionReport = {
@@ -133,71 +126,63 @@ export type FinalReport = {
   findings: FindingReport[];
 };
 
-function lineLabel(l: SpecificChecklistLine): string {
-  return l.clause ? `${l.clause}: ${l.text}` : l.text;
-}
+const APSR_DIM_KEYS: DimensionFindingsGroup["key"][] = ["approach", "processes", "systemsOutcomes", "review"];
 
-function brief(items: string[], n = 4): string {
-  return items.length > n ? `${items.slice(0, n).join("; ")}; +${items.length - n} more` : items.join("; ");
-}
-
-// Verbatim official §23 descriptor for a scored dimension — the same table
-// ApsrMatrixSelector already renders cell-by-cell, just looked up here instead
-// of re-typed. 0% is an honest floor below Band 1, not a missing value.
-function dimensionDescriptor(dimKey: ItemDimensionSummary["key"], score: ApsrDimensionScore): string {
-  if (score === 0) return "No evidence / not yet assessed — a genuine 0% floor, below Band 1.";
-  return (EDUTRUST_BANDS[score - 1] as unknown as Record<string, string>)[dimKey];
-}
-
-const APSR_DIM_KEYS: ItemDimensionSummary["key"][] = ["approach", "processes", "systemsOutcomes", "review"];
-
-// Builds the plain-language per-dimension breakdown for one item, restructured
-// entirely from data already computed/recorded elsewhere (see
-// ItemDimensionSummary's own comment) — no new AI call, no free-text parsing.
-function buildDimensionSummaries(entry: SubCriterionChecklistEntry | undefined, scale: ApsrScale): ItemDimensionSummary[] {
+// Builds the findings table for one item, grouped by dimension: one row per
+// real tagged line (see ItemFindingRow), restructured entirely from data
+// already computed/recorded elsewhere — no new AI call, no free-text parsing.
+// A line tagged to a dimension where it's genuinely weak reads as a weakness
+// row there even if the SAME clause ref also backs a different line tagged
+// strong under another dimension (Task 2's DS2-style case) — each line
+// object produces exactly one row, under its own dimension only.
+function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scale: ApsrScale): DimensionFindingsGroup[] {
   const hb = entry?.holisticBand;
   if (!hb?.matrixScores) return [];
   const specific = entry?.specific ?? [];
   const result = apsrMatrixResult(hb.matrixScores, scale);
-  const out: ItemDimensionSummary[] = [];
+  const out: DimensionFindingsGroup[] = [];
   for (const key of APSR_DIM_KEYS) {
     const score = hb.matrixScores[key];
     if (score === undefined) continue;
     const label = EDUTRUST_DIMENSIONS.find((d) => d.key === key)!.label;
     const dimLines = specific.filter((l) => l.apsrDimension === label && l.status !== "Not Applicable");
-    const gapLines = dimLines.filter((l) => l.status !== "Met" || lineSufficiency(l) !== "Present");
-    const strongLines = dimLines.filter((l) => l.status === "Met" && lineSufficiency(l) === "Present");
-
-    // One entry PER real gap line, never merged — a dimension with three
-    // distinct gaps must report three, not one blended paragraph. A gap
-    // line with no recorded diagnosis still gets its own entry (honest
-    // fallback text), never silently dropped.
-    const gaps: DimensionGapFix[] = gapLines.map((l) => {
-      const diag = lineDimensionDiagnosis(l, key);
-      const action = lineSuggestedAction(l);
+    const rows: ItemFindingRow[] = dimLines.map((l) => {
+      const itemRef = l.clause || l.sourceRef || l.id;
+      const isWeakness = l.status !== "Met" || lineSufficiency(l) !== "Present";
+      const text = lineDimensionDiagnosis(l, key);
+      if (isWeakness) {
+        const action = lineSuggestedAction(l);
+        return {
+          lineId: l.id, itemRef, isWeakness,
+          finding: `Weakness — ${text ? firstSentence(text) : "No detailed diagnosis recorded for this line."}`,
+          afi: action ? firstSentence(action) : "No concrete suggested action recorded for this line.",
+        };
+      }
       return {
-        lineId: l.id,
-        gap: diag ? firstSentence(diag) : "No detailed diagnosis recorded for this line.",
-        fix: action ? firstSentence(action) : undefined,
+        lineId: l.id, itemRef, isWeakness,
+        finding: text ? firstSentence(text) : "No evidence summary recorded for this line.",
       };
     });
-
-    // A genuine strength: every tagged line is Met with sufficient evidence
-    // (gaps is empty) AND at least one of those lines has real text to quote
-    // — the SAME per-dimension note field lineDimensionDiagnosis already
-    // reads (it carries the evidence summary/comment regardless of verdict),
-    // never a bare "Strength" label.
-    const strengthReason = gaps.length === 0
-      ? strongLines.map((l) => lineDimensionDiagnosis(l, key)).find((t) => !!t)
-      : undefined;
-
-    out.push({
-      key, label, band: score, pct: result.pcts[key], finding: dimensionDescriptor(key, score),
-      gaps, strengthReason: strengthReason ? firstSentence(strengthReason) : undefined,
-      noLinesTagged: gaps.length === 0 && !strengthReason,
-    });
+    out.push({ key, label, band: score, pct: result.pcts[key], rows });
   }
   return out;
+}
+
+// Ten-second read above the findings table: band, %, which dimensions are
+// strong/limiting, and roughly how many real AFI rows would close the gap to
+// the next band — reuses fastestPathToNextBand, the SAME limiting-factor
+// logic the Band Improvement Panel already shows, never a new calculation.
+function buildOverallSummary(result: ApsrMatrixResult, groups: DimensionFindingsGroup[], scale: ApsrScale): string {
+  const strongLabels = groups.filter((g) => g.rows.length > 0 && g.rows.every((r) => !r.isWeakness)).map((g) => g.label);
+  const strongPhrase = strongLabels.length ? ` ${strongLabels.join(", ")} ${strongLabels.length > 1 ? "are" : "is"} strong.` : "";
+  const path = fastestPathToNextBand(result, scale);
+  if (!path) {
+    return `This item is banded at Band ${result.band} (${result.total}%).${strongPhrase} All four dimensions are already at the scale's maximum, so no further AFIs are needed to raise the band.`;
+  }
+  const limitingLabels = path.dims.map((d) => EDUTRUST_DIMENSIONS.find((x) => x.key === d)!.label);
+  const afiCount = groups.filter((g) => path.dims.includes(g.key)).reduce((a, g) => a + g.rows.filter((r) => r.isWeakness).length, 0);
+  const closePhrase = afiCount > 0 ? `closing ${afiCount} AFI${afiCount === 1 ? "" : "s"} in ${limitingLabels.join(" and ")}` : `raising ${limitingLabels.join(" and ")}`;
+  return `This item is banded at Band ${result.band} (${result.total}%).${strongPhrase} ${limitingLabels.join(" and ")} ${limitingLabels.length > 1 ? "are" : "is"} limiting the band — ${closePhrase} would raise it to Band ${path.nextBand}.`;
 }
 
 // Sub-criterion rollup — the SAME band/points formula the criterion level
@@ -237,37 +222,23 @@ function analyseItem(
   const hasChecklist = specific.length > 0;
   const completeness = lineCompleteness(specific);
   const reassess = entry ? needsReassessment(entry) : false;
-  const graded = specific.filter((l) => l.status !== "Not Applicable");
 
-  const strengths = graded
-    .filter((l) => l.status === "Met" && lineSufficiency(l) === "Present")
-    .map((l) => lineLabel(l));
+  const hb = entry?.holisticBand;
+  const findingsGroups = buildFindingsGroups(entry, scale);
+  const overallSummary = hb?.matrixScores ? buildOverallSummary(apsrMatrixResult(hb.matrixScores, scale), findingsGroups, scale) : undefined;
 
-  const notMet = graded.filter((l) => l.status !== "Met");
-  const missingEv = graded.filter((l) => lineSufficiency(l) === "Missing");
-  const gaps: string[] = [
-    ...notMet.map((l) => `${lineLabel(l)} — ${l.status || "Not started"}`),
-    ...missingEv.filter((l) => l.status === "Met").map((l) => `${lineLabel(l)} — marked Met but evidence is missing`),
-  ];
-
-  // The band is a holistic judgment (official §23 rubric) — improvement
-  // advice points at the evidence gaps and the target band's official
-  // descriptors, never at a coverage-% formula (the retired engine's model).
-  const targetBand = Math.min(band + 1, 5);
-  const howToImprove: string[] = [];
-  if (!hasChecklist) {
-    howToImprove.push("Generate the Sub-Criterion Checklist for this item (run the Evidence Folder audit, or generate it on the Sub-Criterion Checklist page), then attach evidence and set its holistic band.");
-  } else if (reassess) {
-    howToImprove.push("Re-assess this item's band under the official EduTrust §23 rubric: open the Sub-Criterion Checklist and select the band level whose four dimension descriptors best fit the evidence.");
-  } else if (band >= 5) {
-    howToImprove.push("Already at Band 5 — keep evidence current and the review cadence going to hold it.");
-  } else {
-    const hb = entry?.holisticBand;
-    if (hb) howToImprove.push(...bandEvidenceAdvisories(specific, hb.band));
-    if (notMet.length) howToImprove.push(`Close the requirement-line gaps: ${brief(notMet.map(lineLabel))}.`);
-    if (missingEv.length) howToImprove.push(`Attach or strengthen evidence on: ${brief(missingEv.map(lineLabel))}.`);
-    howToImprove.push(`Then compare the evidence against the official ${bandTitle(targetBand as 1 | 2 | 3 | 4 | 5)} descriptors on the Sub-Criterion Checklist and re-judge the band.`);
-  }
+  // The ONE case the summary+table can't cover: no per-line data exists yet
+  // (no checklist at all, or an old-model item needing re-assessment under
+  // the official rubric before a matrix even exists). A general instruction,
+  // not tied to any specific line — kept separately per Task 3's finding
+  // that everything else in the old bulleted sections (per-line strengths/
+  // gaps, the compiled "how to reach Band N" advice) is now a strict subset
+  // of the findings table and was removed rather than duplicated.
+  const generalNote = !hasChecklist
+    ? "Generate the Sub-Criterion Checklist for this item (run the Evidence Folder audit, or generate it on the Sub-Criterion Checklist page), then attach evidence and set its holistic band."
+    : reassess
+      ? "Re-assess this item's band under the official EduTrust §23 rubric: open the Sub-Criterion Checklist and select the band level whose four dimension descriptors best fit the evidence."
+      : undefined;
 
   return {
     id,
@@ -280,13 +251,11 @@ function analyseItem(
     hasChecklist,
     completeness,
     needsReassessment: reassess,
-    bandRationale: entry?.holisticBand?.rationale,
-    bandTotalPct: entry?.holisticBand?.matrixScores ? apsrMatrixResult(entry.holisticBand.matrixScores, scale).total : undefined,
-    dimensionSummaries: buildDimensionSummaries(entry, scale),
-    strengths,
-    gaps,
-    targetBand,
-    howToImprove,
+    bandRationale: hb?.rationale,
+    bandTotalPct: hb?.matrixScores ? apsrMatrixResult(hb.matrixScores, scale).total : undefined,
+    overallSummary,
+    findingsGroups,
+    generalNote,
   };
 }
 
