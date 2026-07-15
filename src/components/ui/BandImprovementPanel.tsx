@@ -9,14 +9,21 @@
 //     the AI line-generation pass's own structured field (set from a fixed
 //     enum at generation time, never free-text-parsed) — absent on manual/
 //     seed lines, which honestly don't appear in a dimension's line list.
-//   - "how to fix" text: lineDimensionDiagnosis(line, dim.key), VERBATIM —
-//     the real per-dimension AI note an audit run recorded for that line
-//     (fixed 2026-07-14: this used to be buildDraftFinding's synthesised
-//     "Replace the insufficient evidence..." template, a generic boilerplate
-//     string that ignored the line's own real diagnosis already shown a few
-//     clicks away in its expanded PPD/Evidence tabs).
+//   - "Gap" text: lineDimensionDiagnosis(line, dim.key), VERBATIM — the real
+//     per-dimension AI note an audit run recorded for that line (fixed
+//     2026-07-14: this used to be buildDraftFinding's synthesised "Replace
+//     the insufficient evidence..." template, a generic boilerplate string
+//     that ignored the line's own real diagnosis already shown a few clicks
+//     away in its expanded PPD/Evidence tabs).
+//   - "To reach Met" text: lineSuggestedAction(line), VERBATIM — the Evidence
+//     judge's own concrete corrective text (Option A only; same field the
+//     Lineage Diagram's "To reach Met:" callout reads, now also snapshotted
+//     onto the checklist line at commit time). A diagnosis describes WHAT'S
+//     WRONG; this describes WHAT TO DO — two different AI outputs, shown
+//     separately so neither is mistaken for the other. Absent on Option B
+//     lines (no equivalent field exists there) — an honest gap, not hidden.
 import { EDUTRUST_DIMENSIONS, bandTitle } from "../../data/edutrustRubric";
-import { lineDimensionDiagnosis, lineSufficiency, weakestDimensions, fastestPathToNextBand, type ApsrMatrixResult, type ApsrScale } from "../../lib/checklistBanding";
+import { lineDimensionDiagnosis, lineSuggestedAction, lineSufficiency, weakestDimensions, fastestPathToNextBand, type ApsrMatrixResult, type ApsrScale } from "../../lib/checklistBanding";
 import { bandTone } from "../../lib/theme";
 import type { SpecificChecklistLine } from "../../types";
 import { Pill } from "./Pill";
@@ -83,12 +90,25 @@ export function BandImprovementPanel({
                     <div style={{ marginTop: 4, display: "grid", gap: 4 }}>
                       {lines.map((l) => {
                         const diagnosis = lineDimensionDiagnosis(l, dim.key);
+                        const suggestedAction = lineSuggestedAction(l);
+                        const trunc = (s: string) => (s.length > 240 ? `${s.slice(0, 240)}…` : s);
                         return (
                           <div key={l.id} style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 11, background: "#f8fafc", border: "1px solid #f1f5f9", borderRadius: 6, padding: "5px 7px" }}>
                             <span style={{ flex: 1, minWidth: 0 }}>
                               <span style={{ fontWeight: 600, color: "#334155" }}>{l.clause ? `${l.clause}: ` : ""}{l.text.length > 90 ? `${l.text.slice(0, 90)}…` : l.text}</span>
-                              {diagnosis ? (
-                                <span style={{ display: "block", color: "#6b7280", marginTop: 1 }}>How to fix: {diagnosis.length > 240 ? `${diagnosis.slice(0, 240)}…` : diagnosis}</span>
+                              {diagnosis || suggestedAction ? (
+                                <>
+                                  {diagnosis ? (
+                                    <span style={{ display: "block", color: "#6b7280", marginTop: 1 }}>Gap: {trunc(diagnosis)}</span>
+                                  ) : (
+                                    <span style={{ display: "block", color: "#94a3b8", marginTop: 1, fontStyle: "italic" }}>No diagnosis recorded for this line.</span>
+                                  )}
+                                  {suggestedAction ? (
+                                    <span style={{ display: "block", color: "#166534", marginTop: 1 }}>To reach Met: {trunc(suggestedAction)}</span>
+                                  ) : (
+                                    <span style={{ display: "block", color: "#94a3b8", marginTop: 1, fontStyle: "italic" }}>No concrete suggested action recorded for this line.</span>
+                                  )}
+                                </>
                               ) : (
                                 <span style={{ display: "block", color: "#94a3b8", marginTop: 1, fontStyle: "italic" }}>No detailed diagnosis recorded for this line — open it to review the evidence directly.</span>
                               )}

@@ -244,6 +244,16 @@ export function lineDimensionDiagnosis(line: SpecificChecklistLine, dimKey: keyo
   return lineApsr(line)?.[dimKey]?.note?.trim() || undefined;
 }
 
+// The Evidence judge's own concrete "what would make this Met" text (Option
+// A only — Option B's staged audit has no equivalent field). Read from the
+// SAME evidence item as lineDimensionDiagnosis (first with an apsr snapshot)
+// so the two stay grounded in the same run; undefined when absent, never a
+// fabricated action.
+export function lineSuggestedAction(line: SpecificChecklistLine): string | undefined {
+  for (const ev of line.evidence) if (ev.apsr) return ev.suggestedAction?.trim() || undefined;
+  return undefined;
+}
+
 // In-depth, plain-language analysis of WHY a line failed and how to fix it,
 // derived from the APSR dimension that fell short (or, with no APSR, from the
 // status / evidence). This is what makes a raised finding read deeper than

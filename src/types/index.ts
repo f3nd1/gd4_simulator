@@ -332,6 +332,12 @@ export type SubChecklistEvidenceItem = {
   ppdComment?: string;
   evidenceComment?: string;
   promiseChecks?: PromiseCheck[];
+  // The Evidence judge's own "what would make this Met" text, verbatim —
+  // same field as EvidenceAssessmentRow.suggestedAction (see that type for
+  // the honesty rule: concrete and grounded, or absent, never generic).
+  // Absent on Option B, manual, seed and pre-existing lines — Option B's
+  // staged audit has no equivalent field to snapshot.
+  suggestedAction?: string;
   // Audit-run id (e.g. "AR-1.2-K9QZ") when this item was created by a folder
   // audit, so it can be traced to the matching result row, AI Review Log entry
   // and journal entry. Also records that an AI run produced it, not a human.

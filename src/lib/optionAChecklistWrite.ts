@@ -142,6 +142,7 @@ export function buildOptionALineWrites(
         evidenceVerdict: status,
         ppdComment: ppdRow?.fullComment || ppdRow?.shortComment || undefined,
         evidenceComment: row.comment || row.evidenceSummary || undefined,
+        suggestedAction: row.suggestedAction || undefined,
         promiseChecks: row.promiseChecks,
         apsr: optionAApsr(row, ppdRow),
         runId: opts.runId,

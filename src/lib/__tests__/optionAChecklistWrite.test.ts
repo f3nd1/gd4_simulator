@@ -71,12 +71,13 @@ describe("buildOptionALineWrites — Option A verdicts land on checklist lines b
       { promiseText: "Rubric applied before appointment", verdict: "evidenced" as const, evidence: "Scoring sheets on file.", chunkIds: ["C002"] },
       { promiseText: "Due-diligence on every agent", verdict: "not evidenced" as const, evidence: "No record found.", chunkIds: [] },
     ];
-    const writes = buildOptionALineWrites([row({ verdict: "Partial", promiseChecks: checks })], {}, PPD_ROWS, OPTS);
+    const writes = buildOptionALineWrites([row({ verdict: "Partial", promiseChecks: checks, suggestedAction: "Add the missing scoring sheet for the third appointment." })], {}, PPD_ROWS, OPTS);
     const ev = writes[0].evidence;
     expect(ev.ppdVerdict).toBe("Adequate");
     expect(ev.evidenceVerdict).toBe("Partial"); // the RUN's verdict, preserved even if a human later edits l.status
     expect(ev.ppdComment).toBe("…"); // ppdRow.fullComment verbatim, not the shortComment
     expect(ev.evidenceComment).toBe("Documented and implemented (C002)."); // row.comment verbatim
+    expect(ev.suggestedAction).toBe("Add the missing scoring sheet for the third appointment."); // row.suggestedAction verbatim
     expect(ev.promiseChecks).toEqual(checks);
     // The auto-generated auditorNote blob is deliberately gone — it froze at
     // write time and duplicated the tabs. auditorNote is human-input-only now.
