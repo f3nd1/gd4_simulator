@@ -30,10 +30,11 @@ export type ItemDimensionSummary = {
   // "What's actually true right now" — the verbatim official §23 descriptor
   // for the band this dimension was scored at (or the honest 0%-floor note).
   finding: string;
-  // True when at least one line under this dimension has an open gap (a
-  // Not met/Partial line, or a Met line without sufficient evidence) —
-  // distinguishes "no gap, nothing to say" from "there IS a gap but no real
-  // diagnosis was captured on file" so the UI never invents either.
+  // True when this dimension's % is below the scale's max — same "room to
+  // improve" test BandImprovementPanel's hasHeadroom uses. Deliberately a
+  // property of the SCORE, not of whether a line happens to be tagged to
+  // this dimension: a Band 1-3 dimension is a real gap even with zero
+  // tagged lines, and must never be silently hidden for that reason.
   hasGap: boolean;
   // Real per-line diagnosis (lineDimensionDiagnosis), verbatim — undefined
   // when hasGap is false (nothing to report) OR when no line under this
@@ -143,7 +144,13 @@ function buildDimensionSummaries(entry: SubCriterionChecklistEntry | undefined, 
     const gapLines = dimLines.filter((l) => l.status !== "Met" || lineSufficiency(l) !== "Present");
     const missing = gapLines.map((l) => lineDimensionDiagnosis(l, key)).find((t) => !!t);
     const howToImprove = gapLines.map((l) => lineSuggestedAction(l)).find((t) => !!t);
-    out.push({ key, label, band: score, pct: result.pcts[key], finding: dimensionDescriptor(key, score), hasGap: gapLines.length > 0, missing, howToImprove });
+    // "Has room to improve" is a property of the SCORE (below the scale's max
+    // — same test as BandImprovementPanel's hasHeadroom), not of whether any
+    // line happens to be tagged to this dimension. A Band 1-3 dimension with
+    // zero tagged lines still has a real gap; it must show the honest
+    // "no diagnosis on file" fallback, never be silently omitted.
+    const hasGap = result.pcts[key] < scale.maxPctPerDimension;
+    out.push({ key, label, band: score, pct: result.pcts[key], finding: dimensionDescriptor(key, score), hasGap, missing, howToImprove });
   }
   return out;
 }

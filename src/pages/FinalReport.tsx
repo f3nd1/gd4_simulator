@@ -391,26 +391,27 @@ function ItemBlock({ it }: { it: ItemReport }) {
         {it.hasChecklist && <span style={{ fontSize: 11, color: "#94a3b8" }}>· {it.completeness.assessed} of {it.completeness.total} lines assessed ({it.completeness.met} Met · {it.completeness.partial} Partial · {it.completeness.notMet} Not met)</span>}
       </div>
       {it.dimensionSummaries.length > 0 && (
-        <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
-          {it.dimensionSummaries.map((d) => (
-            <div key={d.key} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 9px", background: "#f8fafc" }}>
-              <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 3 }}>
-                <Pill s={bandTone(d.band)}>Band {d.band} · {d.pct}%</Pill>
-                <b style={{ fontSize: 11.5 }}>{d.label}</b>
-              </div>
-              <div style={{ fontSize: 11.5, color: "#374151" }}><b>Finding:</b> {d.finding}</div>
-              {d.hasGap && (
-                <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 2 }}>
-                  <b>What's missing:</b> {d.missing ?? "No detailed diagnosis recorded for this dimension — open the Sub-Criterion Checklist to review the evidence directly."}
-                </div>
-              )}
-              {d.hasGap && (
-                <div style={{ fontSize: 11.5, color: "#2563eb", marginTop: 2 }}>
-                  <b>How to improve:</b> {d.howToImprove ?? "No concrete suggested action recorded for this dimension — open the Sub-Criterion Checklist to review the evidence directly."}
-                </div>
-              )}
-            </div>
-          ))}
+        <div style={{ marginTop: 6, border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+          <table>
+            <thead>
+              <tr><th>Dimension</th><th>Band</th><th>Finding</th><th>What's missing</th><th>How to improve</th></tr>
+            </thead>
+            <tbody>
+              {it.dimensionSummaries.map((d) => (
+                <tr key={d.key}>
+                  <td style={{ verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 700, fontSize: 11.5 }}>{d.label}</td>
+                  <td style={{ verticalAlign: "top", whiteSpace: "nowrap" }}><Pill s={bandTone(d.band)}>B{d.band} · {d.pct}%</Pill></td>
+                  <td style={{ verticalAlign: "top", fontSize: 11.5, color: "#374151" }}>{d.finding}</td>
+                  <td style={{ verticalAlign: "top", fontSize: 11.5, color: d.hasGap ? "#b23121" : "#cbd5e1" }}>
+                    {d.hasGap ? (d.missing ?? "No detailed diagnosis recorded — open the Sub-Criterion Checklist to review the evidence directly.") : "—"}
+                  </td>
+                  <td style={{ verticalAlign: "top", fontSize: 11.5, color: d.hasGap ? "#2563eb" : "#cbd5e1" }}>
+                    {d.hasGap ? (d.howToImprove ?? "No concrete suggested action recorded — open the Sub-Criterion Checklist to review the evidence directly.") : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
       {it.bandRationale && (
