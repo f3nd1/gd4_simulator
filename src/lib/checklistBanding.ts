@@ -23,7 +23,6 @@
 import type { ApsrDimensionScore, ApsrMatrixScores, Band, GD4Requirement, SpecificChecklistLine, EvidenceSufficiency, DraftFindingInfo, SubCriterionChecklistEntry, ApsrBreakdown, FindingDimension } from "../types";
 import { bandTitle } from "../data/edutrustRubric";
 import { findingTypeForStatus, ncSeverityFor } from "./findingClassification";
-import { normalizeAuditRef } from "./gd4Refs";
 
 export function lineSufficiency(line: SpecificChecklistLine): EvidenceSufficiency {
   if (line.evidence.length === 0) return "Missing";
@@ -245,28 +244,43 @@ export function lineDimensionDiagnosis(line: SpecificChecklistLine, dimKey: keyo
   return lineApsr(line)?.[dimKey]?.note?.trim() || undefined;
 }
 
-// Matches the band-scoring AI's structured per-line dimension tags
-// (HolisticBandSuggestionResult.lineDimensions — see runHolisticBandSuggestion
-// in agentRuntime.ts, which already cites these same refs in its per-
-// dimension prose) against REAL checklist lines, by normalized ref — the
-// same ref-matching rule buildOptionALineWrites uses (sourceRef, falling
-// back to clause). A tag whose ref matches no line is dropped, never
-// guessed or force-matched. Only lines that are CURRENTLY untagged are
-// returned: a human's manual apsrDimension pick (the Fix-b picker) is never
-// silently overwritten by an AI suggestion accepted afterwards.
-export function matchLineDimensionTags(
-  tags: { ref: string; dimension: string }[],
+// Deterministic APSR-dimension classification from a requirement line's OWN
+// text. This replaced the band-scoring AI's per-line lineDimensions tagging
+// (commit e5998c3), which proved unreliable: on review-themed sub-criteria
+// (e.g. 6.3.1 Innovation and Continual Improvement) the AI defaulted every
+// line to Review, leaving Approach/Processes/Systems & Outcomes empty. A
+// keyword classifier is predictable and content-driven, which is what an
+// audit tool needs (correctness/consistency over cleverness).
+//
+// ORDER MATTERS — it is the whole point. A line ABOUT implementing or
+// investing in "improvement" must read as Processes, not Review, so a review
+// ACTION (review/evaluate/effectiveness) is matched only when it is genuinely
+// the subject, never merely because the words "improvement"/"continual"/
+// "innovation" (topics, not actions) appear. Worked example (6.3.1's five
+// Describe/Show bullets): Approach, Processes, Processes, Review, Review —
+// distributed across three dimensions instead of all-Review.
+export function classifyApsrByContent(text: string): NonNullable<SpecificChecklistLine["apsrDimension"]> {
+  const t = text.toLowerCase();
+  // Review: an explicit review / evaluation ACTION only.
+  if (/\breview\b|\bevaluat|\beffectiveness\b|\brevisit\b|\bappraise\b|\bmonitor and review\b/.test(t)) return "Review";
+  // Systems & Outcomes: results / performance data.
+  if (/\boutcome|\bresult|\bkpi\b|\btarget\b|\btrend\b|performance data|\bstatistic|\bachiev/.test(t)) return "Systems & Outcomes";
+  // Processes: implementation / deployment / record-keeping.
+  if (/\bimplement|\binvest\b|\bdeploy|\bconduct\b|\bcarry out\b|\bmaintain\b|\brecord\b|\blog\b|\bregister\b|\bform\b|\btrack\b|\bexecute\b|\battendance\b|\bcollect\b/.test(t)) return "Processes";
+  // Default: Approach (documented policy / plan / framework / mechanism).
+  return "Approach";
+}
+
+// Tags every CURRENTLY-UNTAGGED, applicable line by its own content — used
+// when a human accepts the AI band suggestion. A human's manual apsrDimension
+// pick (the Fix-b picker) is never overwritten (the !apsrDimension guard);
+// Not Applicable lines are skipped (they never appear in a dimension group).
+export function classifyUntaggedLinesByContent(
   specific: SpecificChecklistLine[]
 ): { lineId: string; dimension: NonNullable<SpecificChecklistLine["apsrDimension"]> }[] {
-  const out: { lineId: string; dimension: NonNullable<SpecificChecklistLine["apsrDimension"]> }[] = [];
-  for (const tag of tags) {
-    const normRef = normalizeAuditRef(tag.ref);
-    const line = specific.find(
-      (l) => !l.apsrDimension && ((l.sourceRef && normalizeAuditRef(l.sourceRef) === normRef) || (l.clause && normalizeAuditRef(l.clause) === normRef))
-    );
-    if (line) out.push({ lineId: line.id, dimension: tag.dimension as NonNullable<SpecificChecklistLine["apsrDimension"]> });
-  }
-  return out;
+  return specific
+    .filter((l) => !l.apsrDimension && l.status !== "Not Applicable")
+    .map((l) => ({ lineId: l.id, dimension: classifyApsrByContent(l.text) }));
 }
 
 // The Evidence judge's own concrete "what would make this Met" text (Option

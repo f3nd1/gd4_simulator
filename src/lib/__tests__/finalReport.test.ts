@@ -131,15 +131,23 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     expect(item.findingsGroups.map((g) => g.key)).toEqual(["approach", "processes", "systemsOutcomes", "review"]);
   });
 
-  it("(a) the overall summary states band, %, strong dimension and the limiting dimension with a real AFI count", () => {
+  it("(a) the overall summary LEADS with a plain general read, then states band, %, and the limiting dimension with a real AFI count", () => {
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
+    // Task 2: the general performance statement comes first and carries the
+    // weight — a plain-English rendering of the four per-dimension bands
+    // (approach 5, processes 3, systemsOutcomes 3, review 1), not band jargon.
+    expect(item.overallSummary!.startsWith("Overall, this area shows")).toBe(true);
+    expect(item.overallSummary).toContain("a mature, fully embedded approach"); // approach band 5
+    expect(item.overallSummary).toContain("little review activity"); // review band 1
+    // The band mechanics come AFTER the general read.
     expect(item.overallSummary).toContain("Band 3");
     expect(item.overallSummary).toContain("60%");
-    expect(item.overallSummary).toContain("Approach"); // the strong dimension
     expect(item.overallSummary).toContain("Review"); // the limiting (cheapest-to-raise) dimension
     expect(item.overallSummary).toContain("1 AFI"); // Review's single real weakness row
     expect(item.overallSummary).toContain("Band 4"); // the next band
+    // The general read leads, the band line follows it.
+    expect(item.overallSummary!.indexOf("Overall,")).toBeLessThan(item.overallSummary!.indexOf("Band 3"));
   });
 
   it("(b) a strength row states plainly what's evidenced (no 'Weakness' prefix in the text), with a blank AFI", () => {
@@ -275,9 +283,11 @@ describe("buildFinalReport — 'not assessed' is a distinct third state, never a
     expect(soRow.finding).toBe(reviewRow.finding);
     expect(soRow.finding).not.toMatch(/weakness/i);
     expect(soRow.finding).not.toContain("—");
-    // No AFI — nothing was assessed, so there is nothing to close.
-    expect(soRow.afi).toBeUndefined();
-    expect(reviewRow.afi).toBeUndefined();
+    // The AFI column is never blank on a non-strength row (Task 4): a
+    // not-assessed row carries the actionable "run the staged audit / attach
+    // evidence" step, not undefined.
+    expect(soRow.afi).toBe("Run the staged audit or attach outcome or review evidence to assess this dimension.");
+    expect(reviewRow.afi).toBe(soRow.afi);
   });
 
   it("a genuinely-assessed line on the same item is still a weakness (the sentinel check does not swallow real findings)", () => {

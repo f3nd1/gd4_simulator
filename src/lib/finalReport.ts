@@ -18,6 +18,10 @@ import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "./../data/gd4Requirements";
 // no em dash. Detection uses the raw sentinel (isOptionANotAssessedNote); the
 // displayed text is this clean version, saying the same thing.
 const NOT_ASSESSED_FINDING = "Not assessed by Option A (PPD and Evidence). Run the staged audit or attach outcome or review evidence to assess this dimension.";
+// The actionable half of the note, surfaced in the AFI column so a not-assessed
+// row never shows a blank next-action (Task 4) — a reader scanning the AFI
+// column sees a concrete step on every non-strength row.
+const NOT_ASSESSED_AFI = "Run the staged audit or attach outcome or review evidence to assess this dimension.";
 
 export type ClosureLite = { root?: string; corr?: string; prev?: string; evid?: string; human?: "" | "Accepted"; aiNeed?: string };
 
@@ -48,9 +52,11 @@ export type ItemFindingRow = {
   // "not assessed" explanation for a not-assessed row. Never carries a
   // "Weakness —" prefix: the verdict drives the label/colour in the UI.
   finding: string;
-  // The real suggested action for a WEAKNESS row (or an honest "no action
-  // recorded" note when none exists) — undefined for strength rows (nothing
-  // to close) and for not-assessed rows (nothing was assessed to act on).
+  // The suggested next action: the real per-line action for a WEAKNESS row (or
+  // an honest "no action recorded" note when none exists), or the "run the
+  // staged audit / attach evidence" step for a NOT-ASSESSED row so its AFI
+  // column is never blank (Task 4). Undefined only for strength rows — nothing
+  // to close.
   afi?: string;
 };
 
@@ -173,7 +179,7 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
       // weakness test, so an unassessed dimension is never mislabelled a
       // finding just because the line's overall status is Not met/Partial.
       if (isOptionANotAssessedNote(text)) {
-        return { lineId: l.id, itemRef, verdict: "not-assessed", finding: NOT_ASSESSED_FINDING };
+        return { lineId: l.id, itemRef, verdict: "not-assessed", finding: NOT_ASSESSED_FINDING, afi: NOT_ASSESSED_AFI };
       }
       const isWeakness = l.status !== "Met" || lineSufficiency(l) !== "Present";
       if (isWeakness) {
@@ -194,46 +200,46 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
   return out;
 }
 
-// Ten-second read above the findings table: 2-4 plain sentences on band + %,
-// what's genuinely strong (with a real one-line reason), what's limiting the
-// band (with a real one-line reason), and roughly what closing the gap would
-// take. Every clause is drawn from the SAME structured per-line data the
-// findings table shows (real diagnosis/evidence text) plus fastestPathToNext-
-// Band (the limiting-factor logic the Band Improvement Panel already uses) —
-// no new AI call, no invented content. (The band-suggestion AI's own per-
-// dimension reason fields are not persisted on the entry — only the composed
-// rationale is — so the concrete reasons here are pulled from the equivalent
-// real per-line text, which is structured and available at render time.)
+// A plain-English rendering of ONE dimension's assessed band — a faithful
+// restatement of the band the reviewer/AI already set (the official rubric
+// descriptor in words a non-technical reader gets at a glance), never a new
+// judgment. band 0 = "Not evident" on the scale; bands 1-5 climb the rubric.
+function plainDimensionState(key: DimensionFindingsGroup["key"], band: ApsrDimensionScore): string {
+  const P: Record<DimensionFindingsGroup["key"], string[]> = {
+    // index by band 0..5
+    approach: ["no documented approach yet", "little organised approach", "a partially developed approach", "an established approach", "a well-developed approach", "a mature, fully embedded approach"],
+    processes: ["no evidence of implementation", "little evidence of implementation", "limited evidence of implementation", "some evidence of implementation", "strong evidence of implementation", "consistent, fully deployed implementation"],
+    systemsOutcomes: ["no outcome data yet", "little outcome data", "limited outcome data", "some outcome data", "clear outcome data", "strong, sustained outcome data"],
+    review: ["no review activity yet", "little review activity", "limited review activity", "some review activity", "regular review activity", "systematic, embedded review"],
+  };
+  return P[key][band];
+}
+
+// Ten-second read above the findings table. LEADS with a plain general
+// assessment of how the item is actually performing (Task 2) — a faithful
+// plain-English restatement of the four per-dimension bands, carrying the
+// weight of the summary — THEN, separately, the band/% and what closing the
+// gap would take. No new AI call, no invented content: every phrase is a
+// deterministic rendering of data already on the entry (per-dimension bands
+// from matrixScores, fastestPathToNextBand's limiting-factor logic).
 function buildOverallSummary(result: ApsrMatrixResult, groups: DimensionFindingsGroup[], scale: ApsrScale): string {
-  const firstText = (g: DimensionFindingsGroup, v: FindingVerdict): string | undefined =>
-    g.rows.find((r) => r.verdict === v)?.finding;
+  const sentences: string[] = [];
 
-  const sentences: string[] = [`This item is banded at Band ${result.band} (${result.total}%).`];
-
-  // Strengths: dimensions whose assessed lines are all strengths (ignoring
-  // not-assessed rows, which are neither strong nor weak). Name them and, if
-  // available, quote one real evidenced strength so it's concrete, not a bare
-  // "X is strong".
-  const strongGroups = groups.filter((g) => g.rows.some((r) => r.verdict === "strength") && !g.rows.some((r) => r.verdict === "weakness"));
-  if (strongGroups.length) {
-    const labels = strongGroups.map((g) => g.label);
-    const reason = firstText(strongGroups[0], "strength");
-    sentences.push(`${labels.join(" and ")} ${labels.length > 1 ? "are" : "is"} the strongest ${labels.length > 1 ? "dimensions" : "dimension"}${reason ? `: ${reason}` : "."}`);
+  // 1) The general performance statement, first and carrying the weight:
+  // the item's four dimensions described plainly, in APSR order.
+  const parts = groups.map((g) => plainDimensionState(g.key, g.band));
+  if (parts.length === 4) {
+    sentences.push(`Overall, this area shows ${parts[0]}, with ${parts[1]}, ${parts[2]}, and ${parts[3]}.`);
+  } else if (parts.length) {
+    sentences.push(`Overall, this area shows ${parts.join(", ")}.`);
   }
 
-  // Limiting: dimensions with at least one real weakness. Name them and quote
-  // one real diagnosis for concreteness.
-  const weakGroups = groups.filter((g) => g.rows.some((r) => r.verdict === "weakness"));
-  if (weakGroups.length) {
-    const labels = weakGroups.map((g) => g.label);
-    const reason = firstText(weakGroups[0], "weakness");
-    sentences.push(`${labels.join(" and ")} ${labels.length > 1 ? "are" : "is"} holding the band back${reason ? `: ${reason}` : "."}`);
-  }
+  // 2) The band and %, noted separately after the general read.
+  sentences.push(`It is banded at Band ${result.band} (${result.total}%).`);
 
-  // Path to the next band, from the real weakness rows in the limiting dims.
-  // Pushed BEFORE the not-assessed caveat so the task's required "what closing
-  // the gap would take" survives the 4-sentence cap; the caveat is bonus
-  // context that only shows when there is room for it.
+  // 3) What closing the gap would take — the limiting dimension(s) and the
+  // count of open AFIs there, from the SAME logic the Band Improvement Panel
+  // uses. Skipped at Band 5 (nothing to reach).
   const path = fastestPathToNextBand(result, scale);
   if (!path) {
     sentences.push("All four dimensions are already at the scale's maximum, so no further action is needed to raise the band.");
@@ -245,16 +251,16 @@ function buildOverallSummary(result: ApsrMatrixResult, groups: DimensionFindings
       : `Raising ${limitingLabels.join(" and ")} would take it to Band ${path.nextBand}.`);
   }
 
-  // Not-assessed dimensions get an honest one-liner so the reader knows the
-  // band rests on partial coverage, never a silent omission.
+  // 4) An honest note when a dimension was structurally not assessed on this
+  // run, so the reader knows the band rests on partial coverage.
   const naGroups = groups.filter((g) => g.rows.length > 0 && g.rows.every((r) => r.verdict === "not-assessed"));
   if (naGroups.length) {
     const labels = naGroups.map((g) => g.label);
     sentences.push(`${labels.join(" and ")} ${labels.length > 1 ? "were" : "was"} not assessed on this run, so ${labels.length > 1 ? "those bands rest" : "that band rests"} on the band-scoring judgment rather than fresh evidence.`);
   }
 
-  // Keep it to at most four sentences (band line + up to three of
-  // strengths/limiting/path/not-assessed) so it stays a ten-second read.
+  // Keep it to at most four sentences (general read + band + path + optional
+  // not-assessed caveat) so it stays a ten-second read.
   return sentences.slice(0, 4).join(" ");
 }
 

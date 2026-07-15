@@ -13,7 +13,8 @@ import {
   weakestDimensions,
   fastestPathToNextBand,
   lineDimensionDiagnosis,
-  matchLineDimensionTags,
+  classifyApsrByContent,
+  classifyUntaggedLinesByContent,
 } from "../checklistBanding";
 import { EDUTRUST_BANDS, bandTitle } from "../../data/edutrustRubric";
 import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
@@ -331,50 +332,48 @@ describe("lineDimensionDiagnosis — the Band Improvement Panel's real 'how to f
   });
 });
 
-describe("matchLineDimensionTags — the AI band-suggestion accept flow's line auto-tagger", () => {
+describe("classifyApsrByContent — deterministic content-based dimension tagging", () => {
+  it("distributes GD4 6.3.1's five Describe/Show bullets across three dimensions, not all-Review (the reported bug)", () => {
+    // The exact real bullets from gd4Requirements.ts. Before the fix, the
+    // band-scoring AI tagged every line Review because the words
+    // "improvement"/"continual"/"innovation" appear throughout; the content
+    // classifier only reads Review from an actual review/evaluate ACTION.
+    expect(classifyApsrByContent("Encourage and facilitate key stakeholders to contribute towards innovation and continual improvement")).toBe("Approach");
+    expect(classifyApsrByContent("Implement an improvement plan which adds value to students' learning experience")).toBe("Processes");
+    expect(classifyApsrByContent("Invest in appropriate resources, technologies, learning support services and facilities development and/or upgrading")).toBe("Processes");
+    expect(classifyApsrByContent("Evaluate the effectiveness of the innovation and improvement implemented")).toBe("Review");
+    expect(classifyApsrByContent("Review the process for innovation and continual improvement")).toBe("Review");
+  });
+
+  it("reads outcomes/KPIs/results as Systems & Outcomes, and a plain documented approach as Approach", () => {
+    expect(classifyApsrByContent("Track student outcome data against KPI targets")).toBe("Systems & Outcomes");
+    expect(classifyApsrByContent("A documented recruitment policy and procedure")).toBe("Approach");
+  });
+});
+
+describe("classifyUntaggedLinesByContent — the AI band-suggestion accept flow's line auto-tagger", () => {
   function taggableLine(over: Partial<SpecificChecklistLine> & { id: string }): SpecificChecklistLine {
     return { text: "x", status: "Not met", evidence: [], generatedBy: "ai", ...over };
   }
 
-  it("matches by sourceRef and tags a currently-untagged line", () => {
-    const specific = [taggableLine({ id: "L1", sourceRef: "2.1.1.DS1.a" })];
-    const out = matchLineDimensionTags([{ ref: "2.1.1.DS1.a", dimension: "Processes" }], specific);
-    expect(out).toEqual([{ lineId: "L1", dimension: "Processes" }]);
-  });
-
-  it("matches through ref-format drift via normalizeAuditRef, falling back to clause when sourceRef is absent", () => {
-    const specific = [taggableLine({ id: "L1", clause: "2.1.1.DS1.a" })];
-    const out = matchLineDimensionTags([{ ref: "ds: 2.1.1.ds1.a ", dimension: "Approach" }], specific);
-    expect(out).toEqual([{ lineId: "L1", dimension: "Approach" }]);
-  });
-
-  it("drops a tag whose ref matches no real line — never guessed or force-matched", () => {
-    const specific = [taggableLine({ id: "L1", sourceRef: "2.1.1.DS1.a" })];
-    const out = matchLineDimensionTags([{ ref: "2.1.1.DS9.z", dimension: "Review" }], specific);
-    expect(out).toEqual([]);
-  });
-
-  it("never returns a tag for a line that already has a human-set apsrDimension — the manual pick always wins", () => {
-    const specific = [taggableLine({ id: "L1", sourceRef: "2.1.1.DS1.a", apsrDimension: "Review" })];
-    const out = matchLineDimensionTags([{ ref: "2.1.1.DS1.a", dimension: "Processes" }], specific);
-    expect(out).toEqual([]);
-  });
-
-  it("tags every matching line across a full batch", () => {
+  it("tags every currently-untagged, applicable line by its own text", () => {
     const specific = [
-      taggableLine({ id: "L1", sourceRef: "2.1.1.DS1.a" }),
-      taggableLine({ id: "L2", sourceRef: "2.1.1.DS1.b" }),
-      taggableLine({ id: "L3", sourceRef: "2.1.1.DS2", apsrDimension: "Approach" }), // already tagged — excluded
+      taggableLine({ id: "L1", text: "Implement an improvement plan" }),
+      taggableLine({ id: "L2", text: "Review the process for continual improvement" }),
     ];
-    const tags = [
-      { ref: "2.1.1.DS1.a", dimension: "Processes" },
-      { ref: "2.1.1.DS1.b", dimension: "Systems & Outcomes" },
-      { ref: "2.1.1.DS2", dimension: "Review" }, // would retag L3 — must be dropped
-    ];
-    const out = matchLineDimensionTags(tags, specific);
-    expect(out).toEqual([
+    expect(classifyUntaggedLinesByContent(specific)).toEqual([
       { lineId: "L1", dimension: "Processes" },
-      { lineId: "L2", dimension: "Systems & Outcomes" },
+      { lineId: "L2", dimension: "Review" },
     ]);
+  });
+
+  it("never re-tags a line with a human-set apsrDimension — the manual pick always wins", () => {
+    const specific = [taggableLine({ id: "L1", text: "Implement an improvement plan", apsrDimension: "Review" })];
+    expect(classifyUntaggedLinesByContent(specific)).toEqual([]);
+  });
+
+  it("skips Not Applicable lines (they never appear in a dimension group)", () => {
+    const specific = [taggableLine({ id: "L1", text: "Implement an improvement plan", status: "Not Applicable" })];
+    expect(classifyUntaggedLinesByContent(specific)).toEqual([]);
   });
 });

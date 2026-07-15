@@ -94,39 +94,8 @@ describe("runHolisticBandSuggestion — structured per-dimension output", () => 
   });
 });
 
-describe("runHolisticBandSuggestion — lineDimensions (structured per-line tags)", () => {
-  it("parses valid entries and defaults to an empty array when the model omits the field entirely (older-shaped replies never break)", async () => {
-    mockChat.mockResolvedValue(JSON.stringify({
-      approach: { reason: "a", band: "3" }, processes: { reason: "b", band: "3" },
-      systemsOutcomes: { reason: "c", band: "3" }, review: { reason: "d", band: "3" },
-      limitingFactor: "x", band: "3",
-    }));
-    const r = await runHolisticBandSuggestion(REQ, LINES, SETTINGS);
-    expect(r.lineDimensions).toEqual([]);
-  });
-
-  it("keeps well-formed tags and silently drops malformed ones (invalid dimension, empty ref) — never throws", async () => {
-    mockChat.mockResolvedValue(JSON.stringify({
-      approach: { reason: "a", band: "4" }, processes: { reason: "b", band: "3" },
-      systemsOutcomes: { reason: "c", band: "2" }, review: { reason: "d", band: "1" },
-      lineDimensions: [
-        { ref: "6.2.1.DS1", dimension: "Approach" },
-        { ref: "6.2.1.DS2", dimension: "Systems & Outcomes" },
-        { ref: "6.2.1.DS3", dimension: "Not A Real Dimension" }, // invalid enum value
-        { ref: "", dimension: "Review" }, // empty ref
-      ],
-      limitingFactor: "x", band: "2",
-    }));
-    const r = await runHolisticBandSuggestion(REQ, LINES, SETTINGS);
-    expect(r.lineDimensions).toEqual([
-      { ref: "6.2.1.DS1", dimension: "Approach" },
-      { ref: "6.2.1.DS2", dimension: "Systems & Outcomes" },
-    ]);
-  });
-});
-
-describe("runHolisticBandSuggestion — digest surfaces the real note, not the Option A not-assessed boilerplate (Task 4)", () => {
-  it("shows the real Approach/Processes note in the line digest and never the not-assessed sentinel that used to bias the tagging toward Review", async () => {
+describe("runHolisticBandSuggestion — digest surfaces the real note, not the Option A not-assessed boilerplate", () => {
+  it("shows the real Approach/Processes note in the line digest and never the not-assessed sentinel", async () => {
     mockChat.mockResolvedValue(JSON.stringify({
       approach: { reason: "a", band: "3" }, processes: { reason: "b", band: "3" },
       systemsOutcomes: { reason: "c", band: "3" }, review: { reason: "d", band: "3" },
@@ -149,11 +118,10 @@ describe("runHolisticBandSuggestion — digest surfaces the real note, not the O
     };
     const r = await runHolisticBandSuggestion(REQ, [optionALine], SETTINGS);
     const prompt = r.promptSent!;
-    // The digest (embedded in promptSent) must carry a REAL assessment note...
+    // The digest (embedded in promptSent) must carry a REAL assessment note
+    // for the band-scoring reasoning...
     expect(prompt).toContain("PPD documents the recruitment approach");
-    // ...and must NOT surface the not-assessed boilerplate that biased tagging.
+    // ...and must NOT surface the not-assessed boilerplate.
     expect(prompt).not.toContain("Not assessed by Option A");
-    // The tagging instruction must tell the model to classify by line content.
-    expect(prompt).toMatch(/what the requirement LINE IS ABOUT/i);
   });
 });

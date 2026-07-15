@@ -8,7 +8,7 @@ import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrMatrixResult, matchLineDimensionTags } from "../lib/checklistBanding";
+import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrMatrixResult, classifyUntaggedLinesByContent } from "../lib/checklistBanding";
 import { BandImprovementPanel } from "../components/ui/BandImprovementPanel";
 import { bandTitle, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
 import { ApsrMatrixSelector } from "../components/ui/ApsrMatrixSelector";
@@ -322,6 +322,12 @@ export function SubCriterionChecklist() {
   const [bandSuggestionSig, setBandSuggestionSig] = useState<string | null>(null);
   const [bandRationaleDraft, setBandRationaleDraft] = useState("");
   const [bandSaveError, setBandSaveError] = useState<string | null>(null);
+  // Immediate on-click confirmation for the two save buttons (Task 5): the save
+  // is a synchronous store write, so there's no async to spin on — the honest
+  // feedback is a green "✓ saved" that appears the instant the band commits and
+  // clears on the next edit (matrix/rationale change or switching item). The
+  // Header's top-bar "Saving…/Saved" still reflects the real remote sync.
+  const [bandSavedOk, setBandSavedOk] = useState(false);
   const [bandFeedback, setBandFeedback] = useState<string | null>(null);
   // Which read-only reasoning tab the expanded line shows — pure UI state,
   // both halves' data are already on the line's stored evidence item.
@@ -448,6 +454,7 @@ export function SubCriterionChecklist() {
     if (!s) return;
     setBandSuggestion(s);
     setBandSuggestionSig(lineVerdictSig);
+    setBandSavedOk(false);
     (Object.keys(s.dimensionBands) as (keyof typeof s.dimensionBands)[]).forEach((k) => setApsrMatrix(selectedId, k, s.dimensionBands[k]));
   }
 
@@ -458,26 +465,29 @@ export function SubCriterionChecklist() {
     setBandSuggestionSig(null);
     setBandRationaleDraft(entries[id]?.holisticBand?.rationale ?? "");
     setBandSaveError(null);
+    setBandSavedOk(false);
     ensureEntry(id);
   }
 
   // Save the band from the current APSR matrix. Gates mirror the store's:
   // every dimension scored (complete) + a written justification. The band
   // itself is calculated (apsrMatrixResult), never picked.
-  function saveBand(opts?: { viaAiAccept?: boolean; rationale?: string }) {
+  function saveBand(opts?: { viaAiAccept?: boolean; rationale?: string }): boolean {
     const rationale = (opts?.rationale ?? bandRationaleDraft).trim();
     const m = entries[selectedId]?.apsrMatrix;
     if (!apsrMatrixResult(m).complete) {
       setBandSaveError("Score all four dimensions (0% or a band) before saving — the total percentage can't be calculated otherwise.");
-      return;
+      return false;
     }
     if (!rationale) {
       setBandSaveError("A justification is required — explain the scores using Approach, Processes, Systems & Outcomes, and Review.");
-      return;
+      return false;
     }
     setBandSaveError(null);
     setHolisticBand(selectedId, { matrixScores: m!, rationale, source: opts?.viaAiAccept ? "ai-accepted" : "human" });
     setBandRationaleDraft(rationale);
+    setBandSavedOk(true);
+    return true;
   }
 
   useEffect(() => {
@@ -793,16 +803,22 @@ export function SubCriterionChecklist() {
                   <button
                     onClick={() => {
                       saveBand({ viaAiAccept: true, rationale: bandSuggestion.rationale });
-                      // Auto-tag the same lines the AI already reasoned about above
-                      // (fix, 2026-07-15) — matched to real, currently-untagged
-                      // lines only; a human's manual tag (Fix b picker) always wins.
-                      const tags = matchLineDimensionTags(bandSuggestion.lineDimensions, specific);
+                      // Tag untagged lines by their OWN content, deterministically
+                      // (fix, 2026-07-15). The band-scoring AI's per-line
+                      // lineDimensions proved unreliable — on review-themed items
+                      // (e.g. 6.3.1) it tagged every line Review, leaving the other
+                      // dimensions empty. classifyApsrByContent distributes by what
+                      // each line is about; the untagged guard preserves manual tags.
+                      const tags = classifyUntaggedLinesByContent(specific);
                       if (tags.length > 0) applyLineDimensionTags(selectedId, tags);
                     }}
                     style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#fff", background: "#4f46e5", border: "none", borderRadius: 6, padding: "4px 10px", whiteSpace: "nowrap", flexShrink: 0 }}
                   >
                     Accept AI scores &amp; save
                   </button>
+                  {bandSavedOk && (
+                    <span style={{ color: "#15803d", fontSize: 11.5, fontWeight: 700, flexShrink: 0 }}>✓ Saved</span>
+                  )}
                 </div>
               </div>
             )}
@@ -810,7 +826,7 @@ export function SubCriterionChecklist() {
             <ApsrMatrixSelector
               scores={entry?.apsrMatrix}
               suggestion={bandSuggestion?.dimensionBands}
-              onSet={(dim, score) => setApsrMatrix(selectedId, dim, score)}
+              onSet={(dim, score) => { setApsrMatrix(selectedId, dim, score); setBandSavedOk(false); }}
               docsHref={SCORING_DOC_URL}
             />
 
@@ -820,7 +836,7 @@ export function SubCriterionChecklist() {
                 rows={2}
                 placeholder="Why these scores? Explain using Approach, Processes, Systems & Outcomes, and Review."
                 value={bandRationaleDraft}
-                onChange={(e) => { setBandRationaleDraft(e.target.value); setBandSaveError(null); }}
+                onChange={(e) => { setBandRationaleDraft(e.target.value); setBandSaveError(null); setBandSavedOk(false); }}
                 style={{ ...inputStyle, marginTop: 3, resize: "vertical" }}
               />
             </label>
@@ -829,13 +845,18 @@ export function SubCriterionChecklist() {
                 ✋ Not saved: {bandSaveError}
               </div>
             )}
-            <button
-              onClick={() => saveBand()}
-              disabled={!matrixResult.complete}
-              style={{ cursor: matrixResult.complete ? "pointer" : "not-allowed", fontSize: 12.5, fontWeight: 700, padding: "7px 14px", borderRadius: 8, border: "none", background: matrixResult.complete ? "#15803d" : "#cbd5e1", color: "#fff" }}
-            >
-              Save band {matrixResult.complete ? `(Band ${matrixResult.band} — ${matrixResult.total}%)` : ""}
-            </button>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <button
+                onClick={() => saveBand()}
+                disabled={!matrixResult.complete}
+                style={{ cursor: matrixResult.complete ? "pointer" : "not-allowed", fontSize: 12.5, fontWeight: 700, padding: "7px 14px", borderRadius: 8, border: "none", background: matrixResult.complete ? "#15803d" : "#cbd5e1", color: "#fff" }}
+              >
+                Save band {matrixResult.complete ? `(Band ${matrixResult.band} — ${matrixResult.total}%)` : ""}
+              </button>
+              {bandSavedOk && (
+                <span style={{ color: "#15803d", fontSize: 12.5, fontWeight: 700 }}>✓ Band saved — the record below is updated.</span>
+              )}
+            </div>
 
             {/* Additive, read-only view built entirely from data the matrix,
                 each audited line's own APSR notes, and each line's
