@@ -38,6 +38,9 @@ export function FinalReport() {
   const a = useMemo(() => buildAnalytics(scored, entries, findings, folders, closures), [scored, entries, findings, folders, closures]);
 
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const removeCustomFinding = useWorkspaceStore((s) => s.removeCustomFinding);
+  const clearAllFindings = useWorkspaceStore((s) => s.clearAllFindings);
+  const [confirmDeleteFindingId, setConfirmDeleteFindingId] = useState<string | null>(null);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [aiCriterionNarratives, setAiCriterionNarratives] = useState<Record<string, string> | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
@@ -342,11 +345,22 @@ export function FinalReport() {
       </Card>
 
       <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Findings register — root cause, gap & closure ({report.findings.length})</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <h3 style={{ marginTop: 0, marginBottom: 0, fontSize: 14, flex: 1 }}>Findings register — root cause, gap & closure ({report.findings.length})</h3>
+          {report.findings.length > 0 && (
+            <button
+              className="no-print"
+              onClick={() => { if (confirm(`Delete all ${report.findings.length} finding${report.findings.length !== 1 ? "s" : ""}?\n\nThis removes them from both the Findings register AND the Quality Action / AFI module (they share the same data). Closure decisions and any back-references on checklist lines will also be cleared. This cannot be undone.`)) clearAllFindings(); }}
+              style={{ fontSize: 11.5, color: "#b91c1c", background: "transparent", border: "1px solid #fecaca", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}
+            >
+              Delete all
+            </button>
+          )}
+        </div>
         {report.findings.length === 0 ? (
-          <p style={{ fontSize: 12.5, color: "#6b7280" }}>No findings raised.</p>
+          <p style={{ fontSize: 12.5, color: "#6b7280", marginBottom: 0 }}>No findings raised.</p>
         ) : (
-          <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
             {report.findings.map((f) => (
               <div key={f.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px" }}>
                 <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -354,6 +368,16 @@ export function FinalReport() {
                   <Pill s={f.closed ? "good" : "medium"}>{f.closed ? "Closed" : f.status}</Pill>
                   <span style={{ fontSize: 11.5, color: "#6b7280" }}>{f.type}</span>
                   <span style={{ fontSize: 11.5, color: "#94a3b8" }}>· {f.itemId}</span>
+                  <span className="no-print" style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>
+                    {confirmDeleteFindingId === f.id ? (
+                      <>
+                        <button onClick={() => { removeCustomFinding(f.id); setConfirmDeleteFindingId(null); }} style={{ fontSize: 11, color: "#fff", background: "#ef4444", border: "none", borderRadius: 4, padding: "2px 7px", cursor: "pointer", marginRight: 4 }}>Delete</button>
+                        <button onClick={() => setConfirmDeleteFindingId(null)} style={{ fontSize: 11, color: "#6b7280", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}>Cancel</button>
+                      </>
+                    ) : (
+                      <button onClick={() => setConfirmDeleteFindingId(f.id)} style={{ fontSize: 12, color: "#94a3b8", background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px" }} title="Delete finding">✕</button>
+                    )}
+                  </span>
                 </div>
                 <div style={{ fontSize: 12.5, fontWeight: 600, margin: "4px 0" }}>{f.issue}</div>
                 <ReportLine label="Root cause" value={f.rootCause} />
@@ -415,14 +439,21 @@ function ItemBlock({ it }: { it: ItemReport }) {
                     </tr>,
                   ];
                 }
-                return g.rows.map((r, i) => (
-                  <tr key={r.lineId}>
-                    {i === 0 && dimCell(g.rows.length)}
-                    <td style={{ verticalAlign: "top", whiteSpace: "nowrap", fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{r.itemRef}</td>
-                    <td style={{ verticalAlign: "top", fontSize: 11.5, color: r.isWeakness ? "#b23121" : "#15803d" }}>{r.finding}</td>
-                    <td style={{ verticalAlign: "top", fontSize: 11.5, color: "#2563eb" }}>{r.afi ?? ""}</td>
-                  </tr>
-                ));
+                return g.rows.map((r, i) => {
+                  // Three distinct states: strength (green), weakness (red),
+                  // not-assessed (neutral grey) — an absence of assessment is
+                  // never dressed up as a red finding.
+                  const label = r.verdict === "strength" ? "Strength" : r.verdict === "weakness" ? "Weakness" : "Not assessed";
+                  const color = r.verdict === "strength" ? "#15803d" : r.verdict === "weakness" ? "#b23121" : "#64748b";
+                  return (
+                    <tr key={r.lineId}>
+                      {i === 0 && dimCell(g.rows.length)}
+                      <td style={{ verticalAlign: "top", whiteSpace: "nowrap", fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{r.itemRef}</td>
+                      <td style={{ verticalAlign: "top", fontSize: 11.5, color }}><b>{label}:</b> {r.finding}</td>
+                      <td style={{ verticalAlign: "top", fontSize: 11.5, color: "#2563eb" }}>{r.afi ?? ""}</td>
+                    </tr>
+                  );
+                });
               })}
             </tbody>
           </table>

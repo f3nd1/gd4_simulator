@@ -8,6 +8,7 @@ vi.mock("../aiClient", async (importOriginal) => {
 
 import { chatComplete } from "../aiClient";
 import { runHolisticBandSuggestion } from "../agentRuntime";
+import { OPTION_A_NOT_ASSESSED_NOTE } from "../../optionAChecklistWrite";
 import { GD4_REQUIREMENTS } from "../../../data/gd4Requirements";
 
 const mockChat = vi.mocked(chatComplete);
@@ -121,5 +122,38 @@ describe("runHolisticBandSuggestion — lineDimensions (structured per-line tags
       { ref: "6.2.1.DS1", dimension: "Approach" },
       { ref: "6.2.1.DS2", dimension: "Systems & Outcomes" },
     ]);
+  });
+});
+
+describe("runHolisticBandSuggestion — digest surfaces the real note, not the Option A not-assessed boilerplate (Task 4)", () => {
+  it("shows the real Approach/Processes note in the line digest and never the not-assessed sentinel that used to bias the tagging toward Review", async () => {
+    mockChat.mockResolvedValue(JSON.stringify({
+      approach: { reason: "a", band: "3" }, processes: { reason: "b", band: "3" },
+      systemsOutcomes: { reason: "c", band: "3" }, review: { reason: "d", band: "3" },
+      limitingFactor: "x", band: "3",
+    }));
+    // A realistic Option A line: Approach/Processes carry real notes; Systems
+    // & Outcomes and Review carry the not-assessed sentinel (what optionAApsr
+    // always writes for those two dimensions).
+    const optionALine: SpecificChecklistLine = {
+      id: "L1", text: "recruitment records line", clause: "6.2.1.DS1", sourceRef: "6.2.1.DS1", status: "Not met", generatedBy: "ai",
+      evidence: [{
+        id: "e1", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency: "Missing",
+        apsr: {
+          approach: { status: "Beginning", note: "PPD documents the recruitment approach but lacks approval steps." },
+          processes: { status: "Not evident", note: "No recruitment records were found in the evidence folder." },
+          systemsOutcomes: { status: "Not evident", note: OPTION_A_NOT_ASSESSED_NOTE },
+          review: { status: "Not evident", note: OPTION_A_NOT_ASSESSED_NOTE },
+        },
+      }],
+    };
+    const r = await runHolisticBandSuggestion(REQ, [optionALine], SETTINGS);
+    const prompt = r.promptSent!;
+    // The digest (embedded in promptSent) must carry a REAL assessment note...
+    expect(prompt).toContain("PPD documents the recruitment approach");
+    // ...and must NOT surface the not-assessed boilerplate that biased tagging.
+    expect(prompt).not.toContain("Not assessed by Option A");
+    // The tagging instruction must tell the model to classify by line content.
+    expect(prompt).toMatch(/what the requirement LINE IS ABOUT/i);
   });
 });

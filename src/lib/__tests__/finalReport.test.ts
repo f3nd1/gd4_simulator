@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildFinalReport } from "../finalReport";
+import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
 import { blankEvidence } from "../../data/seedEvidence";
 import { GD4_CRITERIA } from "../../data/gd4Requirements";
@@ -141,25 +142,26 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     expect(item.overallSummary).toContain("Band 4"); // the next band
   });
 
-  it("(b) a strength row states plainly what's evidenced, with a blank AFI", () => {
+  it("(b) a strength row states plainly what's evidenced (no 'Weakness' prefix in the text), with a blank AFI", () => {
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
     const processes = item.findingsGroups.find((g) => g.key === "processes")!;
     const strengthRow = processes.rows.find((r) => r.lineId === "L3")!;
-    expect(strengthRow.isWeakness).toBe(false);
+    expect(strengthRow.verdict).toBe("strength");
     expect(strengthRow.itemRef).toBe("6.2.1.DS2");
     expect(strengthRow.finding).toBe("Management review minutes are documented and evidenced for every quarter.");
     expect(strengthRow.afi).toBeUndefined();
   });
 
-  it("(b) a weakness row states 'Weakness — ' plus the real diagnosis, with the real AFI text", () => {
+  it("(b) a weakness row carries the clean real diagnosis (label lives in the UI, not the text) with the real AFI text", () => {
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
     const processes = item.findingsGroups.find((g) => g.key === "processes")!;
     const weaknessRow = processes.rows.find((r) => r.lineId === "L4")!;
-    expect(weaknessRow.isWeakness).toBe(true);
+    expect(weaknessRow.verdict).toBe("weakness");
     expect(weaknessRow.itemRef).toBe("6.2.1.DS3");
-    expect(weaknessRow.finding).toBe("Weakness — There is no follow-up action log for the Q3 management review.");
+    expect(weaknessRow.finding).toBe("There is no follow-up action log for the Q3 management review.");
+    expect(weaknessRow.finding).not.toMatch(/weakness/i);
     expect(weaknessRow.afi).toBe("File the missing follow-up action log for Q3.");
   });
 
@@ -169,10 +171,10 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     const processesRow = item.findingsGroups.find((g) => g.key === "processes")!.rows.find((r) => r.itemRef === "6.2.1.DS2")!;
     const outcomesRow = item.findingsGroups.find((g) => g.key === "systemsOutcomes")!.rows.find((r) => r.itemRef === "6.2.1.DS2")!;
     expect(processesRow.lineId).toBe("L3");
-    expect(processesRow.isWeakness).toBe(false);
+    expect(processesRow.verdict).toBe("strength");
     expect(outcomesRow.lineId).toBe("L5");
-    expect(outcomesRow.isWeakness).toBe(true);
-    expect(outcomesRow.finding).toBe("Weakness — Outcome trend data is not tracked across review cycles.");
+    expect(outcomesRow.verdict).toBe("weakness");
+    expect(outcomesRow.finding).toBe("Outcome trend data is not tracked across review cycles.");
     expect(outcomesRow.afi).toBe("Add outcome trend data for the last two review cycles.");
   });
 
@@ -182,7 +184,8 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     const review = item.findingsGroups.find((g) => g.key === "review")!;
     expect(review.rows).toHaveLength(1);
     expect(review.rows[0].lineId).toBe("L6");
-    expect(review.rows[0].finding).toBe("Weakness — No detailed diagnosis recorded for this line.");
+    expect(review.rows[0].verdict).toBe("weakness");
+    expect(review.rows[0].finding).toBe("No detailed diagnosis recorded for this line.");
     expect(review.rows[0].afi).toBe("No concrete suggested action recorded for this line.");
   });
 
@@ -216,5 +219,81 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     const processes = item.findingsGroups.find((g) => g.key === "processes")!;
     expect(processes).toBeDefined();
     expect(processes.rows).toEqual([]);
+  });
+});
+
+describe("buildFinalReport — 'not assessed' is a distinct third state, never a weakness (Task 5)", () => {
+  function ev(over: Partial<SubChecklistEvidenceItem> = {}): SubChecklistEvidenceItem {
+    return { id: "e1", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency: "Present", ...over };
+  }
+  function line(over: Partial<SpecificChecklistLine> & { id: string }): SpecificChecklistLine {
+    return { text: "x", status: "Met", evidence: [], generatedBy: "ai", ...over };
+  }
+  // The exact APSR shape Option A writes: Approach/Processes carry the real
+  // assessment; Systems & Outcomes and Review carry the not-assessed sentinel.
+  function optionAApsr(): ApsrBreakdown {
+    return {
+      approach: { status: "Meeting", note: "Policy documents the review approach." },
+      processes: { status: "Deployed", note: "Records show the review being run." },
+      systemsOutcomes: { status: "Not evident", note: OPTION_A_NOT_ASSESSED_NOTE },
+      review: { status: "Not evident", note: OPTION_A_NOT_ASSESSED_NOTE },
+    };
+  }
+
+  const ENTRY: SubCriterionChecklistEntry = {
+    gd4ItemId: "6.3.1",
+    specific: [
+      // A line tagged to Systems & Outcomes, Not met — WITHOUT the third
+      // state this would read as a red "Weakness" even though Option A never
+      // assessed the dimension.
+      line({ id: "S1", clause: "6.3.1.DS1", apsrDimension: "Systems & Outcomes", status: "Not met", evidence: [ev({ sufficiency: "Missing", apsr: optionAApsr() })] }),
+      // A line tagged to Review, Met — WITHOUT the third state this would read
+      // as a green strength quoting the not-assessed note. Same fact, two
+      // colours: exactly the bug being fixed.
+      line({ id: "R1", clause: "6.3.1.DS2", apsrDimension: "Review", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: optionAApsr() })] }),
+      // A genuinely-assessed Processes weakness stays a weakness.
+      line({ id: "P1", clause: "6.3.1.DS3", apsrDimension: "Processes", status: "Not met", evidence: [ev({ sufficiency: "Missing", suggestedAction: "File the records.", apsr: optionAApsr() })] }),
+    ],
+    holisticBand: {
+      band: 2, totalPct: 35,
+      matrixScores: { approach: 4, processes: 1, systemsOutcomes: 1, review: 1 },
+      rationale: "x", source: "human", decidedAt: "2026-07-15T00:00:00.000Z",
+    },
+    pendingGenerated: [],
+  };
+
+  it("a line whose dimension note is the Option A not-assessed sentinel renders as 'not-assessed', regardless of the line's status", () => {
+    const report = buildFinalReport(scored, { "6.3.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.3.1")!;
+    const soRow = item.findingsGroups.find((g) => g.key === "systemsOutcomes")!.rows[0];
+    const reviewRow = item.findingsGroups.find((g) => g.key === "review")!.rows[0];
+    // Not met (S1) and Met (R1) — same underlying not-assessed state, so BOTH
+    // must be "not-assessed", never "weakness" or "strength".
+    expect(soRow.verdict).toBe("not-assessed");
+    expect(reviewRow.verdict).toBe("not-assessed");
+    // Consistent, house-style finding text with no em dash, no "Weakness".
+    expect(soRow.finding).toBe(reviewRow.finding);
+    expect(soRow.finding).not.toMatch(/weakness/i);
+    expect(soRow.finding).not.toContain("—");
+    // No AFI — nothing was assessed, so there is nothing to close.
+    expect(soRow.afi).toBeUndefined();
+    expect(reviewRow.afi).toBeUndefined();
+  });
+
+  it("a genuinely-assessed line on the same item is still a weakness (the sentinel check does not swallow real findings)", () => {
+    const report = buildFinalReport(scored, { "6.3.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.3.1")!;
+    const pRow = item.findingsGroups.find((g) => g.key === "processes")!.rows[0];
+    expect(pRow.verdict).toBe("weakness");
+    expect(pRow.afi).toBe("File the records.");
+  });
+
+  it("(Task 2) the overall summary is 2-4 sentences and names the not-assessed dimensions honestly", () => {
+    const report = buildFinalReport(scored, { "6.3.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.3.1")!;
+    const sentenceCount = item.overallSummary!.split(/(?<=[.!?])\s+/).filter(Boolean).length;
+    expect(sentenceCount).toBeGreaterThanOrEqual(2);
+    expect(sentenceCount).toBeLessThanOrEqual(4);
+    expect(item.overallSummary).toContain("Band 2");
   });
 });

@@ -9,13 +9,25 @@ import type { ApsrBreakdown, ChecklistLineWrite, EvidenceAssessmentRow, PPDRevie
 import { normalizeAuditRef } from "./gd4Refs";
 import { ppdVerdictLabel, evVerdictLabel } from "./verdictTone";
 
+// The exact note Option A stamps on the two dimensions it structurally does
+// NOT assess (Systems & Outcomes, Review). Exported + matched by a prefix
+// predicate so downstream readers (the Final Report findings table) can tell
+// a genuine "not assessed" state apart from a real weakness, instead of
+// dressing an absence of assessment up as a finding. Prefix-matched, not
+// exact, so the check survives copy edits to the trailing guidance.
+export const OPTION_A_NOT_ASSESSED_NOTE =
+  "Not assessed by Option A (PPD + Evidence path) — run the staged audit or attach outcome/review evidence to assess this dimension.";
+export function isOptionANotAssessedNote(note: string | undefined): boolean {
+  return !!note && note.trimStart().startsWith("Not assessed by Option A");
+}
+
 // APSR from what Option A actually assessed: Approach from the PPD verdict,
 // Processes from the combined evidence verdict. Systems & Outcomes and
 // Review are NOT assessed by this path — recorded honestly as "Not evident"
 // with a note saying so, never fabricated. (The band itself is driven by
 // line status + evidence sufficiency, not by these APSR fields.)
 function optionAApsr(row: EvidenceAssessmentRow, ppdRow: PPDReviewRow | undefined): ApsrBreakdown {
-  const notAssessedNote = "Not assessed by Option A (PPD + Evidence path) — run the staged audit or attach outcome/review evidence to assess this dimension.";
+  const notAssessedNote = OPTION_A_NOT_ASSESSED_NOTE;
   return {
     approach: {
       status: row.ppdVerdict === "Adequate" ? "Meeting" : row.ppdVerdict === "Partial" ? "Beginning" : "Not evident",

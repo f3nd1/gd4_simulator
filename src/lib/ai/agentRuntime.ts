@@ -16,6 +16,7 @@ import type { AuditorProfile, PanelAuditorReview, PanelCallLog, PanelReviewPosit
 import { perspectiveOf, perspectiveLabel, perspectiveGuidance, detectPanelDisagreement } from "../reviewPanel";
 import { normalizeAuditRef } from "../gd4Refs";
 import { lineSufficiency, lineApsr } from "../checklistBanding";
+import { isOptionANotAssessedNote } from "../optionAChecklistWrite";
 import { EDUTRUST_BANDS, EDUTRUST_DIMENSIONS } from "../../data/edutrustRubric";
 
 // ─── Strict Structured Outputs schemas for every verdict-producing call ─────
@@ -309,8 +310,20 @@ function buildBandEvidenceDigest(specific: SpecificChecklistLine[]): string {
   const lines = graded.map((l) => {
     const suff = lineSufficiency(l);
     const apsr = lineApsr(l);
+    // Surface the most INFORMATIVE real note, not the review note alone. The
+    // old code appended only apsr.review.note, which for an Option A line is
+    // ALWAYS the "not assessed by Option A" boilerplate — so every line's
+    // digest entry featured Review + a note while the actual assessment
+    // (Approach from the PPD verdict, Processes from the evidence verdict)
+    // stayed hidden. That biased the line-dimension classifier toward Review.
+    // Prefer the notes that carry real assessment; drop the not-assessed
+    // sentinel entirely so it never nudges the classification.
+    const realNote = apsr
+      ? [apsr.approach.note, apsr.processes.note, apsr.systemsOutcomes.note, apsr.review.note]
+          .find((n) => n && !isOptionANotAssessedNote(n))
+      : undefined;
     const apsrPart = apsr
-      ? ` | APSR: Approach ${apsr.approach.status}; Processes ${apsr.processes.status}; Systems&Outcomes ${apsr.systemsOutcomes.status}; Review ${apsr.review.status}${apsr.review.note ? ` (${apsr.review.note.slice(0, 160)})` : ""}`
+      ? ` | APSR: Approach ${apsr.approach.status}; Processes ${apsr.processes.status}; Systems&Outcomes ${apsr.systemsOutcomes.status}; Review ${apsr.review.status}${realNote ? ` (${realNote.slice(0, 160)})` : ""}`
       : "";
     return `- [${l.clause || l.sourceRef || "manual"}] ${l.text.slice(0, 180)} → status: ${l.status || "Not Started"}; evidence: ${suff}${apsrPart}`;
   });
@@ -339,7 +352,7 @@ ${officialBandTableBlock()}
 Do THREE things:
 1. DIAGNOSE each of the four dimensions (Approach, Processes, Systems & Outcomes, Review) SEPARATELY: for each, say which band level (1–5) its own evidence best matches, and a SHORT reason. The reason MUST cite the evidence it relies on using the references already present in the digest — the requirement-line ref (e.g. "6.2.1.DS1") and any "file · chunk" reference shown in a line's APSR note. Never invent a citation or a record not in the digest; missing/weak evidence reads DOWN per the descriptors.
 2. JUDGE the ONE holistic overall band for the whole item. This is a judgment reading the four descriptors of a level together — it is NOT the average, sum, or any calculation of the four dimension bands above. It may sit below the strongest dimension when a weak dimension limits the whole (the official rubric's descriptors gate this way). State which dimension(s) are the limiting factor for your holistic pick.
-3. TAG each individual requirement-line ref you cited above with the ONE dimension it belongs to, in lineDimensions. Copy each ref EXACTLY as it appears in the digest — never invent, reformat or abbreviate one. Only include a line you actually reasoned about in step 1; omit any line you did not cite. This lets the checklist auto-tag those lines instead of a human re-doing what you already worked out.
+3. TAG each individual requirement-line ref you cited above with the ONE dimension it belongs to, in lineDimensions. Decide the dimension from what the requirement LINE IS ABOUT — its own text against the four dimension definitions above (documented policy/method → Approach; implementation records/logs/forms → Processes; results/KPIs/trends/outcomes → Systems & Outcomes; review/evaluation/improvement records → Review) — NOT from which dimension currently has assessment data. Spread the lines across all four dimensions as their content warrants; do NOT default lines to one dimension. Copy each ref EXACTLY as it appears in the digest — never invent, reformat or abbreviate one. Only include a line you actually reasoned about in step 1; omit any line you did not cite. This lets the checklist auto-tag those lines instead of a human re-doing what you already worked out.
 
 Rules:
 - Every band is 1 to 5.
