@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, type ItemReport } from "../lib/finalReport";
+import { buildFinalReport, type FinalReport, type ItemReport } from "../lib/finalReport";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { buildSystemPrompt } from "../lib/ai/skills";
@@ -51,6 +51,12 @@ export function FinalReport() {
   const [bandingTab, setBandingTab] = useState<"criterion" | "subcriterion">("criterion");
   const [filterCrit, setFilterCrit] = useState("All");
   const [filterSubCrit, setFilterSubCrit] = useState("All");
+  // Findings-register filters: presentational only, same idiom as the two
+  // dropdowns above. "Classification" is the register's own display axis:
+  // NC rows contribute their Major/Minor severity, OFI/OBS rows their type.
+  const [filterFindItem, setFilterFindItem] = useState("All");
+  const [filterFindClass, setFilterFindClass] = useState("All");
+  const [filterFindOpen, setFilterFindOpen] = useState("All");
 
   useEffect(() => { if (aiSummary) setEditedSummary(aiSummary); }, [aiSummary]);
 
@@ -61,6 +67,33 @@ export function FinalReport() {
   const filteredItems = useMemo(
     () => report.items.filter((it) => (filterCrit === "All" || it.criterion === filterCrit) && (filterSubCrit === "All" || it.subCriterionId === filterSubCrit)),
     [report.items, filterCrit, filterSubCrit]
+  );
+  // Register filter derivations. itemId is "<gd4ItemId> <requirement title>",
+  // so the item option is its first token; classification is Major/Minor for
+  // NC findings and the type itself for OFI/OBS (the axis the register shows).
+  const findingClassOf = (f: FinalReport["findings"][number]) => (f.type === "NC" ? f.severity : f.type);
+  const findItemOptions = useMemo(
+    () => [...new Set(report.findings.map((f) => f.itemId.split(" ")[0]))].sort(),
+    [report.findings]
+  );
+  const findClassOptions = useMemo(
+    () => [...new Set(report.findings.map(findingClassOf))],
+    [report.findings]
+  );
+  const filteredFindings = useMemo(
+    () =>
+      report.findings.filter((f) => {
+        // Match the status PILL the row displays (closure-accepted OR raw
+        // status "Closed" both read "Closed" there), so the filter never
+        // hides a row whose visible label says the selected state.
+        const displaysClosed = f.closed || f.status === "Closed";
+        return (
+          (filterFindItem === "All" || f.itemId.split(" ")[0] === filterFindItem) &&
+          (filterFindClass === "All" || findingClassOf(f) === filterFindClass) &&
+          (filterFindOpen === "All" || (filterFindOpen === "Closed") === displaysClosed)
+        );
+      }),
+    [report.findings, filterFindItem, filterFindClass, filterFindOpen]
   );
 
   function handleSummaryThumbsUp() {
@@ -130,7 +163,22 @@ export function FinalReport() {
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
       <CloseoutStepper />
-      <Card style={{ background: INK, color: "#fff" }}>
+      {/* In-page section jumps. scrollIntoView on ids, NOT href="#..." anchors:
+          the app uses HashRouter, so an anchor href would clobber the
+          #/final-report route (the same pattern SubCriterionChecklist and
+          RubricBanding already use for in-page jumps). */}
+      <div className="no-print" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {([["fr-summary", "Summary"], ["fr-items", "Banding by item"], ["fr-register", "Findings register"]] as const).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "5px 12px", borderRadius: 8, border: "1px solid #e2e8f0", background: "transparent", color: "#6b7280" }}
+          >
+            {label} ↓
+          </button>
+        ))}
+      </div>
+      <Card id="fr-summary" style={{ background: INK, color: "#fff" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
           <div>
             <div style={{ fontSize: 11.5, color: "#aeb8c7", textTransform: "uppercase", letterSpacing: 0.4 }}>Final report (internal simulation)</div>
@@ -308,7 +356,7 @@ export function FinalReport() {
         )}
       </Card>
 
-      <Card>
+      <Card id="fr-items">
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Banding by item — findings and AFIs</h3>
         <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
           Findings and AFIs are derived from the Sub-Criterion Checklist, one row per requirement line grouped by APSR dimension — the band itself is the reviewer's holistic judgment.
@@ -344,7 +392,7 @@ export function FinalReport() {
         </div>
       </Card>
 
-      <Card>
+      <Card id="fr-register">
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <h3 style={{ marginTop: 0, marginBottom: 0, fontSize: 14, flex: 1 }}>Findings register — root cause, gap & closure ({report.findings.length})</h3>
           {report.findings.length > 0 && (
@@ -357,11 +405,40 @@ export function FinalReport() {
             </button>
           )}
         </div>
+        {report.findings.length > 0 && (
+          <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+            <label style={{ fontSize: 12, color: "#374151" }}>
+              Item{" "}
+              <select value={filterFindItem} onChange={(e) => setFilterFindItem(e.target.value)} style={{ fontSize: 12, padding: "4px 6px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                <option value="All">All</option>
+                {findItemOptions.map((id) => <option key={id} value={id}>{id}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: "#374151" }}>
+              Severity{" "}
+              <select value={filterFindClass} onChange={(e) => setFilterFindClass(e.target.value)} style={{ fontSize: 12, padding: "4px 6px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                <option value="All">All</option>
+                {findClassOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: "#374151" }}>
+              Status{" "}
+              <select value={filterFindOpen} onChange={(e) => setFilterFindOpen(e.target.value)} style={{ fontSize: 12, padding: "4px 6px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                <option value="All">All</option>
+                <option value="Open">Open</option>
+                <option value="Closed">Closed</option>
+              </select>
+            </label>
+            <span style={{ fontSize: 11.5, color: "#6b7280" }}>showing {filteredFindings.length} of {report.findings.length}</span>
+          </div>
+        )}
         {report.findings.length === 0 ? (
           <p style={{ fontSize: 12.5, color: "#6b7280", marginBottom: 0 }}>No findings raised.</p>
+        ) : filteredFindings.length === 0 ? (
+          <p style={{ fontSize: 12.5, color: "#6b7280", marginBottom: 0, marginTop: 8 }}>No findings match this filter.</p>
         ) : (
           <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-            {report.findings.map((f) => (
+            {filteredFindings.map((f) => (
               <div key={f.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px" }}>
                 <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                   <Pill s={SEV_TONE[f.severity] || "medium"}>{f.severity}</Pill>
@@ -403,6 +480,33 @@ export function FinalReport() {
 }
 
 function ItemBlock({ it }: { it: ItemReport }) {
+  // An item that was never started and has no checklist collapses to a single
+  // summary line; with 29 such placeholders the page was dominated by empty
+  // cards. The fold body is the card's ENTIRE remaining content for this
+  // state: overallSummary/findingsGroups/bandRationale all require a saved
+  // matrix band (which sets started=true, so such items never reach this
+  // branch), leaving generalNote as the only body content. Deliberate:
+  // collapsed items also PRINT collapsed, since empty placeholders add nothing to
+  // a printed report, and any one expands with a click. Do not add a
+  // print-force-expand rule.
+  if (!it.started && !it.hasChecklist) {
+    return (
+      <details style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "6px 10px" }}>
+        <summary style={{ cursor: "pointer", fontSize: 12.5 }}>
+          <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap", verticalAlign: "middle" }}>
+            <Pill s={bandTone(it.band)}>Band {it.band}</Pill>
+            {it.gate && <Pill s="high">Gate</Pill>}
+            <b>{it.id}</b>
+            <span>{it.title}</span>
+            <Pill s="medium">Not started</Pill>
+          </span>
+        </summary>
+        {it.generalNote && (
+          <p style={{ fontSize: 11.5, color: "#2563eb", margin: "6px 0 0" }}>{it.generalNote}</p>
+        )}
+      </details>
+    );
+  }
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px" }}>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
