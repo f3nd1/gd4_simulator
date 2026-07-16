@@ -150,18 +150,28 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     expect(s).not.toMatch(/\bAFIs?\b/); // no "Closing N AFIs" restatement either
   });
 
-  it("(b-Task2) a strength row under a sub-Band-5 item now carries a maintenance AFI, not a blank", () => {
+  it("(b-Task2) a strength row's AFI quotes the NEXT band's rubric descriptor for ITS OWN dimension, verbatim", () => {
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
-    // This ENTRY's holistic matrix sums to 60% → Band 3 (below 5).
-    expect(item.bandTotalPct).toBe(60);
+    // Processes dimension is Band 3 in this ENTRY's matrix; the strength AFI
+    // must cite Band 4 for Processes (verbatim from EDUTRUST_BANDS), gated on
+    // the dimension's OWN band, not the item's overall band.
     const processes = item.findingsGroups.find((g) => g.key === "processes")!;
     const strengthRow = processes.rows.find((r) => r.lineId === "L3")!;
     expect(strengthRow.verdict).toBe("strength");
     expect(strengthRow.itemRef).toBe("6.2.1.EE2");
     expect(strengthRow.finding).toBe("Management review minutes are documented and evidenced for every quarter.");
-    // Task 2: strengths are not automatically audit-proof below Band 5.
-    expect(strengthRow.afi).toBe("Keep this in place and re-evidence it at each review cycle so it stays audit-ready.");
+    expect(strengthRow.afi).toBe('Band 3 strength. To reach Band 4 on Processes, the EduTrust rubric looks for: "Intended processes are well-managed by owners; desired outputs are produced by these processes". Keep this evidenced and build toward that at the next review cycle.');
+  });
+
+  it("(b-Task2b) a strength on a dimension already at Band 5 gets a BLANK AFI (nothing higher to cite)", () => {
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    // Approach is Band 5 in this ENTRY's matrix; L1 (DS1.b) is a strength there.
+    const approach = item.findingsGroups.find((g) => g.key === "approach")!;
+    const strengthRow = approach.rows.find((r) => r.lineId === "L1")!;
+    expect(strengthRow.verdict).toBe("strength");
+    expect(strengthRow.afi).toBeUndefined();
   });
 
   it("(b) a weakness row carries the clean real diagnosis (label lives in the UI, not the text) with the real AFI text", () => {

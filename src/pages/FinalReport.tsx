@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, type FinalReport, type ItemReport } from "../lib/finalReport";
+import { buildFinalReport, type FinalReport, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { buildSystemPrompt } from "../lib/ai/skills";
@@ -389,7 +389,16 @@ export function FinalReport() {
         <div style={{ display: "grid", gap: 8 }}>
           {filteredItems.length === 0
             ? <div style={{ fontSize: 12.5, color: "#6b7280" }}>No items match this filter.</div>
-            : filteredItems.map((it) => <ItemBlock key={it.id} it={it} />)}
+            : filteredItems.map((it) => (
+                <ItemBlock
+                  key={it.id}
+                  it={it}
+                  findings={report.findings.filter((f) => f.gd4ItemId === it.id)}
+                  confirmDeleteId={confirmDeleteFindingId}
+                  setConfirmDeleteId={setConfirmDeleteFindingId}
+                  onDelete={removeCustomFinding}
+                />
+              ))}
         </div>
       </Card>
 
@@ -480,17 +489,22 @@ export function FinalReport() {
   );
 }
 
-function ItemBlock({ it }: { it: ItemReport }) {
-  // An item that was never started and has no checklist collapses to a single
-  // summary line; with 29 such placeholders the page was dominated by empty
-  // cards. The fold body is the card's ENTIRE remaining content for this
-  // state: overallSummary/findingsGroups/bandRationale all require a saved
-  // matrix band (which sets started=true, so such items never reach this
-  // branch), leaving generalNote as the only body content. Deliberate:
-  // collapsed items also PRINT collapsed, since empty placeholders add nothing to
-  // a printed report, and any one expands with a click. Do not add a
-  // print-force-expand rule.
-  if (!it.started && !it.hasChecklist) {
+function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete }: {
+  it: ItemReport;
+  findings: FindingReport[];
+  confirmDeleteId: string | null;
+  setConfirmDeleteId: (id: string | null) => void;
+  onDelete: (id: string) => void;
+}) {
+  // An item that was never started, has no checklist AND has no findings
+  // collapses to a single summary line; with 29 such placeholders the page was
+  // dominated by empty cards. An item that DOES have findings always falls
+  // through to the full card so its findings fold is reachable, even when it
+  // was never formally banded (e.g. a manual finding on an un-audited item).
+  // Deliberate: collapsed items also PRINT collapsed, since empty placeholders
+  // add nothing to a printed report, and any one expands with a click. Do not
+  // add a print-force-expand rule.
+  if (!it.started && !it.hasChecklist && findings.length === 0) {
     return (
       <details style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "6px 10px" }}>
         <summary style={{ cursor: "pointer", fontSize: 12.5 }}>
@@ -566,6 +580,45 @@ function ItemBlock({ it }: { it: ItemReport }) {
             </tbody>
           </table>
         </div>
+      )}
+      {findings.length > 0 && (
+        // The item's Findings register, folded in per item (starts collapsed on
+        // screen and stays collapsed in print, like the not-started items). The
+        // slim bottom register keeps the global controls (Delete all, cross-item
+        // filters) and the print-complete flat list; this fold is the same card
+        // layout so the two never drift.
+        <details style={{ marginTop: 6 }}>
+          <summary style={{ fontSize: 11.5, color: "#334155", fontWeight: 600, cursor: "pointer" }}>
+            Findings register: root cause, gap &amp; closure ({findings.length})
+          </summary>
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            {findings.map((f) => (
+              <div key={f.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px" }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <Pill s={SEV_TONE[f.severity] || "medium"}>{f.severity}</Pill>
+                  <Pill s={f.closed ? "good" : "medium"}>{f.closed ? "Closed" : f.status}</Pill>
+                  <span style={{ fontSize: 11.5, color: "#6b7280" }}>{f.type}</span>
+                  <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>
+                    {confirmDeleteId === f.id ? (
+                      <>
+                        <button onClick={() => { onDelete(f.id); setConfirmDeleteId(null); }} style={{ fontSize: 11, color: "#fff", background: "#ef4444", border: "none", borderRadius: 4, padding: "2px 7px", cursor: "pointer", marginRight: 4 }}>Delete</button>
+                        <button onClick={() => setConfirmDeleteId(null)} style={{ fontSize: 11, color: "#6b7280", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}>Cancel</button>
+                      </>
+                    ) : (
+                      <button onClick={() => setConfirmDeleteId(f.id)} style={{ fontSize: 12, color: "#94a3b8", background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px" }} title="Delete finding">✕</button>
+                    )}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12.5, fontWeight: 600, margin: "4px 0" }}>{f.issue}</div>
+                <ReportLine label="Root cause" value={f.rootCause} />
+                <ReportLine label="What's missing / still needed" value={f.stillNeeded} />
+                <ReportLine label="Corrective action (how to close)" value={f.corrective} />
+                <ReportLine label="Preventive action" value={f.preventive} />
+                <ReportLine label="Closure evidence" value={f.closureEvidence} />
+              </div>
+            ))}
+          </div>
+        </details>
       )}
       {it.bandRationale && (
         <details style={{ marginTop: 6 }}>

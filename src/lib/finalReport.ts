@@ -9,7 +9,7 @@ import {
   lineSufficiency, lineCompleteness, needsReassessment, apsrMatrixResult, bandToScore, fastestPathToNextBand,
   lineDimensionDiagnosis, lineSuggestedAction, resolveLineDimension, DEFAULT_APSR_SCALE, type LineCompleteness, type ApsrScale, type ApsrMatrixResult,
 } from "./checklistBanding";
-import { EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
+import { EDUTRUST_DIMENSIONS, bandLevel } from "../data/edutrustRubric";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
 import { isOptionANotAssessedNote } from "./optionAChecklistWrite";
 import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "./../data/gd4Requirements";
@@ -22,14 +22,22 @@ export const NOT_ASSESSED_FINDING = "Not assessed by Option A (PPD and Evidence)
 // row never shows a blank next-action (Task 4) — a reader scanning the AFI
 // column sees a concrete step on every non-strength row.
 export const NOT_ASSESSED_AFI = "Run the staged audit or attach outcome or review evidence to assess this dimension.";
-// An honest, generic maintenance AFI for a STRENGTH row while the item's
-// overall band is still below the top (5): a point that is strong today is not
-// automatically audit-proof for the next cycle. Deliberately generic — there is
-// no per-line "next step" recorded for a strength (strengths carry no
-// suggestedAction), so this is the honest most-specific thing we can say
-// without fabricating detail. Suppressed at Band 5, where there is genuinely
-// nothing higher to reach (see buildFindingsGroups).
-const STRENGTH_MAINTENANCE_AFI = "Keep this in place and re-evidence it at each review cycle so it stays audit-ready.";
+// The AFI for a STRENGTH row: a next-band-specific line that quotes the
+// official rubric descriptor for the band ABOVE this dimension's current band,
+// verbatim from EDUTRUST_BANDS (the single source of truth). Gated on the
+// dimension's OWN band (dimBand), not the item's overall band, because "next
+// band up" is inherently per-dimension. Returns undefined at Band 5, where
+// there is no higher rung to cite (do not invent an above-excellent line).
+// Only the surrounding frame is templated; the quoted descriptor is never
+// paraphrased. No AI call, no fabrication (see docs/afi-improvement-investigation.md).
+function strengthNextBandAfi(key: DimensionFindingsGroup["key"], dimLabel: string, dimBand: ApsrDimensionScore): string | undefined {
+  // Only 1-4 yield a meaningful "next band": 5 has no higher rung, and 0
+  // ("Not evident") has no coherent "Band 0 strength" line to build.
+  if (dimBand < 1 || dimBand >= 5) return undefined;
+  const next = (dimBand + 1) as Band;
+  const descriptor = bandLevel(next)[key];
+  return `Band ${dimBand} strength. To reach Band ${next} on ${dimLabel}, the EduTrust rubric looks for: "${descriptor}". Keep this evidenced and build toward that at the next review cycle.`;
+}
 
 export type ClosureLite = { root?: string; corr?: string; prev?: string; evid?: string; human?: "" | "Accepted"; aiNeed?: string };
 
@@ -137,6 +145,10 @@ export type SubCriterionReport = {
 
 export type FindingReport = {
   id: string;
+  // The raw GD4 item id (e.g. "6.2.1"), used to fold each finding into its
+  // matching item card on the Final Report. itemId below is the display form
+  // ("6.2.1 Management Review").
+  gd4ItemId: string;
   itemId: string;
   issue: string;
   severity: string;
@@ -203,14 +215,14 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
           afi: action ? firstSentence(action) : "No concrete suggested action recorded for this line.",
         };
       }
-      // A strength still gets an AFI unless the item is already at the top band
-      // (5) — a strong point under a Band 2/3 item isn't necessarily audit-proof
-      // yet (Task 2). At Band 5 there is nothing higher to reach, so it stays
-      // blank.
+      // A strength gets a next-band-specific AFI quoting the rubric descriptor
+      // for the band above THIS dimension's current band (score), or blank when
+      // the dimension is already at Band 5. Gated per-dimension, not on the
+      // item's overall band.
       return {
         lineId: l.id, itemRef, verdict: "strength",
         finding: text ? firstSentence(text) : "No evidence summary recorded for this line.",
-        afi: result.band < 5 ? STRENGTH_MAINTENANCE_AFI : undefined,
+        afi: strengthNextBandAfi(key, label, score),
       };
     });
     out.push({ key, label, band: score, pct: result.pcts[key], rows });
@@ -401,6 +413,7 @@ export function buildFinalReport(
     const reqTitle = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId)?.requirement;
     return {
       id: f.id,
+      gd4ItemId: f.gd4ItemId,
       itemId: f.gd4ItemId + (reqTitle ? ` ${reqTitle}` : ""),
       issue: f.issue,
       // Resolved NC/OFI/OBS classification (which applyPanelConclusion updates),
