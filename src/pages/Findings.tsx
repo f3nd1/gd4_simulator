@@ -13,7 +13,7 @@ import { Card, filterSelectStyle, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
-import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS, refLabel, refWithLabel } from "../data/gd4Requirements";
 import { GOLD, INK } from "../lib/theme";
 import type { Finding, FindingType, Severity, FindingDimension, GroupedFindingDraft, NcSeverity } from "../types";
 import { runLiveFindingObservation, AIClientError } from "../lib/ai/agentRuntime";
@@ -1068,7 +1068,12 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
       {req && (
         <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 8 }}>
           GD4 {req.id} · {req.requirement}
-          {f.clause && <span style={{ fontFamily: "ui-monospace,monospace", marginLeft: 8 }}>{f.clause}</span>}
+          {f.clause && (
+            <span style={{ marginLeft: 8 }}>
+              <span style={{ fontFamily: "ui-monospace,monospace" }}>{f.clause}</span>
+              {refLabel(f.clause) && <span style={{ color: "#94a3b8" }}> - {refLabel(f.clause)}</span>}
+            </span>
+          )}
           {f.source && <Pill s="neutral">{f.source}</Pill>}
           {/* Clickable run back-link: Option A run ids deep-link to the run's
               result modal on Evidence Folder; ids that don't resolve just open
@@ -1091,7 +1096,12 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
       {(f.linkedSourceRefs?.length || f.evidenceStatusSummary || f.createdFromAuditRunId) && (
         <div style={{ marginTop: 6, borderTop: "1px solid #e2e8f0", paddingTop: 8 }}>
           <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Traceability</div>
-          {f.linkedSourceRefs?.length ? <div style={{ fontSize: 11.5, color: "#475569" }}>GD4 refs: {f.linkedSourceRefs.join(", ")}</div> : null}
+          {f.linkedSourceRefs?.length ? (
+            <div style={{ fontSize: 11.5, color: "#475569" }}>
+              GD4 refs:
+              {f.linkedSourceRefs.map((rf) => <div key={rf} style={{ marginLeft: 8 }}>{refWithLabel(rf)}</div>)}
+            </div>
+          ) : null}
           {f.evidenceStatusSummary ? <div style={{ fontSize: 11.5, color: "#475569", marginTop: 2 }}>{f.evidenceStatusSummary}</div> : null}
           {f.createdFromAuditRunId ? <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2, fontFamily: "ui-monospace,monospace" }}>Audit run: {f.createdFromAuditRunId}</div> : null}
           {f.linkedChecklistLineIds?.length ? (

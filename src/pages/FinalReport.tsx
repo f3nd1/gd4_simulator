@@ -18,6 +18,7 @@ import { Gauge, HBars, VBars, BAND_COLOR, AttainmentLadder } from "../components
 import { GOLD, INK, BLUE, bandTone } from "../lib/theme";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { buildProvenance, provenanceLine } from "../lib/provenance";
+import { refLabel } from "../data/gd4Requirements";
 
 const SEV_TONE: Record<string, string> = { Critical: "critical", High: "critical", Medium: "medium", Low: "progress", Major: "critical", Minor: "medium" };
 
@@ -552,7 +553,10 @@ function ItemBlock({ it }: { it: ItemReport }) {
                   return (
                     <tr key={r.lineId}>
                       {i === 0 && dimCell(g.rows.length)}
-                      <td style={{ verticalAlign: "top", whiteSpace: "nowrap", fontFamily: "ui-monospace,monospace", fontSize: 11 }}>{r.itemRef}</td>
+                      <td style={{ verticalAlign: "top", fontSize: 11 }}>
+                        <span style={{ fontFamily: "ui-monospace,monospace", whiteSpace: "nowrap" }}>{r.itemRef}</span>
+                        {refLabel(r.itemRef) && <div style={{ color: "#64748b", fontSize: 10.5, marginTop: 2 }}>{refLabel(r.itemRef)}</div>}
+                      </td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5, color }}><b>{label}:</b> {r.finding}</td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5, color: "#2563eb" }}>{r.afi ?? ""}</td>
                     </tr>

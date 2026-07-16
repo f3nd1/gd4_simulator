@@ -1,4 +1,5 @@
 import type { GD4Requirement, GD4SubCriterion, FlatAuditPoint } from "../types";
+import { normalizeAuditRef } from "../lib/gd4Refs";
 
 // Source of truth: EduTrust Guidance Document Version 4 (SkillsFuture
 // Singapore, January 2025) — sections "Scoring and Banding System" and
@@ -643,3 +644,35 @@ export const GD4_REQUIREMENTS: GD4Requirement[] = RAW_ITEMS.map((raw) => {
     flatAuditPoints: deriveItemFlatAuditPoints(raw),
   };
 });
+
+// Ref to plain-English label. A bare ref code ("6.2.1.DS1.b") means nothing to
+// a non-technical auditor; every display site pairs the code with the official
+// requirement text through this ONE map so labels never drift per file. All
+// text below is the verbatim GD4 source already derived above (sub-criterion
+// titles, item titles, flatAuditPoints text) - nothing is invented here.
+// Keyed by exact ref, with a normalised-ref fallback because AI-echoed refs
+// (checklist sourceRef/clause) can drift in case or carry a label prefix.
+const REF_LABELS = new Map<string, string>();
+const REF_LABELS_NORM = new Map<string, string>();
+function registerRefLabel(ref: string, label: string): void {
+  REF_LABELS.set(ref, label);
+  const norm = normalizeAuditRef(ref);
+  if (!REF_LABELS_NORM.has(norm)) REF_LABELS_NORM.set(norm, label);
+}
+for (const sc of GD4_SUB_CRITERIA) registerRefLabel(sc.id, sc.title);
+for (const req of GD4_REQUIREMENTS) {
+  registerRefLabel(req.id, req.requirement);
+  for (const p of req.flatAuditPoints ?? []) registerRefLabel(p.ref, p.text);
+}
+
+export function refLabel(ref: string): string | undefined {
+  const trimmed = ref.trim();
+  return REF_LABELS.get(trimmed) ?? REF_LABELS_NORM.get(normalizeAuditRef(trimmed));
+}
+
+// "code - label", falling back to the bare code when no label is found so a
+// display never shows "undefined" for an unrecognised ref.
+export function refWithLabel(ref: string, sep = " - "): string {
+  const label = refLabel(ref);
+  return label ? `${ref}${sep}${label}` : ref;
+}
