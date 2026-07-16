@@ -3,7 +3,7 @@
 // recur?" was unanswerable and Finding.repeatFinding could never be true.
 // Pure helpers here; the store wires them into createNewCycle/addCustomFinding.
 
-import type { Finding, NcSeverity } from "../types";
+import type { Finding, FindingTypeCode, NcSeverity } from "../types";
 import { normalizeAuditRef } from "./gd4Refs";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
 
@@ -21,6 +21,32 @@ export function carryoverKey(f: Pick<Finding, "gd4ItemId" | "clause" | "linkedSo
   const ref = f.linkedSourceRefs?.[0] ?? f.clause;
   const norm = ref ? normalizeAuditRef(ref) : "";
   return norm ? `${f.gd4ItemId}::${norm}` : null;
+}
+
+// Marker prefix for the classification-drift review note. Kept as one
+// constant so the append is idempotent (a finding is flagged once, not on
+// every subsequent re-raise) and so any later surface can detect it.
+export const CLASSIFICATION_REVIEW_MARKER = "⚠ CLASSIFICATION REVIEW";
+
+export function classificationReviewNote(was: FindingTypeCode, now: FindingTypeCode | undefined): string {
+  return `${CLASSIFICATION_REVIEW_MARKER} - this gap was raised as ${was} and a later audit pass now reads it as ${now ?? "NC"}. Review the classification before closing; no second finding was created.`;
+}
+
+// Type-blind same-gap lookup (R9 fix, 2026-07-16). findingDedupeKey includes
+// the finding type, so an NC and an OFI on the same requirement point never
+// match, and a verdict-class change between audit passes (Not met to Partial
+// flips NC to OFI) could raise a sibling finding for one gap. This answers
+// "does an OPEN gap-record already exist for this exact gap, whatever its
+// classification?" using the same carryoverKey identity R9 and the
+// cross-cycle carryover already use, never a third matching scheme.
+// OBS findings never suppress: an OBS records a strength, and a recorded
+// strength must not block a genuinely new NC/OFI for a later regression.
+// Scope matches R9: status !== "Closed" (closure acceptance is a separate
+// record and does not set status).
+export function findOpenFindingForGap(findings: Finding[], gd4ItemId: string, ref: string | undefined): Finding | undefined {
+  const key = carryoverKey({ gd4ItemId, clause: ref, linkedSourceRefs: undefined });
+  if (!key) return undefined;
+  return findings.find((f) => f.status !== "Closed" && resolveFindingType(f) !== "OBS" && carryoverKey(f) === key);
 }
 
 export type RepeatInfo = {

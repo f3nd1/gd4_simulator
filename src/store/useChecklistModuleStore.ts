@@ -18,6 +18,8 @@ import type {
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildDraftFinding, lineSufficiency, lineApsr, apsrMatrixResult } from "../lib/checklistBanding";
 import { findingDedupeKey, findingKeyOf, normalizeAuditRef } from "../lib/gd4Refs";
+import { findOpenFindingForGap, classificationReviewNote, CLASSIFICATION_REVIEW_MARKER } from "../lib/cycleCarryover";
+import { resolveFindingType } from "../lib/findingClassification";
 import { buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill, runHolisticBandSuggestion, type HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
@@ -651,6 +653,23 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
             return;
           }
         }
+        // Type-blind second pass (R9 fix, 2026-07-16): the typed key above
+        // treats an NC and an OFI on the same requirement point as different
+        // findings, so a verdict-class change between audit passes raised a
+        // sibling finding for the same gap. If an OPEN NC/OFI already covers
+        // this exact gap (item + normalised ref, via carryoverKey), do NOT
+        // create a second finding: relink the line and flag the existing
+        // finding for human review. Never auto-relabel or auto-close; the
+        // human decides. OBS never suppresses (findOpenFindingForGap).
+        const sameGap = findOpenFindingForGap(useWorkspaceStore.getState().customFindings, draft.gd4ItemId, line.sourceRef ?? draft.clause);
+        if (sameGap) {
+          if (!(sameGap.observation ?? "").includes(CLASSIFICATION_REVIEW_MARKER)) {
+            const note = classificationReviewNote(resolveFindingType(sameGap), draft.findingType);
+            useWorkspaceStore.getState().updateCustomFinding(sameGap.id, { observation: sameGap.observation ? `${note}\n\n${sameGap.observation}` : note });
+          }
+          set((st) => mapEntry(st, itemId, (e) => mapLine(e, lineId, (l) => ({ ...l, draftFinding: { ...draft, savedFindingId: sameGap.id } }))));
+          return;
+        }
         const finding: Finding = {
           id: newFindingId(),
           auditCycleId: "cycle-1",
@@ -731,13 +750,20 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
               `${itemId}:${draft.issue.slice(0, 60)}`;
             if (existingKeys.has(dupKey)) continue; // already raised — skip, don't double
             existingKeys.add(dupKey);
+            const before = useWorkspaceStore.getState().customFindings.length;
             get().confirmDraftFinding(itemId, line.id, draft, auditRunId);
             // confirmDraftFinding stamps the new finding id onto the line — use
             // it to pre-fill the closure with the derived root cause / corrective
             // / preventive, so the AFI reads deep from the moment it is raised.
+            // Seed + count ONLY when a finding was actually created: the
+            // type-blind dedupe (R9 fix) can relink to an existing finding
+            // instead, and seeding that one's closure would overwrite its
+            // draft (same created-gate the Option A compile already uses).
             const savedId = get().entries[itemId]?.specific.find((l) => l.id === line.id)?.draftFinding?.savedFindingId;
-            if (savedId) useWorkspaceStore.getState().seedClosure(savedId, { root: draft.rootCause, corr: draft.corrective, prev: draft.preventive });
-            raised += 1;
+            if (savedId && useWorkspaceStore.getState().customFindings.length > before) {
+              useWorkspaceStore.getState().seedClosure(savedId, { root: draft.rootCause, corr: draft.corrective, prev: draft.preventive });
+              raised += 1;
+            }
           }
         }
         return raised;

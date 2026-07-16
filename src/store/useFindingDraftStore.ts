@@ -15,6 +15,8 @@ import type {
   ApsrBreakdown,
 } from "../types";
 import { findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
+import { findOpenFindingForGap, classificationReviewNote, CLASSIFICATION_REVIEW_MARKER } from "../lib/cycleCarryover";
+import { resolveFindingType } from "../lib/findingClassification";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { groupWeakLines, buildEvidenceStatusSummary, synthesiseApsrFromGroup, isCoveredByExistingFinding, classifyGroup } from "../lib/findingGrouper";
 import { simulateGroupedFindingWriter, runLiveGroupedFindingWriter } from "../lib/ai/findingWriter";
@@ -315,8 +317,22 @@ export const useFindingDraftStore = create<FindingDraftState>()(
           const existing =
             existingFindings.find((f) => stampedId && f.id === stampedId) ??
             existingFindings.find((f) => draftKey != null && findingKeyOf(f) === draftKey) ??
-            existingFindings.find((f) => isCoveredByExistingFinding(draft.group, [f]));
+            existingFindings.find((f) => isCoveredByExistingFinding(draft.group, [f])) ??
+            // (d) type-blind same-gap match (R9 fix, 2026-07-16): a verdict-
+            // class change flips the typed key (NC vs OFI), so without this a
+            // re-generated draft could create a sibling finding for a gap the
+            // register already holds under the other classification.
+            findOpenFindingForGap(existingFindings, draft.gd4ItemId, sourceRefs[0]);
           if (existing) {
+            // A relink across a classification drift is flagged for human
+            // review on the EXISTING finding, never auto-relabelled. OBS and
+            // closed findings are excluded (an OBS is a strength record, and
+            // a closed finding's classification is settled).
+            const wasType = resolveFindingType(existing);
+            if (existing.status !== "Closed" && wasType !== "OBS" && wasType !== findingType && !(existing.observation ?? "").includes(CLASSIFICATION_REVIEW_MARKER)) {
+              const note = classificationReviewNote(wasType, findingType);
+              useWorkspaceStore.getState().updateCustomFinding(existing.id, { observation: existing.observation ? `${note}\n\n${existing.observation}` : note });
+            }
             set((s) => ({
               draftsBySubCriterion: {
                 ...s.draftsBySubCriterion,
