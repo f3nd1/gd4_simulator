@@ -404,7 +404,7 @@ export function FinalReport() {
 
       <Card id="fr-register">
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <h3 style={{ marginTop: 0, marginBottom: 0, fontSize: 14, flex: 1 }}>Findings register — root cause, gap & closure ({report.findings.length})</h3>
+          <h3 style={{ marginTop: 0, marginBottom: 0, fontSize: 14, flex: 1 }}>Findings register ({report.findings.length})</h3>
           {report.findings.length > 0 && (
             <button
               className="no-print"
@@ -455,6 +455,7 @@ export function FinalReport() {
                   <Pill s={f.closed ? "good" : "medium"}>{f.closed ? "Closed" : f.status}</Pill>
                   <span style={{ fontSize: 11.5, color: "#6b7280" }}>{f.type}</span>
                   <span style={{ fontSize: 11.5, color: "#94a3b8" }}>· {f.itemId}</span>
+                  <span style={{ fontSize: 12, color: "#374151", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.issue}</span>
                   <span className="no-print" style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>
                     {confirmDeleteFindingId === f.id ? (
                       <>
@@ -466,12 +467,6 @@ export function FinalReport() {
                     )}
                   </span>
                 </div>
-                <div style={{ fontSize: 12.5, fontWeight: 600, margin: "4px 0" }}>{f.issue}</div>
-                <ReportLine label="Root cause" value={f.rootCause} />
-                <ReportLine label="What's missing / still needed" value={f.stillNeeded} />
-                <ReportLine label="Corrective action (how to close)" value={f.corrective} />
-                <ReportLine label="Preventive action" value={f.preventive} />
-                <ReportLine label="Closure evidence" value={f.closureEvidence} />
               </div>
             ))}
           </div>
