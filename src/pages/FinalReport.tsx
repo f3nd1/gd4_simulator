@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { buildFinalReport, NOT_ASSESSED_AFI, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { buildSystemPrompt } from "../lib/ai/skills";
@@ -390,24 +390,36 @@ export function FinalReport() {
   );
 }
 
-// Strength AFI from strengthNextBandAfi() has a fixed machine-readable format:
-// "Band N strength. To reach Band N+1 on DimLabel, the EduTrust rubric looks for: '...'."
-// Parse it to show a Band N → Band N+1 pill transition; fall back to plain text for
-// all other AFI strings (weakness AFIs, future formats).
+// Strength AFI from strengthNextBandAfi() uses double-quoted descriptor:
+//   Band N strength. To reach Band N+1 on DimLabel, the EduTrust rubric looks for: "...". Keep this evidenced...
+// Parse that format to show a Band N → Band N+1 pill transition (bandTone gives
+// each band its own colour). Not-assessed rows get muted grey. Weakness AFI is
+// free-text from the AI — no parseable band pair, styled as an action prompt.
 function renderAfi(afi: string | undefined) {
   if (!afi) return null;
-  const m = afi.match(/^Band (\d) strength\. To reach Band (\d) on (.+?), the EduTrust rubric looks for: '(.+)'\. Keep this evidenced/);
-  if (!m) return <span style={{ color: "#2563eb" }}>{afi}</span>;
-  const [, fromBand, toBand, dimLabel, quote] = m;
+  const m = afi.match(/^Band (\d) strength\. To reach Band (\d) on (.+?), the EduTrust rubric looks for: "(.+)"\. Keep this evidenced/);
+  if (m) {
+    const [, fromBand, toBand, dimLabel, quote] = m;
+    return (
+      <span>
+        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+          <Pill s={bandTone(Number(fromBand))}>Band {fromBand}</Pill>
+          <span style={{ color: "#94a3b8", fontSize: 12 }}>→</span>
+          <Pill s={bandTone(Number(toBand))}>Band {toBand}</Pill>
+          <span style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>{dimLabel}</span>
+        </span>
+        <div style={{ fontSize: 10.5, color: "#6b7280", marginTop: 3, fontStyle: "italic" }}>"{quote}"</div>
+      </span>
+    );
+  }
+  if (afi === NOT_ASSESSED_AFI) {
+    return <span style={{ color: "#94a3b8", fontSize: 11 }}>{afi}</span>;
+  }
+  // Weakness AFI: free-text action item — amber to signal "action needed"
   return (
     <span>
-      <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-        <Pill s={bandTone(Number(fromBand))}>Band {fromBand}</Pill>
-        <span style={{ color: "#94a3b8", fontSize: 12 }}>→</span>
-        <Pill s={bandTone(Number(toBand))}>Band {toBand}</Pill>
-        <span style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>{dimLabel}</span>
-      </span>
-      <div style={{ fontSize: 10.5, color: "#6b7280", marginTop: 3, fontStyle: "italic" }}>"{quote}"</div>
+      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#b45309" }}>Action: </span>
+      <span style={{ color: "#92400e" }}>{afi}</span>
     </span>
   );
 }
@@ -433,8 +445,8 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         <summary style={{ cursor: "pointer", fontSize: 12.5 }}>
           <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap", verticalAlign: "middle" }}>
             {it.gate && <Pill s="high">Gate</Pill>}
-            <b>{it.id}</b>
-            <span>{it.title}</span>
+            <span style={{ fontWeight: 700, color: "#94a3b8" }}>{it.id}</span>
+            <span style={{ color: "#b0b9c9" }}>{it.title}</span>
             <span style={{ fontSize: 11, color: "#94a3b8" }}>Not started</span>
           </span>
         </summary>
@@ -507,8 +519,10 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         // The item's Findings register, folded in per item. Starts collapsed on
         // screen and in print (empty placeholders add nothing to a printed report).
         <details style={{ marginTop: 6 }}>
-          <summary style={{ fontSize: 11.5, color: "#334155", fontWeight: 600, cursor: "pointer" }}>
-            Findings register: root cause, gap &amp; closure ({findings.length})
+          <summary style={{ fontSize: 11.5, color: "#334155", fontWeight: 600, cursor: "pointer", userSelect: "none" }}>
+            <span className="details-marker-closed" style={{ fontSize: 10, marginRight: 4, color: "#94a3b8" }}>▶</span>
+            <span className="details-marker-open" style={{ fontSize: 10, marginRight: 4, color: "#94a3b8" }}>▼</span>
+            Findings: root cause, gap &amp; closure ({findings.length})
           </summary>
           <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
             {findings.map((f) => (
