@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, type FinalReport, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { buildFinalReport, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { buildSystemPrompt } from "../lib/ai/skills";
@@ -52,13 +52,6 @@ export function FinalReport() {
   const [bandingTab, setBandingTab] = useState<"criterion" | "subcriterion">("criterion");
   const [filterCrit, setFilterCrit] = useState("All");
   const [filterSubCrit, setFilterSubCrit] = useState("All");
-  // Findings-register filters: presentational only, same idiom as the two
-  // dropdowns above. "Classification" is the register's own display axis:
-  // NC rows contribute their Major/Minor severity, OFI/OBS rows their type.
-  const [filterFindItem, setFilterFindItem] = useState("All");
-  const [filterFindClass, setFilterFindClass] = useState("All");
-  const [filterFindOpen, setFilterFindOpen] = useState("All");
-
   useEffect(() => { if (aiSummary) setEditedSummary(aiSummary); }, [aiSummary]);
 
   const subCritOptions = useMemo(
@@ -69,34 +62,6 @@ export function FinalReport() {
     () => report.items.filter((it) => (filterCrit === "All" || it.criterion === filterCrit) && (filterSubCrit === "All" || it.subCriterionId === filterSubCrit)),
     [report.items, filterCrit, filterSubCrit]
   );
-  // Register filter derivations. itemId is "<gd4ItemId> <requirement title>",
-  // so the item option is its first token; classification is Major/Minor for
-  // NC findings and the type itself for OFI/OBS (the axis the register shows).
-  const findingClassOf = (f: FinalReport["findings"][number]) => (f.type === "NC" ? f.severity : f.type);
-  const findItemOptions = useMemo(
-    () => [...new Set(report.findings.map((f) => f.itemId.split(" ")[0]))].sort(),
-    [report.findings]
-  );
-  const findClassOptions = useMemo(
-    () => [...new Set(report.findings.map(findingClassOf))],
-    [report.findings]
-  );
-  const filteredFindings = useMemo(
-    () =>
-      report.findings.filter((f) => {
-        // Match the status PILL the row displays (closure-accepted OR raw
-        // status "Closed" both read "Closed" there), so the filter never
-        // hides a row whose visible label says the selected state.
-        const displaysClosed = f.closed || f.status === "Closed";
-        return (
-          (filterFindItem === "All" || f.itemId.split(" ")[0] === filterFindItem) &&
-          (filterFindClass === "All" || findingClassOf(f) === filterFindClass) &&
-          (filterFindOpen === "All" || (filterFindOpen === "Closed") === displaysClosed)
-        );
-      }),
-    [report.findings, filterFindItem, filterFindClass, filterFindOpen]
-  );
-
   function handleSummaryThumbsUp() {
     logHumanDecision({ module: "Final Report", subjectId: "executive-summary", aiOutput: aiSummary || "", humanDecision: aiSummary || "", changed: false, decisionType: "Accepted", reason: "" });
   }
@@ -169,7 +134,7 @@ export function FinalReport() {
           #/final-report route (the same pattern SubCriterionChecklist and
           RubricBanding already use for in-page jumps). */}
       <div className="no-print" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-        {([["fr-summary", "Summary"], ["fr-items", "Banding by item"], ["fr-register", "Findings register"]] as const).map(([id, label]) => (
+        {([["fr-summary", "Summary"], ["fr-items", "Banding by item"]] as const).map(([id, label]) => (
           <button
             key={id}
             onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
@@ -295,8 +260,19 @@ export function FinalReport() {
       </Card>
 
       <Card>
-        <h3 style={{ marginTop: 0, fontSize: 14 }}>Banding by criterion</h3>
-        <div className="no-print" style={{ display: "flex", gap: 4, marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <h3 style={{ margin: 0, fontSize: 14, flex: 1 }}>Banding by criterion</h3>
+          {report.findings.length > 0 && (
+            <button
+              className="no-print"
+              onClick={() => { if (confirm(`Delete all ${report.findings.length} finding${report.findings.length !== 1 ? "s" : ""}?\n\nThis removes them from both the Findings register AND the Quality Action / AFI module (they share the same data). Closure decisions and any back-references on checklist lines will also be cleared. This cannot be undone.`)) clearAllFindings(); }}
+              style={{ fontSize: 11.5, color: "#b91c1c", background: "transparent", border: "1px solid #fecaca", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}
+            >
+              Delete all findings
+            </button>
+          )}
+        </div>
+        <div className="no-print" style={{ display: "flex", gap: 4, marginBottom: 10, marginTop: 10 }}>
           {(["criterion", "subcriterion"] as const).map((tab) => (
             <button
               key={tab}
@@ -402,76 +378,6 @@ export function FinalReport() {
         </div>
       </Card>
 
-      <Card id="fr-register">
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <h3 style={{ marginTop: 0, marginBottom: 0, fontSize: 14, flex: 1 }}>Findings register ({report.findings.length})</h3>
-          {report.findings.length > 0 && (
-            <button
-              className="no-print"
-              onClick={() => { if (confirm(`Delete all ${report.findings.length} finding${report.findings.length !== 1 ? "s" : ""}?\n\nThis removes them from both the Findings register AND the Quality Action / AFI module (they share the same data). Closure decisions and any back-references on checklist lines will also be cleared. This cannot be undone.`)) clearAllFindings(); }}
-              style={{ fontSize: 11.5, color: "#b91c1c", background: "transparent", border: "1px solid #fecaca", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}
-            >
-              Delete all
-            </button>
-          )}
-        </div>
-        {report.findings.length > 0 && (
-          <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-            <label style={{ fontSize: 12, color: "#374151" }}>
-              Item{" "}
-              <select value={filterFindItem} onChange={(e) => setFilterFindItem(e.target.value)} style={{ fontSize: 12, padding: "4px 6px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
-                <option value="All">All</option>
-                {findItemOptions.map((id) => <option key={id} value={id}>{id}</option>)}
-              </select>
-            </label>
-            <label style={{ fontSize: 12, color: "#374151" }}>
-              Severity{" "}
-              <select value={filterFindClass} onChange={(e) => setFilterFindClass(e.target.value)} style={{ fontSize: 12, padding: "4px 6px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
-                <option value="All">All</option>
-                {findClassOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </label>
-            <label style={{ fontSize: 12, color: "#374151" }}>
-              Status{" "}
-              <select value={filterFindOpen} onChange={(e) => setFilterFindOpen(e.target.value)} style={{ fontSize: 12, padding: "4px 6px", borderRadius: 6, border: "1px solid #e2e8f0" }}>
-                <option value="All">All</option>
-                <option value="Open">Open</option>
-                <option value="Closed">Closed</option>
-              </select>
-            </label>
-            <span style={{ fontSize: 11.5, color: "#6b7280" }}>showing {filteredFindings.length} of {report.findings.length}</span>
-          </div>
-        )}
-        {report.findings.length === 0 ? (
-          <p style={{ fontSize: 12.5, color: "#6b7280", marginBottom: 0 }}>No findings raised.</p>
-        ) : filteredFindings.length === 0 ? (
-          <p style={{ fontSize: 12.5, color: "#6b7280", marginBottom: 0, marginTop: 8 }}>No findings match this filter.</p>
-        ) : (
-          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-            {filteredFindings.map((f) => (
-              <div key={f.id} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px" }}>
-                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                  <Pill s={SEV_TONE[f.severity] || "medium"}>{f.severity}</Pill>
-                  <Pill s={f.closed ? "good" : "medium"}>{f.closed ? "Closed" : f.status}</Pill>
-                  <span style={{ fontSize: 11.5, color: "#6b7280" }}>{f.type}</span>
-                  <span style={{ fontSize: 11.5, color: "#94a3b8" }}>· {f.itemId}</span>
-                  <span style={{ fontSize: 12, color: "#374151", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.issue}</span>
-                  <span className="no-print" style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>
-                    {confirmDeleteFindingId === f.id ? (
-                      <>
-                        <button onClick={() => { removeCustomFinding(f.id); setConfirmDeleteFindingId(null); }} style={{ fontSize: 11, color: "#fff", background: "#ef4444", border: "none", borderRadius: 4, padding: "2px 7px", cursor: "pointer", marginRight: 4 }}>Delete</button>
-                        <button onClick={() => setConfirmDeleteFindingId(null)} style={{ fontSize: 11, color: "#6b7280", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}>Cancel</button>
-                      </>
-                    ) : (
-                      <button onClick={() => setConfirmDeleteFindingId(f.id)} style={{ fontSize: 12, color: "#94a3b8", background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px" }} title="Delete finding">✕</button>
-                    )}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
       <FeedbackModal
         open={summaryFeedbackOpen}
         aiOutput={aiSummary || ""}
@@ -481,6 +387,28 @@ export function FinalReport() {
         }}
       />
     </div>
+  );
+}
+
+// Strength AFI from strengthNextBandAfi() has a fixed machine-readable format:
+// "Band N strength. To reach Band N+1 on DimLabel, the EduTrust rubric looks for: '...'."
+// Parse it to show a Band N → Band N+1 pill transition; fall back to plain text for
+// all other AFI strings (weakness AFIs, future formats).
+function renderAfi(afi: string | undefined) {
+  if (!afi) return null;
+  const m = afi.match(/^Band (\d) strength\. To reach Band (\d) on (.+?), the EduTrust rubric looks for: '(.+)'\. Keep this evidenced/);
+  if (!m) return <span style={{ color: "#2563eb" }}>{afi}</span>;
+  const [, fromBand, toBand, dimLabel, quote] = m;
+  return (
+    <span>
+      <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+        <Pill s={bandTone(Number(fromBand))}>Band {fromBand}</Pill>
+        <span style={{ color: "#94a3b8", fontSize: 12 }}>→</span>
+        <Pill s={bandTone(Number(toBand))}>Band {toBand}</Pill>
+        <span style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>{dimLabel}</span>
+      </span>
+      <div style={{ fontSize: 10.5, color: "#6b7280", marginTop: 3, fontStyle: "italic" }}>"{quote}"</div>
+    </span>
   );
 }
 
@@ -504,11 +432,10 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
       <details style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "6px 10px" }}>
         <summary style={{ cursor: "pointer", fontSize: 12.5 }}>
           <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap", verticalAlign: "middle" }}>
-            <Pill s={bandTone(it.band)}>Band {it.band}</Pill>
             {it.gate && <Pill s="high">Gate</Pill>}
             <b>{it.id}</b>
             <span>{it.title}</span>
-            <Pill s="medium">Not started</Pill>
+            <span style={{ fontSize: 11, color: "#94a3b8" }}>Not started</span>
           </span>
         </summary>
         {it.generalNote && (
@@ -532,7 +459,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.5, margin: "6px 0 0" }}>{it.overallSummary}</p>
       )}
       {it.findingsGroups.length > 0 && (
-        <div style={{ marginTop: 6, border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+        <div style={{ marginTop: 6, border: "1px solid #e2e8f0", borderRadius: 8, overflowX: "auto" }}>
           <table>
             <thead>
               <tr><th>Dimension</th><th>Band</th><th>Item</th><th>Finding</th><th>AFI (to reach next band)</th></tr>
@@ -567,7 +494,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                         {refLabel(r.itemRef) && <div style={{ color: "#64748b", fontSize: 10.5, marginTop: 2 }}>{refLabel(r.itemRef)}</div>}
                       </td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5, color }}><b>{label}:</b> {r.finding}</td>
-                      <td style={{ verticalAlign: "top", fontSize: 11.5, color: "#2563eb" }}>{r.afi ?? ""}</td>
+                      <td style={{ verticalAlign: "top", fontSize: 11.5 }}>{renderAfi(r.afi)}</td>
                     </tr>
                   );
                 });
@@ -577,11 +504,8 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         </div>
       )}
       {findings.length > 0 && (
-        // The item's Findings register, folded in per item (starts collapsed on
-        // screen and stays collapsed in print, like the not-started items). The
-        // slim bottom register keeps the global controls (Delete all, cross-item
-        // filters) and the print-complete flat list; this fold is the same card
-        // layout so the two never drift.
+        // The item's Findings register, folded in per item. Starts collapsed on
+        // screen and in print (empty placeholders add nothing to a printed report).
         <details style={{ marginTop: 6 }}>
           <summary style={{ fontSize: 11.5, color: "#334155", fontWeight: 600, cursor: "pointer" }}>
             Findings register: root cause, gap &amp; closure ({findings.length})
