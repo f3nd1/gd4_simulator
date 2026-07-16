@@ -555,8 +555,10 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
       )}
       {it.bandRationale && (
         <details style={{ marginTop: 6 }}>
-          <summary style={{ fontSize: 10.5, color: "#94a3b8", cursor: "pointer" }}>
-            Full band justification as recorded{it.bandTotalPct != null ? ` (APSR total ${it.bandTotalPct}%)` : ""}
+          <summary style={{ fontSize: 10.5, color: "#94a3b8", cursor: "pointer", userSelect: "none" }}>
+            <span className="details-marker-closed" style={{ fontSize: 10, marginRight: 4, color: "#94a3b8" }}>▶</span>
+            <span className="details-marker-open" style={{ fontSize: 10, marginRight: 4, color: "#94a3b8" }}>▼</span>
+            Full band justification{it.bandTotalPct != null ? ` (APSR total ${it.bandTotalPct}%)` : ""}
           </summary>
           <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>{it.bandRationale}</div>
         </details>
