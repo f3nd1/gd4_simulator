@@ -90,7 +90,12 @@ describe("Consistency Checker - the five known-bad seed cases each fire their ru
     expect(fired(issues, "R3")).toBe(true);
   });
 
-  it("Seed 3 -> R4: a Weakness-labelled row whose dimension status is positive", () => {
+  it("Seed 3 -> R4 FIXED at source (Bug A, 2026-07-17): a positive leg now derives a Strength row, R4 stays silent", () => {
+    // This seed used to fire R4 because the row verdict came from the LINE's
+    // overall status while the text came from the dimension leg. The verdict
+    // now derives from the leg itself (positive leg -> strength row), so the
+    // polarity mismatch is structurally impossible from buildFindingsGroups
+    // and the checker must find nothing here.
     const entries = {
       "6.2.1": {
         gd4ItemId: "6.2.1",
@@ -101,8 +106,30 @@ describe("Consistency Checker - the five known-bad seed cases each fire their ru
         pendingGenerated: [],
       },
     };
-    const issues = runConsistencyChecks(inputsFrom(entries));
-    expect(fired(issues, "R4")).toBe(true);
+    const input = inputsFrom(entries);
+    const row = input.report.items.find((i) => i.id === "6.2.1")!.findingsGroups.find((g) => g.key === "approach")!.rows[0];
+    expect(row.verdict).toBe("strength"); // label now follows the leg the text comes from
+    expect(fired(runConsistencyChecks(input), "R4")).toBe(false);
+  });
+
+  it("R4 detector still fires on a report whose row verdict genuinely contradicts the leg status", () => {
+    // The rule remains a live guard against any OTHER producer of report rows
+    // (or a future regression) — only buildFindingsGroups was cured, not the
+    // detector. Hand-flip the derived row's verdict to prove the detector.
+    const entries = {
+      "6.2.1": {
+        gd4ItemId: "6.2.1",
+        specific: [
+          line({ id: "L1", clause: "6.2.1.DS1.b", sourceRef: "6.2.1.DS1.b", status: "Not met", evidence: [ev({ sufficiency: "Missing", apsr: apsrWith({ approach: { status: "Meeting", note: "The approach is well documented and fully approved." } }) })] }),
+        ],
+        holisticBand: bandRec({ approach: 4, processes: 1, systemsOutcomes: 1, review: 1 }, 35, 2),
+        pendingGenerated: [],
+      },
+    };
+    const input = inputsFrom(entries);
+    const row = input.report.items.find((i) => i.id === "6.2.1")!.findingsGroups.find((g) => g.key === "approach")!.rows[0];
+    row.verdict = "weakness"; // simulate a producer that mislabels a positive leg
+    expect(fired(runConsistencyChecks(input), "R4")).toBe(true);
   });
 
   it("Seed 4 -> R2: an open finding whose source line has moved to Met", () => {

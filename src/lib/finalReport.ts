@@ -7,7 +7,7 @@ import { getBand } from "./scoring";
 import type { SubCriterionChecklistEntry, Finding, SpecificChecklistLine, ApsrDimensionScore, Band } from "../types";
 import {
   lineSufficiency, lineCompleteness, needsReassessment, apsrMatrixResult, bandToScore, fastestPathToNextBand,
-  lineDimensionDiagnosis, lineSuggestedAction, resolveLineDimension, classifyApsrByContent, DEFAULT_APSR_SCALE, type LineCompleteness, type ApsrScale, type ApsrMatrixResult,
+  lineDimensionDiagnosis, lineSuggestedAction, lineApsr, resolveLineDimension, classifyApsrByContent, DEFAULT_APSR_SCALE, type LineCompleteness, type ApsrScale, type ApsrMatrixResult,
 } from "./checklistBanding";
 import { EDUTRUST_DIMENSIONS, bandLevel } from "../data/edutrustRubric";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
@@ -90,8 +90,16 @@ export type DimensionFindingsGroup = {
   // "official lines of this type exist but none is drafted/tagged yet"
   // (>0 — drafting guidance applies). Display data only, never a score input.
   rubricDefined: number;
-  // Empty when no line is tagged to this dimension — the UI shows an honest
-  // placeholder row, never a fabricated finding.
+  // True when `rows` was built from the item's OTHER lines' apsr[key] legs
+  // because no line groups under this dimension (Bug B fix, 2026-07-17): the
+  // assessment genuinely exists (e.g. the Outcomes & Review pass wrote it),
+  // it just has no same-dimension requirement line to hang on. The UI shows a
+  // lead-in explaining why other lines' refs appear here. False/absent for
+  // normally-grouped rows.
+  rowsFromLegs?: boolean;
+  // Empty when no line is tagged to this dimension AND no real leg content
+  // exists for it — the UI shows an honest placeholder row, never a
+  // fabricated finding.
   rows: ItemFindingRow[];
 };
 
@@ -254,18 +262,29 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
     // lands under the correct dimension (Task 3 fix, 2026-07-15). Grouping only;
     // no band/verdict/score is affected.
     const dimLines = specific.filter((l) => resolveLineDimension(l) === label && l.status !== "Not Applicable");
-    const rows: ItemFindingRow[] = dimLines.map((l) => {
+    const buildRow = (l: SpecificChecklistLine, fromLeg: boolean): ItemFindingRow => {
       const itemRef = l.clause || l.sourceRef || l.id;
       const text = lineDimensionDiagnosis(l, key);
       // A dimension Option A structurally never assessed (its per-line note is
       // the not-assessed sentinel) is NEITHER a strength nor a weakness — no
-      // data exists to judge it. Detect it first, before the status-based
-      // weakness test, so an unassessed dimension is never mislabelled a
-      // finding just because the line's overall status is Not met/Partial.
+      // data exists to judge it. Detect it first, before any status test, so
+      // an unassessed dimension is never mislabelled a finding just because
+      // the line's overall status is Not met/Partial.
       if (isOptionANotAssessedNote(text)) {
         return { lineId: l.id, itemRef, verdict: "not-assessed", finding: NOT_ASSESSED_FINDING, afi: NOT_ASSESSED_AFI };
       }
-      const isWeakness = l.status !== "Met" || lineSufficiency(l) !== "Present";
+      // The row's verdict comes from the SAME dimension leg its text comes
+      // from (Bug A / R4 / INV-06 fix, 2026-07-17): a positive leg status can
+      // never render as a Weakness and a negative one never as a Strength, so
+      // label and text always agree. Middle values (Beginning/Weak/Limited)
+      // are genuinely ambiguous — exactly the set R4 deliberately never flags
+      // — so they, and lines with no APSR at all, fall back to the line-level
+      // rule this replaced.
+      const legStatus = lineApsr(l)?.[key]?.status;
+      const isWeakness =
+        legStatus === "Meeting" || legStatus === "Deployed" || legStatus === "Evident" ? false :
+        legStatus === "Not evident" ? true :
+        l.status !== "Met" || lineSufficiency(l) !== "Present";
       // Finding/AFI text is the user's real recorded diagnosis and action —
       // shown IN FULL, never sentence-truncated (R3/INV-05: truncation cut
       // rows off mid-token at "e.g."). Only the overall summary's inline
@@ -275,7 +294,10 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
         return {
           lineId: l.id, itemRef, verdict: "weakness",
           finding: text || "No detailed diagnosis recorded for this line.",
-          afi: action || "No concrete suggested action recorded for this line.",
+          // A leg-derived row's stored action belongs to the line's own
+          // evidence pass and may not be about THIS dimension — show it only
+          // when it exists, never the generic filler.
+          afi: action || (fromLeg ? undefined : "No concrete suggested action recorded for this line."),
         };
       }
       // A strength gets a next-band-specific AFI quoting the rubric descriptor
@@ -287,8 +309,28 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
         finding: text || "No evidence summary recorded for this line.",
         afi: strengthNextBandAfi(key, label, score),
       };
-    });
-    out.push({ key, label, band: score, pct: result.pcts[key], rubricDefined, rows });
+    };
+    let rows: ItemFindingRow[] = dimLines.map((l) => buildRow(l, false));
+    // Bug B fix: a scored dimension with NO grouped lines can still carry a
+    // real recorded assessment on the item's OTHER lines' apsr[key] legs
+    // (e.g. the Outcomes & Review pass wrote Systems & Outcomes / Review
+    // judgements onto every line). Surface that verbatim leg content,
+    // attributed to the lines it came from, instead of only a placeholder.
+    // A leg qualifies only with a real non-sentinel note — a dimension with
+    // no such content anywhere keeps the honest empty-group placeholder.
+    let rowsFromLegs = false;
+    if (rows.length === 0) {
+      const legLines = specific.filter((l) => {
+        if (l.status === "Not Applicable") return false;
+        const note = lineDimensionDiagnosis(l, key);
+        return !!note && !isOptionANotAssessedNote(note);
+      });
+      if (legLines.length > 0) {
+        rows = legLines.map((l) => buildRow(l, true));
+        rowsFromLegs = true;
+      }
+    }
+    out.push({ key, label, band: score, pct: result.pcts[key], rubricDefined, rowsFromLegs, rows });
   }
   return out;
 }

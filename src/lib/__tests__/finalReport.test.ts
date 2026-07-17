@@ -4,7 +4,8 @@ import { bandLevel } from "../../data/edutrustRubric";
 import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
 import { blankEvidence } from "../../data/seedEvidence";
-import { GD4_CRITERIA } from "../../data/gd4Requirements";
+import { GD4_CRITERIA, GD4_REQUIREMENTS } from "../../data/gd4Requirements";
+import { computeChecklistOverrides } from "../checklistBanding";
 import type { Finding, SubCriterionChecklistEntry, SpecificChecklistLine, SubChecklistEvidenceItem, ApsrBreakdown } from "../../types";
 
 // Minimal real Scored (blank evidence → every item unstarted) — the findings
@@ -72,13 +73,18 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
   function line(over: Partial<SpecificChecklistLine> & { id: string }): SpecificChecklistLine {
     return { text: "x", status: "Met", evidence: [], generatedBy: "ai", ...over };
   }
-  function apsrFor(dimKey: "approach" | "processes" | "systemsOutcomes" | "review", note: string): ApsrBreakdown {
-    return {
+  // `status` overrides the noted dimension's own leg status — weakness-intent
+  // fixture lines must carry a realistic negative/middle leg (the row verdict
+  // now derives from the leg, per the Bug A / R4 fix).
+  function apsrFor(dimKey: "approach" | "processes" | "systemsOutcomes" | "review", note: string, status?: string): ApsrBreakdown {
+    const base: ApsrBreakdown = {
       approach: { status: "Meeting", note: dimKey === "approach" ? note : "" },
       processes: { status: "Deployed", note: dimKey === "processes" ? note : "" },
       systemsOutcomes: { status: "Evident", note: dimKey === "systemsOutcomes" ? note : "" },
       review: { status: "Evident", note: dimKey === "review" ? note : "" },
     };
+    if (status) (base[dimKey] as { status: string }).status = status;
+    return base;
   }
 
   // Lines are grouped by their AUTHORITATIVE dimension — resolved from the
@@ -98,7 +104,7 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
         evidence: [ev({
           sufficiency: "Missing",
           suggestedAction: "File the missing follow-up action log for Q3.",
-          apsr: apsrFor("processes", "There is no follow-up action log for the Q3 management review."),
+          apsr: apsrFor("processes", "There is no follow-up action log for the Q3 management review.", "Not evident"),
         })],
       }),
       // Systems & Outcomes (DS1.a): a weakness.
@@ -107,7 +113,7 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
         evidence: [ev({
           sufficiency: "Weak",
           suggestedAction: "Add outcome trend data for the last two review cycles.",
-          apsr: apsrFor("systemsOutcomes", "Outcome trend data is not tracked across review cycles."),
+          apsr: apsrFor("systemsOutcomes", "Outcome trend data is not tracked across review cycles.", "Limited"),
         })],
       }),
       // Review (DS2): a real gap line with NO recorded diagnosis or action -> honest per-line fallback.
@@ -284,8 +290,9 @@ describe("buildFinalReport — 'not assessed' is a distinct third state, never a
       // Review (DS2), Met — WITHOUT the third state this would read as a green
       // strength quoting the not-assessed note. Same fact, two colours.
       line({ id: "R1", clause: "6.2.1.DS2", apsrDimension: "Review", status: "Met", evidence: [ev({ sufficiency: "Present", apsr: optionAApsr() })] }),
-      // A genuinely-assessed Processes (EE2) weakness stays a weakness.
-      line({ id: "P1", clause: "6.2.1.EE2", apsrDimension: "Processes", status: "Not met", evidence: [ev({ sufficiency: "Missing", suggestedAction: "File the records.", apsr: optionAApsr() })] }),
+      // A genuinely-assessed Processes (EE2) weakness stays a weakness — its
+      // leg is "Not evident", as the real optionAApsr maps a Not met verdict.
+      line({ id: "P1", clause: "6.2.1.EE2", apsrDimension: "Processes", status: "Not met", evidence: [ev({ sufficiency: "Missing", suggestedAction: "File the records.", apsr: { ...optionAApsr(), processes: { status: "Not evident", note: "No records show the review being run." } } })] }),
     ],
     holisticBand: {
       band: 2, totalPct: 35,
@@ -503,5 +510,101 @@ describe("buildFindingsGroups — rubricDefined distinguishes the two empty-dime
     const report = buildFinalReport(scored, { "6.2.1": entry }, [], {});
     const so = report.items.find((i) => i.id === "6.2.1")!.findingsGroups.find((g) => g.key === "systemsOutcomes")!;
     expect(so.rubricDefined).toBeGreaterThan(0);
+  });
+});
+
+// Row-model rework (Bug A + Bug B, 2026-07-17): the verdict derives from the
+// SAME dimension leg the text comes from, and a scored dimension with no
+// grouped lines surfaces the real leg content recorded on the item's other
+// lines. Display-only: the scoring digest must be byte-identical throughout.
+describe("row verdict derives from the dimension leg (Bug A / R4 fix)", () => {
+  const evW = (apsr: ApsrBreakdown, over: Partial<SubChecklistEvidenceItem> = {}): SubChecklistEvidenceItem =>
+    ({ id: "e1", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency: "Missing", apsr, ...over });
+  const mk = (id: string, clause: string, status: SpecificChecklistLine["status"], apsr?: ApsrBreakdown, suff: SubChecklistEvidenceItem["sufficiency"] = "Missing"): SpecificChecklistLine =>
+    ({ id, text: "x", status, generatedBy: "ai", clause, evidence: apsr ? [evW(apsr, { sufficiency: suff })] : [] });
+  const legs = (approach: "Meeting" | "Beginning" | "Not evident", note: string): ApsrBreakdown => ({
+    approach: { status: approach, note },
+    processes: { status: "Deployed", note: "" },
+    systemsOutcomes: { status: "Evident", note: "" },
+    review: { status: "Evident", note: "" },
+  });
+  const hb = { band: 2 as const, totalPct: 40, matrixScores: { approach: 2 as const, processes: 2 as const, systemsOutcomes: 2 as const, review: 2 as const }, rationale: "r", source: "human" as const, decidedAt: "2026-07-17T00:00:00.000Z" };
+  const approachRow = (line: SpecificChecklistLine) => {
+    const entry: SubCriterionChecklistEntry = { gd4ItemId: "6.2.1", specific: [line], holisticBand: hb, pendingGenerated: [] };
+    const report = buildFinalReport(scored, { "6.2.1": entry }, [], {});
+    return report.items.find((i) => i.id === "6.2.1")!.findingsGroups.find((g) => g.key === "approach")!.rows[0];
+  };
+
+  it("positive leg on a Not met line -> Strength (the DS1.d case: label agrees with the text)", () => {
+    const row = approachRow(mk("L1", "6.2.1.DS1.b", "Not met", legs("Meeting", "Documented, because the PPD requires every CAP to have an assigned owner.")));
+    expect(row.verdict).toBe("strength");
+    expect(row.finding).toContain("Documented, because");
+  });
+  it("negative leg on a Met line -> Weakness (the reverse mismatch also cured)", () => {
+    expect(approachRow(mk("L1", "6.2.1.DS1.b", "Met", legs("Not evident", "No documented approach found."), "Present")).verdict).toBe("weakness");
+  });
+  it("middle leg value falls back to the line status, both ways", () => {
+    expect(approachRow(mk("L1", "6.2.1.DS1.b", "Not met", legs("Beginning", "Partially documented."))).verdict).toBe("weakness");
+    expect(approachRow(mk("L1", "6.2.1.DS1.b", "Met", legs("Beginning", "Partially documented."), "Present")).verdict).toBe("strength");
+  });
+  it("no APSR at all keeps the line-level rule", () => {
+    expect(approachRow(mk("L1", "6.2.1.DS1.b", "Not met", undefined)).verdict).toBe("weakness");
+  });
+});
+
+describe("scored-but-ungrouped dimension surfaces real leg content (Bug B)", () => {
+  const NOTE = "#1 [MR-minutes.pdf · C003]: KPI dashboard covers the review period with enrolment trends.";
+  const hb = { band: 2 as const, totalPct: 40, matrixScores: { approach: 2 as const, processes: 2 as const, systemsOutcomes: 2 as const, review: 2 as const }, rationale: "r", source: "human" as const, decidedAt: "2026-07-17T00:00:00.000Z" };
+  // 6.1.1 has ZERO official Systems & Outcomes points; DS1.c is Approach-type.
+  const withSoLeg = (soNote: string): SubCriterionChecklistEntry => ({
+    gd4ItemId: "6.1.1", pendingGenerated: [],
+    specific: [{
+      id: "L1", text: "x", status: "Met", generatedBy: "ai", clause: "6.1.1.DS1.c",
+      evidence: [{ id: "e1", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency: "Present",
+        apsr: {
+          approach: { status: "Meeting", note: "Documented." },
+          processes: { status: "Deployed", note: "" },
+          systemsOutcomes: { status: "Evident", note: soNote },
+          review: { status: "Evident", note: "Review records found." },
+        } }],
+    }],
+    holisticBand: hb,
+  });
+  const soGroup = (entry: SubCriterionChecklistEntry) =>
+    buildFinalReport(scored, { "6.1.1": entry }, [], {}).items.find((i) => i.id === "6.1.1")!.findingsGroups.find((g) => g.key === "systemsOutcomes")!;
+
+  it("real leg notes surface as rows, flagged rowsFromLegs, attributed to the source line's ref", () => {
+    const g = soGroup(withSoLeg(NOTE));
+    expect(g.rowsFromLegs).toBe(true);
+    expect(g.rows).toHaveLength(1);
+    expect(g.rows[0].itemRef).toBe("6.1.1.DS1.c");
+    expect(g.rows[0].finding).toBe(NOTE); // verbatim leg note, no fabrication
+    expect(g.rows[0].verdict).toBe("strength"); // Evident leg -> strength
+  });
+  it("the not-assessed sentinel does NOT count as real content: the group stays empty (honest placeholder)", () => {
+    const g = soGroup(withSoLeg(OPTION_A_NOT_ASSESSED_NOTE));
+    expect(g.rows).toHaveLength(0);
+    expect(g.rowsFromLegs).toBe(false);
+  });
+  it("a leg-derived weakness row never gets the generic filler action (its stored action may be about another dimension)", () => {
+    const entry = withSoLeg(NOTE);
+    entry.specific[0].evidence[0].apsr!.systemsOutcomes = { status: "Not evident", note: "No outcome data found for the review period." };
+    const g = soGroup(entry);
+    expect(g.rows[0].verdict).toBe("weakness");
+    expect(g.rows[0].afi).toBeUndefined();
+  });
+  it("the scoring digest is byte-identical with and without the new row model exercising (display-only proof)", () => {
+    const entry = withSoLeg(NOTE);
+    const overrides = computeChecklistOverrides({ "6.1.1": entry }, GD4_REQUIREMENTS);
+    const scoredLocal = buildScored({ evidence: blankEvidence(), reviewer: {}, confirmed: {}, closures: {}, checklistBandOverrides: overrides });
+    const digestBefore = JSON.stringify({ total: scoredLocal.total, award: scoredLocal.award, gates: scoredLocal.gates, bands: scoredLocal.items.map((i) => [i.id, i.band, i.eff]) });
+    const report = buildFinalReport(scoredLocal, { "6.1.1": entry }, [], {});
+    // The report's score-bearing fields are pass-throughs from `scored` —
+    // buildFindingsGroups can never move them.
+    expect(report.overall.total).toBe(scoredLocal.total);
+    expect(report.items.find((i) => i.id === "6.1.1")!.band).toBe(scoredLocal.items.find((i) => i.id === "6.1.1")!.band);
+    const scoredAfter = buildScored({ evidence: blankEvidence(), reviewer: {}, confirmed: {}, closures: {}, checklistBandOverrides: computeChecklistOverrides({ "6.1.1": entry }, GD4_REQUIREMENTS) });
+    const digestAfter = JSON.stringify({ total: scoredAfter.total, award: scoredAfter.award, gates: scoredAfter.gates, bands: scoredAfter.items.map((i) => [i.id, i.band, i.eff]) });
+    expect(digestAfter).toBe(digestBefore);
   });
 });

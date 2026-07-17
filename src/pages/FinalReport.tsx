@@ -586,6 +586,10 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                     </tr>,
                   ];
                 }
+                // A leg-derived group (Bug B) gets a lead-in row explaining
+                // why other lines' refs appear under this dimension — the
+                // lead-in then carries the rowSpan'd dimension cells.
+                const totalRows = g.rows.length + (sug ? 1 : 0) + (g.rowsFromLegs ? 1 : 0);
                 const rowEls = g.rows.map((r, i) => {
                   // Three distinct states: strength (green), weakness (red),
                   // not-assessed (neutral grey) — an absence of assessment is
@@ -594,7 +598,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   const color = r.verdict === "strength" ? "#15803d" : r.verdict === "weakness" ? "#b23121" : "#64748b";
                   return (
                     <tr key={r.lineId}>
-                      {i === 0 && dimCell(g.rows.length + (sug ? 1 : 0))}
+                      {!g.rowsFromLegs && i === 0 && dimCell(totalRows)}
                       <td style={{ verticalAlign: "top", fontSize: 11 }}>
                         <span style={{ fontFamily: "ui-monospace,monospace", whiteSpace: "nowrap" }}>{r.itemRef}</span>
                         {refLabel(r.itemRef) && <div style={{ color: "#64748b", fontSize: 10.5, marginTop: 2 }}>{refLabel(r.itemRef)}</div>}
@@ -604,6 +608,18 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                     </tr>
                   );
                 });
+                if (g.rowsFromLegs) {
+                  rowEls.unshift(
+                    <tr key={`${g.key}-leg-leadin`}>
+                      {dimCell(totalRows)}
+                      <td colSpan={3} style={{ color: "#94a3b8", fontStyle: "italic", fontSize: 11 }}>
+                        {g.rubricDefined === 0
+                          ? `No requirement line of this type exists for this item; the rows below are this dimension's assessments recorded on the item's other lines.`
+                          : `The official rubric defines ${g.rubricDefined} ${g.label}-type requirement line${g.rubricDefined === 1 ? "" : "s"} for this item, but none is drafted yet; the rows below are this dimension's assessments recorded on the item's other lines.`}
+                      </td>
+                    </tr>
+                  );
+                }
                 if (sug) {
                   const key = suggestionKey(it.id, g.key);
                   rowEls.push(
