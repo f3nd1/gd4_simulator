@@ -1088,6 +1088,32 @@ export type EvidenceAssessmentResult = {
   model?: string;
 };
 
+// ─── Outcomes & Review pass (Option A, on-demand) ───────────────────────────
+// Result of the on-demand "Also assess Outcomes & Review" button: Option B's
+// staged third pass (runStagedOutcomeReviewAudit) run in isolation over the
+// documents an Option A run already read, so Option A rows can get real
+// Systems & Outcomes / Review legs instead of the hardcoded "not assessed"
+// placeholders. ADVISORY until the human clicks "Apply to checklist" — the
+// rows are stored here first and only written onto the checklist lines by
+// that explicit click (all modes, including full-auto). Never feeds the band:
+// the band still flows solely from holisticBand.matrixScores.
+export type OutcomeReviewPassResult = {
+  subCriterionId: string;
+  rows: OutcomeReviewRow[];
+  runAt: string;
+  runId: string;
+  promptSent?: string;
+  chunkFileNames?: Record<string, string>;
+  // Coverage/read problems from the run (files missing from the session text
+  // cache, window errors, truncation) — shown as a warning banner so a
+  // partial pass can never present as a clean success.
+  runWarnings?: string[];
+  model?: string;
+  // Stamped by the explicit "Apply to checklist" click.
+  appliedAt?: string;
+  appliedLineCount?: number;
+};
+
 // Result of comparing the Actual Evidence folder's CURRENT Drive listing
 // (file id + modifiedTime) against a stored EvidenceAssessmentResult's
 // fileLedger — lets the Evidence tab tell the user their existing result may

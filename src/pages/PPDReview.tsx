@@ -1354,6 +1354,12 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
           return row ? <EvRowExtra row={row} selectedId={selectedId} setLineFeedback={setLineFeedback} /> : null;
         }}
       />
+
+      {/* On-demand Outcomes & Review pass — Option A only assesses Approach
+          and Processes; this button runs Option B's staged third pass over
+          the same documents to fill the other two APSR legs. Advisory panel
+          first; the checklist changes only on the explicit Apply click. */}
+      {assessment && !isRunning && <OutcomeReviewPanel selectedId={selectedId} setLineFeedback={setLineFeedback} />}
       <FeedbackModal
         open={!!lineFeedback}
         aiOutput={lineFeedback?.text ?? ""}
@@ -1367,5 +1373,135 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
         }}
       />
     </>
+  );
+}
+
+// On-demand Outcomes & Review pass panel. Option A structurally assesses only
+// Approach (policy) and Processes (evidence); this runs Option B's staged
+// third pass in isolation over the documents the Option A runs already read,
+// so the Systems & Outcomes and Review APSR legs get a real judgement instead
+// of the hardcoded "not assessed" placeholder. The result is ADVISORY until
+// the explicit "Apply to checklist" click (all modes, including full-auto —
+// this pass has staged-audit rigour, so it keeps the human gate Option A's
+// verified two-pass pipeline was allowed to drop, see runModes.ts). Applying
+// never moves a band: the band still flows solely from the human holistic
+// matrix (setHolisticBand).
+function OutcomeReviewPanel({ selectedId, setLineFeedback }: { selectedId: string; setLineFeedback: (v: { ref: string; text: string } | null) => void }) {
+  const busy = useWorkspaceStore((s) => s.busy);
+  const result = useWorkspaceStore((s) => s.outcomeReviewResults[selectedId]);
+  const progress = useWorkspaceStore((s) => s.outcomeReviewProgress);
+  const runOutcomeReviewPass = useWorkspaceStore((s) => s.runOutcomeReviewPass);
+  const applyOutcomeReviewResult = useWorkspaceStore((s) => s.applyOutcomeReviewResult);
+  const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
+  const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const [applyMsg, setApplyMsg] = useState<string | null>(null);
+  const isRunning = busy === "outcomereview" + selectedId;
+  const runDetail = progress && progress.subCriterionId === selectedId ? progress.detail : null;
+
+  const citedFiles = (chunkIds: string[]) =>
+    [...new Set(chunkIds.map((c) => result?.chunkFileNames?.[c] ?? c))].join(", ");
+
+  return (
+    <div style={{ marginTop: 14, border: "1px solid #ddd6fe", background: "#faf5ff", borderRadius: 10, padding: "10px 12px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#6d28d9", textTransform: "uppercase", letterSpacing: 0.3 }}>
+          Systems &amp; Outcomes / Review — optional extra pass
+        </span>
+        {result?.appliedAt && (
+          <Pill s="good">Applied to {result.appliedLineCount} line{result.appliedLineCount === 1 ? "" : "s"} · {new Date(result.appliedAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</Pill>
+        )}
+        <button
+          disabled={isRunning}
+          onClick={() => { setApplyMsg(null); runOutcomeReviewPass(selectedId); }}
+          style={{ marginLeft: "auto", cursor: isRunning ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #6d28d9", background: isRunning ? "#f3e8ff" : "#6d28d9", color: isRunning ? "#a78bfa" : "#fff", whiteSpace: "nowrap" }}
+        >
+          {isRunning ? "Assessing…" : result ? "Re-run Outcomes & Review pass" : "Also assess Outcomes & Review →"}
+        </button>
+        {isRunning && (
+          <button onClick={cancelBusy} style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 10px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: "#475569" }}>
+            Cancel
+          </button>
+        )}
+      </div>
+      <p style={{ fontSize: 11.5, color: "#6b7280", margin: "6px 0 0" }}>
+        Option A assesses Approach (your policy) and Processes (implementation evidence) only. This on-demand pass re-reads the same documents for
+        outcome data (KPIs, results, trends) and review records, so those two dimensions get a real judgement instead of "not assessed". Where no such
+        evidence exists it honestly reports "Not evident". Review the result below, then apply it — nothing changes on the checklist until you do, and
+        the item's band always stays yours to confirm on the Sub-Criterion Checklist.
+      </p>
+      {isRunning && runDetail && (
+        <div style={{ fontSize: 11.5, color: "#6d28d9", marginTop: 6 }}>⏳ {runDetail}</div>
+      )}
+      {result && !isRunning && (
+        <>
+          <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 8 }}>
+            Run {new Date(result.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+            {result.model && <> · {result.model}</>} · outcome data on {result.rows.filter((r) => r.outcomeEvident).length}, review records on {result.rows.filter((r) => r.reviewEvident).length} of {result.rows.length} audit points
+          </div>
+          {result.runWarnings && result.runWarnings.length > 0 && (
+            <div style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px", marginTop: 6 }}>
+              {result.runWarnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+            </div>
+          )}
+          <div style={{ overflowX: "auto", marginTop: 8 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: "#6d28d9" }}>
+                  <th style={{ padding: "4px 8px" }}>Ref</th>
+                  <th style={{ padding: "4px 8px" }}>Outcome data</th>
+                  <th style={{ padding: "4px 8px" }}>Review records</th>
+                  <th style={{ padding: "4px 8px" }}>AI observation</th>
+                  <th style={{ padding: "4px 8px" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.rows.map((row) => {
+                  const rowText = `Outcomes & Review ${row.ref}: outcome data ${row.outcomeEvident ? "evident" : "not evident"}, review records ${row.reviewEvident ? "evident" : "not evident"} — ${row.note}`;
+                  return (
+                    <tr key={row.ref} style={{ borderTop: "1px solid #ede9fe", verticalAlign: "top" }}>
+                      <td style={{ padding: "5px 8px", fontFamily: "ui-monospace,monospace", whiteSpace: "nowrap" }}>{row.ref}</td>
+                      <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>
+                        {row.notAssessed ? <Pill s="neutral">Not assessed</Pill> : row.outcomeEvident ? <Pill s="good">Evident</Pill> : <Pill s="medium">Not evident</Pill>}
+                      </td>
+                      <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>
+                        {row.notAssessed ? <Pill s="neutral">Not assessed</Pill> : row.reviewEvident ? <Pill s="good">Evident</Pill> : <Pill s="medium">Not evident</Pill>}
+                      </td>
+                      <td style={{ padding: "5px 8px", color: "#475569" }}>
+                        {row.note}
+                        {row.chunkIds.length > 0 && <div style={{ color: "#94a3b8", marginTop: 2 }}>Cited: {citedFiles(row.chunkIds)}</div>}
+                      </td>
+                      <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>
+                        <ThumbsButtons
+                          onAccept={() => logHumanDecision({ module: "Line Status", subjectId: selectedId, field: row.ref, aiOutput: rowText, humanDecision: "Accepted Outcomes & Review verdicts", changed: false, decisionType: "Accepted", reason: "" })}
+                          onReject={() => setLineFeedback({ ref: row.ref, text: rowText })}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+            <button
+              onClick={() => {
+                const n = applyOutcomeReviewResult(selectedId);
+                setApplyMsg(n > 0
+                  ? `Applied: Systems & Outcomes and Review updated on ${n} checklist line${n === 1 ? "" : "s"}. The band itself is unchanged — confirm it on the Sub-Criterion Checklist.`
+                  : "No checklist lines matched this result — run the Evidence assessment first so the lines exist, then re-apply.");
+              }}
+              title="Writes ONLY the Systems & Outcomes and Review legs onto the matched checklist lines. Verdicts, evidence sufficiency and the band are untouched."
+              style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "6px 14px", borderRadius: 8, border: "1px solid #6d28d9", background: "#6d28d9", color: "#fff" }}
+            >
+              Apply to checklist →
+            </button>
+            <span style={{ fontSize: 11, color: "#94a3b8" }}>Updates the two APSR legs on matched lines only — never a verdict, never the band.</span>
+          </div>
+          {applyMsg && (
+            <div style={{ fontSize: 12, color: "#15803d", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "6px 11px", marginTop: 8 }}>{applyMsg}</div>
+          )}
+        </>
+      )}
+    </div>
   );
 }

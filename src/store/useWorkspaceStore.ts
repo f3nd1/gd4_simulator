@@ -55,7 +55,8 @@ import { selectLineStatusMemories, selectLineStatusCalibration } from "../lib/la
 import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, OutcomeReviewPassResult, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt } from "../types";
+import { buildOutcomeReviewLegUpdates } from "../lib/outcomeReviewApply";
 import { aiRateFor } from "../lib/aiCost";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
@@ -665,6 +666,22 @@ export type WorkspaceState = {
   // possibly-stale assessment. See EvidenceDriftCheck.
   checkEvidenceDrift: (subCriterionId: string) => Promise<EvidenceDriftCheck>;
   compileEvidenceFindings: (subCriterionId: string) => number;
+  // On-demand Outcomes & Review pass (Option A, "Also assess Outcomes &
+  // Review" button): Option B's staged third pass run in isolation over the
+  // documents the Option A run already read (fileTextCache-first; only files
+  // missing from the session cache are re-read, text tier only). The result
+  // is stored here as an ADVISORY panel — nothing touches the checklist
+  // until applyOutcomeReviewResult (the human's explicit Apply click).
+  outcomeReviewResults: Record<string, OutcomeReviewPassResult>;
+  runOutcomeReviewPass: (subCriterionId: string) => Promise<void>;
+  // The explicit Apply click (all modes, including full-auto): writes the
+  // pass's Systems & Outcomes / Review legs onto the matched checklist lines
+  // (applyOutcomeReviewLegs), logs the human decision, stamps appliedAt.
+  // Returns lines updated. Never moves a band — the band still flows solely
+  // from holisticBand.matrixScores via setHolisticBand.
+  applyOutcomeReviewResult: (subCriterionId: string) => number;
+  // Live heartbeat for a running Outcomes & Review pass; null when idle.
+  outcomeReviewProgress: { subCriterionId: string; detail: string } | null;
   // Live progress for a fresh runEvidenceAssessment (bar + heartbeat on the
   // Evidence tab); null when no assessment is running.
   evidenceAssessmentProgress: EvidenceAssessmentProgress | null;
@@ -1067,6 +1084,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       evidenceAssessments: {},
       evidenceAssessmentHistory: {},
       evidenceAssessmentProgress: null,
+      outcomeReviewResults: {},
+      outcomeReviewProgress: null,
       ppdReviewProgress: null,
       analysisPath: {},
       auditMode: DEFAULT_AUDIT_MODE,
@@ -2019,6 +2038,192 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
         }
+      },
+
+      // On-demand Outcomes & Review pass — Option B's staged third pass run
+      // in isolation for one sub-criterion, over the documents its Option A
+      // runs already read. Requires live AI (the pass is a live judgement;
+      // Option A has no offline mode either). Stores an ADVISORY result only:
+      // the checklist is untouched until applyOutcomeReviewResult below.
+      runOutcomeReviewPass: async (subCriterionId) => {
+        const s = get();
+        const aiSettings = useAISettingsStore.getState();
+        const offline = aiOfflineReason(aiSettings);
+        if (offline) { set({ auditBlockedReason: `The Outcomes & Review pass needs live AI. ${offline}` }); return; }
+        const auditorGate = checkAuditorForRun(s.auditors, s.activeAuditorId);
+        if (!auditorGate.ok) { set({ auditBlockedReason: auditorGate.message }); return; }
+        const ppd = s.ppdReviewResults[subCriterionId];
+        const ev = s.evidenceAssessments[subCriterionId];
+        if (!ev) return; // the button only renders with an Option A result
+
+        set({ busy: "outcomereview" + subCriterionId, auditBlockedReason: null, outcomeReviewProgress: { subCriterionId, detail: "Preparing documents…" } });
+        const runId = `OR-${subCriterionId}-${Date.now().toString(36).toUpperCase()}`;
+        const runAbort = new AbortController();
+        _currentRunAbort = runAbort;
+
+        const finish = (result: OutcomeReviewPassResult | null, liveError?: string, promptSent?: string, usage?: AIUsage) => {
+          if (_currentRunAbort === runAbort) _currentRunAbort = null;
+          const summary = result
+            ? `Outcomes & Review pass: outcome data found on ${result.rows.filter((r) => r.outcomeEvident).length}, review records on ${result.rows.filter((r) => r.reviewEvident).length} of ${result.rows.length} audit points.${result.runWarnings?.length ? `\n⚠ ${result.runWarnings.join("; ")}` : ""}`
+            : `Outcomes & Review pass failed${liveError ? `: ${liveError}` : "."}`;
+          const log: AIReviewLogEntry = {
+            id: `LOG-${Date.now()}-${++logCounter}`,
+            auditCycleId: s.cycle.id,
+            agent: "Outcomes & Review Assessor",
+            reviewType: "Evidence",
+            subjectId: subCriterionId,
+            verdict: summary,
+            confidence: "Medium",
+            keyConcerns: [summary],
+            recommendedAction: "Review the per-point results, then click 'Apply to checklist' to update the Systems & Outcomes and Review legs.",
+            live: true,
+            liveError,
+            generatedContent: summary,
+            promptSent,
+            createdAt: new Date().toISOString(),
+            runId,
+            model: usage?.model,
+            promptTokens: usage?.promptTokens,
+            completionTokens: usage?.completionTokens,
+            totalTokens: usage?.totalTokens,
+          };
+          set((st) => ({
+            outcomeReviewResults: result ? { ...st.outcomeReviewResults, [subCriterionId]: result } : st.outcomeReviewResults,
+            aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
+            busy: st.busy === "outcomereview" + subCriterionId ? null : st.busy,
+            outcomeReviewProgress: st.outcomeReviewProgress?.subCriterionId === subCriterionId ? null : st.outcomeReviewProgress,
+            ...(liveError && !result ? { auditBlockedReason: `Outcomes & Review pass failed: ${liveError}` } : {}),
+          }));
+        };
+
+        try {
+          const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId);
+          const allAuditPoints = items.flatMap((r) => r.flatAuditPoints ?? []);
+          if (allAuditPoints.length === 0) { finish(null, "No audit points are defined for this sub-criterion."); return; }
+
+          // Combined policy + evidence text, rebuilt from the two Option A
+          // runs' file ledgers via fileTextCache (cache-first; the cache is
+          // session-only, so files missing after a reload are re-read from
+          // Drive, text tier only — a vision-only file that can't be re-read
+          // this way is reported in runWarnings, never silently dropped).
+          const ledger: AuditFileRecord[] = [...(ppd?.fileLedger ?? []), ...(ev.fileLedger ?? [])];
+          const seen = new Set<string>();
+          const files: AuditFileRecord[] = [];
+          for (const rec of ledger) {
+            const key = rec.driveFileId || rec.path;
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            files.push(rec);
+          }
+          if (files.length === 0) { finish(null, "The Option A results carry no file ledger — re-run the PPD Review and Evidence assessment first."); return; }
+
+          const MAX_PART_CHARS = 24_000;
+          const parts: string[] = [];
+          const chunkFileNames: Record<string, string> = {};
+          const missing: string[] = [];
+          let chunkCounter = 0;
+          let readToken: string | null | undefined; // fetched once, on first cache miss
+          for (const rec of files) {
+            if (runAbort.signal.aborted) { finish(null, "Run cancelled."); return; }
+            let text: string | null = null;
+            if (rec.driveFileId) {
+              const exact = get().fileTextCache[`${rec.driveFileId}:${rec.driveModifiedTime ?? ""}`];
+              const hit = exact ?? Object.entries(get().fileTextCache).find(([k]) => k.startsWith(`${rec.driveFileId}:`))?.[1];
+              text = hit?.text ?? null;
+            }
+            if ((text == null || !text.trim()) && rec.driveFileId) {
+              set({ outcomeReviewProgress: { subCriterionId, detail: `Re-reading ${rec.name}…` } });
+              if (readToken === undefined) readToken = await useGoogleDriveStore.getState().getFreshToken();
+              if (readToken) {
+                try {
+                  const r = await readDriveFileWithVision(
+                    { id: rec.driveFileId, name: rec.name, mimeType: rec.mimeType, modifiedTime: rec.driveModifiedTime },
+                    readToken,
+                    timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS),
+                    // Text tier only: no vision budget for this lightweight
+                    // fallback — an image/scanned file lands in `missing`
+                    // and is reported, matching the honesty rule.
+                    { canDescribeImages: false, visionSettings: effectiveSettings(aiSettings, { purpose: "vision" }), visionModelId: "", budget: { count: 0, max: 0 }, maxPerFile: 0 }
+                  );
+                  text = r.text;
+                  if (text && text.trim()) {
+                    const cached = text;
+                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [`${rec.driveFileId}:${rec.driveModifiedTime ?? ""}`]: { text: cached, charCount: cached.length, fileKind: rec.mimeType, fileName: rec.name, filePath: rec.path, cachedAt: Date.now(), readMethod: r.readMethod } } }));
+                  }
+                } catch { /* falls through to missing */ }
+              }
+            }
+            if (text == null || !text.trim()) { missing.push(rec.name); continue; }
+            const totalParts = Math.ceil(text.length / MAX_PART_CHARS) || 1;
+            for (let pi = 0; pi < totalParts; pi++) {
+              const chunkBody = text.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+              const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
+              chunkFileNames[chunkId] = rec.name;
+              const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
+              parts.push(`[CHUNK:${chunkId}] --- ${rec.path}${partLabel} [${rec.fileKind}] ---\n${chunkBody}`);
+            }
+          }
+          if (parts.length === 0) { finish(null, "None of the run's documents could be read (the session text cache is empty and Drive re-read failed) — re-run the Option A assessment first."); return; }
+
+          const memories = selectLineStatusMemories(get().calibrationMemories);
+          memories.forEach((m) => get().incrementMemoryUsage(m.id));
+          const analysisSettings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
+          const result = await runStagedOutcomeReviewAudit(allAuditPoints, parts.join("\n\n"), analysisSettings, {
+            criterionId: subCriterionId,
+            memories,
+            ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
+            resolveChunkFile: (cid) => chunkFileNames[cid],
+            onProgress: (detail) => set({ outcomeReviewProgress: { subCriterionId, detail } }),
+            signal: runAbort.signal,
+          });
+          const runWarnings = [
+            ...(missing.length > 0 ? [`${missing.length} file(s) could not be read for this pass (${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ", …" : ""}) — the extracted-text cache is session-only; re-run the Option A assessment for full coverage.`] : []),
+            ...(result.truncationNote ? [result.truncationNote] : []),
+            ...(result.windowErrors ?? []),
+          ];
+          finish(
+            { subCriterionId, rows: result.rows, runAt: new Date().toISOString(), runId, promptSent: result.promptSent, chunkFileNames, runWarnings: runWarnings.length > 0 ? runWarnings : undefined, model: result.usage?.model },
+            undefined,
+            result.promptSent,
+            result.usage
+          );
+        } catch (err) {
+          finish(null, err instanceof Error ? err.message : String(err));
+        }
+      },
+
+      applyOutcomeReviewResult: (subCriterionId) => {
+        const res = get().outcomeReviewResults[subCriterionId];
+        if (!res) return 0;
+        const checklist = useChecklistModuleStore.getState();
+        const itemIds = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId).map((r) => r.id);
+        const linesByItem = Object.fromEntries(
+          itemIds
+            .filter((id) => checklist.entries[id])
+            .map((id) => [id, checklist.entries[id].specific.map((l) => ({ id: l.id, sourceRef: l.sourceRef, clause: l.clause }))])
+        );
+        const updates = buildOutcomeReviewLegUpdates(res.rows, linesByItem);
+        const applied = checklist.applyOutcomeReviewLegs(updates);
+        if (applied > 0) {
+          const outcomeN = res.rows.filter((r) => r.outcomeEvident).length;
+          const reviewN = res.rows.filter((r) => r.reviewEvident).length;
+          get().logHumanDecision({
+            module: "Line Status",
+            subjectId: subCriterionId,
+            field: "apsr.systemsOutcomes+review",
+            aiRunId: res.runId,
+            aiOutput: `Outcomes & Review pass ${res.runId}: outcome data on ${outcomeN}, review records on ${reviewN} of ${res.rows.length} audit points`,
+            humanDecision: `Applied to ${applied} checklist line(s) — Systems & Outcomes and Review APSR legs updated`,
+            changed: true,
+            decisionType: "Accepted",
+            reason: "",
+          });
+          set((st) => {
+            const cur = st.outcomeReviewResults[subCriterionId];
+            return cur ? { outcomeReviewResults: { ...st.outcomeReviewResults, [subCriterionId]: { ...cur, appliedAt: new Date().toISOString(), appliedLineCount: applied } } } : {};
+          });
+        }
+        return applied;
       },
 
       // Metadata-only check (Drive files.list — no content read, no AI call)
@@ -6489,6 +6694,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v.promptSent) }]));
         const capEv = (r: Record<string, EvidenceAssessmentResult>) =>
           Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v.promptSent) }]));
+        const capOr = (r: Record<string, OutcomeReviewPassResult>) =>
+          Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v.promptSent) }]));
         // Task 2: same promptSent cap, applied to every ARCHIVED run in
         // history — without this, each past run's full prompt would persist
         // uncapped, and OPTION_A_RUN_HISTORY_CAP runs of that is exactly the
@@ -6507,6 +6714,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ppdReviewHistory: capPpdHistory(s.ppdReviewHistory),
           evidenceAssessments: capEv(s.evidenceAssessments),
           evidenceAssessmentHistory: capEvHistory(s.evidenceAssessmentHistory),
+          outcomeReviewResults: capOr(s.outcomeReviewResults),
           // Historical snapshots: strip the embedded log (new snapshots no
           // longer capture it) and cap embedded Option A prompts.
           versions: s.versions.map((v) => ({

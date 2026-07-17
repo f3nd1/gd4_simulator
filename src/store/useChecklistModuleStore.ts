@@ -24,6 +24,7 @@ import { buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill, runHolisticBandSuggestion, type HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
 import { effectiveSettings, type AIUsage } from "../lib/ai/aiClient";
+import type { OutcomeReviewLegUpdate } from "../lib/outcomeReviewApply";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useWorkspaceStore, composeSchoolContext } from "./useWorkspaceStore";
@@ -132,6 +133,14 @@ export type ChecklistModuleState = {
   // way. Matched lines are UPDATED (idempotent re-runs, prior runId evidence
   // replaced); unmatched refs create a new line. Returns lines written.
   applyOptionAWrites: (writes: ChecklistLineWrite[]) => number;
+
+  // Writes ONLY the Systems & Outcomes and Review APSR legs onto each line's
+  // audited evidence item (the first carrying an apsr snapshot — the same
+  // item lineApsr reads), replacing Option A's hardcoded "not assessed"
+  // placeholders with the on-demand Outcomes & Review pass result after the
+  // human's explicit Apply click. Never touches status, sufficiency or
+  // verdicts, so scoring inputs are unchanged. Returns lines updated.
+  applyOutcomeReviewLegs: (updates: OutcomeReviewLegUpdate[]) => number;
 
   confirmDraftFinding: (itemId: string, lineId: string, draft: DraftFindingInfo, auditRunId?: string) => void;
   // Scans checklist lines and raises a draft finding for each one that is
@@ -530,6 +539,36 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
             }))
           )
         ),
+
+      applyOutcomeReviewLegs: (updates) => {
+        let applied = 0;
+        set((s) => {
+          let entries = s.entries;
+          for (const u of updates) {
+            const entry = entries[u.itemId];
+            const line = entry?.specific.find((l) => l.id === u.lineId);
+            if (!entry || !line) continue;
+            const evIdx = line.evidence.findIndex((ev) => ev.apsr);
+            if (evIdx < 0) continue; // never-audited line: no APSR snapshot to update
+            applied++;
+            const specific = entry.specific.map((l) =>
+              l.id !== u.lineId
+                ? l
+                : {
+                    ...l,
+                    evidence: l.evidence.map((ev, i) =>
+                      i === evIdx && ev.apsr
+                        ? { ...ev, apsr: { ...ev.apsr, systemsOutcomes: u.systemsOutcomes, review: u.review } }
+                        : ev
+                    ),
+                  }
+            );
+            entries = { ...entries, [u.itemId]: { ...entry, specific } };
+          }
+          return { entries };
+        });
+        return applied;
+      },
 
       updateEvidence: (itemId, lineId, evidenceId, patch) => {
         if ("sufficiency" in patch) {
