@@ -63,10 +63,11 @@ export type ItemFindingRow = {
   // — e.g. "6.2.1.DS2". Never invented when a line genuinely has no ref.
   itemRef: string;
   verdict: FindingVerdict;
-  // The real per-line text for this dimension, one sentence — the evidence
+  // The real per-line text for this dimension, IN FULL — the evidence
   // summary for a strength, the diagnosis for a weakness, or the honest
-  // "not assessed" explanation for a not-assessed row. Never carries a
-  // "Weakness —" prefix: the verdict drives the label/colour in the UI.
+  // "not assessed" explanation for a not-assessed row. Never truncated
+  // (R3/INV-05) and never carries a "Weakness —" prefix: the verdict drives
+  // the label/colour in the UI.
   finding: string;
   // The suggested next action: the real per-line action for a WEAKNESS row (or
   // an honest "no action recorded" note when none exists), or the "run the
@@ -86,13 +87,22 @@ export type DimensionFindingsGroup = {
   rows: ItemFindingRow[];
 };
 
-// Trims real AI-authored text to ONE sentence for a report line, without
-// inventing wording: the first sentence up to its terminal punctuation, or a
-// hard character cap with an ellipsis when no sentence boundary exists.
-function firstSentence(text: string, cap = 220): string {
+// Trims real AI-authored text to ONE sentence, without inventing wording.
+// Used ONLY for inline embedding (the overall summary's "for example, …"
+// clause) — findings-table rows show the FULL recorded text, untruncated
+// (R3/INV-05: the old first-"." split cut real text mid-token at the "."
+// inside "e.g."/"i.e.", producing rows ending "(e."). The boundary scan
+// below skips those abbreviations, and only a punctuation mark followed by
+// whitespace (or end of text) counts as a sentence end.
+export function firstSentence(text: string, cap = 220): string {
   const trimmed = text.trim();
-  const match = trimmed.match(/^[^.!?]*[.!?]/);
-  if (match) return match[0].trim();
+  const boundary = /[.!?](?:\s|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = boundary.exec(trimmed))) {
+    const candidate = trimmed.slice(0, m.index + 1);
+    if (/\b(?:e\.g|i\.e|etc|vs|cf|approx)\.$/i.test(candidate)) continue;
+    return candidate.trim();
+  }
   return trimmed.length > cap ? `${trimmed.slice(0, cap).trim()}…` : trimmed;
 }
 
@@ -143,6 +153,39 @@ export type SubCriterionReport = {
   started: boolean;
 };
 
+// The nature of a finding's gap, derived ONLY from data the finding already
+// carries — never a new schema field (docs/report-issues-investigation.md,
+// Issue 2). Option A fuses the PPD (policy) verdict into the Approach APSR
+// leg and the evidence verdict into the Processes leg, so the failing leg IS
+// the policy-vs-evidence distinction. Rule, in priority order:
+//   1. source "PPD Review" (the internal-contradiction findings) → Policy.
+//   2. APSR present: Approach failing alone → Policy; Processes failing
+//      alone → Evidence; BOTH failing → "Policy + evidence gap" (picking one
+//      would hide the other).
+//   3. Otherwise fall back to the finding's dimension tag: Procedure →
+//      Policy, Evidence/Unverified → Evidence, Outcomes/Review → their own
+//      honest labels (neither policy nor implementation evidence).
+//   4. No signal at all → undefined, no pill — never guessed.
+export function findingGapNature(f: Finding): string | undefined {
+  if (f.source === "PPD Review") return "Policy gap (PPD)";
+  const a = f.apsr;
+  if (a) {
+    const approachFails = a.approach.status !== "Meeting";
+    const processesFails = a.processes.status !== "Deployed";
+    if (approachFails && processesFails) return "Policy + evidence gap";
+    if (approachFails) return "Policy gap (PPD)";
+    if (processesFails) return "Evidence gap";
+  }
+  switch (f.dimension) {
+    case "Procedure": return "Policy gap (PPD)";
+    case "Evidence":
+    case "Unverified": return "Evidence gap";
+    case "Outcomes": return "Outcome gap";
+    case "Review": return "Review gap";
+  }
+  return undefined;
+}
+
 export type FindingReport = {
   id: string;
   // The raw GD4 item id (e.g. "6.2.1"), used to fold each finding into its
@@ -155,6 +198,8 @@ export type FindingReport = {
   type: string;
   status: string;
   closed: boolean;
+  // See findingGapNature above — undefined when the finding carries no signal.
+  gapNature?: string;
   rootCause?: string;
   corrective?: string;
   preventive?: string;
@@ -207,12 +252,16 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
         return { lineId: l.id, itemRef, verdict: "not-assessed", finding: NOT_ASSESSED_FINDING, afi: NOT_ASSESSED_AFI };
       }
       const isWeakness = l.status !== "Met" || lineSufficiency(l) !== "Present";
+      // Finding/AFI text is the user's real recorded diagnosis and action —
+      // shown IN FULL, never sentence-truncated (R3/INV-05: truncation cut
+      // rows off mid-token at "e.g."). Only the overall summary's inline
+      // example still trims to one sentence, via the fixed firstSentence.
       if (isWeakness) {
         const action = lineSuggestedAction(l);
         return {
           lineId: l.id, itemRef, verdict: "weakness",
-          finding: text ? firstSentence(text) : "No detailed diagnosis recorded for this line.",
-          afi: action ? firstSentence(action) : "No concrete suggested action recorded for this line.",
+          finding: text || "No detailed diagnosis recorded for this line.",
+          afi: action || "No concrete suggested action recorded for this line.",
         };
       }
       // A strength gets a next-band-specific AFI quoting the rubric descriptor
@@ -221,7 +270,7 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
       // item's overall band.
       return {
         lineId: l.id, itemRef, verdict: "strength",
-        finding: text ? firstSentence(text) : "No evidence summary recorded for this line.",
+        finding: text || "No evidence summary recorded for this line.",
         afi: strengthNextBandAfi(key, label, score),
       };
     });
@@ -313,9 +362,10 @@ function buildOverallSummary(result: ApsrMatrixResult, groups: DimensionFindings
     } else {
       // Ground the action in a REAL per-line weakness reason when one exists —
       // never the "No detailed diagnosis recorded" placeholder fallback (that
-      // would read as invented filler).
+      // would read as invented filler). Rows now carry the FULL diagnosis, so
+      // trim to its first sentence here for the inline example clause only.
       const reason = g?.rows.find((r) => r.verdict === "weakness" && !/^No (detailed diagnosis|concrete|evidence)/i.test(r.finding))?.finding;
-      action = `The single highest-priority step is to ${DIM_FACE[dim].act}${reason ? ` — for example, ${lowerFirst(reason.replace(/\.$/, ""))}.` : "."}`;
+      action = `The single highest-priority step is to ${DIM_FACE[dim].act}${reason ? ` — for example, ${lowerFirst(firstSentence(reason).replace(/\.$/, ""))}.` : "."}`;
     }
   }
 
@@ -423,6 +473,7 @@ export function buildFinalReport(
       type: resolveFindingType(f),
       status: f.status,
       closed: (c.human || "") === "Accepted",
+      gapNature: findingGapNature(f),
       rootCause: c.root,
       corrective: c.corr,
       preventive: c.prev,

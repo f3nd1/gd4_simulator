@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFinalReport } from "../finalReport";
+import { buildFinalReport, firstSentence, findingGapNature } from "../finalReport";
 import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
 import { blankEvidence } from "../../data/seedEvidence";
@@ -335,5 +335,91 @@ describe("buildFinalReport — 'not assessed' is a distinct third state, never a
     expect(s).toContain("The single highest-priority step is to");
     expect(s).not.toMatch(/Band \d/);
     expect(s).not.toMatch(/\d+%/);
+  });
+});
+
+// Item 1 (R3/INV-05): finding/AFI text must never be cut mid-token at the
+// "." inside "e.g."/"i.e." — rows show the FULL recorded text, and the one
+// remaining one-sentence use (the summary's inline example) skips
+// abbreviations when finding the sentence boundary.
+describe("firstSentence — abbreviation-safe (R3/INV-05)", () => {
+  it("does not break on e.g. / i.e. / etc.", () => {
+    expect(firstSentence("Provide examples (e.g. survey results, KPI trends) for each initiative. Then file them."))
+      .toBe("Provide examples (e.g. survey results, KPI trends) for each initiative.");
+    expect(firstSentence("Records are partial, i.e. only Q1 is covered. Add the rest."))
+      .toBe("Records are partial, i.e. only Q1 is covered.");
+    expect(firstSentence("Attach minutes, logs, etc. from every cycle. More text."))
+      .toBe("Attach minutes, logs, etc. from every cycle.");
+  });
+  it("still returns the first sentence of plain text, and caps unbounded text", () => {
+    expect(firstSentence("First sentence. Second sentence.")).toBe("First sentence.");
+    const long = "x".repeat(300);
+    expect(firstSentence(long).endsWith("…")).toBe(true);
+  });
+});
+
+describe("buildFinalReport — rows carry FULL finding/AFI text, never truncated (Item 1)", () => {
+  const evF = (over: Partial<SubChecklistEvidenceItem> = {}): SubChecklistEvidenceItem =>
+    ({ id: "e1", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency: "Missing", ...over });
+  const DIAG = "Improvement records for specific initiatives (e.g. the new intake survey, the attendance tracker) are absent. Only the policy statement exists.";
+  const ACTION = "Provide examples where specific feedback led to a change (e.g. a revised rubric). Then evidence the follow-through in the next cycle.";
+  const entry: SubCriterionChecklistEntry = {
+    gd4ItemId: "6.3.1",
+    specific: [{
+      id: "W1", text: "line", status: "Not met", generatedBy: "ai", clause: "6.3.1.DS1",
+      evidence: [evF({
+        suggestedAction: ACTION,
+        apsr: {
+          approach: { status: "Not evident", note: DIAG },
+          processes: { status: "Deployed", note: "" },
+          systemsOutcomes: { status: "Evident", note: "" },
+          review: { status: "Evident", note: "" },
+        },
+      })],
+    }],
+    holisticBand: { band: 2, totalPct: 40, matrixScores: { approach: 2, processes: 2, systemsOutcomes: 2, review: 2 }, rationale: "r", source: "human", decidedAt: "2026-07-17T00:00:00.000Z" },
+    pendingGenerated: [],
+  };
+
+  it("weakness rows show the complete diagnosis and action text, not a fragment ending at '(e.'", () => {
+    const report = buildFinalReport(scored, { "6.3.1": entry }, [], {});
+    const item = report.items.find((i) => i.id === "6.3.1")!;
+    const row = item.findingsGroups.flatMap((g) => g.rows).find((r) => r.lineId === "W1")!;
+    expect(row.verdict).toBe("weakness");
+    expect(row.finding).toBe(DIAG);
+    expect(row.afi).toBe(ACTION);
+    expect(row.finding.endsWith("(e.")).toBe(false);
+  });
+});
+
+// Item 4: the gap-nature pill is derived ONLY from data the finding already
+// carries (source / APSR legs / dimension) — never guessed.
+describe("findingGapNature (Item 4)", () => {
+  const apsr = (approach: "Meeting" | "Beginning" | "Not evident", processes: "Deployed" | "Weak" | "Not evident"): ApsrBreakdown => ({
+    approach: { status: approach, note: "" },
+    processes: { status: processes, note: "" },
+    systemsOutcomes: { status: "Not evident", note: "" },
+    review: { status: "Not evident", note: "" },
+  });
+
+  it("source 'PPD Review' (internal contradictions) is always a Policy gap", () => {
+    expect(findingGapNature(finding({ source: "PPD Review", apsr: apsr("Meeting", "Not evident") }))).toBe("Policy gap (PPD)");
+  });
+  it("Approach failing alone → Policy gap; Processes failing alone → Evidence gap", () => {
+    expect(findingGapNature(finding({ apsr: apsr("Beginning", "Deployed") }))).toBe("Policy gap (PPD)");
+    expect(findingGapNature(finding({ apsr: apsr("Meeting", "Weak") }))).toBe("Evidence gap");
+  });
+  it("both legs failing → 'Policy + evidence gap', never one hiding the other", () => {
+    expect(findingGapNature(finding({ apsr: apsr("Not evident", "Not evident") }))).toBe("Policy + evidence gap");
+  });
+  it("no APSR → dimension fallback; no signal at all → undefined (no pill)", () => {
+    expect(findingGapNature(finding({ dimension: "Procedure" }))).toBe("Policy gap (PPD)");
+    expect(findingGapNature(finding({ dimension: "Unverified" }))).toBe("Evidence gap");
+    expect(findingGapNature(finding({ dimension: "Outcomes" }))).toBe("Outcome gap");
+    expect(findingGapNature(finding({}))).toBeUndefined();
+  });
+  it("rides onto the FindingReport for the report UI", () => {
+    const report = buildFinalReport(scored, {}, [finding({ apsr: apsr("Meeting", "Weak") })], {});
+    expect(report.findings[0].gapNature).toBe("Evidence gap");
   });
 });

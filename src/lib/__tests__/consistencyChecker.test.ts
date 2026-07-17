@@ -54,12 +54,33 @@ describe("Consistency Checker - the five known-bad seed cases each fire their ru
     expect(fired(issues, "R1")).toBe(true);
   });
 
-  it("Seed 2 -> R3: derived finding text truncated mid-abbreviation ('(e.')", () => {
+  it("Seed 2 -> R3 FIXED at source (Item 1, 2026-07-17): a note containing 'e.g.' derives COMPLETE, R3 stays silent", () => {
+    // This seed used to fire R3 because firstSentence cut the derived row at
+    // the '.' inside '(e.g.' — the truncation is now fixed at source (rows
+    // carry the full text), so the checker must find nothing to flag here.
     const entries = {
       "6.2.1": {
         gd4ItemId: "6.2.1",
         specific: [
           line({ id: "L1", clause: "6.2.1.DS2", sourceRef: "6.2.1.DS2", status: "Not met", evidence: [ev({ sufficiency: "Missing", apsr: apsrWith({ review: { status: "Not evident", note: "Documented, as shown in the policy (e.g. minutes and agendas)." } }) })] }),
+        ],
+        holisticBand: bandRec({ approach: 4, processes: 1, systemsOutcomes: 1, review: 1 }, 35, 2),
+        pendingGenerated: [],
+      },
+    };
+    const issues = runConsistencyChecks(inputsFrom(entries));
+    expect(fired(issues, "R3")).toBe(false);
+  });
+
+  it("R3 detector still fires on text that is GENUINELY truncated in the stored data itself", () => {
+    // The rule remains a live guard for truncation from any origin (e.g. old
+    // stored notes cut before the source fix) — only the report-side
+    // truncation was cured, not the detector.
+    const entries = {
+      "6.2.1": {
+        gd4ItemId: "6.2.1",
+        specific: [
+          line({ id: "L1", clause: "6.2.1.DS2", sourceRef: "6.2.1.DS2", status: "Not met", evidence: [ev({ sufficiency: "Missing", apsr: apsrWith({ review: { status: "Not evident", note: "Documented, as shown in the policy (e." } }) })] }),
         ],
         holisticBand: bandRec({ approach: 4, processes: 1, systemsOutcomes: 1, review: 1 }, 35, 2),
         pendingGenerated: [],

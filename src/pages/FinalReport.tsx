@@ -390,24 +390,36 @@ export function FinalReport() {
   );
 }
 
+// The Band N → Band N+1 pill pair shared by strength AND weakness rows
+// (bandTone gives each band its own colour). Rendered only for bands 1-4 —
+// the same gate strengthNextBandAfi uses: Band 5 has no higher rung and
+// Band 0 ("Not evident") has no coherent transition to draw.
+function bandJumpPills(fromBand: number, dimLabel: string) {
+  if (fromBand < 1 || fromBand >= 5) return null;
+  return (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+      <Pill s={bandTone(fromBand)}>Band {fromBand}</Pill>
+      <span style={{ color: "#94a3b8", fontSize: 12 }}>→</span>
+      <Pill s={bandTone(fromBand + 1)}>Band {fromBand + 1}</Pill>
+      <span style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>{dimLabel}</span>
+    </span>
+  );
+}
+
 // Strength AFI from strengthNextBandAfi() uses double-quoted descriptor:
 //   Band N strength. To reach Band N+1 on DimLabel, the EduTrust rubric looks for: "...". Keep this evidenced...
-// Parse that format to show a Band N → Band N+1 pill transition (bandTone gives
-// each band its own colour). Not-assessed rows get muted grey. Weakness AFI is
-// free-text from the AI — no parseable band pair, styled as an action prompt.
-function renderAfi(afi: string | undefined) {
+// Parse that format to show the band-jump pills. Not-assessed rows get muted
+// grey. Weakness AFI is free-text from the AI — no parseable band pair, so
+// the SAME pill pair is drawn from the dimension's own band (dim), above the
+// action text.
+function renderAfi(afi: string | undefined, dim?: { band: number; label: string }) {
   if (!afi) return null;
   const m = afi.match(/^Band (\d) strength\. To reach Band (\d) on (.+?), the EduTrust rubric looks for: "(.+)"\. Keep this evidenced/);
   if (m) {
-    const [, fromBand, toBand, dimLabel, quote] = m;
+    const [, fromBand, , dimLabel, quote] = m;
     return (
       <span>
-        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-          <Pill s={bandTone(Number(fromBand))}>Band {fromBand}</Pill>
-          <span style={{ color: "#94a3b8", fontSize: 12 }}>→</span>
-          <Pill s={bandTone(Number(toBand))}>Band {toBand}</Pill>
-          <span style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>{dimLabel}</span>
-        </span>
+        {bandJumpPills(Number(fromBand), dimLabel)}
         <div style={{ fontSize: 10.5, color: "#6b7280", marginTop: 3, fontStyle: "italic" }}>"{quote}"</div>
       </span>
     );
@@ -415,11 +427,17 @@ function renderAfi(afi: string | undefined) {
   if (afi === NOT_ASSESSED_AFI) {
     return <span style={{ color: "#94a3b8", fontSize: 11 }}>{afi}</span>;
   }
-  // Weakness AFI: free-text action item — amber to signal "action needed"
+  // Weakness AFI: the same band-jump visual as strengths (from the
+  // dimension's own band), then the free-text action item — amber to signal
+  // "action needed".
+  const pills = dim ? bandJumpPills(dim.band, dim.label) : null;
   return (
     <span>
-      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#b45309" }}>Action: </span>
-      <span style={{ color: "#92400e" }}>{afi}</span>
+      {pills}
+      <div style={{ marginTop: pills ? 3 : 0 }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#b45309" }}>Action: </span>
+        <span style={{ color: "#92400e" }}>{afi}</span>
+      </div>
     </span>
   );
 }
@@ -506,7 +524,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                         {refLabel(r.itemRef) && <div style={{ color: "#64748b", fontSize: 10.5, marginTop: 2 }}>{refLabel(r.itemRef)}</div>}
                       </td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5, color }}><b>{label}:</b> {r.finding}</td>
-                      <td style={{ verticalAlign: "top", fontSize: 11.5 }}>{renderAfi(r.afi)}</td>
+                      <td style={{ verticalAlign: "top", fontSize: 11.5 }}>{renderAfi(r.afi, r.verdict === "weakness" ? { band: g.band, label: g.label } : undefined)}</td>
                     </tr>
                   );
                 });
@@ -530,6 +548,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                 <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                   <Pill s={SEV_TONE[f.severity] || "medium"}>{f.severity}</Pill>
                   <Pill s={f.closed ? "good" : "medium"}>{f.closed ? "Closed" : f.status}</Pill>
+                  {f.gapNature && <Pill s="neutral">{f.gapNature}</Pill>}
                   <span style={{ fontSize: 11.5, color: "#6b7280" }}>{f.type}</span>
                   <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>
                     {confirmDeleteId === f.id ? (
@@ -560,6 +579,9 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
             <span className="details-marker-open" style={{ fontSize: 10, marginRight: 4, color: "#94a3b8" }}>▼</span>
             Full band justification{it.bandTotalPct != null ? ` (APSR total ${it.bandTotalPct}%)` : ""}
           </summary>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontStyle: "italic", marginTop: 3 }}>
+            AI narrative summary. It may refer to dimensions more loosely than the classified table above.
+          </div>
           <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>{it.bandRationale}</div>
         </details>
       )}
