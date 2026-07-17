@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GD4 Audit Pipeline — Target Flow by Mode</title>
+<style>
+  :root {
+    --ink: #2b2620; --paper: #faf6ee; --card: #ffffff; --line: #d8cfbe;
+    --accent: #a8632c; --accent-soft: #f3e4d2; --green: #4c7a52; --green-soft: #e4efe1;
+    --blue: #3f6a8a; --blue-soft: #e3edf3; --red: #a04b42; --red-soft: #f6e2df;
+    --grey: #7a7368; --gold: #b8860b;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:36px 24px 80px; background:var(--paper); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.5; }
+  h1 { text-align:center; font-size:26px; margin-bottom:4px; }
+  .subtitle { text-align:center; color:var(--grey); font-size:14px; margin-bottom:20px; }
+  .banner { max-width:980px; margin:0 auto 40px; background:#fff4d6; border:1.5px solid var(--gold);
+    border-radius:10px; padding:12px 18px; font-size:13.5px; color:#6b5100; text-align:center; }
+  .banner strong { color:#4a3800; }
+  h2.section { max-width:1000px; margin:56px auto 6px; font-size:21px; border-top:3px solid var(--line); padding-top:26px; }
+  .mode-tag { font-size:13px; font-weight:400; color:var(--grey); }
+  .mode-desc { max-width:1000px; margin:0 auto 22px; font-size:14px; color:#4a4437; }
+  .lane { max-width:1000px; margin:0 auto; }
+  .row { display:flex; align-items:stretch; gap:0; }
+  .endcap { flex:0 0 120px; display:flex; align-items:center; justify-content:center; text-align:center;
+    border-radius:10px; font-weight:700; font-size:13px; padding:14px 8px; margin:6px 0; }
+  .endcap.start { background:var(--blue-soft); color:var(--blue); border:1.5px solid var(--blue); }
+  .endcap.end { background:var(--ink); color:var(--paper); }
+  .track { flex:1; display:flex; flex-direction:column; gap:0; padding:0 14px; }
+  .node { background:var(--card); border:1.5px solid var(--line); border-radius:9px; padding:10px 14px; margin:5px 0; }
+  .node.auto { border-left:5px solid var(--green); }
+  .node.gated { border-left:5px solid var(--accent); }
+  .node.manual { border-left:5px solid var(--red); }
+  .node.band-auto { border-left:5px solid var(--gold); background:#fffbf0; }
+  .node-title { font-weight:600; font-size:14px; }
+  .node-meta { font-size:12px; color:var(--grey); margin-top:2px; }
+  .down { text-align:center; color:var(--line); font-size:15px; line-height:1; margin:-1px 0; }
+  .badge { display:inline-block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px;
+    padding:2px 7px; border-radius:20px; margin-left:6px; vertical-align:middle; }
+  .badge.auto { background:var(--green-soft); color:var(--green); }
+  .badge.gated { background:var(--accent-soft); color:var(--accent); }
+  .badge.manual { background:var(--red-soft); color:var(--red); }
+  .badge.band { background:#fbeecb; color:var(--gold); }
+  .loop-wrap { max-width:1000px; margin:8px auto 0; position:relative; border:2px dashed var(--accent);
+    border-radius:12px; padding:14px 16px 16px; background:rgba(168,99,44,0.03); }
+  .loop-label { position:absolute; top:-11px; left:20px; background:var(--paper); color:var(--accent);
+    font-size:12px; font-weight:700; padding:0 8px; }
+  .loop-back { text-align:center; color:var(--accent); font-size:13px; font-weight:600; margin-top:8px; }
+  .legend { max-width:1000px; margin:44px auto 0; display:flex; gap:22px; flex-wrap:wrap; font-size:13px;
+    color:#4a4437; justify-content:center; }
+  .legend-item { display:flex; align-items:center; gap:8px; }
+  .swatch { width:14px; height:14px; border-radius:4px; }
+  .swatch.auto { background:var(--green); }
+  .swatch.gated { background:var(--accent); }
+  .swatch.manual { background:var(--red); }
+  .swatch.band { background:var(--gold); }
+  .footer-note { max-width:940px; margin:46px auto 0; font-size:13px; color:var(--grey); text-align:center; }
+</style>
+</head>
+<body>
+
+<h1>The GD4 Audit Pipeline — Target Design</h1>
+<div class="subtitle">Three ways to get from Evidence Folder to Final Report</div>
+
+<div class="banner">
+  &#9888; <strong>This is the PROPOSED / TARGET flow you are designing — not what the code does today.</strong>
+  Today's Hybrid pauses at each step going forward; the version below runs a full draft first, then lets you iterate.
+  This diagram doubles as the spec for building it.
+</div>
+
+<h2 class="section">&#9889; Full Auto <span class="mode-tag">— one-way trip, don't look back</span></h2>
+<div class="mode-desc">Click once at the start. Everything runs to a finished Final Report with no stops — including the band. A disclaimer makes clear the AI's verdicts and scores are a simulation, not an official SSG result, and yours to override.</div>
+<div class="lane">
+  <div class="row">
+    <div class="endcap start">START<br>Evidence Folder</div>
+    <div class="track">
+      <div class="node auto"><div class="node-title">Read &amp; analyse all evidence <span class="badge auto">auto</span></div><div class="node-meta">Reads linked Drive files, runs the chosen pass per row.</div></div>
+      <div class="down">&#8595;</div>
+      <div class="node auto"><div class="node-title">Verdicts commit to checklist <span class="badge auto">auto</span></div></div>
+      <div class="down">&#8595;</div>
+      <div class="node auto"><div class="node-title">Outcomes &amp; Review pass runs + applies <span class="badge auto">auto</span></div><div class="node-meta">Fills Systems &amp; Outcomes and Review too.</div></div>
+      <div class="down">&#8595;</div>
+      <div class="node auto"><div class="node-title">Findings raise <span class="badge auto">auto</span></div></div>
+      <div class="down">&#8595;</div>
+      <div class="node band-auto"><div class="node-title">AI sets the band (6&#215;4 matrix) <span class="badge band">auto-scored</span></div><div class="node-meta">The one difference from every other mode: in Full Auto the score sets itself. You can still re-open and override.</div></div>
+    </div>
+    <div class="endcap end">END<br>Final Report</div>
+  </div>
+</div>
+
+<h2 class="section">&#128260; Hybrid <span class="mode-tag">— your usual mode: fast full draft, then iterate</span></h2>
+<div class="mode-desc">First pass is just like Full Auto — one click gives you a complete draft all the way to the Final Report. Then you loop back into any module, adjust, re-run, and re-land on the report as many times as you like until you're happy. Human judgement lives in the <em>refinement</em>, not in blocking each step.</div>
+<div class="lane">
+  <div class="row">
+    <div class="endcap start">START<br>Evidence Folder</div>
+    <div class="track">
+      <div class="node auto"><div class="node-title">Same automatic first pass as Full Auto <span class="badge auto">auto draft</span></div><div class="node-meta">Read &#8594; verdicts &#8594; Outcomes/Review &#8594; findings &#8594; band, all in one go, to give you a full draft.</div></div>
+    </div>
+    <div class="endcap end">DRAFT<br>Final Report</div>
+  </div>
+</div>
+
+<div class="loop-wrap">
+  <div class="loop-label">&#8635; THEN ITERATE — as many loops as you want</div>
+  <div class="lane">
+    <div class="row">
+      <div class="endcap start" style="background:var(--accent-soft); color:var(--accent); border-color:var(--accent);">Review the<br>draft report</div>
+      <div class="track">
+        <div class="node gated"><div class="node-title">Jump back into any module <span class="badge gated">your choice</span></div><div class="node-meta">Checklist verdict, a finding, the 6&#215;4 band matrix, evidence links — change anything.</div></div>
+        <div class="down">&#8595;</div>
+        <div class="node gated"><div class="node-title">Adjust &amp; re-run just what you touched <span class="badge gated">re-run button</span></div><div class="node-meta">Re-run a row, re-raise a finding, regenerate a summary. Costs extra AI calls — that's expected.</div></div>
+      </div>
+      <div class="endcap end">Updated<br>Final Report</div>
+    </div>
+  </div>
+  <div class="loop-back">&#8634; repeat until you're satisfied</div>
+</div>
+
+<h2 class="section">&#9997;&#65039; Full Manual <span class="mode-tag">— you build every step by hand from the start</span></h2>
+<div class="mode-desc">Nothing writes to the checklist or raises a finding by itself. AI can suggest on request, but every verdict, finding and band is entered by you. Unchanged from today.</div>
+<div class="lane">
+  <div class="row">
+    <div class="endcap start">START<br>Evidence Folder</div>
+    <div class="track">
+      <div class="node manual"><div class="node-title">You enter each line verdict <span class="badge manual">manual</span></div><div class="node-meta">AI results, if run, stay as on-screen suggestions only — never auto-commit.</div></div>
+      <div class="down">&#8595;</div>
+      <div class="node manual"><div class="node-title">You raise each finding <span class="badge manual">manual</span></div></div>
+      <div class="down">&#8595;</div>
+      <div class="node manual"><div class="node-title">You set the band (6&#215;4 matrix) <span class="badge manual">manual</span></div><div class="node-meta">Sub-Criterion Checklist &#8594; item &#8594; "APSR band — per-dimension percentage matrix".</div></div>
+    </div>
+    <div class="endcap end">END<br>Final Report</div>
+  </div>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="swatch auto"></div> Runs automatically</div>
+  <div class="legend-item"><div class="swatch gated"></div> Your choice / your click (Hybrid loop)</div>
+  <div class="legend-item"><div class="swatch manual"></div> Always fully manual</div>
+  <div class="legend-item"><div class="swatch band"></div> Band auto-scored (Full Auto only)</div>
+</div>
+
+<div class="footer-note">
+  <strong>The band (6&#215;4 matrix)</strong> lives on the <em>Sub-Criterion Checklist &#8594; each item &#8594; "APSR band — per-dimension percentage matrix"</em> section.
+  In the target design it auto-scores in Full Auto and in the Hybrid first draft; it stays fully manual in Manual mode; and in every mode you can always re-open it and override.
+  Text extraction and score/report recalculation always run in the background regardless of mode — that's infrastructure, not a judgement call.
+</div>
+
+</body>
+</html>

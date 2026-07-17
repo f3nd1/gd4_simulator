@@ -7,6 +7,9 @@ spelling, no em dashes.
 **Commit analysed:** `b76901266748c7a4353eb3a543362d48cfe257be` (local HEAD
 confirmed equal to origin/main before analysis, clean tree).
 
+See docs/target-audit-flow.html for the proposed target design this
+current-state doc will be compared against.
+
 ---
 
 ## Correcting the mental model first
