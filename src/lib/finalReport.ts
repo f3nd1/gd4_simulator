@@ -7,7 +7,7 @@ import { getBand } from "./scoring";
 import type { SubCriterionChecklistEntry, Finding, SpecificChecklistLine, ApsrDimensionScore, Band } from "../types";
 import {
   lineSufficiency, lineCompleteness, needsReassessment, apsrMatrixResult, bandToScore, fastestPathToNextBand,
-  lineDimensionDiagnosis, lineSuggestedAction, resolveLineDimension, DEFAULT_APSR_SCALE, type LineCompleteness, type ApsrScale, type ApsrMatrixResult,
+  lineDimensionDiagnosis, lineSuggestedAction, resolveLineDimension, classifyApsrByContent, DEFAULT_APSR_SCALE, type LineCompleteness, type ApsrScale, type ApsrMatrixResult,
 } from "./checklistBanding";
 import { EDUTRUST_DIMENSIONS, bandLevel } from "../data/edutrustRubric";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
@@ -82,6 +82,14 @@ export type DimensionFindingsGroup = {
   label: string;
   band: ApsrDimensionScore;
   pct: number;
+  // How many of this ITEM's official GD4 audit points classify to this
+  // dimension (same classifier the line grouping uses). Lets the UI's
+  // empty-group placeholder distinguish "the official rubric defines no
+  // line of this type for this item" (0 — the band is still a real holistic
+  // judgement, see docs/dimension-band-without-lines-investigation.md) from
+  // "official lines of this type exist but none is drafted/tagged yet"
+  // (>0 — drafting guidance applies). Display data only, never a score input.
+  rubricDefined: number;
   // Empty when no line is tagged to this dimension — the UI shows an honest
   // placeholder row, never a fabricated finding.
   rows: ItemFindingRow[];
@@ -229,11 +237,17 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
   if (!hb?.matrixScores) return [];
   const specific = entry?.specific ?? [];
   const result = apsrMatrixResult(hb.matrixScores, scale);
+  // How many OFFICIAL audit points of each dimension this item has — the same
+  // classifier the line grouping uses (REF_DIMENSION is built from it), so
+  // the empty-group placeholder can tell "the rubric defines no such line"
+  // apart from "lines exist but none is drafted/tagged". Display only.
+  const officialPoints = GD4_REQUIREMENTS.find((r) => r.id === entry?.gd4ItemId)?.flatAuditPoints ?? [];
   const out: DimensionFindingsGroup[] = [];
   for (const key of APSR_DIM_KEYS) {
     const score = hb.matrixScores[key];
     if (score === undefined) continue;
     const label = EDUTRUST_DIMENSIONS.find((d) => d.key === key)!.label;
+    const rubricDefined = officialPoints.filter((fp) => classifyApsrByContent(fp.text) === label).length;
     // Group by the line's AUTHORITATIVE dimension (resolved from its official
     // source ref), NOT its stored apsrDimension — so a line the Option A audit
     // wrote with a ref but no tag, or one the live-gen AI mis-tagged, still
@@ -274,7 +288,7 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
         afi: strengthNextBandAfi(key, label, score),
       };
     });
-    out.push({ key, label, band: score, pct: result.pcts[key], rows });
+    out.push({ key, label, band: score, pct: result.pcts[key], rubricDefined, rows });
   }
   return out;
 }

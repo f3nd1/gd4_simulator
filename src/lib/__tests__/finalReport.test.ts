@@ -432,7 +432,7 @@ describe("findingGapNature (Item 4)", () => {
 describe("AI improvement suggestions — eligibility, prompt grounding, honesty filter (Item 3)", () => {
   const group = (key: "approach" | "processes" | "systemsOutcomes" | "review", band: 0 | 1 | 2 | 3 | 4 | 5, rows: Array<{ verdict: "strength" | "weakness" | "not-assessed"; finding: string; afi?: string }>) => ({
     key, label: key === "systemsOutcomes" ? "Systems & Outcomes" : key[0].toUpperCase() + key.slice(1),
-    band: band as 0 | 1 | 2 | 3 | 4 | 5, pct: 15,
+    band: band as 0 | 1 | 2 | 3 | 4 | 5, pct: 15, rubricDefined: rows.length,
     rows: rows.map((r, i) => ({ lineId: `L${i}`, itemRef: `6.2.1.DS${i + 1}`, ...r })),
   });
 
@@ -476,5 +476,32 @@ describe("AI improvement suggestions — eligibility, prompt grounding, honesty 
 
   it("suggestionKey is the stable item::dimension storage key", () => {
     expect(suggestionKey("6.2.1", "processes")).toBe("6.2.1::processes");
+  });
+});
+
+// Empty-dimension placeholder: the two empty states must be distinguishable —
+// "the official rubric defines no line of this type for this item" (0) vs
+// "official lines exist but none is drafted/tagged" (>0). rubricDefined is
+// counted from the item's official flatAuditPoints via the SAME classifier
+// the grouping uses; it is display data only, never a score input.
+describe("buildFindingsGroups — rubricDefined distinguishes the two empty-dimension states", () => {
+  const hb = { band: 2 as const, totalPct: 40, matrixScores: { approach: 2 as const, processes: 2 as const, systemsOutcomes: 2 as const, review: 2 as const }, rationale: "r", source: "human" as const, decidedAt: "2026-07-17T00:00:00.000Z" };
+
+  it("6.1.1: Systems & Outcomes has rubricDefined 0 (the official rubric defines no such line), the other dimensions > 0", () => {
+    const entry: SubCriterionChecklistEntry = { gd4ItemId: "6.1.1", specific: [], holisticBand: hb, pendingGenerated: [] };
+    const report = buildFinalReport(scored, { "6.1.1": entry }, [], {});
+    const groups = report.items.find((i) => i.id === "6.1.1")!.findingsGroups;
+    const byKey = Object.fromEntries(groups.map((g) => [g.key, g.rubricDefined]));
+    expect(byKey.systemsOutcomes).toBe(0);
+    expect(byKey.approach).toBeGreaterThan(0);
+    expect(byKey.processes).toBeGreaterThan(0);
+    expect(byKey.review).toBeGreaterThan(0);
+  });
+
+  it("6.2.1: every dimension the official rubric covers reports its real point count (S&O > 0 here)", () => {
+    const entry: SubCriterionChecklistEntry = { gd4ItemId: "6.2.1", specific: [], holisticBand: hb, pendingGenerated: [] };
+    const report = buildFinalReport(scored, { "6.2.1": entry }, [], {});
+    const so = report.items.find((i) => i.id === "6.2.1")!.findingsGroups.find((g) => g.key === "systemsOutcomes")!;
+    expect(so.rubricDefined).toBeGreaterThan(0);
   });
 });

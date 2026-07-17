@@ -569,10 +569,20 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   </>
                 );
                 if (g.rows.length === 0) {
+                  // Two DIFFERENT empty states, never conflated: the official
+                  // rubric defines no line of this dimension type for this
+                  // item (the band is still a real holistic judgement — see
+                  // docs/dimension-band-without-lines-investigation.md), vs
+                  // official lines of this type exist but none is drafted or
+                  // tagged yet (drafting guidance applies).
                   return [
                     <tr key={g.key}>
                       {dimCell(1)}
-                      <td colSpan={3} style={{ color: "#94a3b8", fontStyle: "italic", fontSize: 11.5 }}>No lines currently tagged to this dimension.</td>
+                      <td colSpan={3} style={{ color: "#94a3b8", fontStyle: "italic", fontSize: 11.5 }}>
+                        {g.rubricDefined === 0
+                          ? `No individual GD4 requirement line for this item is ${g.label}-type, so there are no per-line rows here. The dimension is still assessed in the band shown, from the assessed lines' evidence and the band justification below.`
+                          : `The official rubric defines ${g.rubricDefined} ${g.label}-type requirement line${g.rubricDefined === 1 ? "" : "s"} for this item, but none is drafted or tagged yet. Generate the checklist lines on the Sub-Criterion Checklist page.`}
+                      </td>
                     </tr>,
                   ];
                 }
