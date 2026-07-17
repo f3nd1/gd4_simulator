@@ -446,6 +446,58 @@ function analyseItem(
   };
 }
 
+// ── Item 3: AI improvement suggestions (pure helpers; the AI call itself
+// lives in FinalReport.tsx, reusing the generateSummary plumbing) ──────────
+// A dimension is ELIGIBLE for a suggestion only when it has at least one
+// genuinely assessed row: all-not-assessed and empty dimensions keep their
+// honest notes and never get a fabricated suggestion.
+export function eligibleSuggestionDims(groups: DimensionFindingsGroup[]): DimensionFindingsGroup[] {
+  return groups.filter((g) => g.rows.length > 0 && g.rows.some((r) => r.verdict !== "not-assessed"));
+}
+
+// Storage key in useWorkspaceStore.reportAiSuggestions.
+export function suggestionKey(itemId: string, dimKey: DimensionFindingsGroup["key"]): string {
+  return `${itemId}::${dimKey}`;
+}
+
+// The grounding block the AI sees — ONLY real stored data: each eligible
+// dimension's band/%, the verbatim next-band rubric descriptor as the
+// target, and every assessed row's ref, verdict and FULL recorded text.
+// Not-assessed rows and ineligible dimensions never appear, so the model
+// has nothing unassessed to speculate about.
+export function buildAiSuggestionUserPrompt(it: ItemReport): string {
+  const dims = eligibleSuggestionDims(it.findingsGroups).map((g) => {
+    const next = g.band >= 1 && g.band < 5 ? ((g.band + 1) as Band) : undefined;
+    const target = next
+      ? `Target (verbatim EduTrust Band ${next} descriptor for this dimension): "${bandLevel(next)[g.key]}"`
+      : `This dimension is already at Band ${g.band} — suggest how to keep it evidenced, not how to climb.`;
+    const rows = g.rows
+      .filter((r) => r.verdict !== "not-assessed")
+      .map((r) => `  - [${r.itemRef}] ${r.verdict === "strength" ? "Strength" : "Weakness"}: ${r.finding}${r.verdict === "weakness" && r.afi ? ` | Recorded action: ${r.afi}` : ""}`)
+      .join("\n");
+    return `${g.label} (JSON key "${g.key}") — current Band ${g.band} (${g.pct}%).\n${target}\nAssessed findings:\n${rows}`;
+  });
+  return `Item ${it.id} ${it.title} — overall Band ${it.band}.\n\n${dims.join("\n\n")}`;
+}
+
+// The honesty filter on the AI's reply: keeps ONLY non-empty string
+// suggestions for eligible dimensions — the model can never attach a
+// suggestion to a not-assessed or empty dimension, whatever it returns.
+export function filterAiSuggestions(
+  raw: unknown,
+  groups: DimensionFindingsGroup[]
+): Partial<Record<DimensionFindingsGroup["key"], string>> {
+  const eligible = new Set(eligibleSuggestionDims(groups).map((g) => g.key));
+  const out: Partial<Record<DimensionFindingsGroup["key"], string>> = {};
+  if (raw && typeof raw === "object") {
+    for (const key of APSR_DIM_KEYS) {
+      const v = (raw as Record<string, unknown>)[key];
+      if (typeof v === "string" && v.trim() && eligible.has(key)) out[key] = v.trim();
+    }
+  }
+  return out;
+}
+
 export function buildFinalReport(
   scored: Scored,
   entries: Record<string, SubCriterionChecklistEntry>,

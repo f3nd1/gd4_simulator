@@ -4,7 +4,8 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, NOT_ASSESSED_AFI, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { buildSystemPrompt } from "../lib/ai/skills";
@@ -449,6 +450,54 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
   setConfirmDeleteId: (id: string | null) => void;
   onDelete: (id: string) => void;
 }) {
+  // Item 3: AI improvement suggestions — generate-once-and-save. Rendering
+  // only ever READS the persisted map; the AI is called only by the explicit
+  // button click below, so the report never re-rolls (or re-bills) per
+  // render and the on-screen text matches the printed PDF.
+  const aiSettings = useAISettingsStore();
+  const schoolContext = useWorkspaceStore((s) => s.schoolContext);
+  const suggestions = useWorkspaceStore((s) => s.reportAiSuggestions);
+  const setReportAiSuggestions = useWorkspaceStore((s) => s.setReportAiSuggestions);
+  const logSuggestionDecision = useWorkspaceStore((s) => s.logHumanDecision);
+  const [sugBusy, setSugBusy] = useState(false);
+  const [sugError, setSugError] = useState<string | null>(null);
+  const [sugFeedback, setSugFeedback] = useState<{ key: string; text: string } | null>(null);
+
+  const eligibleDims = eligibleSuggestionDims(it.findingsGroups);
+  const hasSuggestions = eligibleDims.some((g) => suggestions[suggestionKey(it.id, g.key)]);
+  const aiReady = aiSettings.enabled && !!aiSettings.apiKey;
+
+  async function generateSuggestions() {
+    setSugBusy(true);
+    setSugError(null);
+    try {
+      const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(schoolContext) });
+      const sys =
+        "You are writing improvement suggestions for a GD4 internal audit readiness report for a Singapore PEI. For EACH dimension in the user message, write 2-3 specific sentences on how to improve, reasoning ONLY from the assessed findings listed for that dimension and toward the quoted verbatim rubric target. Never invent records, numbers or citations that are not in the findings. Respond with JSON only: {\"suggestions\": {\"approach\"?: string, \"processes\"?: string, \"systemsOutcomes\"?: string, \"review\"?: string}} — include only the dimensions given." +
+        buildSystemPrompt("bandRecommend", null, "FinalReport.generateImprovementSuggestions");
+      const user = buildAiSuggestionUserPrompt(it);
+      let model: string | undefined;
+      const content = await chatComplete([{ role: "system", content: sys }, { role: "user", content: user }], settings, { onUsage: (u) => { model = u.model; } });
+      let raw: unknown;
+      try {
+        raw = (JSON.parse(content) as { suggestions?: unknown }).suggestions;
+      } catch {
+        const match = content.match(/\{[\s\S]*\}/);
+        if (match) { try { raw = (JSON.parse(match[0]) as { suggestions?: unknown }).suggestions; } catch { /* no usable JSON */ } }
+      }
+      // The honesty filter: only eligible dimensions survive, whatever the
+      // model returned — a not-assessed dimension can never gain a suggestion.
+      const filtered = filterAiSuggestions(raw, it.findingsGroups);
+      const keys = Object.keys(filtered) as Array<keyof typeof filtered>;
+      if (keys.length === 0) throw new Error("The AI returned no usable suggestions — try again.");
+      const generatedAt = new Date().toISOString();
+      setReportAiSuggestions(Object.fromEntries(keys.map((k) => [suggestionKey(it.id, k), { text: filtered[k]!, generatedAt, model }])));
+    } catch (err) {
+      setSugError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSugBusy(false);
+    }
+  }
   // An item that was never started, has no checklist AND has no findings
   // collapses to a single summary line; with 29 such placeholders the page was
   // dominated by empty cards. An item that DOES have findings always falls
@@ -484,7 +533,19 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         <b style={{ fontSize: 12.5 }}>{it.id}</b>
         <span style={{ fontSize: 12.5 }}>{it.title}</span>
         {it.hasChecklist && <span style={{ fontSize: 11, color: "#94a3b8" }}>· {it.completeness.assessed} of {it.completeness.total} lines assessed ({it.completeness.met} Met · {it.completeness.partial} Partial · {it.completeness.notMet} Not met)</span>}
+        {eligibleDims.length > 0 && (
+          <button
+            className="no-print"
+            disabled={sugBusy || !aiReady}
+            onClick={generateSuggestions}
+            title={!aiReady ? "Enable AI and set an API key in Settings first." : "One analysis-model call grounded on this item's assessed findings and the verbatim next-band rubric descriptors. Saved once — it does not regenerate on its own."}
+            style={{ marginLeft: "auto", cursor: sugBusy || !aiReady ? "default" : "pointer", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", opacity: aiReady ? 1 : 0.5, whiteSpace: "nowrap" }}
+          >
+            {sugBusy ? "Writing…" : hasSuggestions ? "Regenerate AI improvement suggestions" : "Generate AI improvement suggestions"}
+          </button>
+        )}
       </div>
+      {sugError && <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>AI suggestions failed: {sugError}</div>}
       {it.overallSummary && (
         <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.5, margin: "6px 0 0" }}>{it.overallSummary}</p>
       )}
@@ -496,6 +557,11 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
             </thead>
             <tbody>
               {it.findingsGroups.flatMap((g) => {
+                // Item 3: the saved AI suggestion for this dimension (read-only
+                // here — generation happens only via the button above). Renders
+                // as one extra labelled row under the group; the verbatim rubric
+                // quote in the AFI column stays as the target, untouched.
+                const sug = g.rows.length > 0 ? suggestions[suggestionKey(it.id, g.key)] : undefined;
                 const dimCell = (rowSpan: number) => (
                   <>
                     <td rowSpan={rowSpan} style={{ verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 700, fontSize: 11.5 }}>{g.label}</td>
@@ -510,7 +576,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                     </tr>,
                   ];
                 }
-                return g.rows.map((r, i) => {
+                const rowEls = g.rows.map((r, i) => {
                   // Three distinct states: strength (green), weakness (red),
                   // not-assessed (neutral grey) — an absence of assessment is
                   // never dressed up as a red finding.
@@ -518,7 +584,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   const color = r.verdict === "strength" ? "#15803d" : r.verdict === "weakness" ? "#b23121" : "#64748b";
                   return (
                     <tr key={r.lineId}>
-                      {i === 0 && dimCell(g.rows.length)}
+                      {i === 0 && dimCell(g.rows.length + (sug ? 1 : 0))}
                       <td style={{ verticalAlign: "top", fontSize: 11 }}>
                         <span style={{ fontFamily: "ui-monospace,monospace", whiteSpace: "nowrap" }}>{r.itemRef}</span>
                         {refLabel(r.itemRef) && <div style={{ color: "#64748b", fontSize: 10.5, marginTop: 2 }}>{refLabel(r.itemRef)}</div>}
@@ -528,6 +594,24 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                     </tr>
                   );
                 });
+                if (sug) {
+                  const key = suggestionKey(it.id, g.key);
+                  rowEls.push(
+                    <tr key={`${g.key}-ai-suggestion`}>
+                      <td colSpan={3} style={{ background: "#f5f7ff", fontSize: 11.5 }}>
+                        <span style={{ fontWeight: 700, color: "#4338ca" }}>AI suggestion (how to improve): </span>
+                        <span style={{ color: "#374151" }}>{sug.text}</span>
+                        <span className="no-print" style={{ marginLeft: 8, verticalAlign: "middle" }}>
+                          <ThumbsButtons
+                            onAccept={() => logSuggestionDecision({ module: "Final Report", subjectId: key, field: "aiSuggestion", aiOutput: sug.text, humanDecision: sug.text, changed: false, decisionType: "Accepted", reason: "" })}
+                            onReject={() => setSugFeedback({ key, text: sug.text })}
+                          />
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                }
+                return rowEls;
               })}
             </tbody>
           </table>
@@ -588,6 +672,15 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
       {it.generalNote && (
         <p style={{ fontSize: 11.5, color: "#2563eb", marginTop: 6 }}>{it.generalNote}</p>
       )}
+      <FeedbackModal
+        open={!!sugFeedback}
+        aiOutput={sugFeedback?.text ?? ""}
+        onClose={() => setSugFeedback(null)}
+        onSubmit={(fb) => {
+          logSuggestionDecision({ module: "Final Report", subjectId: sugFeedback?.key ?? it.id, field: "aiSuggestion", aiOutput: sugFeedback?.text ?? "", humanDecision: fb.correction || sugFeedback?.text || "", changed: !!fb.correction, decisionType: "Overridden", reason: fb.reason });
+          setSugFeedback(null);
+        }}
+      />
     </div>
   );
 }

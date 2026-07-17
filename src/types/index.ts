@@ -1114,6 +1114,20 @@ export type OutcomeReviewPassResult = {
   appliedLineCount?: number;
 };
 
+// One AI-generated improvement suggestion on the Final Report, persisted per
+// item-dimension (key "itemId::dimensionKey" in
+// useWorkspaceStore.reportAiSuggestions). Generate-once-and-save: written
+// only by the explicit per-item Generate button, so the report never re-rolls
+// (or re-bills) per render and the on-screen text matches the printed PDF.
+// A deliberate, user-approved exception to the no-fabrication rule: AI-written
+// prose, always rendered under an explicit "AI suggestion" label, never
+// replacing the real recorded diagnosis or the verbatim rubric target.
+export type ReportAiSuggestion = {
+  text: string;
+  generatedAt: string;
+  model?: string;
+};
+
 // Result of comparing the Actual Evidence folder's CURRENT Drive listing
 // (file id + modifiedTime) against a stored EvidenceAssessmentResult's
 // fileLedger — lets the Evidence tab tell the user their existing result may

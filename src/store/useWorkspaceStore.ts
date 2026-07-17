@@ -55,7 +55,7 @@ import { selectLineStatusMemories, selectLineStatusCalibration } from "../lib/la
 import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, OutcomeReviewPassResult, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, OutcomeReviewPassResult, ReportAiSuggestion, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt } from "../types";
 import { buildOutcomeReviewLegUpdates } from "../lib/outcomeReviewApply";
 import { aiRateFor } from "../lib/aiCost";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
@@ -682,6 +682,11 @@ export type WorkspaceState = {
   applyOutcomeReviewResult: (subCriterionId: string) => number;
   // Live heartbeat for a running Outcomes & Review pass; null when idle.
   outcomeReviewProgress: { subCriterionId: string; detail: string } | null;
+  // Final Report AI improvement suggestions, keyed "itemId::dimensionKey"
+  // (see ReportAiSuggestion). Persisted so they survive reload and match the
+  // printed PDF; written ONLY by the report's explicit Generate button.
+  reportAiSuggestions: Record<string, ReportAiSuggestion>;
+  setReportAiSuggestions: (patch: Record<string, ReportAiSuggestion>) => void;
   // Live progress for a fresh runEvidenceAssessment (bar + heartbeat on the
   // Evidence tab); null when no assessment is running.
   evidenceAssessmentProgress: EvidenceAssessmentProgress | null;
@@ -1086,6 +1091,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       evidenceAssessmentProgress: null,
       outcomeReviewResults: {},
       outcomeReviewProgress: null,
+      reportAiSuggestions: {},
+      // Suggestion text is capped at write time — persisted state must never
+      // grow an unbounded blob (same rule as the promptSent caps).
+      setReportAiSuggestions: (patch) =>
+        set((s) => ({
+          reportAiSuggestions: {
+            ...s.reportAiSuggestions,
+            ...Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, { ...v, text: v.text.slice(0, 2000) }])),
+          },
+        })),
       ppdReviewProgress: null,
       analysisPath: {},
       auditMode: DEFAULT_AUDIT_MODE,

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildFinalReport, firstSentence, findingGapNature } from "../finalReport";
+import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, type ItemReport } from "../finalReport";
+import { bandLevel } from "../../data/edutrustRubric";
 import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
 import { blankEvidence } from "../../data/seedEvidence";
@@ -421,5 +422,59 @@ describe("findingGapNature (Item 4)", () => {
   it("rides onto the FindingReport for the report UI", () => {
     const report = buildFinalReport(scored, {}, [finding({ apsr: apsr("Meeting", "Weak") })], {});
     expect(report.findings[0].gapNature).toBe("Evidence gap");
+  });
+});
+
+// Item 3: AI improvement suggestions — the pure honesty layer. Eligibility
+// and the response filter guarantee a not-assessed or empty dimension can
+// never gain a fabricated suggestion, whatever the model returns; the prompt
+// grounds only on real assessed rows and the verbatim rubric target.
+describe("AI improvement suggestions — eligibility, prompt grounding, honesty filter (Item 3)", () => {
+  const group = (key: "approach" | "processes" | "systemsOutcomes" | "review", band: 0 | 1 | 2 | 3 | 4 | 5, rows: Array<{ verdict: "strength" | "weakness" | "not-assessed"; finding: string; afi?: string }>) => ({
+    key, label: key === "systemsOutcomes" ? "Systems & Outcomes" : key[0].toUpperCase() + key.slice(1),
+    band: band as 0 | 1 | 2 | 3 | 4 | 5, pct: 15,
+    rows: rows.map((r, i) => ({ lineId: `L${i}`, itemRef: `6.2.1.DS${i + 1}`, ...r })),
+  });
+
+  const GROUPS = [
+    group("approach", 3, [{ verdict: "strength" as const, finding: "The procedure names its owner and cadence." }]),
+    group("processes", 2, [{ verdict: "weakness" as const, finding: "Improvement records (e.g. the intake survey) are absent.", afi: "Provide worked examples." }]),
+    group("systemsOutcomes", 1, [{ verdict: "not-assessed" as const, finding: "Not assessed." }]),
+    group("review", 1, []),
+  ];
+
+  it("eligibleSuggestionDims keeps only dimensions with at least one assessed row", () => {
+    expect(eligibleSuggestionDims(GROUPS).map((g) => g.key)).toEqual(["approach", "processes"]);
+  });
+
+  it("buildAiSuggestionUserPrompt grounds on the FULL row text and the verbatim next-band descriptor, and omits not-assessed material", () => {
+    const it2: ItemReport = {
+      id: "6.2.1", title: "Management Review", criterion: "6", subCriterionId: "6.2", gate: false, band: 3,
+      started: true, hasChecklist: true, completeness: { total: 2, assessed: 2, met: 1, partial: 0, notMet: 1, na: 0 },
+      needsReassessment: false, findingsGroups: GROUPS,
+    };
+    const p = buildAiSuggestionUserPrompt(it2);
+    expect(p).toContain("Improvement records (e.g. the intake survey) are absent.");
+    expect(p).toContain("Recorded action: Provide worked examples.");
+    // Verbatim rubric target for Processes Band 2 -> 3 is quoted from the
+    // single source of truth, not paraphrased.
+    expect(p).toContain(`"${bandLevel(3).processes}"`);
+    // Not-assessed dimension and its text never reach the model.
+    expect(p).not.toContain("systemsOutcomes");
+    expect(p).not.toContain("Not assessed.");
+  });
+
+  it("filterAiSuggestions drops suggestions for not-assessed/empty dimensions and non-string values", () => {
+    const out = filterAiSuggestions(
+      { approach: "Do X.", processes: "Do Y.", systemsOutcomes: "Fabricated.", review: "Also fabricated.", junk: 42 },
+      GROUPS
+    );
+    expect(out).toEqual({ approach: "Do X.", processes: "Do Y." });
+    expect(filterAiSuggestions(null, GROUPS)).toEqual({});
+    expect(filterAiSuggestions({ approach: "   " }, GROUPS)).toEqual({});
+  });
+
+  it("suggestionKey is the stable item::dimension storage key", () => {
+    expect(suggestionKey("6.2.1", "processes")).toBe("6.2.1::processes");
   });
 });
