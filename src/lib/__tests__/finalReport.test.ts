@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, splitEvidenceNote, type ItemReport } from "../finalReport";
+import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, splitEvidenceNote, needsConciseSummary, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport } from "../finalReport";
 import { bandLevel } from "../../data/edutrustRubric";
 import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
@@ -625,5 +625,58 @@ describe("splitEvidenceNote", () => {
   });
   it("does not split on a '#' that is not a numbered entry boundary", () => {
     expect(splitEvidenceNote("Item #2 in the register is missing.\n\nSecond paragraph.")).toHaveLength(1);
+  });
+});
+
+// Item 2: concise auditor-voice summaries — the pure qualification, prompt
+// and honesty-filter layer. A not-assessed row can never qualify or receive
+// a summary, and only requested row keys survive the model's reply.
+describe("concise summaries — qualification, prompt, filter (Item 2)", () => {
+  const LONG = "x".repeat(450);
+  const MULTI = "#1 [F.pdf · C001]:\nFirst entry.\n\n#2 [G.pdf · C002]:\nSecond entry.";
+  const hb = { band: 2 as const, totalPct: 40, matrixScores: { approach: 2 as const, processes: 2 as const, systemsOutcomes: 2 as const, review: 2 as const }, rationale: "r", source: "human" as const, decidedAt: "2026-07-17T00:00:00.000Z" };
+  const entry: SubCriterionChecklistEntry = {
+    gd4ItemId: "6.2.1", pendingGenerated: [],
+    specific: [
+      { id: "L1", text: "x", status: "Not met", generatedBy: "ai", clause: "6.2.1.EE3",
+        evidence: [{ id: "e1", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency: "Missing",
+          apsr: { approach: { status: "Meeting", note: "" }, processes: { status: "Not evident", note: LONG }, systemsOutcomes: { status: "Evident", note: MULTI }, review: { status: "Not evident", note: OPTION_A_NOT_ASSESSED_NOTE } } }] },
+      { id: "L2", text: "short", status: "Met", generatedBy: "ai", clause: "6.2.1.EE2",
+        evidence: [{ id: "e2", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency: "Present",
+          apsr: { approach: { status: "Meeting", note: "" }, processes: { status: "Deployed", note: "A short, already-concise diagnosis." }, systemsOutcomes: { status: "Evident", note: "" }, review: { status: "Evident", note: "" } } }] },
+    ],
+    holisticBand: hb,
+  };
+  const itemReport = () => buildFinalReport(scored, { "6.2.1": entry }, [], {}).items.find((i) => i.id === "6.2.1")!;
+
+  it("needsConciseSummary: long text and multi-entry notes qualify; short text and not-assessed never do", () => {
+    expect(needsConciseSummary(LONG, "weakness")).toBe(true);
+    expect(needsConciseSummary(MULTI, "strength")).toBe(true);
+    expect(needsConciseSummary("Short diagnosis.", "weakness")).toBe(false);
+    expect(needsConciseSummary(LONG, "not-assessed")).toBe(false);
+  });
+
+  it("qualifyingConciseRows collects only qualifying rows, keyed item::dim::line, and skips not-assessed rows", () => {
+    const rows = qualifyingConciseRows(itemReport());
+    const keys = rows.map((q) => q.key);
+    expect(keys).toContain("6.2.1::processes::L1");     // long weakness note
+    expect(keys).toContain("6.2.1::systemsOutcomes::L1"); // multi-entry note (leg-surfaced)
+    expect(keys.some((k) => k.endsWith("::L2"))).toBe(false); // short text stays as-is
+    expect(keys.some((k) => k.includes("::review::"))).toBe(false); // not-assessed sentinel never qualifies
+  });
+
+  it("buildConciseUserPrompt grounds each row on its FULL raw text", () => {
+    const p = buildConciseUserPrompt(itemReport());
+    expect(p).toContain('Row key "6.2.1::processes::L1"');
+    expect(p).toContain(LONG);
+    expect(p).toContain(MULTI);
+  });
+
+  it("filterConciseSummaries keeps only requested keys with non-empty strings", () => {
+    const out = filterConciseSummaries(
+      { "6.2.1::processes::L1": "A grounded summary.", "6.2.1::review::L1": "Fabricated for a not-assessed row.", junk: 1, "6.2.1::systemsOutcomes::L1": "   " },
+      itemReport()
+    );
+    expect(out).toEqual({ "6.2.1::processes::L1": "A grounded summary." });
   });
 });

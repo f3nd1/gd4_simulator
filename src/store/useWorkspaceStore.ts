@@ -687,6 +687,12 @@ export type WorkspaceState = {
   // printed PDF; written ONLY by the report's explicit Generate button.
   reportAiSuggestions: Record<string, ReportAiSuggestion>;
   setReportAiSuggestions: (patch: Record<string, ReportAiSuggestion>) => void;
+  // Concise auditor-voice summaries for long finding text on the Final
+  // Report, keyed "itemId::dimensionKey::lineId" — same generate-once-and-
+  // save contract as reportAiSuggestions; the raw finding text is never
+  // replaced, only fronted (full text stays behind the row's expand).
+  reportConciseFindings: Record<string, ReportAiSuggestion>;
+  setReportConciseFindings: (patch: Record<string, ReportAiSuggestion>) => void;
   // Live progress for a fresh runEvidenceAssessment (bar + heartbeat on the
   // Evidence tab); null when no assessment is running.
   evidenceAssessmentProgress: EvidenceAssessmentProgress | null;
@@ -1098,6 +1104,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set((s) => ({
           reportAiSuggestions: {
             ...s.reportAiSuggestions,
+            ...Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, { ...v, text: v.text.slice(0, 2000) }])),
+          },
+        })),
+      reportConciseFindings: {},
+      setReportConciseFindings: (patch) =>
+        set((s) => ({
+          reportConciseFindings: {
+            ...s.reportConciseFindings,
             ...Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, { ...v, text: v.text.slice(0, 2000) }])),
           },
         })),

@@ -513,6 +513,71 @@ export function splitEvidenceNote(note: string): string[] {
   return parts.length > 1 ? parts : [note];
 }
 
+// ── Item 2 (2026-07-17): concise auditor-voice summaries for long finding
+// text. Pure helpers; the AI call lives in FinalReport.tsx on the same
+// generate-once-and-save plumbing as the improvement suggestions. Summaries
+// are stored ALONGSIDE the raw text (useWorkspaceStore.reportConciseFindings,
+// keyed per row) — the raw text always stays reachable behind the expand. ──
+
+export function conciseKey(itemId: string, dimKey: DimensionFindingsGroup["key"], lineId: string): string {
+  return `${itemId}::${dimKey}::${lineId}`;
+}
+
+// Which row texts qualify for a concise summary: anything over the length
+// threshold, or any multi-entry numbered evidence merge (even a short one
+// reads as a citation dump). Not-assessed rows never qualify — there is no
+// assessment to summarise, and the honest note must stay verbatim. Genuine
+// 2-3 sentence diagnoses stay as they are.
+export const CONCISE_THRESHOLD = 400;
+export function needsConciseSummary(finding: string, verdict: FindingVerdict): boolean {
+  if (verdict === "not-assessed") return false;
+  return finding.length > CONCISE_THRESHOLD || splitEvidenceNote(finding).length > 1;
+}
+
+export type ConciseRowRef = {
+  key: string;
+  dimKey: DimensionFindingsGroup["key"];
+  dimLabel: string;
+  lineId: string;
+  itemRef: string;
+  verdict: FindingVerdict;
+  text: string;
+};
+
+export function qualifyingConciseRows(it: ItemReport): ConciseRowRef[] {
+  const out: ConciseRowRef[] = [];
+  for (const g of it.findingsGroups) {
+    for (const r of g.rows) {
+      if (!needsConciseSummary(r.finding, r.verdict)) continue;
+      out.push({ key: conciseKey(it.id, g.key, r.lineId), dimKey: g.key, dimLabel: g.label, lineId: r.lineId, itemRef: r.itemRef, verdict: r.verdict, text: r.finding });
+    }
+  }
+  return out;
+}
+
+// The grounding block: each qualifying row's key, dimension, verdict and
+// FULL raw text — the model may only reference facts already in that text.
+export function buildConciseUserPrompt(it: ItemReport): string {
+  const rows = qualifyingConciseRows(it).map((q) =>
+    `Row key "${q.key}" — ${q.dimLabel}, ${q.verdict}, requirement line ${q.itemRef}.\nRaw assessment text:\n"""\n${q.text}\n"""`
+  );
+  return `Item ${it.id} ${it.title} — overall Band ${it.band}.\n\n${rows.join("\n\n")}`;
+}
+
+// The honesty filter on the reply: only REQUESTED row keys survive, and only
+// as non-empty strings — the model can never attach a summary to a row that
+// was not asked about (e.g. a not-assessed row).
+export function filterConciseSummaries(raw: unknown, it: ItemReport): Record<string, string> {
+  const wanted = new Set(qualifyingConciseRows(it).map((q) => q.key));
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof v === "string" && v.trim() && wanted.has(k)) out[k] = v.trim();
+    }
+  }
+  return out;
+}
+
 // ── Item 3: AI improvement suggestions (pure helpers; the AI call itself
 // lives in FinalReport.tsx, reusing the generateSummary plumbing) ──────────
 // A dimension is ELIGIBLE for a suggestion only when it has at least one

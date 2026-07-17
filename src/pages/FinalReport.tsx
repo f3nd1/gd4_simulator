@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, splitEvidenceNote, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, splitEvidenceNote, conciseKey, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
@@ -467,6 +467,47 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
   const hasSuggestions = eligibleDims.some((g) => suggestions[suggestionKey(it.id, g.key)]);
   const aiReady = aiSettings.enabled && !!aiSettings.apiKey;
 
+  // Item 2: concise auditor-voice summaries for long/multi-entry finding text
+  // — same generate-once-and-save contract as the suggestions above. The raw
+  // text is never replaced; a summary fronts the row and the full raw note
+  // moves behind the expand.
+  const conciseFindings = useWorkspaceStore((s) => s.reportConciseFindings);
+  const setReportConciseFindings = useWorkspaceStore((s) => s.setReportConciseFindings);
+  const [conciseBusy, setConciseBusy] = useState(false);
+  const [conciseError, setConciseError] = useState<string | null>(null);
+  const qualifying = qualifyingConciseRows(it);
+  const hasConcise = qualifying.some((q) => conciseFindings[q.key]);
+
+  async function generateConciseSummaries() {
+    setConciseBusy(true);
+    setConciseError(null);
+    try {
+      const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(schoolContext) });
+      const sys =
+        "You are an experienced EduTrust auditor writing up findings for a school's internal readiness report. For each entry in the user message, rewrite the raw assessment text as ONE natural, flowing paragraph of roughly 500-800 characters in an auditor's voice: state what was examined, what the evidence shows, and what it means, citing the specific facts, figures, file names and excerpts ALREADY PRESENT in the raw text. You must not invent any fact, number, document or citation that is not in the source text, and you must not soften a gap. Use UK spelling. Respond with JSON only: {\"summaries\": {\"<row key>\": string}} — one entry per row key given, using each key exactly as written." +
+        buildSystemPrompt("bandRecommend", null, "FinalReport.generateConciseSummaries");
+      const user = buildConciseUserPrompt(it);
+      let model: string | undefined;
+      const content = await chatComplete([{ role: "system", content: sys }, { role: "user", content: user }], settings, { onUsage: (u) => { model = u.model; } });
+      let raw: unknown;
+      try {
+        raw = (JSON.parse(content) as { summaries?: unknown }).summaries;
+      } catch {
+        const match = content.match(/\{[\s\S]*\}/);
+        if (match) { try { raw = (JSON.parse(match[0]) as { summaries?: unknown }).summaries; } catch { /* no usable JSON */ } }
+      }
+      const filtered = filterConciseSummaries(raw, it);
+      const keys = Object.keys(filtered);
+      if (keys.length === 0) throw new Error("The AI returned no usable summaries — try again.");
+      const generatedAt = new Date().toISOString();
+      setReportConciseFindings(Object.fromEntries(keys.map((k) => [k, { text: filtered[k], generatedAt, model }])));
+    } catch (err) {
+      setConciseError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConciseBusy(false);
+    }
+  }
+
   async function generateSuggestions() {
     setSugBusy(true);
     setSugError(null);
@@ -544,8 +585,20 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
             {sugBusy ? "Writing…" : hasSuggestions ? "Regenerate AI improvement suggestions" : "Generate AI improvement suggestions"}
           </button>
         )}
+        {qualifying.length > 0 && (
+          <button
+            className="no-print"
+            disabled={conciseBusy || !aiReady}
+            onClick={generateConciseSummaries}
+            title={!aiReady ? "Enable AI and set an API key in Settings first." : "One analysis-model call that rewrites this item's long finding text as concise auditor prose, grounded only on facts already in the raw text. Saved once — the full raw text stays behind each row's expand."}
+            style={{ marginLeft: eligibleDims.length > 0 ? 0 : "auto", cursor: conciseBusy || !aiReady ? "default" : "pointer", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", opacity: aiReady ? 1 : 0.5, whiteSpace: "nowrap" }}
+          >
+            {conciseBusy ? "Writing…" : hasConcise ? "Rewrite concise summaries" : `Write concise summaries (${qualifying.length})`}
+          </button>
+        )}
       </div>
       {sugError && <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>AI suggestions failed: {sugError}</div>}
+      {conciseError && <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>Concise summaries failed: {conciseError}</div>}
       {it.overallSummary && (
         <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.5, margin: "6px 0 0" }}>{it.overallSummary}</p>
       )}
@@ -604,11 +657,17 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   // never dressed up as a red finding.
                   const label = r.verdict === "strength" ? "Strength" : r.verdict === "weakness" ? "Weakness" : "Not assessed";
                   const color = r.verdict === "strength" ? "#15803d" : r.verdict === "weakness" ? "#b23121" : "#64748b";
-                  // Item 1: a multi-entry evidence note (the staged pass's
-                  // numbered "#1 […] #2 […]" merge) shows its FIRST entry by
-                  // default; the remaining entries stay reachable behind the
-                  // expand — the full text is never deleted.
+                  // Item 1 + Item 2: a saved concise summary fronts the row
+                  // (raw text moves ENTIRELY behind the expand); without one,
+                  // a multi-entry evidence note (the staged pass's numbered
+                  // "#1 […] #2 […]" merge) shows its FIRST entry by default
+                  // with the rest behind the expand — the full raw text is
+                  // never deleted either way.
+                  const summary = conciseFindings[conciseKey(it.id, g.key, r.lineId)];
                   const noteEntries = splitEvidenceNote(r.finding);
+                  const defaultText = summary ? summary.text : noteEntries[0];
+                  const folded = summary ? r.finding : noteEntries.slice(1).join("\n\n");
+                  const skippedByConcise = !summary && hasConcise && qualifying.some((q) => q.key === conciseKey(it.id, g.key, r.lineId));
                   return (
                     <tr key={r.lineId}>
                       {!g.rowsFromLegs && i === 0 && dimCell(totalRows)}
@@ -617,15 +676,27 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                         {refLabel(r.itemRef) && <div style={{ color: "#64748b", fontSize: 10.5, marginTop: 2 }}>{refLabel(r.itemRef)}</div>}
                       </td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5, color }}>
-                        <b>{label}:</b> {noteEntries[0]}
-                        {noteEntries.length > 1 && (
+                        <b>{label}:</b> {defaultText}
+                        {summary && (
+                          <span className="no-print" style={{ marginLeft: 6, verticalAlign: "middle", whiteSpace: "nowrap" }}>
+                            <span style={{ fontSize: 9.5, fontWeight: 700, color: "#4338ca", border: "1px solid #c7d2fe", borderRadius: 4, padding: "1px 4px", marginRight: 4 }}>AI summary</span>
+                            <ThumbsButtons
+                              onAccept={() => logSuggestionDecision({ module: "Final Report", subjectId: conciseKey(it.id, g.key, r.lineId), field: "conciseSummary", aiOutput: summary.text, humanDecision: summary.text, changed: false, decisionType: "Accepted", reason: "" })}
+                              onReject={() => setSugFeedback({ key: conciseKey(it.id, g.key, r.lineId), text: summary.text })}
+                            />
+                          </span>
+                        )}
+                        {skippedByConcise && (
+                          <span style={{ fontSize: 10, color: "#94a3b8", fontStyle: "italic", marginLeft: 6 }}>(no AI summary generated for this row — rewrite to fill it in)</span>
+                        )}
+                        {folded && (
                           <details style={{ marginTop: 3 }}>
                             <summary style={{ fontSize: 10.5, color: "#94a3b8", cursor: "pointer", userSelect: "none" }}>
                               <span className="details-marker-closed" style={{ fontSize: 10, marginRight: 4 }}>▶</span>
                               <span className="details-marker-open" style={{ fontSize: 10, marginRight: 4 }}>▼</span>
-                              View full evidence note ({noteEntries.length} entries)
+                              View full evidence note{noteEntries.length > 1 ? ` (${noteEntries.length} entries)` : ""}
                             </summary>
-                            <div style={{ whiteSpace: "pre-wrap", color: "#6b7280", marginTop: 3 }}>{noteEntries.slice(1).join("\n\n")}</div>
+                            <div style={{ whiteSpace: "pre-wrap", color: "#6b7280", marginTop: 3 }}>{folded}</div>
                           </details>
                         )}
                       </td>
