@@ -502,6 +502,17 @@ function analyseItem(
   };
 }
 
+// Splits a multi-entry evidence note (the staged pass's merged
+// "#1 [file · chunk]:\n… \n\n#2 […]" format, see agentRuntime's
+// renderWindowNotes) into its numbered entries; any other text comes back as
+// a single entry. Lets the report show the first entry by default with the
+// rest behind an expand — the full text is never deleted, just not all shown
+// at once (Item 1, 2026-07-17).
+export function splitEvidenceNote(note: string): string[] {
+  const parts = note.split(/\n\n(?=#\d+\b)/);
+  return parts.length > 1 ? parts : [note];
+}
+
 // ── Item 3: AI improvement suggestions (pure helpers; the AI call itself
 // lives in FinalReport.tsx, reusing the generateSummary plumbing) ──────────
 // A dimension is ELIGIBLE for a suggestion only when it has at least one

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, type ItemReport } from "../finalReport";
+import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, splitEvidenceNote, type ItemReport } from "../finalReport";
 import { bandLevel } from "../../data/edutrustRubric";
 import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
@@ -606,5 +606,24 @@ describe("scored-but-ungrouped dimension surfaces real leg content (Bug B)", () 
     const scoredAfter = buildScored({ evidence: blankEvidence(), reviewer: {}, confirmed: {}, closures: {}, checklistBandOverrides: computeChecklistOverrides({ "6.1.1": entry }, GD4_REQUIREMENTS) });
     const digestAfter = JSON.stringify({ total: scoredAfter.total, award: scoredAfter.award, gates: scoredAfter.gates, bands: scoredAfter.items.map((i) => [i.id, i.band, i.eff]) });
     expect(digestAfter).toBe(digestBefore);
+  });
+});
+
+// Item 1 (2026-07-17): multi-entry evidence notes fold to their first entry
+// by default in the UI — the split must round-trip the full text.
+describe("splitEvidenceNote", () => {
+  it("splits the staged pass's numbered merge format into its entries, preserving all text", () => {
+    const note = "#1 [MR.pdf · C003]:\nKPI dashboard reviewed.\n\n#2 [Survey.xlsx · C007]:\nSatisfaction at 86 percent.\n\n#3:\nUncited window note.";
+    const parts = splitEvidenceNote(note);
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toBe("#1 [MR.pdf · C003]:\nKPI dashboard reviewed.");
+    expect(parts.join("\n\n")).toBe(note); // nothing lost
+  });
+  it("returns plain text (or a single-entry note) as one part", () => {
+    expect(splitEvidenceNote("A short ordinary diagnosis.")).toEqual(["A short ordinary diagnosis."]);
+    expect(splitEvidenceNote("#1 [F.pdf · C001]:\nOnly one entry.")).toEqual(["#1 [F.pdf · C001]:\nOnly one entry."]);
+  });
+  it("does not split on a '#' that is not a numbered entry boundary", () => {
+    expect(splitEvidenceNote("Item #2 in the register is missing.\n\nSecond paragraph.")).toHaveLength(1);
   });
 });

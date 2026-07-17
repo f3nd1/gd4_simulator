@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, splitEvidenceNote, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
@@ -553,7 +553,9 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         <div style={{ marginTop: 6, border: "1px solid #e2e8f0", borderRadius: 8, overflowX: "auto" }}>
           <table>
             <thead>
-              <tr><th>Dimension</th><th>Band</th><th>Item</th><th>Finding</th><th>AFI (to reach next band)</th></tr>
+              {/* Finding and AFI get EQUAL width (Item 3): unequal auto-layout
+                  widths made the two prose columns wrap raggedly. */}
+              <tr><th>Dimension</th><th>Band</th><th>Item</th><th style={{ width: "34%" }}>Finding</th><th style={{ width: "34%" }}>AFI (to reach next band)</th></tr>
             </thead>
             <tbody>
               {it.findingsGroups.flatMap((g) => {
@@ -586,16 +588,27 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                     </tr>,
                   ];
                 }
+                // Item 4: a dimension with real assessed rows is ELIGIBLE for
+                // an AI suggestion; once generation has run for this item, an
+                // eligible dimension the model skipped gets a visible marker
+                // instead of silent absence.
+                const sugEligible = g.rows.length > 0 && g.rows.some((r) => r.verdict !== "not-assessed");
+                const missingSug = !sug && hasSuggestions && sugEligible;
                 // A leg-derived group (Bug B) gets a lead-in row explaining
                 // why other lines' refs appear under this dimension — the
                 // lead-in then carries the rowSpan'd dimension cells.
-                const totalRows = g.rows.length + (sug ? 1 : 0) + (g.rowsFromLegs ? 1 : 0);
+                const totalRows = g.rows.length + (sug || missingSug ? 1 : 0) + (g.rowsFromLegs ? 1 : 0);
                 const rowEls = g.rows.map((r, i) => {
                   // Three distinct states: strength (green), weakness (red),
                   // not-assessed (neutral grey) — an absence of assessment is
                   // never dressed up as a red finding.
                   const label = r.verdict === "strength" ? "Strength" : r.verdict === "weakness" ? "Weakness" : "Not assessed";
                   const color = r.verdict === "strength" ? "#15803d" : r.verdict === "weakness" ? "#b23121" : "#64748b";
+                  // Item 1: a multi-entry evidence note (the staged pass's
+                  // numbered "#1 […] #2 […]" merge) shows its FIRST entry by
+                  // default; the remaining entries stay reachable behind the
+                  // expand — the full text is never deleted.
+                  const noteEntries = splitEvidenceNote(r.finding);
                   return (
                     <tr key={r.lineId}>
                       {!g.rowsFromLegs && i === 0 && dimCell(totalRows)}
@@ -603,7 +616,19 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                         <span style={{ fontFamily: "ui-monospace,monospace", whiteSpace: "nowrap" }}>{r.itemRef}</span>
                         {refLabel(r.itemRef) && <div style={{ color: "#64748b", fontSize: 10.5, marginTop: 2 }}>{refLabel(r.itemRef)}</div>}
                       </td>
-                      <td style={{ verticalAlign: "top", fontSize: 11.5, color }}><b>{label}:</b> {r.finding}</td>
+                      <td style={{ verticalAlign: "top", fontSize: 11.5, color }}>
+                        <b>{label}:</b> {noteEntries[0]}
+                        {noteEntries.length > 1 && (
+                          <details style={{ marginTop: 3 }}>
+                            <summary style={{ fontSize: 10.5, color: "#94a3b8", cursor: "pointer", userSelect: "none" }}>
+                              <span className="details-marker-closed" style={{ fontSize: 10, marginRight: 4 }}>▶</span>
+                              <span className="details-marker-open" style={{ fontSize: 10, marginRight: 4 }}>▼</span>
+                              View full evidence note ({noteEntries.length} entries)
+                            </summary>
+                            <div style={{ whiteSpace: "pre-wrap", color: "#6b7280", marginTop: 3 }}>{noteEntries.slice(1).join("\n\n")}</div>
+                          </details>
+                        )}
+                      </td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5 }}>{renderAfi(r.afi, r.verdict === "weakness" ? { band: g.band, label: g.label } : undefined)}</td>
                     </tr>
                   );
@@ -625,7 +650,10 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   rowEls.push(
                     <tr key={`${g.key}-ai-suggestion`}>
                       <td colSpan={3} style={{ background: "#f5f7ff", fontSize: 11.5 }}>
-                        <span style={{ fontWeight: 700, color: "#4338ca" }}>AI suggestion (how to improve): </span>
+                        {/* Item 4: the heading names the DIMENSION and states
+                            the scope, so the suggestion never reads as
+                            belonging only to the last row above it. */}
+                        <span style={{ fontWeight: 700, color: "#4338ca" }}>AI suggestion for {g.label} (covers all rows above): </span>
                         <span style={{ color: "#374151" }}>{sug.text}</span>
                         <span className="no-print" style={{ marginLeft: 8, verticalAlign: "middle" }}>
                           <ThumbsButtons
@@ -633,6 +661,17 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                             onReject={() => setSugFeedback({ key, text: sug.text })}
                           />
                         </span>
+                      </td>
+                    </tr>
+                  );
+                } else if (missingSug) {
+                  // Item 4 (other half of Symptom 1): the model's reply
+                  // skipped this eligible dimension — say so visibly instead
+                  // of silently showing nothing.
+                  rowEls.push(
+                    <tr key={`${g.key}-ai-missing`}>
+                      <td colSpan={3} style={{ background: "#f8fafc", fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>
+                        No AI suggestion was generated for {g.label}. Click "Regenerate AI improvement suggestions" above to fill it in.
                       </td>
                     </tr>
                   );
