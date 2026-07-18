@@ -63,6 +63,21 @@ describe("setHolisticBand — complete-matrix gate + calculated band", () => {
     expect(hb.matrixScores).toEqual(WORKED);
   });
 
+  it("seeds the working copy (apsrMatrix) to mirror the saved matrixScores, for human AND ai-auto saves (2026-07-18 display-bug fix)", () => {
+    // The editable grid reads entry.apsrMatrix; without this, an ai-auto save
+    // wrote holisticBand but left apsrMatrix empty and the grid showed dashes.
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "AI rationale.", source: "ai-auto" });
+    const e1 = useChecklistModuleStore.getState().entries[ITEM]!;
+    expect(e1.apsrMatrix).toEqual(WORKED);
+    expect(e1.apsrMatrix).toEqual(e1.holisticBand!.matrixScores);
+    // A later human save keeps the two in sync too.
+    const OTHER = { approach: 5, processes: 3, systemsOutcomes: 2, review: 1 } as const;
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: OTHER, rationale: "Human reasoning.", source: "human" });
+    const e2 = useChecklistModuleStore.getState().entries[ITEM]!;
+    expect(e2.apsrMatrix).toEqual(OTHER);
+    expect(e2.apsrMatrix).toEqual(e2.holisticBand!.matrixScores);
+  });
+
   it("accepts R=0 as a real scored dimension (0% is a valid input, distinct from unscored)", () => {
     useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: { approach: 5, processes: 5, systemsOutcomes: 5, review: 0 }, rationale: "Review absent; rest excellent.", source: "human" });
     const hb = useChecklistModuleStore.getState().entries[ITEM]!.holisticBand!;

@@ -226,7 +226,13 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           source: input.source,
           decidedAt: new Date().toISOString(),
         };
-        set((s) => mapEntry(s, itemId, (e) => ({ ...e, holisticBand: full })));
+        // Also seed the working copy (apsrMatrix) the editable grid reads from,
+        // so it mirrors the saved record for EVERY caller — not just the human
+        // runBandSuggestion+saveBand flow that happens to co-populate it. Without
+        // this, an ai-auto (or any future) save leaves apsrMatrix empty and the
+        // grid shows dashes though a real band exists (2026-07-18 display bug).
+        // Purely fills the field; it does not itself trigger another band save.
+        set((s) => mapEntry(s, itemId, (e) => ({ ...e, holisticBand: full, apsrMatrix: { ...input.matrixScores } })));
         // Band selection is a scoring decision — always on the record. An
         // "ai-auto" save is logged as decisionType "Automatic" with wording
         // that can never read as a human act; the two human sources keep

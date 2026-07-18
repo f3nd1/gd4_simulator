@@ -450,6 +450,10 @@ export function SubCriterionChecklist() {
   // load-bearing input, no longer a "your own working" diagnostic). Snapshots
   // the line-verdict signature for the staleness check (Task 5).
   async function runBandSuggestion() {
+    // A fresh suggestion overwrites the matrix working copy; if a band is
+    // already saved (human OR ai-auto), make that explicit before regenerating
+    // so an accidental Accept-and-save doesn't quietly replace it (2026-07-18).
+    if (holisticBand?.matrixScores && savedBand && !confirm(`This item already has a saved band (${bandTitle(savedBand.band)}, ${savedBand.total}%). Generate a new AI suggestion anyway? It will not change the saved band until you Accept and save.`)) return;
     const s = await suggestBand(selectedId);
     if (!s) return;
     setBandSuggestion(s);
