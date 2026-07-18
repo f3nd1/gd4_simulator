@@ -60,10 +60,25 @@ export function ExportCentre() {
       .map((item) => item.id);
   }, [scored.items, checklistEntries]);
 
+  // Items whose band was written by an automatic run (source "ai-auto") and not
+  // yet re-saved by a human — the pack must carry the same "not yet reviewed"
+  // label the screens show, because criterion bands aggregate these items.
+  const aiAutoBandItems = useMemo(
+    () =>
+      Object.entries(checklistEntries)
+        .filter(([, entry]) => entry.holisticBand?.source === "ai-auto")
+        .map(([id]) => id)
+        .sort(),
+    [checklistEntries],
+  );
+
   function exportPack() {
     let md = `# Management Review Pack — ${cycle.name}\n\n${cycle.periodStart} to ${cycle.periodEnd} · ${cycle.version} · ${cycle.status}\n\n**Assessment coverage:** ${provenanceLine(provenance)}\n\n`;
     if (zeroEvidenceItems.length > 0) {
       md += `## ⚠ WARNING — Unverified scored items\n\n**${zeroEvidenceItems.length} sub-criterion/criteria are scored via the checklist but have NO evidence attached to any specific line: ${zeroEvidenceItems.join(", ")}.**\n\nBands for these items are based solely on self-reported checklist status with no supporting documents. EduTrust assessors will not accept these scores without evidence. Attach evidence before submitting.\n\n`;
+    }
+    if (aiAutoBandItems.length > 0) {
+      md += `## ⚠ AI-scored bands — not yet reviewed\n\n**${aiAutoBandItems.length} item(s) carry a band set automatically by AI and not yet reviewed by a human: ${aiAutoBandItems.join(", ")}.**\n\nCriterion scores below include these bands. Review and re-save each band in the Sub-Criterion Checklist before relying on this pack.\n\n`;
     }
     md += `## Readiness\nProjected ${scored.total}/1000 — ${scored.award}\nScore gate (4.2, 4.6, C5): ${scored.gatePass ? "met" : "NOT met (" + scored.gateFail.map((g) => g.id).join(", ") + ")"}\n\n`;
     md += `## Criterion scores\n` + scored.crits.map((c) => `- C${c.id} ${c.title}: Band ${c.band}, ${c.scored}/${c.points}`).join("\n") + "\n\n";
@@ -174,6 +189,17 @@ export function ExportCentre() {
             </div>
             <div style={{ fontSize: 12, color: "#7c2d12", lineHeight: 1.5 }}>
               {zeroEvidenceItems.join(", ")} — checklist is scored but no evidence is attached to any specific line. EduTrust assessors will not accept these bands without supporting documents. The exported pack includes a bold warning.
+            </div>
+          </div>
+        )}
+        {aiAutoBandItems.length > 0 && (
+          <div style={{ background: "#fefce8", border: "1px solid #eab308", borderRadius: 8, padding: "10px 14px", marginTop: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <Pill s="medium">AI-scored — not yet reviewed</Pill>
+              <b style={{ fontSize: 12.5, color: "#854d0e" }}>{aiAutoBandItems.length} band(s) set automatically by AI</b>
+            </div>
+            <div style={{ fontSize: 12, color: "#713f12", lineHeight: 1.5 }}>
+              {aiAutoBandItems.join(", ")} — the band was written by an automatic run and no human has reviewed it yet. The exported pack carries the same warning. Re-save each band in the Sub-Criterion Checklist to clear it.
             </div>
           </div>
         )}

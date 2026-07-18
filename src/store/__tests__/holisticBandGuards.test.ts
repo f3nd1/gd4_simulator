@@ -19,6 +19,11 @@ vi.mock("mammoth", () => ({ default: { extractRawText: vi.fn() } }));
 vi.mock("../../lib/drive/pdfWorker?worker", () => ({ default: class MockWorker { postMessage() {} addEventListener() {} terminate() {} } }));
 
 const { useChecklistModuleStore } = await import("../useChecklistModuleStore");
+const { useWorkspaceStore } = await import("../useWorkspaceStore");
+const { useScoringConfigStore } = await import("../useScoringConfigStore");
+const { computeChecklistOverrides } = await import("../../lib/checklistBanding");
+const { buildScored } = await import("../../lib/scoring");
+const { GD4_REQUIREMENTS } = await import("../../data/gd4Requirements");
 
 const ITEM = "6.2.1";
 // The auditor's worked example: A=20 + P=20 + S=10 + R=0 = 50% → Band 3.
@@ -198,6 +203,77 @@ describe("clearSpecificLines — 'Remove all' genuinely resets the item to unass
   it("also clears the live apsrMatrix working state", () => {
     useChecklistModuleStore.getState().clearSpecificLines(ITEM);
     expect(useChecklistModuleStore.getState().entries[ITEM]!.apsrMatrix).toBeUndefined();
+  });
+});
+
+describe('setHolisticBand — "ai-auto" source (auto-score setting, 2026-07-18)', () => {
+  // An automatic save must be distinguishable from a human one everywhere:
+  // stored source "ai-auto", logged decisionType "Automatic" with wording
+  // that can never read as a human act. Gates 1 and 2 apply unchanged.
+  beforeEach(() => {
+    useWorkspaceStore.setState({ humanDecisionLog: [] });
+  });
+
+  it("saves with source ai-auto and logs an Automatic entry, never a human decision", () => {
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "AI rationale from suggestion.", source: "ai-auto" });
+    const hb = useChecklistModuleStore.getState().entries[ITEM]!.holisticBand!;
+    expect(hb.source).toBe("ai-auto");
+    expect(hb.band).toBe(3);
+    const log = useWorkspaceStore.getState().humanDecisionLog;
+    expect(log).toHaveLength(1);
+    expect(log[0].decisionType).toBe("Automatic");
+    expect(log[0].aiOutput).toContain("automatically");
+    expect(log[0].humanDecision).toBe("No human decision yet — pending review");
+  });
+
+  it("Gate 2 (written justification) still rejects an ai-auto save with no rationale", () => {
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "", source: "ai-auto" });
+    expect(useChecklistModuleStore.getState().entries[ITEM]?.holisticBand).toBeUndefined();
+    expect(useWorkspaceStore.getState().humanDecisionLog).toHaveLength(0);
+  });
+
+  it("Gate 1 (complete matrix) still rejects an incomplete ai-auto save", () => {
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: { approach: 4, processes: 4, systemsOutcomes: 2 }, rationale: "AI rationale.", source: "ai-auto" });
+    expect(useChecklistModuleStore.getState().entries[ITEM]?.holisticBand).toBeUndefined();
+  });
+
+  it("a human re-save over an ai-auto band clears the flag and re-logs as a human decision", () => {
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "AI rationale.", source: "ai-auto" });
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "Reviewed and confirmed by me.", source: "human" });
+    const hb = useChecklistModuleStore.getState().entries[ITEM]!.holisticBand!;
+    expect(hb.source).toBe("human");
+    const log = useWorkspaceStore.getState().humanDecisionLog;
+    expect(log).toHaveLength(2);
+    // Newest-first log: [0] is the human re-save.
+    const human = log.find((e) => e.decisionType !== "Automatic")!;
+    expect(human.decisionType).toBe("Accepted"); // same band, human confirms
+    expect(human.humanDecision).toContain("Band 3");
+  });
+
+  it("human saves log exactly as before — unchanged entries for human and ai-accepted", () => {
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "My own reasoning.", source: "human" });
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: { approach: 5, processes: 4, systemsOutcomes: 2, review: 0 }, rationale: "Accepting AI scores.", source: "ai-accepted" });
+    const log = useWorkspaceStore.getState().humanDecisionLog;
+    expect(log.every((e) => e.decisionType !== "Automatic")).toBe(true);
+    expect(log.some((e) => e.decisionType === "Accepted")).toBe(true);
+  });
+});
+
+describe("auto-score setting OFF — byte-identical scoring (nothing reads the toggle)", () => {
+  it("computeChecklistOverrides and buildScored are byte-identical with autoScoreBands off vs on", () => {
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "A=20, P=20, S=10, R=0 = 50%.", source: "human" });
+    const entries = useChecklistModuleStore.getState().entries;
+    const digest = () => {
+      const overrides = computeChecklistOverrides(entries, GD4_REQUIREMENTS);
+      const s = buildScored({ evidence: {}, reviewer: {}, confirmed: {}, closures: {}, checklistBandOverrides: overrides });
+      return JSON.stringify({ overrides, total: s.total, award: s.award, gates: s.gates, bands: s.items.map((i) => [i.id, i.band, i.eff]) });
+    };
+    useScoringConfigStore.setState({ autoScoreBands: false });
+    const off = digest();
+    useScoringConfigStore.setState({ autoScoreBands: true });
+    const on = digest();
+    useScoringConfigStore.setState({ autoScoreBands: false });
+    expect(on).toBe(off);
   });
 });
 

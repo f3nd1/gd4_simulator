@@ -76,7 +76,14 @@ export type ChecklistModuleState = {
   //   1. all four dimensions must be scored (0 or a band) — an incomplete
   //      matrix cannot produce a defensible total.
   //   2. rationale is REQUIRED — a band with no stated reason is rejected.
-  setHolisticBand: (itemId: string, input: { matrixScores: ApsrMatrixScores; rationale: string; source: "human" | "ai-accepted" }) => void;
+  // source "human"/"ai-accepted" = a human clicked Save/Accept (unchanged).
+  // source "ai-auto" = an automatic run saving the AI suggestion with no
+  // human in the loop — permitted ONLY when the opt-in autoScoreBands
+  // setting is on (docs/auto-scoring-setting.md); logged as decisionType
+  // "Automatic", never as a human act. Gates 1 and 2 apply identically to
+  // every source — the AI's generated rationale satisfies Gate 2, it is
+  // never bypassed.
+  setHolisticBand: (itemId: string, input: { matrixScores: ApsrMatrixScores; rationale: string; source: "human" | "ai-accepted" | "ai-auto" }) => void;
   clearHolisticBand: (itemId: string) => void;
   // One dimension's matrix score (0 = 0%/not-evident, 1-5 = band). This is the
   // OFFICIAL input now. Pass undefined to un-set a dimension.
@@ -220,17 +227,33 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           decidedAt: new Date().toISOString(),
         };
         set((s) => mapEntry(s, itemId, (e) => ({ ...e, holisticBand: full })));
-        // Band selection is a scoring decision — always on the human record.
-        useWorkspaceStore.getState().logHumanDecision({
-          module: "Holistic Band",
-          subjectId: itemId,
-          field: "band",
-          aiOutput: input.source === "ai-accepted" ? `AI-suggested APSR scores → Band ${result.band}` : prev ? `Previous: Band ${prev.band}` : "No prior band",
-          humanDecision: `Band ${result.band} (APSR total ${result.total}%) — ${full.rationale}`,
-          changed: prev?.band !== result.band,
-          decisionType: input.source === "ai-accepted" ? "Accepted" : prev && prev.band !== result.band ? "Overridden" : "Accepted",
-          reason: full.rationale ?? "",
-        });
+        // Band selection is a scoring decision — always on the record. An
+        // "ai-auto" save is logged as decisionType "Automatic" with wording
+        // that can never read as a human act; the two human sources keep
+        // their exact pre-existing entries.
+        useWorkspaceStore.getState().logHumanDecision(
+          input.source === "ai-auto"
+            ? {
+                module: "Holistic Band",
+                subjectId: itemId,
+                field: "band",
+                aiOutput: `AI set Band ${result.band} (APSR total ${result.total}%) automatically — auto-score setting on`,
+                humanDecision: "No human decision yet — pending review",
+                changed: prev?.band !== result.band,
+                decisionType: "Automatic",
+                reason: full.rationale ?? "",
+              }
+            : {
+                module: "Holistic Band",
+                subjectId: itemId,
+                field: "band",
+                aiOutput: input.source === "ai-accepted" ? `AI-suggested APSR scores → Band ${result.band}` : prev ? `Previous: Band ${prev.band}` : "No prior band",
+                humanDecision: `Band ${result.band} (APSR total ${result.total}%) — ${full.rationale}`,
+                changed: prev?.band !== result.band,
+                decisionType: input.source === "ai-accepted" ? "Accepted" : prev && prev.band !== result.band ? "Overridden" : "Accepted",
+                reason: full.rationale ?? "",
+              }
+        );
       },
 
       clearHolisticBand: (itemId) =>

@@ -564,7 +564,15 @@ export type HolisticBandRecord = {
   // satisfies it when the human accepts the AI's own scores. Optional in the
   // type solely for older records.
   rationale?: string;
-  source: "human" | "ai-accepted";
+  // Who committed this band. "human" = the reviewer chose the scores;
+  // "ai-accepted" = the reviewer clicked "Accept AI scores & save" (still a
+  // human decision); "ai-auto" = an automatic run saved the AI's suggestion
+  // WITHOUT a human in the loop (the opt-in autoScoreBands setting,
+  // docs/auto-scoring-setting.md). "ai-auto" doubles as the "AI-scored, not
+  // yet reviewed" flag everywhere bands render — it clears ONLY when a human
+  // re-saves via setHolisticBand with one of the two human values, never by
+  // time or viewing.
+  source: "human" | "ai-accepted" | "ai-auto";
   decidedAt: string;
   decidedBy?: string;
 };
@@ -1354,7 +1362,10 @@ export type HumanDecisionModule =
   | "Holistic Band"
   | "NC Severity";
 
-export type HumanDecisionType = "Accepted" | "Edited" | "Overridden" | "Dismissed";
+// "Automatic" is the one NON-human value: an AI write made with no human in
+// the loop (today only an "ai-auto" band save). It exists so an automatic
+// decision can never masquerade as a human Accepted/Edited in this log.
+export type HumanDecisionType = "Accepted" | "Edited" | "Overridden" | "Dismissed" | "Automatic";
 
 export type HumanDecisionEntry = {
   id: string;

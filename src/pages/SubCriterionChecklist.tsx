@@ -713,8 +713,13 @@ export function SubCriterionChecklist() {
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <Pill s={bandTone(savedBand.band)}>{bandTitle(savedBand.band)}</Pill>
                 <span style={{ fontSize: 11.5, color: "#475569", fontFamily: "ui-monospace,monospace" }}>APSR total {savedBand.total}%</span>
+                {/* An "ai-auto" band is unmistakably marked until a human
+                    re-saves it here (the ONLY thing that clears the label). */}
+                {holisticBand.source === "ai-auto" ? (
+                  <Pill s="medium">AI-scored — not yet reviewed</Pill>
+                ) : null}
                 <span style={{ fontSize: 11, color: "#94a3b8" }}>
-                  {holisticBand.source === "ai-accepted" ? "AI scores accepted" : "Set"} by reviewer · {new Date(holisticBand.decidedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
+                  {holisticBand.source === "ai-auto" ? "Set automatically by AI" : holisticBand.source === "ai-accepted" ? "AI scores accepted by reviewer" : "Set by reviewer"} · {new Date(holisticBand.decidedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
                 </span>
                 <button onClick={() => { if (confirm(`Clear the band for ${selectedId}? The item will show "needs assessment" until re-scored.`)) clearHolisticBand(selectedId); }} style={{ cursor: "pointer", fontSize: 11, color: "#94a3b8", background: "transparent", border: "1px solid #e2e8f0", borderRadius: 6, padding: "2px 8px" }}>
                   Clear / re-assess

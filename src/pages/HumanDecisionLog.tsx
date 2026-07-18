@@ -7,6 +7,9 @@ import type { HumanDecisionEntry, HumanDecisionModule, HumanDecisionType, Calibr
 function decisionTone(type: HumanDecisionType): "good" | "medium" | "critical" | "neutral" {
   if (type === "Accepted") return "good";
   if (type === "Edited") return "medium";
+  // "Automatic" is not a human act — neutral grey, never green (it is not an
+  // acceptance) and never red (it is not an override).
+  if (type === "Automatic") return "neutral";
   return "critical";
 }
 
@@ -47,7 +50,7 @@ const ALL_MODULES: HumanDecisionModule[] = [
   "Final Report",
   "AI Review Log Feedback",
 ];
-const ALL_TYPES: HumanDecisionType[] = ["Accepted", "Edited", "Overridden"];
+const ALL_TYPES: HumanDecisionType[] = ["Accepted", "Edited", "Overridden", "Automatic"];
 
 const selectStyle: React.CSSProperties = {
   padding: "5px 8px",

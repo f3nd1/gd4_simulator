@@ -570,6 +570,9 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         {it.needsReassessment
           ? <Pill s="medium">Needs re-assessment</Pill>
           : <Pill s={bandTone(it.band)}>Band {it.band}</Pill>}
+        {/* An auto-scored band is marked until a human re-saves it on the
+            Sub-Criterion Checklist — prints too, so the PDF carries it. */}
+        {it.bandSource === "ai-auto" && <Pill s="medium">AI-scored — not yet reviewed</Pill>}
         {it.gate && <Pill s="high">Gate</Pill>}
         <b style={{ fontSize: 12.5 }}>{it.id}</b>
         <span style={{ fontSize: 12.5 }}>{it.title}</span>

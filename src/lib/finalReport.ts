@@ -142,6 +142,11 @@ export type ItemReport = {
   // rather than as the primary reading.
   bandRationale?: string;
   bandTotalPct?: number;
+  // Who committed the band (HolisticBandRecord.source). "ai-auto" drives the
+  // "AI-scored, not yet reviewed" marker on the report — display only, and it
+  // clears only when a human re-saves the band (source becomes human/
+  // ai-accepted). Undefined when no band is saved.
+  bandSource?: "human" | "ai-accepted" | "ai-auto";
   // Ten-second read above the findings table: band, %, which dimensions are
   // strong/limiting, and roughly how many AFIs would close the gap to the
   // next band — built from apsrMatrixResult/fastestPathToNextBand, the SAME
@@ -496,6 +501,7 @@ function analyseItem(
     needsReassessment: reassess,
     bandRationale: hb?.rationale,
     bandTotalPct: hb?.matrixScores ? apsrMatrixResult(hb.matrixScores, scale).total : undefined,
+    bandSource: hb?.source,
     overallSummary,
     findingsGroups,
     generalNote,

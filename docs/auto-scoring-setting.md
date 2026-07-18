@@ -84,10 +84,12 @@ evidence, and save - the band then becomes yours and the label goes.
 
 ## Current status
 
-Built so far: this setting and its confirmation dialog. Still to come, in
-order: the AI-vs-human record keeping and the "AI-scored, not yet reviewed"
-labels (approved design, awaiting build), and separately the fully automatic
-"one click runs everything including the band" flow this setting governs.
-Until that flow lands, no automatic run sets a band regardless of this
-setting, so turning it on has no effect yet beyond recording your choice.
-This section will be updated as each part ships.
+Built so far: this setting and its confirmation dialog, the AI-vs-human
+record keeping (an automatic save is stored and logged as "Automatic", never
+as a human decision), and the "AI-scored, not yet reviewed" labels on the
+Sub-Criterion Checklist, Final Report, Criterion Scorecard, and Export
+Centre (page and exported pack). Still to come: the fully automatic "one
+click runs everything including the band" flow this setting governs. Until
+that flow lands, no automatic run sets a band regardless of this setting,
+so turning it on has no effect yet beyond recording your choice. This
+section will be updated when that flow ships.
