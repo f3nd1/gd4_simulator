@@ -1,17 +1,22 @@
 ## Auditor Narrative Writing Standard
 
-When generating or revising GD4 assessment findings, write in a natural,
-evidence-based auditor narrative.
+When generating or revising GD4 assessment findings, write like a human
+auditor, not an extraction system. Use clear, natural, professional language:
+short sentences, familiar terms, one point per sentence.
+
+Retain the established QA terms where they apply: NC, AFI, CAP, internal
+assessment, independence, monitoring, effectiveness. These are precise; do not
+paraphrase them away.
 
 ### Required writing approach
 
-For each finding, follow this sequence:
+For each finding, follow this logical sequence (not a rigid template):
 
 1. State what evidence was reviewed or sighted.
 2. Explain what the evidence demonstrates.
-3. Identify the specific limitation, inconsistency or missing evidence.
-4. Explain how the limitation affects the assessed band or requirement.
-5. State the evidence or action needed to reach the next band.
+3. Identify the remaining limitation, inconsistency or missing evidence.
+4. Explain why that gap matters to the requirement or band assessment.
+5. State the required action and the records that must be retained.
 
 The narrative must be:
 
@@ -23,19 +28,27 @@ The narrative must be:
 - focused on whether implementation and effectiveness are demonstrated, not
   merely documented
 
-### Preferred auditor wording
+### Vary sentence structure and transitions
 
-Use phrases naturally, without repeating them excessively:
+Do NOT open every gap sentence with "However". Do not repeat any single
+transition within the same report section. Choose the wording that fits the
+specific gap; do not force synonyms.
 
-- "The sampled records demonstrated that..."
-- "Evidence was sighted that..."
-- "The records generally included..."
-- "However, it was not consistently demonstrated that..."
-- "No evidence was sighted to confirm that..."
-- "This was evident at the initiative level, but not at the institutional
-  level."
-- "Accordingly, the requirement was partially demonstrated."
-- "Further evidence is required to demonstrate that..."
+Transitions available for a gap sentence:
+
+- "The records did not yet show that..."
+- "This was not consistently demonstrated across..."
+- "A remaining gap is..."
+- "Despite these controls,..."
+- "Although the records show..., they do not confirm..."
+- "The evidence was limited to..."
+- "The process was in place, but..."
+- "Further evidence is needed to confirm..."
+- "The main limitation was..."
+- "Implementation was evident, but consistent application was not."
+
+Avoid repeated openings generally: not every sentence should start "The
+records show...", "It was evident...", "However...", or "The PEI should...".
 
 ### Avoid
 
@@ -62,17 +75,27 @@ Do not:
 Use the following format:
 
 **Weakness:**
-Begin with the positive evidence sighted. Then identify the precise gap
-using "However". Conclude with the effect of that gap on the requirement or
-band assessment.
+Begin with the positive evidence sighted and what it demonstrates. Then
+identify the precise gap, choosing a transition that fits it (not always
+"However"). Conclude with why the gap matters to the requirement or band
+assessment.
 
 **Band Assessment:**
 State the current band and target band exactly as supplied.
 
 **Required Action:**
-State the records, controls or evidence required to close the identified
-gap. The action must directly correspond to the weakness and must not
-introduce unrelated requirements.
+Begin with a direct action, and vary the opening (not always "Ensure that"
+or "The PEI should"). State the records to retain and when the control should
+take place. The action must directly address the stated weakness and must not
+introduce unrelated requirements. Suitable openings include:
+
+- "Before each internal assessment,..."
+- "For future audit cycles,..."
+- "Add a formal approval step..."
+- "Maintain records showing..."
+- "Require CAP owners to..."
+- "Retain evidence that..."
+- "Document and verify..."
 
 **Strength:**
 State the demonstrated practice, mechanism or outcome clearly. Do not
@@ -89,14 +112,12 @@ Review, but no Management Review minutes were provided."
 
 Preferred:
 
-"The sampled Innovation Register records demonstrated that individual
-improvement initiatives were evaluated using defined before-and-after
-indicators and QIPI scores. However, no consolidated Management Review or
-equivalent record was sighted to demonstrate that management had reviewed
-the effectiveness of the overall innovation portfolio and determined the
-necessary follow-up actions. Accordingly, evaluation was evident at the
-initiative level, but not yet consistently demonstrated at the institutional
-level."
+"The sampled Innovation Register recorded before-and-after indicators and QIPI
+scores for individual improvement initiatives. This shows initiatives were
+evaluated at the project level. The records did not yet show a consolidated
+Management Review of the overall innovation portfolio or the follow-up actions
+management decided. Without that review, the effectiveness of continual
+improvement cannot be confirmed at the institutional level."
 
 ### Meaning-preservation rules
 

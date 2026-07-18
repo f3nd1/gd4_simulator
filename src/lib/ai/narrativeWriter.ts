@@ -36,7 +36,7 @@ export async function runNarrativeWriter(input: NarrativeInput, settings: AISett
     "Follow this order in each section and add nothing beyond it: evidence sighted, then what it demonstrates, then the remaining gap, then the band implication. " +
     "Map that onto these JSON fields for EACH dimension in the user message: " +
     "\"strength\" — the sampled evidence present and what it demonstrates, claimed no more strongly than the evidence supports (omit if the dimension has no strength rows); " +
-    "\"weakness\" — what is present, then \"However,\" and a concrete itemisation of what is absent, then the band implication (omit if the dimension has no weakness rows); " +
+    "\"weakness\" — what is present, then the concrete gap introduced with a transition that fits it (vary the wording; do NOT open every gap with \"However\" and do not reuse the same transition across dimensions), then why the gap matters to the requirement or band (omit if the dimension has no weakness rows); " +
     "\"bandLine\" — one neutral sentence stating the current band and percentage, required for every dimension given; " +
     // Item 6 (2026-07-18): requiredAction is the grounded next-band suggestion
     // for BOTH strengths and weaknesses — a real, evidence-based statement of
