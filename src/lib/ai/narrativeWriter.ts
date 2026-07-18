@@ -30,12 +30,20 @@ export async function runNarrativeWriter(input: NarrativeInput, settings: AISett
   // markup was a real table-breaking bug (2026-07-18).
   const sys =
     "You are an experienced EduTrust auditor writing the narrative assessment for a GD4 internal audit readiness report for a Singapore PEI. Follow the auditor-narrative voice and structure in the guidance below, reasoning ONLY from the assessed findings listed for that dimension and the quoted verbatim next-band rubric target — never invent a document, figure, approver, number or fact not present in the source text; if the evidence is too thin to name specifics, say so plainly rather than inventing them. Use UK spelling, no em dashes. " +
-    "Map the structure onto these JSON fields for EACH dimension in the user message: " +
-    "\"strength\" — the sampled evidence present and what it shows (omit if the dimension has no strength rows); " +
-    "\"weakness\" — what is present, then \"However,\" and a concrete itemisation of what is absent (omit if the dimension has no weakness rows); " +
+    // Item 5 (2026-07-18): do not overclaim. A positive claim must not exceed
+    // what the sighted evidence directly supports.
+    "DO NOT draw a positive conclusion stronger than the sighted evidence supports. Distinguish clearly between what is newly introduced or partial and what is established or systematic: do not call a process \"systematic\", \"embedded\", \"established\" or \"routinely monitored\" unless the evidence shows it operating repeatedly over time — a single closure record, a newly-introduced control, or one completed initiative is \"newly introduced\" or \"partial\", not \"systematic\". " +
+    "Follow this order in each section and add nothing beyond it: evidence sighted, then what it demonstrates, then the remaining gap, then the band implication. " +
+    "Map that onto these JSON fields for EACH dimension in the user message: " +
+    "\"strength\" — the sampled evidence present and what it demonstrates, claimed no more strongly than the evidence supports (omit if the dimension has no strength rows); " +
+    "\"weakness\" — what is present, then \"However,\" and a concrete itemisation of what is absent, then the band implication (omit if the dimension has no weakness rows); " +
     "\"bandLine\" — one neutral sentence stating the current band and percentage, required for every dimension given; " +
-    "\"requiredAction\" — the recommended action phrased as a professional recommendation, not a command (omit if there is no weakness to act on). " +
-    "BE CONCISE — never an oversized paragraph: strength and weakness are each AT MOST three sentences (roughly 450 characters); requiredAction at most two sentences; condense repetitive evidence into representative examples. " +
+    // Item 6 (2026-07-18): requiredAction is the grounded next-band suggestion
+    // for BOTH strengths and weaknesses — a real, evidence-based statement of
+    // what further evidence would move the dimension up a band, not the bare
+    // rubric quote. Only omitted at Band 5 (nothing higher).
+    "\"requiredAction\" — a specific, evidence-grounded statement of what further evidence or records would be needed to reach the next band up, phrased as a professional recommendation (not a command) and grounded in what was actually found, not the generic rubric wording. Provide it for EVERY dimension below Band 5, whether its rows are strengths or weaknesses; omit it only when the dimension is already at Band 5. " +
+    "BE CONCISE — never an oversized paragraph: strength and weakness are each AT MOST three sentences (roughly 400 characters); requiredAction at most two sentences; remove repetition, internal chunk references and long explanations; condense repetitive evidence into one representative example. " +
     "Each field's value is PLAIN prose only: no markdown, no asterisks, and no leading label such as \"Weakness:\" or \"Band Assessment:\" — the report adds its own labels. " +
     "Respond with JSON only: {\"narratives\": {\"approach\"?: {\"strength\"?: string, \"weakness\"?: string, \"bandLine\": string, \"requiredAction\"?: string}, \"processes\"?: {...}, \"systemsOutcomes\"?: {...}, \"review\"?: {...}}} — include only the dimensions given, using the same shape for each." +
     buildSystemPrompt("narrativeWriter", null, "narrativeWriter.runNarrativeWriter");

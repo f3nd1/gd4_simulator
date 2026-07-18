@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, splitEvidenceNote, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, findingParagraphs, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
@@ -413,15 +413,23 @@ function bandJumpPills(fromBand: number, dimLabel: string) {
 // grey. Weakness AFI is free-text from the AI — no parseable band pair, so
 // the SAME pill pair is drawn from the dimension's own band (dim), above the
 // action text.
-function renderAfi(afi: string | undefined, dim?: { band: number; label: string }) {
+function renderAfi(afi: string | undefined, dim?: { band: number; label: string }, strengthGroundedAction?: string) {
   if (!afi) return null;
   const m = afi.match(/^Band (\d) strength\. To reach Band (\d) on (.+?), the EduTrust rubric looks for: "(.+)"\. Keep this evidenced/);
   if (m) {
+    // Item 6 (recurring, 2026-07-18): a Strength row keeps the verbatim rubric
+    // descriptor as the "target", but the actionable line beneath it is now
+    // the grounded, evidence-based next-band suggestion from the auditor
+    // narrative (nar.requiredAction) — NOT the bare rubric quote alone. When
+    // the narrative has not run yet, an honest pointer replaces it.
     const [, fromBand, , dimLabel, quote] = m;
     return (
       <span>
         {bandJumpPills(Number(fromBand), dimLabel)}
-        <div style={{ fontSize: 10.5, color: "#6b7280", marginTop: 3, fontStyle: "italic" }}>"{quote}"</div>
+        <div style={{ fontSize: 10.5, color: "#6b7280", marginTop: 3 }}><span style={{ fontWeight: 700 }}>Target (rubric): </span><span style={{ fontStyle: "italic" }}>"{quote}"</span></div>
+        {strengthGroundedAction
+          ? <div style={{ fontSize: 11, color: "#166534", marginTop: 3 }}><span style={{ fontWeight: 700 }}>To reach the next band: </span>{strengthGroundedAction}</div>
+          : <div className="no-print" style={{ fontSize: 10, color: "#94a3b8", marginTop: 3, fontStyle: "italic" }}>Run the audit or click "Regenerate report text" for a grounded, evidence-based suggestion.</div>}
       </span>
     );
   }
@@ -621,7 +629,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                       {dimCell(1)}
                       <td colSpan={3} style={{ color: "#94a3b8", fontStyle: "italic", fontSize: 11.5 }}>
                         {g.rubricDefined === 0
-                          ? `No individual GD4 requirement line for this item is ${g.label}-type, so there are no per-line rows here. The dimension is still assessed in the band shown, from the assessed lines' evidence and the band justification below.`
+                          ? `This item has no GD4 requirement line dedicated to ${g.label}, so ${g.label} is not assessed through its own row. It is still assessed: the band shown comes from the item's other lines and the overall band judgement below. This dimension IS assessed, just not via a requirement row of its own.`
                           : `The official rubric defines ${g.rubricDefined} ${g.label}-type requirement line${g.rubricDefined === 1 ? "" : "s"} for this item, but none is drafted or tagged yet. Generate the checklist lines on the Sub-Criterion Checklist page.`}
                       </td>
                     </tr>,
@@ -648,15 +656,12 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   // never dressed up as a red finding.
                   const label = r.verdict === "strength" ? "Strength" : r.verdict === "weakness" ? "Weakness" : "Not assessed";
                   const color = r.verdict === "strength" ? "#15803d" : r.verdict === "weakness" ? "#b23121" : "#64748b";
-                  // A multi-entry evidence note (the staged pass's numbered
-                  // "#1 […] #2 […]" merge) shows its FIRST entry by default
-                  // with the rest behind the expand — the full raw text is
-                  // never deleted. (The per-row "concise summary" front was
-                  // retired 2026-07-18: the dimension-level auditor narrative
-                  // below is the readable text now.)
-                  const noteEntries = splitEvidenceNote(r.finding);
-                  const defaultText = noteEntries[0];
-                  const folded = noteEntries.slice(1).join("\n\n");
+                  // Item 4 (2026-07-18): a long finding renders as scannable
+                  // paragraphs (multi-entry evidence merges split on their own
+                  // entries; one long blob is grouped into ~2-sentence paras)
+                  // instead of one crammed cell. wordBreak stops a long file
+                  // name stretching the table.
+                  const paras = findingParagraphs(r.finding);
                   return (
                     <tr key={r.lineId}>
                       {!g.rowsFromLegs && i === 0 && dimCell(totalRows)}
@@ -664,20 +669,15 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                         <span style={{ fontFamily: "ui-monospace,monospace", whiteSpace: "nowrap" }}>{r.itemRef}</span>
                         {refLabel(r.itemRef) && <div style={{ color: "#64748b", fontSize: 10.5, marginTop: 2 }}>{refLabel(r.itemRef)}</div>}
                       </td>
-                      <td style={{ verticalAlign: "top", fontSize: 11.5, color }}>
-                        <b>{label}:</b> {defaultText}
-                        {folded && (
-                          <details style={{ marginTop: 3 }}>
-                            <summary style={{ fontSize: 10.5, color: "#94a3b8", cursor: "pointer", userSelect: "none" }}>
-                              <span className="details-marker-closed" style={{ fontSize: 10, marginRight: 4 }}>▶</span>
-                              <span className="details-marker-open" style={{ fontSize: 10, marginRight: 4 }}>▼</span>
-                              View full evidence note{noteEntries.length > 1 ? ` (${noteEntries.length} entries)` : ""}
-                            </summary>
-                            <div style={{ whiteSpace: "pre-wrap", color: "#6b7280", marginTop: 3 }}>{folded}</div>
-                          </details>
-                        )}
+                      <td style={{ verticalAlign: "top", fontSize: 11.5, color, wordBreak: "break-word" }}>
+                        <b>{label}:</b>{" "}
+                        {paras.length === 1
+                          ? <span style={{ whiteSpace: "pre-wrap" }}>{paras[0]}</span>
+                          : paras.map((p, pi) => (
+                              <p key={pi} style={{ whiteSpace: "pre-wrap", margin: pi === 0 ? "0" : "6px 0 0" }}>{p}</p>
+                            ))}
                       </td>
-                      <td style={{ verticalAlign: "top", fontSize: 11.5 }}>{renderAfi(r.afi, r.verdict === "weakness" ? { band: g.band, label: g.label } : undefined)}</td>
+                      <td style={{ verticalAlign: "top", fontSize: 11.5 }}>{renderAfi(r.afi, r.verdict === "weakness" ? { band: g.band, label: g.label } : undefined, r.verdict === "strength" ? nar?.requiredAction : undefined)}</td>
                     </tr>
                   );
                 });
@@ -687,7 +687,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                       {dimCell(totalRows)}
                       <td colSpan={3} style={{ color: "#94a3b8", fontStyle: "italic", fontSize: 11 }}>
                         {g.rubricDefined === 0
-                          ? `No requirement line of this type exists for this item; the rows below are this dimension's assessments recorded on the item's other lines.`
+                          ? `This item has no GD4 requirement line dedicated to ${g.label}, so it is assessed through the item's other lines instead. The rows below are the ${g.label} judgements recorded on those lines. This dimension IS assessed, just not via a requirement row of its own.`
                           : `The official rubric defines ${g.rubricDefined} ${g.label}-type requirement line${g.rubricDefined === 1 ? "" : "s"} for this item, but none is drafted yet; the rows below are this dimension's assessments recorded on the item's other lines.`}
                       </td>
                     </tr>

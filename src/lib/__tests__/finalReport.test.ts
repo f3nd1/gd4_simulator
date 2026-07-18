@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, filterDimensionNarratives, stripChunkMarkers, splitEvidenceNote, needsConciseSummary, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport } from "../finalReport";
+import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, filterDimensionNarratives, stripChunkMarkers, findingParagraphs, splitEvidenceNote, needsConciseSummary, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport } from "../finalReport";
 import { bandLevel } from "../../data/edutrustRubric";
 import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
@@ -483,6 +483,19 @@ describe("AI improvement suggestions — eligibility, prompt grounding, honesty 
 
   it("suggestionKey is the stable item::dimension storage key", () => {
     expect(suggestionKey("6.2.1", "processes")).toBe("6.2.1::processes");
+  });
+
+  it("findingParagraphs splits multi-entry notes and groups one long blob into scannable paragraphs, preserving all text", () => {
+    // Multi-entry evidence merge → one paragraph per entry.
+    const multi = "#1 [a·C1]:\nFirst entry.\n\n#2 [b·C2]:\nSecond entry.";
+    expect(findingParagraphs(multi)).toEqual(["#1 [a·C1]:\nFirst entry.", "#2 [b·C2]:\nSecond entry."]);
+    // Short single note → unchanged single paragraph.
+    expect(findingParagraphs("A short finding.")).toEqual(["A short finding."]);
+    // Long single blob (no structure) → grouped into ~2-sentence paragraphs, no text lost.
+    const long = "One. Two. Three. Four. Five. Six.".padEnd(320, " x.");
+    const paras = findingParagraphs(long);
+    expect(paras.length).toBeGreaterThan(1);
+    expect(paras.join(" ").replace(/\s+/g, " ").trim()).toBe(long.replace(/\s+/g, " ").trim());
   });
 
   it("stripChunkMarkers removes internal [CHUNK:..] markers and tidies spacing", () => {

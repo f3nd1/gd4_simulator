@@ -524,6 +524,23 @@ export function splitEvidenceNote(note: string): string[] {
   return parts.length > 1 ? parts : [note];
 }
 
+// Item 4 (2026-07-18): break a long finding into scannable paragraphs instead
+// of one crammed cell. A multi-entry evidence merge splits on its own numbered
+// entries; a single long blob with no entry structure is grouped into
+// ~2-sentence paragraphs. Presentational only — every character of the
+// original text is preserved, just laid out with whitespace.
+const FINDING_PARA_THRESHOLD = 300;
+export function findingParagraphs(finding: string): string[] {
+  const entries = splitEvidenceNote(finding);
+  if (entries.length > 1) return entries;
+  const text = entries[0];
+  if (!text || text.length <= FINDING_PARA_THRESHOLD || text.includes("\n")) return [text];
+  const sentences = text.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g) ?? [text];
+  const paras: string[] = [];
+  for (let i = 0; i < sentences.length; i += 2) paras.push(sentences.slice(i, i + 2).join("").trim());
+  return paras.filter(Boolean);
+}
+
 // ── Item 2 (2026-07-17): concise auditor-voice summaries for long finding
 // text. Pure helpers; the AI call lives in FinalReport.tsx on the same
 // generate-once-and-save plumbing as the improvement suggestions. Summaries

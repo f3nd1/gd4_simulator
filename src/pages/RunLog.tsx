@@ -115,6 +115,8 @@ function RunAiCalls({ entry, aiLog }: { entry: RunLogEntry; aiLog: AIReviewLogEn
 export function RunLog() {
   const log = useWorkspaceStore((s) => s.runLog);
   const aiLog = useWorkspaceStore((s) => s.aiReviewLog);
+  const removeRunLogEntry = useWorkspaceStore((s) => s.removeRunLogEntry);
+  const clearRunLog = useWorkspaceStore((s) => s.clearRunLog);
   const [filterMode, setFilterMode] = useState<RunLogEntry["mode"] | "All">("All");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
@@ -175,6 +177,16 @@ export function RunLog() {
               style={{ fontSize: 11, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: "1px solid #4338ca", background: "#4338ca", color: "#fff", cursor: log.length === 0 ? "default" : "pointer", opacity: log.length === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
             >
               Export full AI log
+            </button>
+            {/* Delete-all: removes only the run-log summary entries. The AI
+                Review Log, findings and all scoring/checklist data are separate
+                stores and are untouched. */}
+            <button
+              disabled={log.length === 0}
+              onClick={() => { if (confirm(`Delete all ${log.length} run-log ${log.length === 1 ? "entry" : "entries"}? This clears only the run summaries — the AI Review Log, findings and scoring data are not affected. This cannot be undone.`)) clearRunLog(); }}
+              style={{ fontSize: 11, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", cursor: log.length === 0 ? "default" : "pointer", opacity: log.length === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
+            >
+              Delete all
             </button>
           </div>
         </div>
@@ -253,7 +265,19 @@ export function RunLog() {
                     <div style={{ fontSize: 11, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }} title={entry.summary}>
                       {entry.summary}
                     </div>
-                    <div style={{ fontSize: 11, color: "#64748b" }}>{entry.subCriterionIds.length}</div>
+                    <div style={{ fontSize: 11, color: "#64748b", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                      <span>{entry.subCriterionIds.length}</span>
+                      {/* Per-entry delete: removes only this run summary; the AI
+                          Review Log and scoring/finding data are untouched.
+                          stopPropagation so it never toggles the row expand. */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); if (confirm(`Delete this run-log entry (${formatTs(entry.startedAt)})? Only the run summary is removed — the AI Review Log, findings and scoring data are not affected.`)) removeRunLogEntry(entry.id); }}
+                        title="Delete this run-log entry"
+                        style={{ fontSize: 13, color: "#94a3b8", background: "transparent", border: "none", cursor: "pointer", padding: "0 4px", lineHeight: 1 }}
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
 
                   {expanded && (

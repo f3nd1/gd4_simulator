@@ -580,6 +580,11 @@ export type WorkspaceState = {
   // never an input to scoring. See useWorkspaceStore's runFullAudit/
   // runHybridItemDraft (writers) and src/pages/RunLog.tsx (viewer).
   runLog: RunLogEntry[];
+  // Delete ONE run-log entry / the whole log. Removes only the summary record;
+  // the underlying AI Review Log, findings and scoring/checklist data are all
+  // separate stores and are never touched.
+  removeRunLogEntry: (id: string) => void;
+  clearRunLog: () => void;
   calibrationExamples: CalibrationExample[];
   calibrationMemories: CalibrationMemory[];
   samples: SampleRecord[];
@@ -2679,6 +2684,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       dismissFullAuditProgress: () => set({ fullAuditProgress: null }),
       dismissHybridDraftProgress: () => set({ hybridDraftProgress: null }),
+      // Run-log deletes touch ONLY runLog — never aiReviewLog, findings or any
+      // checklist/scoring data (all separate stores).
+      removeRunLogEntry: (id) => set((s) => ({ runLog: s.runLog.filter((e) => e.id !== id) })),
+      clearRunLog: () => set({ runLog: [] }),
 
       writeReportNarratives: async (itemIds) => {
         const ai = useAISettingsStore.getState();
