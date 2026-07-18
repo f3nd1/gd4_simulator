@@ -521,6 +521,25 @@ describe("AI improvement suggestions — eligibility, prompt grounding, honesty 
     expect(filterDimensionNarratives(null, GROUPS)).toEqual({});
     expect(filterDimensionNarratives({ approach: { strength: "x" } }, GROUPS)).toEqual({});
   });
+
+  it("filterDimensionNarratives strips leaked markdown markers and duplicated field labels (table-break fix)", () => {
+    const out = filterDimensionNarratives(
+      {
+        processes: {
+          weakness: "**Weakness:** The records were incomplete. However, no approval was sighted.",
+          bandLine: "**Band Assessment:** Current Band 1 (5%); target Band 2.",
+          requiredAction: "Required Action: Ensure records capture the approver.",
+        },
+      },
+      GROUPS
+    );
+    expect(out.processes.weakness).toBe("The records were incomplete. However, no approval was sighted.");
+    expect(out.processes.bandLine).toBe("Current Band 1 (5%); target Band 2.");
+    expect(out.processes.requiredAction).toBe("Ensure records capture the approver.");
+    // A field that is ONLY a leaked label collapses to empty and is dropped.
+    const empty = filterDimensionNarratives({ processes: { weakness: "**Weakness:**", bandLine: "Band 1." } }, GROUPS);
+    expect(empty.processes.weakness).toBeUndefined();
+  });
 });
 
 // Empty-dimension placeholder: the two empty states must be distinguishable —

@@ -1452,7 +1452,7 @@ export type RunLogEntry = {
 // animated bar. Full Auto already has its own live overlay (FullAuditOverlay)
 // and does not use this.
 export type HybridDraftStep = {
-  key: "ppd" | "evidence" | "findings" | "review" | "band";
+  key: "ppd" | "evidence" | "findings" | "review" | "band" | "narrative";
   label: string;
   status: "pending" | "running" | "done" | "skipped";
 };

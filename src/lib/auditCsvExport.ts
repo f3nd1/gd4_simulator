@@ -1,4 +1,4 @@
-import type { AuditRunRecord, AuditFileRecord, AuditAISummaryLine, PPDReviewRow, EvidenceAssessmentRow, RunLogEntry } from "../types";
+import type { AuditRunRecord, AuditFileRecord, AuditAISummaryLine, PPDReviewRow, EvidenceAssessmentRow, RunLogEntry, AIReviewLogEntry } from "../types";
 
 // Escapes a single CSV cell: wraps in double-quotes when the value contains
 // commas, quotes or line breaks; escapes inner double-quotes by doubling them.
@@ -271,6 +271,37 @@ export function buildRunLogCsv(entries: RunLogEntry[]): string {
         o.steps ? (o.steps.outcomeReviewApplied ? "yes" : "no") : "",
         bands,
       ]);
+    }
+  }
+  return toCsv(headers, rows);
+}
+
+// ── Full run AI-output CSV ───────────────────────────────────────────────────
+// The ONE consolidated diagnostic export: every run in the log, one row per
+// correlated AI call (PPD, evidence, Outcomes & Review, band, narrative) with
+// its FULL prompt and output — a developer opens one file and reads a whole
+// run end to end. Assembled on demand from the Run Log + AI Review Log via the
+// same time-window correlation the on-screen drill-down uses; nothing new is
+// stored and nothing is duplicated at rest. A run with no surviving log
+// entries (cleared or aged past the 500-entry cap) gets one honest stub row
+// rather than silently vanishing.
+import { aiCallsForRun } from "./runLogCorrelation";
+
+export function buildFullRunAiCsv(entries: RunLogEntry[], aiLog: AIReviewLogEntry[]): string {
+  const headers = [
+    "runId", "mode", "runStartedAt", "runEndedAt", "runStatus", "runSummary",
+    "callAt", "agent", "subjectId", "verdict", "model", "totalTokens",
+    "promptSent", "aiOutput",
+  ];
+  const rows: unknown[][] = [];
+  for (const e of entries) {
+    const calls = aiCallsForRun(aiLog, e);
+    if (calls.length === 0) {
+      rows.push([e.id, e.mode, e.startedAt, e.endedAt, e.status, e.summary, "", "", "", "no correlated AI Review Log entries survive for this run (log cleared or capped)", "", "", "", ""]);
+      continue;
+    }
+    for (const c of calls) {
+      rows.push([e.id, e.mode, e.startedAt, e.endedAt, e.status, e.summary, c.createdAt, c.agent, c.subjectId, c.verdict, c.model ?? "", c.totalTokens ?? "", c.promptSent ?? "", c.generatedContent ?? ""]);
     }
   }
   return toCsv(headers, rows);

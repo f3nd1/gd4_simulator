@@ -618,7 +618,10 @@ export function stripChunkMarkers(text: string): string {
   return text.replace(/\[CHUNK:[^\]]*\]/g, "").replace(/ {2,}/g, " ").trim();
 }
 
-export function buildAiSuggestionUserPrompt(it: ItemReport): string {
+// Param is the minimal Pick (not full ItemReport) so the run flow can build
+// the same grounding for an item WITHOUT constructing a whole report — see
+// narrativeInputForEntry below. A full ItemReport still satisfies it.
+export function buildAiSuggestionUserPrompt(it: Pick<ItemReport, "id" | "title" | "band" | "findingsGroups">): string {
   const dims = eligibleSuggestionDims(it.findingsGroups).map((g) => {
     const next = g.band >= 1 && g.band < 5 ? ((g.band + 1) as Band) : undefined;
     const target = next
@@ -671,15 +674,44 @@ export function filterDimensionNarratives(
       const v = (raw as Record<string, unknown>)[key];
       if (!v || typeof v !== "object") continue;
       const rec = v as Record<string, unknown>;
-      const bandLine = typeof rec.bandLine === "string" ? rec.bandLine.trim() : "";
+      const bandLine = typeof rec.bandLine === "string" ? cleanNarrativeField(rec.bandLine) : "";
       if (!bandLine) continue; // the one mandatory field — no bandLine, no entry
-      const strength = typeof rec.strength === "string" && rec.strength.trim() ? rec.strength.trim() : undefined;
-      const weakness = typeof rec.weakness === "string" && rec.weakness.trim() ? rec.weakness.trim() : undefined;
-      const requiredAction = typeof rec.requiredAction === "string" && rec.requiredAction.trim() ? rec.requiredAction.trim() : undefined;
+      const strength = typeof rec.strength === "string" && cleanNarrativeField(rec.strength) ? cleanNarrativeField(rec.strength) : undefined;
+      const weakness = typeof rec.weakness === "string" && cleanNarrativeField(rec.weakness) ? cleanNarrativeField(rec.weakness) : undefined;
+      const requiredAction = typeof rec.requiredAction === "string" && cleanNarrativeField(rec.requiredAction) ? cleanNarrativeField(rec.requiredAction) : undefined;
       out[key] = { strength, weakness, bandLine, requiredAction };
     }
   }
   return out as Record<DimensionFindingsGroup["key"], { strength?: string; weakness?: string; bandLine: string; requiredAction?: string }>;
+}
+
+// Despite the prompt's instruction, models sometimes echo the standard's own
+// field labels and markdown inside the JSON values ("**Weakness:** …"). The
+// report renders its OWN labels, so a leaked label doubles up and raw "**"
+// markers read as broken markup in the table (real live bug, 2026-07-18).
+// Deterministic cleanup only — wording is never changed, just the wrapper.
+function cleanNarrativeField(s: string): string {
+  return s
+    .replace(/\*\*/g, "")
+    .replace(/^\s*(?:strength|weakness|band assessment|required action)\s*:\s*/i, "")
+    .trim();
+}
+
+// The minimal narrative-generator input for ONE item, built straight from its
+// checklist entry — what the run flow uses to auto-write narratives after
+// banding, without constructing a full report. Null when the item has no
+// banded matrix or no assessed dimension (nothing to narrate — never forced).
+export function narrativeInputForEntry(
+  itemId: string,
+  entry: SubCriterionChecklistEntry | undefined,
+  scale: ApsrScale = DEFAULT_APSR_SCALE
+): Pick<ItemReport, "id" | "title" | "band" | "findingsGroups"> | null {
+  const band = entry?.holisticBand?.band;
+  if (!band) return null;
+  const findingsGroups = buildFindingsGroups(entry, scale);
+  if (eligibleSuggestionDims(findingsGroups).length === 0) return null;
+  const title = GD4_REQUIREMENTS.find((r) => r.id === itemId)?.requirement ?? "";
+  return { id: itemId, title, band, findingsGroups };
 }
 
 export function buildFinalReport(

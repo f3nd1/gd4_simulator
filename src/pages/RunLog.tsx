@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { bandTone } from "../lib/theme";
-import { buildRunLogCsv, downloadCsv, downloadBlob } from "../lib/auditCsvExport";
+import { buildRunLogCsv, buildFullRunAiCsv, downloadCsv, downloadBlob } from "../lib/auditCsvExport";
 import { aiCallsForRun } from "../lib/runLogCorrelation";
 import type { RunLogEntry, RunLogSubOutcome, AIReviewLogEntry } from "../types";
 
@@ -164,6 +164,17 @@ export function RunLog() {
               style={{ fontSize: 11, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", cursor: log.length === 0 ? "default" : "pointer", opacity: log.length === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
             >
               Export JSON
+            </button>
+            {/* The ONE consolidated diagnostic export: every run, every AI
+                call, full prompt + output in a single file — assembled on
+                demand from the AI Review Log, nothing duplicated at rest. */}
+            <button
+              disabled={log.length === 0}
+              title="One CSV with every run's full end-to-end AI output: one row per AI call (PPD, evidence, Outcomes & Review, band, narrative) with the complete prompt and reply, for diagnosis."
+              onClick={() => downloadCsv(buildFullRunAiCsv(log, aiLog), `run-log-full-ai-${new Date().toISOString().slice(0, 10)}.csv`)}
+              style={{ fontSize: 11, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: "1px solid #4338ca", background: "#4338ca", color: "#fff", cursor: log.length === 0 ? "default" : "pointer", opacity: log.length === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
+            >
+              Export full AI log
             </button>
           </div>
         </div>

@@ -99,6 +99,8 @@ import { buildOptionALineWrites, buildOptionASourceTrace } from "../lib/optionAC
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, partitionOptionAWrites, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
 import { effectiveVerdictTemp, describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
+import { narrativeInputForEntry, suggestionKey } from "../lib/finalReport";
+import { runNarrativeWriter } from "../lib/ai/narrativeWriter";
 import { lineApsr, findingDimension, buildDraftFinding, apsrMatrixResult } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
@@ -785,6 +787,14 @@ export type WorkspaceState = {
   // evidence rows), or "cancelled" (the user hit Cancel). Only "done" should
   // navigate the user onward to the Final Report.
   runHybridItemDraft: (subCriterionId: string) => Promise<"done" | "stopped" | "cancelled">;
+  // Auto-writes the Final Report auditor narratives for the given banded items
+  // — the run flows call this as their FINAL, non-blocking step (verdicts,
+  // findings and band are already committed before it starts, so a slow or
+  // failed narrative call can never delay or corrupt scoring data). Returns
+  // how many items got a narrative; skips silently when AI is offline or an
+  // item has nothing narratable. Same generator the "Regenerate report text"
+  // button uses (lib/ai/narrativeWriter).
+  writeReportNarratives: (itemIds: string[]) => Promise<number>;
   dismissFullAuditProgress: () => void;
   // Live per-step progress for the Hybrid draft (transient, never persisted) —
   // Full Auto has its own overlay (fullAuditProgress); this is only set by
@@ -2670,6 +2680,46 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       dismissFullAuditProgress: () => set({ fullAuditProgress: null }),
       dismissHybridDraftProgress: () => set({ hybridDraftProgress: null }),
 
+      writeReportNarratives: async (itemIds) => {
+        const ai = useAISettingsStore.getState();
+        // Never fabricate offline — no AI, no narrative (the report shows the
+        // honest "not yet generated" placeholder instead).
+        if (aiOfflineReason(ai)) return 0;
+        const scale = useScoringConfigStore.getState().apsrScale;
+        let written = 0;
+        for (const itemId of itemIds) {
+          // Fresh entry read per item — the band pass just wrote holisticBand.
+          const input = narrativeInputForEntry(itemId, useChecklistModuleStore.getState().entries[itemId], scale);
+          if (!input) continue; // no band / nothing assessed — nothing to narrate
+          try {
+            const settings = effectiveSettings(ai, { purpose: "analysis", context: composeSchoolContext(get().schoolContext) });
+            const res = await runNarrativeWriter(input, settings);
+            const keys = Object.keys(res.narratives) as Array<keyof typeof res.narratives>;
+            if (keys.length === 0) continue;
+            const generatedAt = new Date().toISOString();
+            get().setReportDimensionNarratives(Object.fromEntries(keys.map((k) => [suggestionKey(itemId, k), { ...res.narratives[k], generatedAt, model: res.model }])));
+            get().pushAIReviewLog({
+              agent: "Final Report Narrative Writer",
+              reviewType: "Finalisation",
+              subjectId: itemId,
+              verdict: `Narrative written for ${keys.length} dimension${keys.length === 1 ? "" : "s"}`,
+              confidence: "Medium",
+              keyConcerns: keys.map((k) => input.findingsGroups.find((g) => g.key === k)?.label || String(k)),
+              recommendedAction: "Review the narrative on the Final Report; use Regenerate report text if it misses the mark.",
+              live: true,
+              generatedContent: res.content,
+              promptSent: res.promptSent,
+              usage: res.usage,
+            });
+            written++;
+          } catch {
+            // A narrative failure never fails the run — scoring data is already
+            // committed; the report just shows the Regenerate placeholder.
+          }
+        }
+        return written;
+      },
+
       autoScoreAssessedItems: async (subIds) => {
         const set: string[] = [];
         const skipped: { itemId: string; reason: string }[] = [];
@@ -2780,6 +2830,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         let autoScore: FullAuditProgress["autoScore"];
         let bandsSet: RunLogEntry["bandsSet"] = [];
         let bandsSkipped: RunLogEntry["bandsSkipped"] = [];
+        let narrativesWritten = 0;
         if (!cancelled) {
           const doneSubIds = entries.filter((e) => e.status === "done").map((e) => e.subCriterionId);
           const r = await get().autoScoreAssessedItems(doneSubIds);
@@ -2794,9 +2845,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             .map((hb, i) => hb ? { itemId: r.set[i], band: hb.band, totalPct: hb.totalPct } : null)
             .filter((b): b is RunLogBandResult => b !== null);
           bandsSkipped = r.skipped;
+          // Final decoupled step: auto-write report narratives for the items
+          // just banded. Runs AFTER every committed step (verdicts, findings,
+          // bands are all saved), so a slow/failed narrative call never blocks
+          // scoring; failures just leave the report's Regenerate placeholder.
+          narrativesWritten = await get().writeReportNarratives(r.set);
         }
         const autoScorePhrase = autoScore
-          ? ` Auto-scored ${autoScore.set} band(s)${autoScore.skipped.length > 0 ? `, ${autoScore.skipped.length} left for manual scoring` : ""}.`
+          ? ` Auto-scored ${autoScore.set} band(s)${autoScore.skipped.length > 0 ? `, ${autoScore.skipped.length} left for manual scoring` : ""}.${narrativesWritten > 0 ? ` Auditor narratives written for ${narrativesWritten} item(s).` : ""}`
           : "";
         const finalSummary = cancelled
           ? `Cancelled — ${doneCount} of ${linkedCount} linked sub-criteria completed before the stop.`
@@ -2851,6 +2907,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           { key: "findings", label: "Compile findings", status: "pending" },
           { key: "review", label: "Outcomes & Review", status: "pending" },
           { key: "band", label: "Score band", status: "pending" },
+          // Decoupled final step: verdicts/findings/band are all committed
+          // before this runs, so a slow or failed narrative never blocks them.
+          { key: "narrative", label: "Write report narrative", status: "pending" },
         ];
         const ORDER = stepDefs.map((s) => s.key);
         const setStep = (key: HybridDraftProgress["steps"][number]["key"], status: HybridDraftProgress["steps"][number]["status"]) =>
@@ -2880,6 +2939,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // reads as un-banded / needs-assessment, never complete-but-isn't.
         if (get().auditRunToken !== startToken) {
           setStep("band", "skipped");
+          setStep("narrative", "skipped");
           const cancelSummary = `Hybrid draft for ${subCriterionId} cancelled — steps completed before the stop are kept; the band was not scored.`;
           set((st) => st.hybridDraftProgress ? { hybridDraftProgress: { ...st.hybridDraftProgress, status: "cancelled", summary: cancelSummary } } : {});
           const cancelledEntry: RunLogEntry = {
@@ -2904,13 +2964,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           .map((itemId) => freshChecklist[itemId]?.holisticBand)
           .map((hb, i) => hb ? { itemId: r.set[i], band: hb.band, totalPct: hb.totalPct } : null)
           .filter((b): b is RunLogBandResult => b !== null);
+        if (steps.evidenceRan) setStep("band", bandsSet.length > 0 ? "done" : "skipped");
+        // Final decoupled step: auto-write the report narrative for the item(s)
+        // just banded. Everything that scores is already committed above; a
+        // cancel arriving during the band pass, a narrative failure, or AI
+        // being offline just leaves the report's honest "not yet generated —
+        // Regenerate" placeholder.
+        let narrativesWritten = 0;
+        if (get().auditRunToken !== startToken || r.set.length === 0) {
+          setStep("narrative", "skipped");
+        } else {
+          setStep("narrative", "running");
+          narrativesWritten = await get().writeReportNarratives(r.set);
+          setStep("narrative", narrativesWritten > 0 ? "done" : "skipped");
+        }
         const status: RunLogSubOutcome["status"] = steps.ppdRan && steps.evidenceRan ? "done" : "skipped";
         const summary = status === "done"
-          ? `Hybrid draft complete for ${subCriterionId} — ${steps.findingsCompiled} finding(s) compiled${steps.outcomeReviewApplied ? ", Outcomes & Review applied" : ""}${bandsSet.length > 0 ? `, band ${bandsSet[0].band} (${bandsSet[0].totalPct}%) set` : r.skipped.length > 0 ? `, band not set (${r.skipped[0].reason})` : ""}.`
+          ? `Hybrid draft complete for ${subCriterionId} — ${steps.findingsCompiled} finding(s) compiled${steps.outcomeReviewApplied ? ", Outcomes & Review applied" : ""}${bandsSet.length > 0 ? `, band ${bandsSet[0].band} (${bandsSet[0].totalPct}%) set` : r.skipped.length > 0 ? `, band not set (${r.skipped[0].reason})` : ""}${narrativesWritten > 0 ? ", report narrative written" : ""}.`
           : `Hybrid draft for ${subCriterionId} stopped early — ${!steps.ppdRan ? "PPD review returned no rows" : "evidence assessment returned no rows"}.`;
-        // Band step outcome + overlay handover to its final state (kept open;
-        // the user closes it, revealing the Option A result modal underneath).
-        if (steps.evidenceRan) setStep("band", bandsSet.length > 0 ? "done" : "skipped");
+        // Overlay handover to its final state (kept open; the user closes it,
+        // revealing the Option A result modal underneath).
         set((st) => st.hybridDraftProgress ? { hybridDraftProgress: { ...st.hybridDraftProgress, status: "complete", summary } } : {});
         const runLogEntry: RunLogEntry = {
           id: `RUN-${Date.now()}-${++logCounter}`,

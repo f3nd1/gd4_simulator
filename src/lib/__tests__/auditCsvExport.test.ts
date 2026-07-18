@@ -8,6 +8,7 @@ import {
   exportOptionASummaryCsv,
   progressToRunRecord,
   buildRunLogCsv,
+  buildFullRunAiCsv,
 } from "../auditCsvExport";
 import type { AuditFileRecord, AuditAISummaryLine, AuditRunRecord, PPDReviewRow, EvidenceAssessmentRow, RunLogEntry } from "../../types";
 
@@ -524,5 +525,33 @@ describe("buildRunLogCsv — automated-run audit trail", () => {
 
   it("returns a header-only CSV for an empty log", () => {
     expect(buildRunLogCsv([]).split("\r\n").length).toBe(1);
+  });
+});
+
+describe("buildFullRunAiCsv — the one consolidated diagnostic export", () => {
+  const run: RunLogEntry = {
+    id: "RUN-9", mode: "hybrid-item", subCriterionIds: ["6.2"],
+    startedAt: "2026-07-18T10:00:00.000Z", endedAt: "2026-07-18T10:05:00.000Z",
+    status: "complete", perSub: [], bandsSet: [], bandsSkipped: [], summary: "Hybrid draft complete for 6.2.",
+  };
+  const aiLog = [
+    { id: "L1", auditCycleId: "c1", agent: "PPD Requirements Reviewer", reviewType: "Evidence", subjectId: "6.2", verdict: "PPD reviewed", confidence: "Medium", keyConcerns: [], recommendedAction: "", live: true, createdAt: "2026-07-18T10:01:00.000Z", model: "gpt-x", totalTokens: 900, promptSent: "FULL PPD PROMPT\nline two", generatedContent: "FULL PPD OUTPUT" },
+    { id: "L2", auditCycleId: "c1", agent: "Final Report Narrative Writer", reviewType: "Finalisation", subjectId: "6.2.1", verdict: "Narrative written for 2 dimensions", confidence: "Medium", keyConcerns: [], recommendedAction: "", live: true, createdAt: "2026-07-18T10:04:30.000Z", promptSent: "NARRATIVE PROMPT", generatedContent: "NARRATIVE OUTPUT" },
+    { id: "L3", auditCycleId: "c1", agent: "Other", reviewType: "Evidence", subjectId: "6.3", verdict: "x", confidence: "Medium", keyConcerns: [], recommendedAction: "", live: true, createdAt: "2026-07-18T10:02:00.000Z" },
+  ] as never[];
+
+  it("emits one row per correlated AI call with the FULL prompt and output, excluding other subs", () => {
+    const csv = buildFullRunAiCsv([run], aiLog);
+    expect(csv).toContain("FULL PPD PROMPT");
+    expect(csv).toContain("FULL PPD OUTPUT");
+    expect(csv).toContain("Final Report Narrative Writer"); // narrative call included (item-level subject)
+    expect(csv).not.toContain("6.3"); // other sub excluded
+    // header + 2 data rows: multiline prompt is quoted, so count quoted-row starts.
+    expect(csv.split("RUN-9,").length - 1).toBe(2);
+  });
+
+  it("a run with no surviving log entries gets one honest stub row, never silence", () => {
+    const csv = buildFullRunAiCsv([{ ...run, id: "RUN-OLD", startedAt: "2020-01-01T00:00:00.000Z", endedAt: "2020-01-01T00:01:00.000Z" }], aiLog);
+    expect(csv).toContain("no correlated AI Review Log entries survive");
   });
 });

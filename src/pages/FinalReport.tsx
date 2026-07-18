@@ -4,10 +4,10 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, filterDimensionNarratives, splitEvidenceNote, conciseKey, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, splitEvidenceNote, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { buildAnalytics } from "../lib/analytics";
-import { chatComplete, effectiveSettings, type AIUsage } from "../lib/ai/aiClient";
+import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { buildSystemPrompt } from "../lib/ai/skills";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useScoringConfigStore } from "../store/useScoringConfigStore";
@@ -467,57 +467,17 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
   const hasSuggestions = eligibleDims.some((g) => suggestions[suggestionKey(it.id, g.key)]);
   const aiReady = aiSettings.enabled && !!aiSettings.apiKey;
 
-  // Auditor-narrative pilot: a dimension-level Strength/Weakness/Band/Required
-  // Action block, additional to (not a replacement for) the per-row concise
-  // summaries above and the short AI suggestion below — same eligibility,
-  // same key scheme (suggestionKey), same generate-once-and-save contract.
+  // Auditor narratives are written AUTOMATICALLY as the final step of a run
+  // (Hybrid draft / Full Auto) via the same store action the button below
+  // calls — the report should come out in the right voice with no clicking.
+  // This component only READS the persisted map and offers "Regenerate report
+  // text" as the fallback for when the auto text misses the mark. The old
+  // per-row "concise summaries" feature was superseded by the narrative and
+  // its button removed (2026-07-18); its persisted data is simply unread.
   const narratives = useWorkspaceStore((s) => s.reportDimensionNarratives);
-  const setReportDimensionNarratives = useWorkspaceStore((s) => s.setReportDimensionNarratives);
-  const pushAIReviewLog = useWorkspaceStore((s) => s.pushAIReviewLog);
+  const writeReportNarratives = useWorkspaceStore((s) => s.writeReportNarratives);
   const [narBusy, setNarBusy] = useState(false);
   const [narError, setNarError] = useState<string | null>(null);
-  const hasNarratives = eligibleDims.some((g) => narratives[suggestionKey(it.id, g.key)]);
-
-  // Item 2: concise auditor-voice summaries for long/multi-entry finding text
-  // — same generate-once-and-save contract as the suggestions above. The raw
-  // text is never replaced; a summary fronts the row and the full raw note
-  // moves behind the expand.
-  const conciseFindings = useWorkspaceStore((s) => s.reportConciseFindings);
-  const setReportConciseFindings = useWorkspaceStore((s) => s.setReportConciseFindings);
-  const [conciseBusy, setConciseBusy] = useState(false);
-  const [conciseError, setConciseError] = useState<string | null>(null);
-  const qualifying = qualifyingConciseRows(it);
-  const hasConcise = qualifying.some((q) => conciseFindings[q.key]);
-
-  async function generateConciseSummaries() {
-    setConciseBusy(true);
-    setConciseError(null);
-    try {
-      const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(schoolContext) });
-      const sys =
-        "You are an experienced EduTrust auditor writing up findings for a school's internal readiness report. For each entry in the user message, rewrite the raw assessment text as ONE natural, flowing paragraph of roughly 500-800 characters in an auditor's voice: state what was examined, what the evidence shows, and what it means, citing the specific facts, figures, file names and excerpts ALREADY PRESENT in the raw text. You must not invent any fact, number, document or citation that is not in the source text, and you must not soften a gap. Use UK spelling. Respond with JSON only: {\"summaries\": {\"<row key>\": string}} — one entry per row key given, using each key exactly as written." +
-        buildSystemPrompt("bandRecommend", null, "FinalReport.generateConciseSummaries");
-      const user = buildConciseUserPrompt(it);
-      let model: string | undefined;
-      const content = await chatComplete([{ role: "system", content: sys }, { role: "user", content: user }], settings, { onUsage: (u) => { model = u.model; } });
-      let raw: unknown;
-      try {
-        raw = (JSON.parse(content) as { summaries?: unknown }).summaries;
-      } catch {
-        const match = content.match(/\{[\s\S]*\}/);
-        if (match) { try { raw = (JSON.parse(match[0]) as { summaries?: unknown }).summaries; } catch { /* no usable JSON */ } }
-      }
-      const filtered = filterConciseSummaries(raw, it);
-      const keys = Object.keys(filtered);
-      if (keys.length === 0) throw new Error("The AI returned no usable summaries — try again.");
-      const generatedAt = new Date().toISOString();
-      setReportConciseFindings(Object.fromEntries(keys.map((k) => [k, { text: filtered[k], generatedAt, model }])));
-    } catch (err) {
-      setConciseError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setConciseBusy(false);
-    }
-  }
 
   async function generateSuggestions() {
     setSugBusy(true);
@@ -551,64 +511,16 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
     }
   }
 
-  // Auditor-narrative pilot (Final Report, one surface per
-  // docs/auditor-narrative-investigation.md): reuses buildAiSuggestionUserPrompt
-  // unchanged as grounding (it already carries band/%, the verbatim next-band
-  // rubric target, and every assessed row's ref+verdict+full text+action) and
-  // writes the gold-standard shape — Strength paragraph, Weakness paragraph,
-  // neutral Band Assessment line, Required Action as a recommendation — per
-  // eligible dimension. Log-split fix: also writes the raw prompt/output to
-  // the AI Review Log, which generateSuggestions/generateConciseSummaries above
-  // never did.
-  async function generateDimensionNarratives() {
+  // The ONE regenerate control: re-runs the auditor narrative (via the same
+  // store action the run flow uses — one generator, no drift) AND the
+  // improvement suggestion together, so a user who disagrees with the auto
+  // text refreshes the whole item's AI prose with a single click.
+  async function regenerateReportText() {
     setNarBusy(true);
     setNarError(null);
     try {
-      const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(schoolContext) });
-      // The auditor-narrative voice + six-part structure live in the shared
-      // narrativeWriter skill (auditor-narrative-voice.md), injected below and
-      // reusable by other surfaces later. The inline text keeps only the JSON
-      // envelope and the field-to-part mapping specific to this call site.
-      const sys =
-        "You are an experienced EduTrust auditor writing the narrative assessment for a GD4 internal audit readiness report for a Singapore PEI. Follow the auditor-narrative voice and the six-part structure in the guidance below, reasoning ONLY from the assessed findings listed for that dimension and the quoted verbatim next-band rubric target — never invent a document, figure, approver, number or fact not present in the source text; if the evidence is too thin to name specifics, say so plainly rather than inventing them. Use UK spelling, no em dashes. " +
-        "Map the six-part structure onto these JSON fields for EACH dimension in the user message: " +
-        "\"strength\" — parts 1-2, the sampled evidence present and what it shows (omit if the dimension has no strength rows); " +
-        "\"weakness\" — parts 3-4, what is present then \"However,\" and a concrete itemisation of what is absent (omit if the dimension has no weakness rows); " +
-        "\"bandLine\" — part 5, one neutral sentence stating the current band and percentage, required for every dimension given; " +
-        "\"requiredAction\" — part 6, the recommended action phrased as a professional recommendation, not a command (omit if there is no weakness to act on). " +
-        "Respond with JSON only: {\"narratives\": {\"approach\"?: {\"strength\"?: string, \"weakness\"?: string, \"bandLine\": string, \"requiredAction\"?: string}, \"processes\"?: {...}, \"systemsOutcomes\"?: {...}, \"review\"?: {...}}} — include only the dimensions given, using the same shape for each." +
-        buildSystemPrompt("narrativeWriter", null, "FinalReport.generateDimensionNarratives");
-      const user = buildAiSuggestionUserPrompt(it);
-      let model: string | undefined;
-      let usage: AIUsage | undefined;
-      const content = await chatComplete([{ role: "system", content: sys }, { role: "user", content: user }], settings, { onUsage: (u) => { model = u.model; usage = u; } });
-      let raw: unknown;
-      try {
-        raw = (JSON.parse(content) as { narratives?: unknown }).narratives;
-      } catch {
-        const match = content.match(/\{[\s\S]*\}/);
-        if (match) { try { raw = (JSON.parse(match[0]) as { narratives?: unknown }).narratives; } catch { /* no usable JSON */ } }
-      }
-      const filtered = filterDimensionNarratives(raw, it.findingsGroups);
-      const keys = Object.keys(filtered) as Array<keyof typeof filtered>;
-      if (keys.length === 0) throw new Error("The AI returned no usable narratives — try again.");
-      const generatedAt = new Date().toISOString();
-      setReportDimensionNarratives(Object.fromEntries(keys.map((k) => [suggestionKey(it.id, k), { ...filtered[k]!, generatedAt, model }])));
-      pushAIReviewLog({
-        agent: "Final Report Narrative Writer",
-        reviewType: "Finalisation",
-        subjectId: it.id,
-        verdict: `Narrative written for ${keys.length} dimension${keys.length === 1 ? "" : "s"}`,
-        confidence: "Medium",
-        keyConcerns: keys.map((k) => it.findingsGroups.find((g) => g.key === k)?.label || k),
-        recommendedAction: "Review the Strength/Weakness narrative and Required Action for each dimension below.",
-        live: true,
-        generatedContent: content,
-        promptSent: `SYSTEM:\n${sys}\n\nUSER:\n${user}`,
-        usage,
-      });
-    } catch (err) {
-      setNarError(err instanceof Error ? err.message : String(err));
+      const [written] = await Promise.all([writeReportNarratives([it.id]), generateSuggestions()]);
+      if (written === 0) setNarError("No narrative was generated — check the AI settings on Settings, then try again.");
     } finally {
       setNarBusy(false);
     }
@@ -652,41 +564,22 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         <span style={{ fontSize: 12.5 }}>{it.title}</span>
         {it.hasChecklist && <span style={{ fontSize: 11, color: "#94a3b8" }}>· {it.completeness.assessed} of {it.completeness.total} lines assessed ({it.completeness.met} Met · {it.completeness.partial} Partial · {it.completeness.notMet} Not met)</span>}
         {eligibleDims.length > 0 && (
+          // The single regenerate control (2026-07-18): the narrative is
+          // auto-written by the run, so this exists only as the fallback. One
+          // click refreshes BOTH the auditor narrative and the improvement
+          // suggestion for this item.
           <button
             className="no-print"
-            disabled={sugBusy || !aiReady}
-            onClick={generateSuggestions}
-            title={!aiReady ? "Enable AI and set an API key in Settings first." : "One analysis-model call grounded on this item's assessed findings and the verbatim next-band rubric descriptors. Saved once — it does not regenerate on its own."}
-            style={{ marginLeft: "auto", cursor: sugBusy || !aiReady ? "default" : "pointer", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", opacity: aiReady ? 1 : 0.5, whiteSpace: "nowrap" }}
+            disabled={narBusy || sugBusy || !aiReady}
+            onClick={regenerateReportText}
+            title={!aiReady ? "Enable AI and set an API key in Settings first." : "Rewrites this item's auditor narrative and improvement suggestion from its assessed findings. The narrative is normally written automatically at the end of a run — use this if it is missing or misses the mark."}
+            style={{ marginLeft: "auto", cursor: narBusy || sugBusy || !aiReady ? "default" : "pointer", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", opacity: aiReady ? 1 : 0.5, whiteSpace: "nowrap" }}
           >
-            {sugBusy ? "Writing…" : hasSuggestions ? "Regenerate AI improvement suggestions" : "Generate AI improvement suggestions"}
-          </button>
-        )}
-        {qualifying.length > 0 && (
-          <button
-            className="no-print"
-            disabled={conciseBusy || !aiReady}
-            onClick={generateConciseSummaries}
-            title={!aiReady ? "Enable AI and set an API key in Settings first." : "One analysis-model call that rewrites this item's long finding text as concise auditor prose, grounded only on facts already in the raw text. Saved once — the full raw text stays behind each row's expand."}
-            style={{ marginLeft: eligibleDims.length > 0 ? 0 : "auto", cursor: conciseBusy || !aiReady ? "default" : "pointer", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", opacity: aiReady ? 1 : 0.5, whiteSpace: "nowrap" }}
-          >
-            {conciseBusy ? "Writing…" : hasConcise ? "Rewrite concise summaries" : `Write concise summaries (${qualifying.length})`}
-          </button>
-        )}
-        {eligibleDims.length > 0 && (
-          <button
-            className="no-print"
-            disabled={narBusy || !aiReady}
-            onClick={generateDimensionNarratives}
-            title={!aiReady ? "Enable AI and set an API key in Settings first." : "One analysis-model call grounded on this item's assessed findings and the verbatim next-band rubric descriptors, written as a Strength/Weakness/Band/Required Action narrative. Saved once — it does not regenerate on its own."}
-            style={{ marginLeft: 0, cursor: narBusy || !aiReady ? "default" : "pointer", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", opacity: aiReady ? 1 : 0.5, whiteSpace: "nowrap" }}
-          >
-            {narBusy ? "Writing…" : hasNarratives ? "Rewrite auditor narrative" : "Write auditor narrative"}
+            {narBusy || sugBusy ? "Writing…" : "Regenerate report text"}
           </button>
         )}
       </div>
       {sugError && <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>AI suggestions failed: {sugError}</div>}
-      {conciseError && <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>Concise summaries failed: {conciseError}</div>}
       {narError && <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>Auditor narrative failed: {narError}</div>}
       {it.overallSummary && (
         <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.5, margin: "6px 0 0" }}>{it.overallSummary}</p>
@@ -740,7 +633,11 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                 // instead of silent absence.
                 const sugEligible = g.rows.length > 0 && g.rows.some((r) => r.verdict !== "not-assessed");
                 const missingSug = !sug && hasSuggestions && sugEligible;
-                const missingNar = !nar && hasNarratives && sugEligible;
+                // The narrative is auto-written by the run, so ANY eligible
+                // dimension without one gets the honest placeholder (auto-gen
+                // failed, was cancelled, or the item pre-dates the feature) —
+                // pointing at the one Regenerate button.
+                const missingNar = !nar && sugEligible;
                 // A leg-derived group (Bug B) gets a lead-in row explaining
                 // why other lines' refs appear under this dimension — the
                 // lead-in then carries the rowSpan'd dimension cells.
@@ -751,17 +648,15 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   // never dressed up as a red finding.
                   const label = r.verdict === "strength" ? "Strength" : r.verdict === "weakness" ? "Weakness" : "Not assessed";
                   const color = r.verdict === "strength" ? "#15803d" : r.verdict === "weakness" ? "#b23121" : "#64748b";
-                  // Item 1 + Item 2: a saved concise summary fronts the row
-                  // (raw text moves ENTIRELY behind the expand); without one,
-                  // a multi-entry evidence note (the staged pass's numbered
+                  // A multi-entry evidence note (the staged pass's numbered
                   // "#1 […] #2 […]" merge) shows its FIRST entry by default
                   // with the rest behind the expand — the full raw text is
-                  // never deleted either way.
-                  const summary = conciseFindings[conciseKey(it.id, g.key, r.lineId)];
+                  // never deleted. (The per-row "concise summary" front was
+                  // retired 2026-07-18: the dimension-level auditor narrative
+                  // below is the readable text now.)
                   const noteEntries = splitEvidenceNote(r.finding);
-                  const defaultText = summary ? summary.text : noteEntries[0];
-                  const folded = summary ? r.finding : noteEntries.slice(1).join("\n\n");
-                  const skippedByConcise = !summary && hasConcise && qualifying.some((q) => q.key === conciseKey(it.id, g.key, r.lineId));
+                  const defaultText = noteEntries[0];
+                  const folded = noteEntries.slice(1).join("\n\n");
                   return (
                     <tr key={r.lineId}>
                       {!g.rowsFromLegs && i === 0 && dimCell(totalRows)}
@@ -771,18 +666,6 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                       </td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5, color }}>
                         <b>{label}:</b> {defaultText}
-                        {summary && (
-                          <span className="no-print" style={{ marginLeft: 6, verticalAlign: "middle", whiteSpace: "nowrap" }}>
-                            <span style={{ fontSize: 9.5, fontWeight: 700, color: "#4338ca", border: "1px solid #c7d2fe", borderRadius: 4, padding: "1px 4px", marginRight: 4 }}>AI summary</span>
-                            <ThumbsButtons
-                              onAccept={() => logSuggestionDecision({ module: "Final Report", subjectId: conciseKey(it.id, g.key, r.lineId), field: "conciseSummary", aiOutput: summary.text, humanDecision: summary.text, changed: false, decisionType: "Accepted", reason: "" })}
-                              onReject={() => setSugFeedback({ key: conciseKey(it.id, g.key, r.lineId), text: summary.text })}
-                            />
-                          </span>
-                        )}
-                        {skippedByConcise && (
-                          <span style={{ fontSize: 10, color: "#94a3b8", fontStyle: "italic", marginLeft: 6 }}>(no AI summary generated for this row — rewrite to fill it in)</span>
-                        )}
                         {folded && (
                           <details style={{ marginTop: 3 }}>
                             <summary style={{ fontSize: 10.5, color: "#94a3b8", cursor: "pointer", userSelect: "none" }}>
@@ -836,7 +719,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   rowEls.push(
                     <tr key={`${g.key}-ai-missing`}>
                       <td colSpan={3} style={{ background: "#f8fafc", fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>
-                        No AI suggestion was generated for {g.label}. Click "Regenerate AI improvement suggestions" above to fill it in.
+                        No AI suggestion was generated for {g.label}. Click "Regenerate report text" above to fill it in.
                       </td>
                     </tr>
                   );
@@ -850,7 +733,10 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   const narText = [nar.strength, nar.weakness, nar.bandLine, nar.requiredAction].filter(Boolean).join("\n\n");
                   rowEls.push(
                     <tr key={`${g.key}-ai-narrative`}>
-                      <td colSpan={3} style={{ background: "#fefce8", fontSize: 11.5 }}>
+                      {/* wordBreak: a long unbroken token (file names in the
+                          narrative) must wrap inside the cell, never stretch
+                          the table (part of the 2026-07-18 table-break fix). */}
+                      <td colSpan={3} style={{ background: "#fefce8", fontSize: 11.5, wordBreak: "break-word" }}>
                         <div style={{ fontWeight: 700, color: "#854d0e", marginBottom: 4 }}>
                           Auditor narrative for {g.label} (covers all rows above):
                           <span className="no-print" style={{ marginLeft: 8, verticalAlign: "middle" }}>
@@ -871,7 +757,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   rowEls.push(
                     <tr key={`${g.key}-ai-narrative-missing`}>
                       <td colSpan={3} style={{ background: "#f8fafc", fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>
-                        No auditor narrative was generated for {g.label}. Click "Rewrite auditor narrative" above to fill it in.
+                        Auditor narrative not yet generated for {g.label} — it is written automatically at the end of a run, or click "Regenerate report text" above.
                       </td>
                     </tr>
                   );
