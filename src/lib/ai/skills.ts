@@ -82,6 +82,7 @@ import sgPeiContextSkill           from "../../data/skills/sg-pei-context.md?raw
 import consultantInsightsSkill     from "../../data/skills/consultant-insights.md?raw";
 import riskRemediationSkill        from "../../data/skills/risk-and-remediation.md?raw";
 import commonFindingPatternsSkill  from "../../data/skills/common-ssg-finding-patterns.md?raw";
+import auditorNarrativeVoiceSkill  from "../../data/skills/auditor-narrative-voice.md?raw";
 
 // ─── Named exports (use these when you need an individual skill) ─────────────
 
@@ -108,6 +109,7 @@ export {
   consultantInsightsSkill,
   riskRemediationSkill,
   commonFindingPatternsSkill,
+  auditorNarrativeVoiceSkill,
 };
 
 // ─── Module map ─────────────────────────────────────────────────────────────
@@ -121,6 +123,7 @@ type SkillModule =
   | "findingWriter"
   | "afiClosure"
   | "bandRecommend"
+  | "narrativeWriter"
   | "evidenceTracking"
   | "interviewFieldwork";
 
@@ -164,6 +167,14 @@ const MODULE_SKILLS: Record<SkillModule, { capped: string[]; uncapped: string[] 
   bandRecommend: {
     capped:   [benchmarkingSkill, bandCalibrationSkill, consultantInsightsSkill],
     uncapped: [regulatoryReferencesSkill],
+  },
+  // Shared auditor-narrative voice for user-facing write-ups (piloted on the
+  // Final Report dimension narratives; reusable later by Findings/AFI/Checklist
+  // surfaces). Voice guidance is UNCAPPED — it is the core instruction and
+  // truncating it mid-structure would drop half the six-part shape.
+  narrativeWriter: {
+    capped:   [],
+    uncapped: [auditorNarrativeVoiceSkill],
   },
   evidenceTracking: {
     capped:   [evidenceLedgerSkill],

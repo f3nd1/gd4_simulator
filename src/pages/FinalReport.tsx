@@ -565,14 +565,19 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
     setNarError(null);
     try {
       const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(schoolContext) });
+      // The auditor-narrative voice + six-part structure live in the shared
+      // narrativeWriter skill (auditor-narrative-voice.md), injected below and
+      // reusable by other surfaces later. The inline text keeps only the JSON
+      // envelope and the field-to-part mapping specific to this call site.
       const sys =
-        "You are an experienced EduTrust auditor writing the narrative assessment for a GD4 internal audit readiness report for a Singapore PEI. For EACH dimension in the user message, write a structured narrative reasoning ONLY from the assessed findings listed for that dimension and the quoted verbatim next-band rubric target — never invent a document, figure, approver, number or fact not present in the source text. Use UK spelling, no em dashes. For each dimension produce: " +
-        "\"strength\" — a paragraph naming the sampled evidence that is present and what it shows (omit if the dimension has no strength rows); " +
-        "\"weakness\" — a paragraph that states what is present, then \"However,\" and itemises concretely what is absent (omit if the dimension has no weakness rows); " +
-        "\"bandLine\" — one neutral sentence stating the current band and percentage, required for every dimension given; " +
-        "\"requiredAction\" — the recommended action to close the gap, phrased as a professional recommendation, not a command (omit if there is no weakness to act on). " +
+        "You are an experienced EduTrust auditor writing the narrative assessment for a GD4 internal audit readiness report for a Singapore PEI. Follow the auditor-narrative voice and the six-part structure in the guidance below, reasoning ONLY from the assessed findings listed for that dimension and the quoted verbatim next-band rubric target — never invent a document, figure, approver, number or fact not present in the source text; if the evidence is too thin to name specifics, say so plainly rather than inventing them. Use UK spelling, no em dashes. " +
+        "Map the six-part structure onto these JSON fields for EACH dimension in the user message: " +
+        "\"strength\" — parts 1-2, the sampled evidence present and what it shows (omit if the dimension has no strength rows); " +
+        "\"weakness\" — parts 3-4, what is present then \"However,\" and a concrete itemisation of what is absent (omit if the dimension has no weakness rows); " +
+        "\"bandLine\" — part 5, one neutral sentence stating the current band and percentage, required for every dimension given; " +
+        "\"requiredAction\" — part 6, the recommended action phrased as a professional recommendation, not a command (omit if there is no weakness to act on). " +
         "Respond with JSON only: {\"narratives\": {\"approach\"?: {\"strength\"?: string, \"weakness\"?: string, \"bandLine\": string, \"requiredAction\"?: string}, \"processes\"?: {...}, \"systemsOutcomes\"?: {...}, \"review\"?: {...}}} — include only the dimensions given, using the same shape for each." +
-        buildSystemPrompt("bandRecommend", null, "FinalReport.generateDimensionNarratives");
+        buildSystemPrompt("narrativeWriter", null, "FinalReport.generateDimensionNarratives");
       const user = buildAiSuggestionUserPrompt(it);
       let model: string | undefined;
       let usage: AIUsage | undefined;
