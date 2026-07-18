@@ -309,3 +309,38 @@ describe("setApsrMatrix — the official per-dimension input", () => {
     expect(useChecklistModuleStore.getState().entries[ITEM]!.apsrMatrix!.approach).toBeUndefined();
   });
 });
+
+describe("clearApsrMatrix — undo an AI-first-pass suggestion (2026-07-18)", () => {
+  // The matrix cells can be re-picked but never un-set, so an accidental
+  // "AI first pass (suggest scores)" click otherwise strands the four scores
+  // with no removal path. Clearing must wipe the whole working matrix and
+  // touch nothing else on the entry.
+  it("wipes the whole working matrix back to un-set", () => {
+    const s = useChecklistModuleStore.getState();
+    s.setApsrMatrix(ITEM, "approach", 4);
+    s.setApsrMatrix(ITEM, "processes", 4);
+    s.setApsrMatrix(ITEM, "review", 0);
+    s.clearApsrMatrix(ITEM);
+    expect(useChecklistModuleStore.getState().entries[ITEM]!.apsrMatrix).toBeUndefined();
+  });
+
+  it("leaves the saved band, lines and pendingGenerated untouched", () => {
+    useChecklistModuleStore.setState({
+      entries: {
+        [ITEM]: {
+          gd4ItemId: ITEM,
+          pendingGenerated: [{ id: "P1", text: "pending", status: "Not met", evidence: [], generatedBy: "ai" }],
+          specific: [{ id: "L1", text: "A real line", status: "Met", evidence: [], generatedBy: "ai" }],
+          holisticBand: { band: 3, totalPct: 50, matrixScores: WORKED, rationale: "x", source: "human", decidedAt: "2026-07-18T00:00:00.000Z" },
+          apsrMatrix: { approach: 4, processes: 4, systemsOutcomes: 2, review: 0 },
+        },
+      },
+    });
+    useChecklistModuleStore.getState().clearApsrMatrix(ITEM);
+    const e = useChecklistModuleStore.getState().entries[ITEM]!;
+    expect(e.apsrMatrix).toBeUndefined();
+    expect(e.holisticBand).toBeDefined();
+    expect(e.specific).toHaveLength(1);
+    expect(e.pendingGenerated).toHaveLength(1);
+  });
+});

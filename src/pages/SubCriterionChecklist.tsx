@@ -276,6 +276,7 @@ export function SubCriterionChecklist() {
   const setHolisticBand = useChecklistModuleStore((s) => s.setHolisticBand);
   const clearHolisticBand = useChecklistModuleStore((s) => s.clearHolisticBand);
   const setApsrMatrix = useChecklistModuleStore((s) => s.setApsrMatrix);
+  const clearApsrMatrix = useChecklistModuleStore((s) => s.clearApsrMatrix);
   const suggestBand = useChecklistModuleStore((s) => s.suggestBand);
   const generateSpecific = useChecklistModuleStore((s) => s.generateSpecific);
   const updatePendingLine = useChecklistModuleStore((s) => s.updatePendingLine);
@@ -348,6 +349,9 @@ export function SubCriterionChecklist() {
   const apsrScale = useScoringConfigStore((s) => s.apsrScale);
   const completeness = useMemo(() => lineCompleteness(specific), [specific]);
   const matrixResult = useMemo(() => apsrMatrixResult(entry?.apsrMatrix, apsrScale), [entry?.apsrMatrix, apsrScale]);
+  // Any dimension actually scored in the working matrix (0 is a real score, so
+  // test !== undefined). Gates the "Remove AI scores" undo control below.
+  const matrixHasScores = !!entry?.apsrMatrix && Object.values(entry.apsrMatrix).some((v) => v !== undefined);
   // Saved band DERIVED live from the stored matrixScores under the current
   // scale — so editing the %-scale on Setup re-bands this item immediately,
   // rather than showing the frozen save-time snapshot.
@@ -770,6 +774,20 @@ export function SubCriterionChecklist() {
               >
                 {busy === "band:" + selectedId ? "Assessing…" : bandSuggestion ? "Re-run AI first pass" : "AI first pass (suggest scores)"}
               </button>
+              {/* Undo an accidental AI first pass: it fills the matrix working
+                  copy but never saves a band, and the matrix cells can only be
+                  re-picked, not un-set — so without this the suggested scores
+                  are stuck with no removal path (2026-07-18 bug). Only offered
+                  while nothing is saved; a saved band has its own Clear control. */}
+              {matrixHasScores && !savedBand && (
+                <button
+                  onClick={() => { clearApsrMatrix(selectedId); setBandSuggestion(null); setBandSuggestionSig(null); setBandSavedOk(false); }}
+                  title="Clear the AI-suggested scores from the matrix — nothing is saved, so this removes them without touching lines, findings or run history"
+                  style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "5px 10px", borderRadius: 8, border: "1px solid #e3b7b0", background: "#fff", color: "#b23121" }}
+                >
+                  × Remove AI scores
+                </button>
+              )}
             </div>
             <p style={{ fontSize: 11.5, color: "#6b7280", margin: "4px 0 6px" }}>
               Score each dimension against the official descriptors; the four percentages sum to the band.
