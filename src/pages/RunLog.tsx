@@ -5,7 +5,8 @@ import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { bandTone } from "../lib/theme";
 import { buildRunLogCsv, downloadCsv, downloadBlob } from "../lib/auditCsvExport";
-import type { RunLogEntry, RunLogSubOutcome } from "../types";
+import { aiCallsForRun } from "../lib/runLogCorrelation";
+import type { RunLogEntry, RunLogSubOutcome, AIReviewLogEntry } from "../types";
 
 // Small inline deep-link to a real record the run touched — reuses the app's
 // existing ?item=/?subCrit= navigation, so the run log links to the live
@@ -67,8 +68,53 @@ const inputStyle: React.CSSProperties = {
   background: "#fff",
 };
 
+// The full raw AI output for one run, surfaced for diagnosis — READ from the
+// existing AI Review Log (no copy is stored on the run-log entry), correlated
+// by the run's own window + sub-criterion. Each call's prompt + output expand
+// inline so the whole run's reasoning is reachable without leaving the page.
+function RunAiCalls({ entry, aiLog }: { entry: RunLogEntry; aiLog: AIReviewLogEntry[] }) {
+  const calls = useMemo(() => aiCallsForRun(aiLog, entry), [aiLog, entry]);
+  if (calls.length === 0) return null;
+  return (
+    <>
+      <div style={{ marginTop: 10, fontSize: 10.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginBottom: 4 }}>
+        AI output for this run ({calls.length} call{calls.length === 1 ? "" : "s"})
+      </div>
+      <div style={{ background: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: "6px 10px" }}>
+        {calls.map((c) => (
+          <details key={c.id} style={{ padding: "3px 0", borderBottom: "1px solid #f1f5f9" }}>
+            <summary style={{ cursor: "pointer", fontSize: 11.5, color: "#374151", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 700 }}>{c.agent}</span>
+              <span style={{ color: "#64748b" }}>{c.verdict}</span>
+              <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#94a3b8" }}>
+                {c.model || "—"}{c.totalTokens ? ` · ${c.totalTokens} tok` : ""} · {formatTs(c.createdAt)}
+              </span>
+            </summary>
+            {c.promptSent && (
+              <div style={{ marginTop: 4 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase" }}>Prompt sent</div>
+                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 10.5, color: "#475569", margin: "2px 0 6px", maxHeight: 220, overflowY: "auto", background: "#f8fafc", borderRadius: 6, padding: "6px 8px" }}>{c.promptSent}</pre>
+              </div>
+            )}
+            {c.generatedContent && (
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase" }}>AI output</div>
+                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 10.5, color: "#374151", margin: "2px 0 2px", maxHeight: 220, overflowY: "auto", background: "#f8fafc", borderRadius: 6, padding: "6px 8px" }}>{c.generatedContent}</pre>
+              </div>
+            )}
+          </details>
+        ))}
+        <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 4 }}>
+          Read live from the AI Review Log — see the <Link to="/ai-review" style={{ color: "#4338ca", fontWeight: 700 }}>AI Review Log</Link> for the full diagnostic page.
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function RunLog() {
   const log = useWorkspaceStore((s) => s.runLog);
+  const aiLog = useWorkspaceStore((s) => s.aiReviewLog);
   const [filterMode, setFilterMode] = useState<RunLogEntry["mode"] | "All">("All");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
@@ -240,6 +286,8 @@ export function RunLog() {
                           </div>
                         </>
                       )}
+
+                      <RunAiCalls entry={entry} aiLog={aiLog} />
                     </div>
                   )}
                 </div>

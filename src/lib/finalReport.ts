@@ -269,7 +269,11 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
     const dimLines = specific.filter((l) => resolveLineDimension(l) === label && l.status !== "Not Applicable");
     const buildRow = (l: SpecificChecklistLine, fromLeg: boolean): ItemFindingRow => {
       const itemRef = l.clause || l.sourceRef || l.id;
-      const text = lineDimensionDiagnosis(l, key);
+      // Strip engine chunk headers ("[CHUNK:C003]") that can be quoted inside a
+      // recorded note — they are plumbing the user cannot resolve and were
+      // leaking into both the on-screen row and the generated narrative.
+      const rawText = lineDimensionDiagnosis(l, key);
+      const text = rawText == null ? rawText : stripChunkMarkers(rawText);
       // A dimension Option A structurally never assessed (its per-line note is
       // the not-assessed sentinel) is NEITHER a strength nor a weakness — no
       // data exists to judge it. Detect it first, before any status test, so
@@ -295,7 +299,8 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
       // rows off mid-token at "e.g."). Only the overall summary's inline
       // example still trims to one sentence, via the fixed firstSentence.
       if (isWeakness) {
-        const action = lineSuggestedAction(l);
+        const rawAction = lineSuggestedAction(l);
+        const action = rawAction == null ? rawAction : stripChunkMarkers(rawAction);
         return {
           lineId: l.id, itemRef, verdict: "weakness",
           finding: text || "No detailed diagnosis recorded for this line.",

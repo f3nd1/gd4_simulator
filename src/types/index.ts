@@ -1459,7 +1459,7 @@ export type HybridDraftStep = {
 export type HybridDraftProgress = {
   subCriterionId: string;
   steps: HybridDraftStep[];
-  status: "running" | "complete";
+  status: "running" | "complete" | "cancelled";
   // The same wrap-up line written to the run-log entry — reused, not reworded.
   summary?: string;
 };

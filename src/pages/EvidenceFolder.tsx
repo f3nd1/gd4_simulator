@@ -1932,6 +1932,7 @@ function fmtHybridLiveDetail(p: { detail?: string; window?: { current: number; t
 function HybridDraftOverlay() {
   const progress = useWorkspaceStore((s) => s.hybridDraftProgress);
   const dismiss = useWorkspaceStore((s) => s.dismissHybridDraftProgress);
+  const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
   const ppdP = useWorkspaceStore((s) => s.ppdReviewProgress);
   const evP = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
   const orP = useWorkspaceStore((s) => s.outcomeReviewProgress);
@@ -1969,7 +1970,7 @@ function HybridDraftOverlay() {
       <style>{MODAL_KEYFRAMES}</style>
       <div style={{ background: "#fff", borderRadius: 16, padding: "24px 28px 20px", width: "100%", maxWidth: 480, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginBottom: 4 }}>
-          {running ? `Drafting ${progress.subCriterionId}…` : `Hybrid draft complete — ${progress.subCriterionId}`}
+          {running ? `Drafting ${progress.subCriterionId}…` : progress.status === "cancelled" ? `Hybrid draft cancelled — ${progress.subCriterionId}` : `Hybrid draft complete — ${progress.subCriterionId}`}
         </div>
         {!running && progress.summary && (
           <div style={{ fontSize: 12, color: "#475569", marginBottom: 8 }}>{progress.summary}</div>
@@ -1994,13 +1995,25 @@ function HybridDraftOverlay() {
           })}
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button
-            onClick={dismiss}
-            disabled={running}
-            style={{ cursor: running ? "default" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #cbd5e1", background: running ? "#f1f5f9" : "#fff", color: running ? "#94a3b8" : "#374151" }}
-          >
-            {running ? "Working…" : "Close"}
-          </button>
+          {running ? (
+            // Reuses cancelBusy() — the SAME token/abort the Full Auto overlay's
+            // Cancel uses: it aborts the in-flight AI call and bumps
+            // auditRunToken, which runHybridItemDraft detects to skip the band.
+            <button
+              onClick={cancelBusy}
+              title="Stops the draft at the next safe point: the in-flight AI call is aborted and the band is NOT scored. Steps already completed are kept."
+              style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #fca5a5", background: "#fff5f5", color: "#b23121" }}
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={dismiss}
+              style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: "#374151" }}
+            >
+              Close
+            </button>
+          )}
         </div>
       </div>
     </div>

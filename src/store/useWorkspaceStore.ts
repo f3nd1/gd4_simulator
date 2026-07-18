@@ -2836,6 +2836,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // sub-criterion straight through and stops — never touches another.
         if (!useScoringConfigStore.getState().autoScoreBands) return "stopped";
         const runStartedAt = new Date().toISOString();
+        // Cancel support (reuses the existing token): cancelBusy() aborts the
+        // in-flight AI call AND bumps auditRunToken. We snapshot it here; if it
+        // has changed by the time the audit chain returns, the user cancelled —
+        // and we SKIP band scoring entirely so nothing is ever banded on
+        // incomplete data.
+        const startToken = get().auditRunToken;
         // Live overlay: five real steps, all pending. Marked done/skipped only
         // when the step's real await resolves (see onStep + the reconcile
         // below) — never a fake animated bar.
@@ -2868,6 +2874,29 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setStep("evidence", steps.ppdRan ? (steps.evidenceRan ? "done" : "skipped") : "skipped");
         setStep("findings", steps.evidenceRan ? "done" : "skipped");
         setStep("review", steps.evidenceRan ? "done" : "skipped");
+        // Cancelled during the audit chain: record honestly and STOP before the
+        // band. Steps that genuinely completed keep their writes (a coherent
+        // "some lines assessed" state); the band is never scored, so the item
+        // reads as un-banded / needs-assessment, never complete-but-isn't.
+        if (get().auditRunToken !== startToken) {
+          setStep("band", "skipped");
+          const cancelSummary = `Hybrid draft for ${subCriterionId} cancelled — steps completed before the stop are kept; the band was not scored.`;
+          set((st) => st.hybridDraftProgress ? { hybridDraftProgress: { ...st.hybridDraftProgress, status: "cancelled", summary: cancelSummary } } : {});
+          const cancelledEntry: RunLogEntry = {
+            id: `RUN-${Date.now()}-${++logCounter}`,
+            mode: "hybrid-item",
+            subCriterionIds: [subCriterionId],
+            startedAt: runStartedAt,
+            endedAt: new Date().toISOString(),
+            status: "cancelled",
+            perSub: [{ subCriterionId, path: "A", status: "skipped", note: "cancelled by user", steps }],
+            bandsSet: [],
+            bandsSkipped: [],
+            summary: cancelSummary,
+          };
+          set((st) => ({ runLog: [cancelledEntry, ...st.runLog].slice(0, RUN_LOG_CAP) }));
+          return "cancelled";
+        }
         setStep("band", steps.evidenceRan ? "running" : "skipped");
         const r = await get().autoScoreAssessedItems([subCriterionId]);
         const freshChecklist = useChecklistModuleStore.getState().entries;
