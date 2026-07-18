@@ -84,12 +84,19 @@ evidence, and save - the band then becomes yours and the label goes.
 
 ## Current status
 
-Built so far: this setting and its confirmation dialog, the AI-vs-human
-record keeping (an automatic save is stored and logged as "Automatic", never
-as a human decision), and the "AI-scored, not yet reviewed" labels on the
-Sub-Criterion Checklist, Final Report, Criterion Scorecard, and Export
-Centre (page and exported pack). Still to come: the fully automatic "one
-click runs everything including the band" flow this setting governs. Until
-that flow lands, no automatic run sets a band regardless of this setting,
-so turning it on has no effect yet beyond recording your choice. This
-section will be updated when that flow ships.
+Fully built and live for Full Auto. When the setting is ON, a Full Auto run
+("Run full audit") now, as its final step, scores the band for every item it
+assessed: it asks the AI for the four per-dimension scores and a written
+reason, and saves the band automatically as an "Automatic" decision, marked
+"AI-scored, not yet reviewed" everywhere it appears (Sub-Criterion Checklist,
+Final Report and its PDF, Criterion Scorecard, Export Centre page and pack).
+An item the AI cannot score cleanly (the suggestion is unavailable, or the
+save would fail either mandatory gate) is left blank and listed on the run's
+completion summary for you to band by hand, never guessed. When the setting
+is OFF the run stops at verdicts and findings exactly as before, sets no
+band, and the completion summary is unchanged.
+
+Not yet wired: the Hybrid "first pass = Full Auto" flow (a separate change
+with its own per-line approval gates). The single automatic band step above
+lives in the Full Auto sweep only; a manual single-folder audit never
+auto-scores.

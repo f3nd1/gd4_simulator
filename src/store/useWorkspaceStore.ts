@@ -94,7 +94,7 @@ import { buildOptionALineWrites, buildOptionASourceTrace } from "../lib/optionAC
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, partitionOptionAWrites, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
 import { effectiveVerdictTemp, describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
-import { lineApsr, findingDimension, buildDraftFinding } from "../lib/checklistBanding";
+import { lineApsr, findingDimension, buildDraftFinding, apsrMatrixResult } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 
@@ -745,6 +745,15 @@ export type WorkspaceState = {
   // full-screen overlay; cancel goes through the existing abort mechanism.
   fullAuditProgress: FullAuditProgress | null;
   runFullAudit: () => Promise<void>;
+  // Post-sweep band pass for Full Auto. No-op (returns empty) unless the
+  // "Auto-score bands" scoring-config setting is ON — that gate is what keeps
+  // a setting-OFF run byte-identical to before this feature existed. For each
+  // assessed item under the given sub-criteria it runs the AI band suggestion
+  // and saves it via setHolisticBand({ source: "ai-auto" }); an item the AI
+  // cannot score cleanly (suggestion unavailable, or a gate would reject) is
+  // skipped, never force-saved. Reused only by runFullAudit today; exposed so
+  // it can be unit-tested directly.
+  autoScoreAssessedItems: (subIds: string[]) => Promise<{ set: string[]; skipped: { itemId: string; reason: string }[] }>;
   dismissFullAuditProgress: () => void;
   // Checklist writes held for human review by the gated modes, one pending
   // run per sub-criterion (a new run replaces the previous pending one).
@@ -2600,6 +2609,38 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       dismissFullAuditProgress: () => set({ fullAuditProgress: null }),
 
+      autoScoreAssessedItems: async (subIds) => {
+        const set: string[] = [];
+        const skipped: { itemId: string; reason: string }[] = [];
+        // THE gate: setting OFF → do nothing, touch nothing. This is what makes
+        // a Full Auto run byte-identical to before the feature when it is off.
+        if (!useScoringConfigStore.getState().autoScoreBands) return { set, skipped };
+        const subSet = new Set(subIds);
+        const checklist = useChecklistModuleStore.getState();
+        // Only items that were actually assessed (have checklist lines) under a
+        // swept sub-criterion. suggestBand reads live line state, fully settled
+        // by the time the sweep loop has finished.
+        const items = GD4_REQUIREMENTS.filter(
+          (r) => subSet.has(r.subCriterionId) && (checklist.entries[r.id]?.specific?.length ?? 0) > 0,
+        );
+        for (const req of items) {
+          // suggestBand is the same AI call + learning-loop + AI-review-log the
+          // human accept flow uses; null = AI unavailable/failed → skip, honest.
+          const s = await useChecklistModuleStore.getState().suggestBand(req.id);
+          if (!s) { skipped.push({ itemId: req.id, reason: "AI band suggestion unavailable" }); continue; }
+          // Mirror the UI's saveBand gate so a skip is reported rather than a
+          // silent no-op inside setHolisticBand: complete matrix + a rationale.
+          if (!apsrMatrixResult(s.dimensionBands, useScoringConfigStore.getState().apsrScale).complete) {
+            skipped.push({ itemId: req.id, reason: "incomplete APSR matrix from the AI suggestion" });
+            continue;
+          }
+          if (!s.rationale.trim()) { skipped.push({ itemId: req.id, reason: "AI returned no written justification" }); continue; }
+          useChecklistModuleStore.getState().setHolisticBand(req.id, { matrixScores: s.dimensionBands, rationale: s.rationale, source: "ai-auto" });
+          set.push(req.id);
+        }
+        return { set, skipped };
+      },
+
       runFullAudit: async () => {
         if (get().fullAuditProgress?.status === "running" || get().busy) return;
         // See runPPDReview: no run without a named auditor.
@@ -2664,11 +2705,30 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const doneCount = entries.filter((e) => e.status === "done").length;
         const errorCount = entries.filter((e) => e.status === "error").length;
+
+        // Consolidated post-sweep band pass (single insertion point — see the
+        // helper's note). A no-op unless the "Auto-score bands" setting is ON.
+        // Skipped when cancelled: the user stopped, so don't score on top of a
+        // half-finished sweep. Each item is banded once here, from its fully
+        // settled checklist state, covering both Option A and staged items.
+        let autoScore: FullAuditProgress["autoScore"];
+        if (!cancelled) {
+          const doneSubIds = entries.filter((e) => e.status === "done").map((e) => e.subCriterionId);
+          const r = await get().autoScoreAssessedItems(doneSubIds);
+          // Undefined when the setting was off (nothing attempted) so the
+          // overlay stays identical to a pre-feature run; populated otherwise.
+          if (r.set.length > 0 || r.skipped.length > 0) autoScore = { set: r.set.length, skipped: r.skipped };
+        }
+        const autoScorePhrase = autoScore
+          ? ` Auto-scored ${autoScore.set} band(s)${autoScore.skipped.length > 0 ? `, ${autoScore.skipped.length} left for manual scoring` : ""}.`
+          : "";
+
         setFull({
           status: cancelled ? "cancelled" : "complete",
+          autoScore,
           summary: cancelled
             ? `Cancelled — ${doneCount} of ${linkedCount} linked sub-criteria completed before the stop.`
-            : `Full audit complete — ${doneCount} of ${linkedCount} linked sub-criteria audited${errorCount > 0 ? `, ${errorCount} errored/timed out` : ""}; ${plan.length - linkedCount} had no links.`,
+            : `Full audit complete — ${doneCount} of ${linkedCount} linked sub-criteria audited${errorCount > 0 ? `, ${errorCount} errored/timed out` : ""}; ${plan.length - linkedCount} had no links.${autoScorePhrase}`,
         });
       },
 

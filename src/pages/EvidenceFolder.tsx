@@ -1817,6 +1817,15 @@ function FullAuditOverlay() {
         {!running && progress.summary && (
           <div style={{ fontSize: 12.5, color: "#475569", marginBottom: 6 }}>{progress.summary}</div>
         )}
+        {/* Auto-score outcome: only present when the "Auto-score bands" setting
+            was on for this run. Names the items left unscored so the user knows
+            exactly what to band by hand — never a silent gap. */}
+        {!running && progress.autoScore && progress.autoScore.skipped.length > 0 && (
+          <div style={{ fontSize: 11.5, color: "#713f12", background: "#fefce8", border: "1px solid #eab308", borderRadius: 6, padding: "7px 10px", marginBottom: 8 }}>
+            <b>Needs manual scoring ({progress.autoScore.skipped.length}):</b>{" "}
+            {progress.autoScore.skipped.map((s) => `${s.itemId} (${s.reason})`).join("; ")}. Open each on the Sub-Criterion Checklist and set its band.
+          </div>
+        )}
 
         {/* Percentage ring + live stat chips */}
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, margin: "6px 0 12px" }}>

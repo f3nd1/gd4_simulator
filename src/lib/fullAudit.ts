@@ -72,6 +72,12 @@ export type FullAuditProgress = {
   entries: FullAuditEntry[];
   // One-line wrap-up shown when the run ends.
   summary?: string;
+  // Populated only when the "Auto-score bands" setting was ON for this run:
+  // how many item bands the AI set automatically, and which items it could
+  // not score cleanly (left blank for manual attention, never guessed).
+  // Stays undefined when the setting is OFF — the overlay is then identical
+  // to before this feature existed.
+  autoScore?: { set: number; skipped: { itemId: string; reason: string }[] };
 };
 
 // Hard per-sub-criterion ceiling for the Full auto sweep. A single stalled
