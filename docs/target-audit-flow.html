@@ -65,7 +65,7 @@
 
 <div class="banner">
   &#9888; <strong>This is the PROPOSED / TARGET flow you are designing — not what the code does today.</strong>
-  Today's Hybrid pauses at each step going forward; the version below runs a full draft first, then lets you iterate.
+  Today's Hybrid pauses at each step going forward; in the version below, each per-item "Run audit" click drives that one sub-criterion straight through to a draft, then you iterate.
   This diagram doubles as the spec for building it.
 </div>
 
@@ -89,17 +89,20 @@
   </div>
 </div>
 
-<h2 class="section">&#128260; Hybrid <span class="mode-tag">— your usual mode: fast full draft, then iterate</span></h2>
-<div class="mode-desc">First pass is just like Full Auto — one click gives you a complete draft all the way to the Final Report. Then you loop back into any module, adjust, re-run, and re-land on the report as many times as you like until you're happy. Human judgement lives in the <em>refinement</em>, not in blocking each step.</div>
+<h2 class="section">&#128260; Hybrid <span class="mode-tag">— your usual mode: one item at a time, hands-off, then iterate</span></h2>
+<div class="mode-desc">Per sub-criterion, on YOUR schedule. You pick an item and click its normal <strong>"Run audit"</strong> — not a whole-criterion sweep — and that ONE item runs straight through to a complete draft with no mid-run pause. No other sub-criterion is touched. Do the next item when you choose. Then you loop back into any module, adjust, re-run, and re-land on the report until you're happy. Human judgement lives in the <em>refinement</em>, not in blocking each step.</div>
 <div class="lane">
   <div class="row">
-    <div class="endcap start">START<br>Evidence Folder</div>
+    <div class="endcap start">START<br>one sub-criterion</div>
     <div class="track">
-      <div class="node auto"><div class="node-title">Same automatic first pass as Full Auto <span class="badge auto">auto draft</span></div><div class="node-meta">Read &#8594; verdicts &#8594; Outcomes/Review &#8594; findings &#8594; band, all in one go, to give you a full draft.</div></div>
+      <div class="node gated"><div class="node-title">You click "Run audit" on ONE item <span class="badge gated">your click</span></div><div class="node-meta">Pick the A/B path on that row first; the click drives only this sub-criterion.</div></div>
+      <div class="down">&#8595;</div>
+      <div class="node auto"><div class="node-title">That one item runs straight through <span class="badge auto">auto, no pause</span></div><div class="node-meta">Verdicts &#8594; compile findings &#8594; Outcomes/Review &#8594; band, all in one go for this item only.</div></div>
     </div>
-    <div class="endcap end">DRAFT<br>Final Report</div>
+    <div class="endcap end">DRAFT<br>for that item</div>
   </div>
 </div>
+<div class="mode-desc" style="margin-top:6px;">Repeat per item when you want. Full Auto (below-left) differs only in that its one "Run full audit" click does <em>every</em> sub-criterion at once; Hybrid does one at a time, driven by you.</div>
 
 <div class="loop-wrap">
   <div class="loop-label">&#8635; THEN ITERATE — as many loops as you want</div>
@@ -142,7 +145,7 @@
 
 <div class="footer-note">
   <strong>The band (6&#215;4 matrix)</strong> lives on the <em>Sub-Criterion Checklist &#8594; each item &#8594; "APSR band — per-dimension percentage matrix"</em> section.
-  In the target design it auto-scores in Full Auto and in the Hybrid first draft; it stays fully manual in Manual mode; and in every mode you can always re-open it and override.
+  In the target design it auto-scores in Full Auto and in a Hybrid per-item hands-off run; it stays fully manual in Manual mode; and in every mode you can always re-open it and override.
   Text extraction and score/report recalculation always run in the background regardless of mode — that's infrastructure, not a judgement call.
 </div>
 

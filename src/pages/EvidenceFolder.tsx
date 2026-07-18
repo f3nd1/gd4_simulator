@@ -2058,7 +2058,7 @@ export function EvidenceFolder() {
   const auditMode           = useWorkspaceStore((s) => s.auditMode);
   const fullAuditProgress   = useWorkspaceStore((s) => s.fullAuditProgress);
   const runFullAudit        = useWorkspaceStore((s) => s.runFullAudit);
-  const runHybridFirstDraft = useWorkspaceStore((s) => s.runHybridFirstDraft);
+  const runHybridItemDraft  = useWorkspaceStore((s) => s.runHybridItemDraft);
   const autoScoreBands      = useScoringConfigStore((s) => s.autoScoreBands);
   const pendingGates        = useWorkspaceStore((s) => Object.values(s.pendingCommits).reduce((a, r) => a + r.items.length, 0));
   const tip = useTip();
@@ -2616,11 +2616,10 @@ export function EvidenceFolder() {
       {/* Cycle mode chip + Full-auto master action. The chip is instructional
           (it just states the current mode), so its ✕ dismiss is EPHEMERAL —
           local state, reappears on reload — matching the other instructional
-          tips. In Full-auto (and in Hybrid when auto-scoring is on) the SAME
-          chip hosts the master run action, so the ✕ is not offered there
-          (hiding it would hide the run control); the chip therefore never
-          hides while it carries a run button. */}
-      {!(modeChipHidden && !(auditMode === "full-auto" || (auditMode === "hybrid" && autoScoreBands))) && (
+          tips. In Full-auto the SAME chip hosts the "Run full audit" action, so
+          the ✕ is not offered there (hiding it would hide the run control);
+          full-auto therefore never hides. */}
+      {!(modeChipHidden && auditMode !== "full-auto") && (
       <div id="wt-mode-chip" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10, padding: "8px 12px", border: "1px solid #ddd6fe", background: "#faf5ff", borderRadius: 8 }}>
         <span style={{ fontSize: 12.5, fontWeight: 700, color: "#5b21b6" }}>
           Audit mode: {auditModeLabel(auditMode)}
@@ -2638,21 +2637,6 @@ export function EvidenceFolder() {
             style={{ marginLeft: "auto", cursor: busy || noAuditors ? "not-allowed" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #7c3aed", background: noAuditors ? "#c4b5fd" : "#7c3aed", color: "#fff" }}
           >
             ⚡ Run full audit
-          </button>
-        ) : auditMode === "hybrid" && autoScoreBands ? (
-          // One-click Hybrid first draft — only offered when auto-scoring is on
-          // (the whole behaviour is gated on it). Runs the full sweep like Full
-          // auto and auto-scores the bands, producing one complete draft; the
-          // per-row run buttons below stay for the iterate phase afterwards.
-          // When auto-scoring is off this branch is absent and Hybrid shows no
-          // new control, exactly as today.
-          <button
-            onClick={() => runHybridFirstDraft()}
-            disabled={!!busy || fullAuditProgress?.status === "running" || noAuditors}
-            title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Runs every linked sub-criterion end to end like Full auto and AI-scores each band (labelled 'AI-scored, not yet reviewed'), producing one complete draft. Afterwards, re-run any row individually to refine it with the normal per-line approval.")}
-            style={{ marginLeft: "auto", cursor: busy || noAuditors ? "not-allowed" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #7c3aed", background: noAuditors ? "#c4b5fd" : "#7c3aed", color: "#fff" }}
-          >
-            🤝 Run Hybrid first draft
           </button>
         ) : (
           <DismissX onClick={() => setModeChipHidden(true)} title="Hide for now (reappears on reload)" color="#7c3aed" />
@@ -2914,21 +2898,26 @@ export function EvidenceFolder() {
                       </Link>
                     ) : path === "A" ? (
                       // Option A is multi-step (PPD → evidence → compile).
-                      // Clicking here ONLY opens the near-fullscreen review
-                      // MODAL over this page — same no-navigation shape as
-                      // Option B's "Run audit" — and does NOT start any run
-                      // itself; the user picks "Run PPD review" or "Run
-                      // evidence assessment" inside the modal. Used to fire
-                      // runPPDReview() immediately on click too, which meant
-                      // a click here silently started (and billed) a run the
-                      // user hadn't asked for yet if they just wanted to look.
+                      // Default: clicking ONLY opens the near-fullscreen review
+                      // MODAL over this page — it does NOT start any run itself;
+                      // the user picks "Run PPD review"/"Run evidence
+                      // assessment" inside (opening it must never silently bill
+                      // a run the user only wanted to look at).
+                      // Hybrid + auto-scoring ON: this deliberate click ALSO
+                      // drives THIS one sub-criterion straight through
+                      // (runHybridItemDraft: verdicts → compile → Outcomes/
+                      // Review → band), hands-off, and the modal shows it
+                      // running. Scoped to this sub only; never a sweep.
                       <button
-                        onClick={() => setOptionAModal(f.subCriterionId)}
+                        onClick={() => { setOptionAModal(f.subCriterionId); if (auditMode === "hybrid" && autoScoreBands) runHybridItemDraft(f.subCriterionId); }}
                         disabled={noAuditors}
-                        title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Option A (PPD + Evidence): opens the full review, where you run the PPD review, then the evidence assessment, then compile findings. In Hybrid mode you approve, edit or reject each verdict inside that review — beside the evidence rows that produced it — before it commits.")}
+                        title={noAuditors ? MSG_NO_AUDITORS_EXIST
+                          : auditMode === "hybrid" && autoScoreBands
+                            ? tip("Runs this ONE sub-criterion end to end and AI-scores its band (labelled 'AI-scored, not yet reviewed'): verdicts, compile findings, Outcomes & Review, band — no mid-run pause. Review it afterwards on the Final Report. No other sub-criterion is touched.")
+                            : tip("Option A (PPD + Evidence): opens the full review, where you run the PPD review, then the evidence assessment, then compile findings. In Hybrid mode you approve, edit or reject each verdict inside that review — beside the evidence rows that produced it — before it commits.")}
                         style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >
-                        Run review
+                        {auditMode === "hybrid" && autoScoreBands ? "Run audit →" : "Run review"}
                       </button>
                     ) : (
                       <button

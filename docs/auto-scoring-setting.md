@@ -96,23 +96,21 @@ completion summary for you to band by hand, never guessed. When the setting
 is OFF the run stops at verdicts and findings exactly as before, sets no
 band, and the completion summary is unchanged.
 
-Also live for Hybrid's first draft. When the setting is ON, Hybrid mode
-gains a one-click "Run Hybrid first draft" button that runs the whole sweep
-exactly like Full Auto - verdicts and findings commit immediately (no
-per-line queue, no Compile click) and the bands auto-score - producing one
-complete draft in a single trigger. Afterwards you refine by re-running any
-row individually, and those individual re-runs keep the normal Hybrid gates
-(per-line approval, Compile click). When the setting is OFF the button is
-absent and Hybrid behaves exactly as before (per-row runs, per-line approval,
-Compile click, no auto-band). A manual single-folder audit never auto-scores,
-and Full Manual mode is completely unaffected in every case.
+Also live for Hybrid, per sub-criterion. When the setting is ON, clicking the
+normal per-item "Run audit" on a single Option A sub-criterion in Hybrid mode
+drives THAT one item straight through with no mid-run pause: verdicts, then
+auto-compile findings, then run and apply the Outcomes & Review pass, then
+auto-score the band ("AI-scored, not yet reviewed", logged Automatic). No
+other sub-criterion is touched - you pick the next item when you choose, and
+review on the Final Report afterwards (the iterate loop). This is NOT a
+whole-criterion sweep; Full Auto (one button, every item at once) is the only
+all-items run. When the setting is OFF, the Hybrid per-item run behaves exactly
+as before (opens the review; you run each step and compile/apply/band by
+hand). Full Manual mode is completely unaffected.
 
-Complete-draft chaining (both sweeps, when the setting is ON): a hands-off
-sweep - Full Auto or the Hybrid first draft - now also runs and applies the
-Outcomes & Review pass for each Option A sub-criterion before the band scores,
-so the Systems & Outcomes and Review dimensions carry real judgements instead
-of "not assessed" placeholders and the auto-band rests on complete data. This
-runs only inside a sweep; an individual per-row re-run during iteration still
-leaves the Outcomes & Review "Apply to checklist" step manual, unchanged.
-Applying those legs never moves a band by itself - only the auto-score step
-sets the band, off the now-complete data.
+Because the Outcomes & Review pass runs before the band scores, the Systems &
+Outcomes and Review dimensions carry real judgements instead of "not assessed"
+placeholders, so the auto-band rests on complete data. Applying those legs
+never moves a band by itself - only the auto-score step sets the band, off the
+now-complete data. The same Outcomes & Review chaining runs inside the Full
+Auto sweep too (both are gated on this setting).

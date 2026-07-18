@@ -91,7 +91,7 @@ function enqueuePanelAutoRun(findingId: string, getRunner: () => (id: string, op
 }
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
 import { buildOptionALineWrites, buildOptionASourceTrace } from "../lib/optionAChecklistWrite";
-import { DEFAULT_AUDIT_MODE, partitionWritesByMode, partitionOptionAWrites, auditModeLabel, stagedWriteConfidence, effectiveAutomationMode } from "../lib/runModes";
+import { DEFAULT_AUDIT_MODE, partitionWritesByMode, partitionOptionAWrites, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
 import { effectiveVerdictTemp, describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
 import { lineApsr, findingDimension, buildDraftFinding, apsrMatrixResult } from "../lib/checklistBanding";
@@ -754,17 +754,12 @@ export type WorkspaceState = {
   // skipped, never force-saved. Reused only by runFullAudit today; exposed so
   // it can be unit-tested directly.
   autoScoreAssessedItems: (subIds: string[]) => Promise<{ set: string[]; skipped: { itemId: string; reason: string }[] }>;
-  // Transient (never persisted): true only while a Hybrid first-pass sweep is
-  // running, which makes auditFolderStaged's Option B path commit + raise like
-  // Full auto for the sweep's duration. Every per-row Hybrid run leaves it
-  // false, so their per-line queue / Compile-click gates are untouched.
-  forceFullAutoSweep: boolean;
-  // Hybrid "run everything" first draft: one trigger that runs the whole sweep
-  // like Full auto (commit verdicts, raise findings, auto-score bands). Gated
-  // entirely on the autoScoreBands setting — a no-op when it is off, so Hybrid
-  // stays byte-identical to today. Reuses runFullAudit + autoScoreAssessedItems
-  // verbatim; the only difference is the forceFullAutoSweep flag it sets.
-  runHybridFirstDraft: () => Promise<void>;
+  // Hybrid per-item hands-off draft: drives ONE sub-criterion (Option A)
+  // straight through — runOptionAFullAuto (PPD -> Evidence -> compile ->
+  // Outcomes/Review) then the band auto-scores off that complete data. Scoped
+  // to the single sub whose "Run audit" was clicked; never a sweep, never
+  // cascades. Wired only from that deliberate click when autoScoreBands is on.
+  runHybridItemDraft: (subCriterionId: string) => Promise<void>;
   dismissFullAuditProgress: () => void;
   // Checklist writes held for human review by the gated modes, one pending
   // run per sub-criterion (a new run replaces the previous pending one).
@@ -1094,7 +1089,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       sampleDataActive: false,
       priorCycleFindings: null,
       busy: null,
-      forceFullAutoSweep: false,
       auditRunToken: 0,
       auditSkipStageFlag: false,
       auditProgress: null,
@@ -2744,22 +2738,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         });
       },
 
-      runHybridFirstDraft: async () => {
-        // Gated ENTIRELY on the setting: off → strict no-op, so Hybrid stays
-        // byte-identical to today (no sweep, per-row gates intact). The button
-        // is hidden when off too; this guard is the belt-and-braces backstop.
+      runHybridItemDraft: async (subCriterionId) => {
+        // Gated ENTIRELY on the setting: off → strict no-op, so a Hybrid
+        // per-item run stays exactly as today (the caller only wires this in
+        // when on; this guard is the belt-and-braces backstop). Drives ONE
+        // sub-criterion straight through and stops — never touches another.
         if (!useScoringConfigStore.getState().autoScoreBands) return;
-        // Flip the whole sweep to Full-auto behaviour (Option B commits + raises
-        // via auditFolderStaged's effective-mode read) for its duration only,
-        // then clear it no matter how the sweep ends. runFullAudit already does
-        // the sweep, Option A compile (via runOptionAFullAuto) and the band
-        // auto-score (autoScoreAssessedItems) — reused verbatim, nothing dupes.
-        set({ forceFullAutoSweep: true });
-        try {
-          await get().runFullAudit();
-        } finally {
-          set({ forceFullAutoSweep: false });
-        }
+        // runOptionAFullAuto: PPD → Evidence → compile → Outcomes/Review (O/R
+        // gated on autoScoreBands, already true here). Then the band scores off
+        // that now-complete APSR — findings + O/R fully settle before it runs.
+        // Both reused verbatim; nothing duplicated. Scoped to this one sub.
+        await get().runOptionAFullAuto(subCriterionId);
+        await get().autoScoreAssessedItems([subCriterionId]);
       },
 
       resolvePendingItem: (subCriterionId, itemId, decision, overrideStatus) => {
@@ -5221,10 +5211,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set({ auditBlockedReason: null });
         // Automation mode for this sub-criterion (NOT the scope `mode` param):
         // decides whether verdicts commit immediately, queue for review, or
-        // whether the run happens at all (manual). A Hybrid first-pass sweep
-        // (forceFullAutoSweep) runs like Full auto for its duration; every
-        // per-row Hybrid run leaves the flag false and keeps today's gates.
-        const automationMode: AuditMode = effectiveAutomationMode(s.auditMode, s.forceFullAutoSweep);
+        // whether the run happens at all (manual).
+        const automationMode: AuditMode = s.auditMode;
         if (automationMode === "manual") {
           // Manual mode: the AI must not auto-decide anything — no AI calls,
           // no verdicts. The user enters verdicts in the checklist directly.
@@ -6845,9 +6833,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ...s,
           fileTextCache: {},
           changeLog: [],
-          // Transient sweep flag — never persist it (a mid-sweep debounced
-          // write must not restore true and silently full-auto a later run).
-          forceFullAutoSweep: false,
           aiReviewLog: capLog(s.aiReviewLog),
           ppdReviewResults: capPpd(s.ppdReviewResults),
           ppdReviewHistory: capPpdHistory(s.ppdReviewHistory),
