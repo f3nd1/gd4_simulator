@@ -8,7 +8,7 @@ import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrMatrixResult, classifyUntaggedLinesByContent } from "../lib/checklistBanding";
+import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrMatrixResult, classifyUntaggedLinesByContent, resolveLineDimension } from "../lib/checklistBanding";
 import { BandImprovementPanel } from "../components/ui/BandImprovementPanel";
 import { bandTitle, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
 import { ApsrMatrixSelector } from "../components/ui/ApsrMatrixSelector";
@@ -949,7 +949,14 @@ export function SubCriterionChecklist() {
                   {l.sourceType && (
                     <div style={{ fontSize: 10, color: "#78716c", marginTop: 2, paddingLeft: 2 }}>
                       GD4 source: {sourceLabel(l.sourceType, l.sourceIndex, l.sourceRef ?? undefined)}
-                      {l.apsrDimension && <span style={{ marginLeft: 8, color: "#9ca3af" }}>APSR: {l.apsrDimension}</span>}
+                      {/* Show the RESOLVED APSR dimension (from the official
+                          requirement ref), not just the stored tag — a manual
+                          or Option-A line has no stored tag but still resolves
+                          a correct dimension, so it is never shown as
+                          "untagged". "(auto)" marks a resolved-not-stored one.
+                          Display only: this never affects the band, which comes
+                          from the holistic matrix. */}
+                      <span style={{ marginLeft: 8, color: "#9ca3af" }} title={l.apsrDimension ? "Dimension tag set on this line" : "Dimension resolved from the official requirement reference (no manual tag needed)"}>APSR: {resolveLineDimension(l)}{!l.apsrDimension ? " (auto)" : ""}</span>
                       {l.sourceText && <span style={{ marginLeft: 8, color: "#b0ada8", fontStyle: "italic" }} title={l.sourceText}>"{l.sourceText.slice(0, 80)}{l.sourceText.length > 80 ? "…" : ""}"</span>}
                     </div>
                   )}
@@ -1025,12 +1032,14 @@ export function SubCriterionChecklist() {
               l.status === "Not Applicable"  ? "#94a3b8" :
               "#cbd5e1"; // Not Started
 
-            // Row 1 background tint by APSR dimension — subtle orientation cue
+            // Row 1 background tint by RESOLVED APSR dimension (from the ref,
+            // not only the stored tag) — subtle orientation cue, display only.
+            const resolvedDim = resolveLineDimension(l);
             const dimBg =
-              l.apsrDimension === "Approach"           ? "#f0f6ff" :
-              l.apsrDimension === "Processes"          ? "#f5f3ff" :
-              l.apsrDimension === "Systems & Outcomes" ? "#f0fdf4" :
-              l.apsrDimension === "Review"             ? "#fffbeb" :
+              resolvedDim === "Approach"           ? "#f0f6ff" :
+              resolvedDim === "Processes"          ? "#f5f3ff" :
+              resolvedDim === "Systems & Outcomes" ? "#f0fdf4" :
+              resolvedDim === "Review"             ? "#fffbeb" :
               "#f8fafc";
 
             const row2Bg =
@@ -1060,7 +1069,7 @@ export function SubCriterionChecklist() {
                   {l.afiTag && <Pill s="critical">AFI {l.afiTag}</Pill>}
                   <span style={{ fontSize: 12.5, flex: 1, lineHeight: 1.45, color: "#1e293b" }}>{l.text}</span>
                   <div style={{ display: "flex", gap: 5, alignItems: "center", flexShrink: 0, marginTop: 1 }}>
-                    {l.apsrDimension && <Pill s="neutral">{l.apsrDimension}</Pill>}
+                    <Pill s="neutral">{resolvedDim}{!l.apsrDimension ? " · auto" : ""}</Pill>
                   </div>
                 </div>
                 {/* Row 2 — controls (smaller, stop click propagation) */}
@@ -1090,12 +1099,19 @@ export function SubCriterionChecklist() {
                       manual/seed lines never get this any other way, and this
                       does not regenerate or duplicate any line content. */}
                   <span style={{ fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.3 }}>Dimension</span>
+                  {/* The empty value is NOT "untagged/broken": it means the line
+                      uses its auto-resolved dimension (from the official
+                      requirement ref, shown as the "· auto" pill above). Setting
+                      a value here is an optional manual override. Dimension
+                      tagging is display grouping only — it never changes the
+                      band, which comes from the holistic APSR matrix. */}
                   <select
                     value={l.apsrDimension ?? ""}
                     onChange={(e) => setLineApsrDimension(selectedId, l.id, (e.target.value || undefined) as SpecificChecklistLine["apsrDimension"])}
                     style={{ ...inputStyle, width: "auto", padding: "3px 5px", fontSize: 11 }}
+                    title={`Grouping only — does not affect the band. Empty uses the auto-resolved dimension (${resolveLineDimension(l)}).`}
                   >
-                    <option value="">— untagged —</option>
+                    <option value="">— auto ({resolveLineDimension(l)}) —</option>
                     {EDUTRUST_DIMENSIONS.map((d) => <option key={d.key} value={d.label}>{d.label}</option>)}
                   </select>
                   {l.generatedBy === "ai" && (
@@ -1260,7 +1276,7 @@ export function SubCriterionChecklist() {
                         <div style={{ fontWeight: 700, color: "#15803d", marginBottom: 4, textTransform: "uppercase", fontSize: 10.5, letterSpacing: 0.3 }}>Evidence strength</div>
                         <div style={{ marginBottom: 4 }}>{metVerdictSummary(metEvidence.apsr)}</div>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                          {l.apsrDimension && <Pill s="good">{l.apsrDimension}</Pill>}
+                          <Pill s="good">{resolveLineDimension(l)}{!l.apsrDimension ? " · auto" : ""}</Pill>
                           {citedChunkIds(metEvidence.apsr).length > 0 ? (
                             <span style={{ fontSize: 11, color: "#166534" }}>
                               Cited: {citedChunkIds(metEvidence.apsr).join(", ")}

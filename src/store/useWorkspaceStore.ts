@@ -3915,7 +3915,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       removeDepartment: (id) => set((s) => ({ departments: s.departments.filter((d) => d.id !== id) })),
       resetDepartments: () => set({ departments: DEFAULT_DEPARTMENTS }),
 
-      setFolderField: (id, field, value) => set((s) => ({ folders: s.folders.map((f) => (f.id === id ? { ...f, [field]: value } : f)) })),
+      setFolderField: (id, field, value) => set((s) => ({
+        folders: s.folders.map((f) => {
+          if (f.id !== id) return f;
+          // Editing/deleting a link must clear that tab's stale cached access
+          // status — otherwise a prior "Error" (rendered as "Policy/Evidence:
+          // Can't read") survives the delete + re-add because the folder id is
+          // reused per sub-criterion. Cleared to undefined → the chip reads the
+          // honest "Linked" (not-yet-checked) until a real access check runs.
+          const clear =
+            field === "folderLink" ? { accessCheckStatus: undefined, accessCheckNote: undefined, accessCheckAt: undefined } :
+            field === "policyLink" ? { policyAccessStatus: undefined, policyAccessNote: undefined, policyAccessAt: undefined } :
+            {};
+          return { ...f, [field]: value, ...clear };
+        }),
+      })),
 
       // "Check access" action on the Evidence Folder page: a real Drive API
       // call (files.list) confirming whether the connected Google account can
