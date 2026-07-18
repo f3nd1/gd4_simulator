@@ -7,8 +7,9 @@ import {
   exportAISummaryCsv,
   exportOptionASummaryCsv,
   progressToRunRecord,
+  buildRunLogCsv,
 } from "../auditCsvExport";
-import type { AuditFileRecord, AuditAISummaryLine, AuditRunRecord, PPDReviewRow, EvidenceAssessmentRow } from "../../types";
+import type { AuditFileRecord, AuditAISummaryLine, AuditRunRecord, PPDReviewRow, EvidenceAssessmentRow, RunLogEntry } from "../../types";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -470,5 +471,58 @@ describe("exportFileLedgerCsvFor — Option A ledger matches the staged ledger c
     const d = optionA.split("\r\n")[1].split(",");
     expect(d[h.indexOf("readMethod")]).toBe("vision");
     expect(d[h.indexOf("auditRunId")]).toBe("AR-4.1-Z");
+  });
+});
+
+describe("buildRunLogCsv — automated-run audit trail", () => {
+  const fullAuto: RunLogEntry = {
+    id: "RUN-1",
+    mode: "full-auto",
+    subCriterionIds: ["6.2", "1.1"],
+    startedAt: "2026-07-18T10:00:00Z",
+    endedAt: "2026-07-18T10:05:00Z",
+    status: "complete",
+    perSub: [
+      { subCriterionId: "6.2", path: "A", status: "done", steps: { ppdRan: true, evidenceRan: true, findingsCompiled: 3, outcomeReviewApplied: true } },
+      { subCriterionId: "1.1", path: "B", status: "done" }, // Option B: no steps
+    ],
+    bandsSet: [{ itemId: "6.2.1", band: 3, totalPct: 50 }],
+    bandsSkipped: [],
+    summary: "Full audit complete.",
+  };
+
+  it("emits one row per per-sub outcome with the real step outcomes", () => {
+    const csv = buildRunLogCsv([fullAuto]);
+    const lines = csv.split("\r\n");
+    expect(lines.length).toBe(3); // header + 2 sub-criteria
+    const h = lines[0].split(",");
+    const a = lines[1].split(",");
+    expect(a[h.indexOf("subCriterionId")]).toBe("6.2");
+    expect(a[h.indexOf("ppdRan")]).toBe("yes");
+    expect(a[h.indexOf("findingsCompiled")]).toBe("3");
+    // Bands joined to their sub-criterion by exact id-prefix.
+    expect(a[h.indexOf("bandsForSubCriterion")]).toBe("6.2.1:B3(50%)");
+  });
+
+  it("leaves Option B step columns BLANK (no steps captured — never a fabricated 'no')", () => {
+    const csv = buildRunLogCsv([fullAuto]);
+    const lines = csv.split("\r\n");
+    const h = lines[0].split(",");
+    const b = lines[2].split(",");
+    expect(b[h.indexOf("subCriterionId")]).toBe("1.1");
+    expect(b[h.indexOf("ppdRan")]).toBe("");
+    expect(b[h.indexOf("evidenceRan")]).toBe("");
+    expect(b[h.indexOf("findingsCompiled")]).toBe("");
+  });
+
+  it("does NOT cross-attach a band from a different sub-criterion", () => {
+    const csv = buildRunLogCsv([fullAuto]);
+    const b = csv.split("\r\n")[2].split(","); // the 1.1 row
+    const h = csv.split("\r\n")[0].split(",");
+    expect(b[h.indexOf("bandsForSubCriterion")]).toBe(""); // 6.2.1 must not leak onto 1.1
+  });
+
+  it("returns a header-only CSV for an empty log", () => {
+    expect(buildRunLogCsv([]).split("\r\n").length).toBe(1);
   });
 });

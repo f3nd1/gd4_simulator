@@ -1,9 +1,19 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { bandTone } from "../lib/theme";
+import { buildRunLogCsv, downloadCsv, downloadBlob } from "../lib/auditCsvExport";
 import type { RunLogEntry, RunLogSubOutcome } from "../types";
+
+// Small inline deep-link to a real record the run touched — reuses the app's
+// existing ?item=/?subCrit= navigation, so the run log links to the live
+// content instead of copying it.
+const drillLinkStyle: React.CSSProperties = {
+  fontSize: 10.5, fontWeight: 700, color: "#4338ca", textDecoration: "none",
+  border: "1px solid #c7d2fe", borderRadius: 5, padding: "1px 6px", whiteSpace: "nowrap",
+};
 
 function formatTs(iso: string): string {
   try {
@@ -83,11 +93,34 @@ export function RunLog() {
   return (
     <div className="grid gap-3">
       <Card>
-        <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 700 }}>Run Log</h2>
-        <p style={{ margin: "0 0 14px", fontSize: 11.5, color: "#6b7280" }}>
-          What an automated run actually did — Full Auto sweeps and Hybrid per-item hands-off drafts. A record of
-          what happened, never an input to scoring. For individual AI-call prompts/outputs, see the AI Review Log.
-        </p>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 260 }}>
+            <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 700 }}>Run Log</h2>
+            <p style={{ margin: "0 0 14px", fontSize: 11.5, color: "#6b7280" }}>
+              What an automated run actually did — Full Auto sweeps and Hybrid per-item hands-off drafts. A record of
+              what happened, never an input to scoring. For individual AI-call prompts/outputs, see the AI Review Log.
+            </p>
+          </div>
+          {/* Whole-log export: a portable audit trail. CSV opens in Excel (one
+              row per sub-criterion outcome); JSON is the full-fidelity record.
+              Both reuse the shared export helpers. */}
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              disabled={log.length === 0}
+              onClick={() => downloadCsv(buildRunLogCsv(log), `run-log-${new Date().toISOString().slice(0, 10)}.csv`)}
+              style={{ fontSize: 11, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", cursor: log.length === 0 ? "default" : "pointer", opacity: log.length === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
+            >
+              Export CSV
+            </button>
+            <button
+              disabled={log.length === 0}
+              onClick={() => downloadBlob(JSON.stringify(log, null, 2), `run-log-${new Date().toISOString().slice(0, 10)}.json`, "application/json")}
+              style={{ fontSize: 11, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", cursor: log.length === 0 ? "default" : "pointer", opacity: log.length === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
+            >
+              Export JSON
+            </button>
+          </div>
+        </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
           {[
@@ -173,8 +206,13 @@ export function RunLog() {
                       </div>
                       <div style={{ background: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: "6px 10px" }}>
                         {entry.perSub.map((o) => (
-                          <div key={o.subCriterionId} style={{ fontSize: 11.5, color: "#374151", padding: "3px 0", borderBottom: "1px solid #f1f5f9" }}>
-                            {subOutcomeLine(o)}
+                          <div key={o.subCriterionId} style={{ fontSize: 11.5, color: "#374151", padding: "3px 0", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ flex: 1, minWidth: 180 }}>{subOutcomeLine(o)}</span>
+                            {/* Drill-down: links to the real records this sub-criterion
+                                touched — the app's existing ?subCrit= deep-links, not a
+                                copy of the finding/evidence content. */}
+                            <Link to={`/findings?subCrit=${encodeURIComponent(o.subCriterionId)}`} style={drillLinkStyle}>Findings</Link>
+                            {o.path === "A" && <Link to="/evidence-folder" style={drillLinkStyle}>Evidence</Link>}
                           </div>
                         ))}
                       </div>
@@ -186,14 +224,17 @@ export function RunLog() {
                           </div>
                           <div style={{ background: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: "6px 10px" }}>
                             {entry.bandsSet.map((b) => (
-                              <div key={b.itemId} style={{ fontSize: 11.5, color: "#374151", padding: "3px 0", display: "flex", alignItems: "center", gap: 8 }}>
+                              <div key={b.itemId} style={{ fontSize: 11.5, color: "#374151", padding: "3px 0", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                                 <Pill s={bandTone(b.band)}>B{b.band} · {b.totalPct}%</Pill>
-                                <span>{b.itemId} — set automatically, labelled "AI-scored, not yet reviewed"</span>
+                                <span style={{ flex: 1, minWidth: 180 }}>{b.itemId} — set automatically, labelled "AI-scored, not yet reviewed"</span>
+                                <Link to={`/sub-checklist?item=${encodeURIComponent(b.itemId)}`} style={drillLinkStyle}>Checklist</Link>
+                                <Link to="/final-report" style={drillLinkStyle}>Final Report</Link>
                               </div>
                             ))}
                             {entry.bandsSkipped.map((s) => (
-                              <div key={s.itemId} style={{ fontSize: 11.5, color: "#b45309", padding: "3px 0" }}>
-                                {s.itemId} — not scored: {s.reason}
+                              <div key={s.itemId} style={{ fontSize: 11.5, color: "#b45309", padding: "3px 0", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ flex: 1, minWidth: 180 }}>{s.itemId} — not scored: {s.reason}</span>
+                                <Link to={`/sub-checklist?item=${encodeURIComponent(s.itemId)}`} style={drillLinkStyle}>Checklist</Link>
                               </div>
                             ))}
                           </div>

@@ -1906,6 +1906,55 @@ function FullAuditOverlay() {
   );
 }
 
+// Live overlay for a Hybrid per-item hands-off draft — Full Auto has its own
+// (FullAuditOverlay); this is the single-item equivalent so the run does not
+// look frozen. Reads hybridDraftProgress, which the store sets one step at a
+// time only when each real await resolves. Five steps; a step that produced no
+// usable rows shows "skipped", never a fake "done".
+function HybridDraftOverlay() {
+  const progress = useWorkspaceStore((s) => s.hybridDraftProgress);
+  const dismiss = useWorkspaceStore((s) => s.dismissHybridDraftProgress);
+  if (!progress) return null;
+  const running = progress.status === "running";
+  const toneOf = (s: "pending" | "running" | "done" | "skipped") =>
+    s === "done" ? TONE.good : s === "skipped" ? TONE.medium : s === "running" ? TONE.progress : TONE.neutral;
+  const word = (s: "pending" | "running" | "done" | "skipped") =>
+    s === "running" ? "running…" : s === "done" ? "done" : s === "skipped" ? "skipped" : "waiting";
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 120, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "24px 28px 20px", width: "100%", maxWidth: 460, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginBottom: 4 }}>
+          {running ? `Drafting ${progress.subCriterionId}…` : `Hybrid draft complete — ${progress.subCriterionId}`}
+        </div>
+        {!running && progress.summary && (
+          <div style={{ fontSize: 12, color: "#475569", marginBottom: 8 }}>{progress.summary}</div>
+        )}
+        <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 12px", margin: "10px 0 14px" }}>
+          {progress.steps.map((s) => {
+            const tone = toneOf(s.status);
+            return (
+              <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, lineHeight: 2 }}>
+                <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: tone.fg, flexShrink: 0, opacity: s.status === "pending" ? 0.4 : 1 }} />
+                <span style={{ color: tone.fg, fontWeight: s.status === "running" ? 700 : 500, opacity: s.status === "pending" ? 0.7 : 1, flex: 1 }}>{s.label}</span>
+                <span style={{ color: tone.fg, opacity: 0.85, fontSize: 11 }}>{word(s.status)}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={dismiss}
+            disabled={running}
+            style={{ cursor: running ? "default" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #cbd5e1", background: running ? "#f1f5f9" : "#fff", color: running ? "#94a3b8" : "#374151" }}
+          >
+            {running ? "Working…" : "Close"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // The live, per-sub-criterion detail for the sub-criterion being assessed
 // RIGHT NOW, shown inside the Full-auto overlay. Reads the same auditProgress
 // state the standalone AuditProgressModal uses, so the user watches the
@@ -2057,6 +2106,7 @@ export function EvidenceFolder() {
   // Automation mode per sub-criterion + the queue of verdicts awaiting review.
   const auditMode           = useWorkspaceStore((s) => s.auditMode);
   const fullAuditProgress   = useWorkspaceStore((s) => s.fullAuditProgress);
+  const hybridDraftProgress = useWorkspaceStore((s) => s.hybridDraftProgress);
   const runFullAudit        = useWorkspaceStore((s) => s.runFullAudit);
   const runHybridItemDraft  = useWorkspaceStore((s) => s.runHybridItemDraft);
   const autoScoreBands      = useScoringConfigStore((s) => s.autoScoreBands);
@@ -2646,6 +2696,7 @@ export function EvidenceFolder() {
 
       <div id="wt-path-guidance"><PathGuidance /></div>
       {fullAuditProgress && <FullAuditOverlay />}
+      {hybridDraftProgress && <HybridDraftOverlay />}
 
       {/* Card list — one self-contained card per sub-criterion. Everything
           stacks vertically and wraps; the container never scrolls sideways. */}

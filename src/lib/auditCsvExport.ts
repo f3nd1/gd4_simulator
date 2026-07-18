@@ -1,4 +1,4 @@
-import type { AuditRunRecord, AuditFileRecord, AuditAISummaryLine, PPDReviewRow, EvidenceAssessmentRow } from "../types";
+import type { AuditRunRecord, AuditFileRecord, AuditAISummaryLine, PPDReviewRow, EvidenceAssessmentRow, RunLogEntry } from "../types";
 
 // Escapes a single CSV cell: wraps in double-quotes when the value contains
 // commas, quotes or line breaks; escapes inner double-quotes by doubling them.
@@ -239,6 +239,42 @@ import type { Finding } from "../types";
 import { resolveFindingType, resolveNcSeverity } from "./findingClassification";
 
 export type FindingClosureLite = { root?: string; corr?: string; prev?: string; evid?: string; human?: "" | "Accepted" };
+
+// ── Run Log CSV ──────────────────────────────────────────────────────────────
+// The automated-run audit trail: one row per per-sub-criterion outcome (a run
+// with N sub-criteria produces N rows), carrying the run metadata and the REAL
+// captured step outcomes. Bands are per-item, joined to their sub-criterion by
+// exact id-prefix (item "6.2.1" belongs to sub "6.2"; the trailing "." makes it
+// unambiguous) — never fabricated. Option B rows have no `steps` (its staged
+// pipeline is not separately instrumented), so their step columns are blank
+// rather than a fake "yes"/count.
+export function buildRunLogCsv(entries: RunLogEntry[]): string {
+  const headers = [
+    "runId", "mode", "startedAt", "endedAt", "runStatus",
+    "subCriterionId", "path", "subStatus", "note",
+    "ppdRan", "evidenceRan", "findingsCompiled", "outcomeReviewApplied",
+    "bandsForSubCriterion",
+  ];
+  const rows: unknown[][] = [];
+  for (const e of entries) {
+    for (const o of e.perSub) {
+      const bands = e.bandsSet
+        .filter((b) => b.itemId === o.subCriterionId || b.itemId.startsWith(o.subCriterionId + "."))
+        .map((b) => `${b.itemId}:B${b.band}(${b.totalPct}%)`)
+        .join("; ");
+      rows.push([
+        e.id, e.mode, e.startedAt, e.endedAt, e.status,
+        o.subCriterionId, o.path, o.status, o.note ?? "",
+        o.steps ? (o.steps.ppdRan ? "yes" : "no") : "",
+        o.steps ? (o.steps.evidenceRan ? "yes" : "no") : "",
+        o.steps ? o.steps.findingsCompiled : "",
+        o.steps ? (o.steps.outcomeReviewApplied ? "yes" : "no") : "",
+        bands,
+      ]);
+    }
+  }
+  return toCsv(headers, rows);
+}
 
 export function buildFindingsRegisterCsv(
   findings: Finding[],

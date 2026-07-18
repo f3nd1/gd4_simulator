@@ -1445,6 +1445,25 @@ export type RunLogEntry = {
   summary: string;
 };
 
+// Live progress for a Hybrid per-item hands-off draft (runHybridItemDraft).
+// Transient (like fullAuditProgress — NOT persisted): drives the
+// HybridDraftOverlay so the run doesn't look frozen. Each step's status is
+// set by the writer only when that step's real await resolves — never a fake
+// animated bar. Full Auto already has its own live overlay (FullAuditOverlay)
+// and does not use this.
+export type HybridDraftStep = {
+  key: "ppd" | "evidence" | "findings" | "review" | "band";
+  label: string;
+  status: "pending" | "running" | "done" | "skipped";
+};
+export type HybridDraftProgress = {
+  subCriterionId: string;
+  steps: HybridDraftStep[];
+  status: "running" | "complete";
+  // The same wrap-up line written to the run-log entry — reused, not reworded.
+  summary?: string;
+};
+
 // ── Prompt Review feature ────────────────────────────────────────────────────
 // A PARALLEL, user-authored "reviewable prompt" object and a connected
 // review → revise → log loop. Deliberately does NOT touch the app's real

@@ -48,7 +48,8 @@ describe("runHybridItemDraft — per-item hands-off draft (2026-07-18)", () => {
     const { runOptionAFullAuto, autoScoreAssessedItems } = stub();
     useScoringConfigStore.setState({ autoScoreBands: true });
     await useWorkspaceStore.getState().runHybridItemDraft(SUB);
-    expect(runOptionAFullAuto).toHaveBeenCalledWith(SUB);
+    // Second arg is the live-progress onStep callback (drives HybridDraftOverlay).
+    expect(runOptionAFullAuto).toHaveBeenCalledWith(SUB, expect.any(Function));
     expect(autoScoreAssessedItems).toHaveBeenCalledWith([SUB]); // scoped, no cascade
     // Band pass runs AFTER the audit chain (findings + O/R settled first).
     expect(runOptionAFullAuto.mock.invocationCallOrder[0])

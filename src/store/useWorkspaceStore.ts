@@ -20,6 +20,7 @@ import type {
   RunLogEntry,
   RunLogSubOutcome,
   RunLogBandResult,
+  HybridDraftProgress,
   DimensionNarrative,
   CalibrationExample,
   CalibrationMemory,
@@ -781,6 +782,11 @@ export type WorkspaceState = {
   // cascades. Wired only from that deliberate click when autoScoreBands is on.
   runHybridItemDraft: (subCriterionId: string) => Promise<void>;
   dismissFullAuditProgress: () => void;
+  // Live per-step progress for the Hybrid draft (transient, never persisted) —
+  // Full Auto has its own overlay (fullAuditProgress); this is only set by
+  // runHybridItemDraft so the single-item run shows real step completion.
+  hybridDraftProgress: HybridDraftProgress | null;
+  dismissHybridDraftProgress: () => void;
   // Checklist writes held for human review by the gated modes, one pending
   // run per sub-criterion (a new run replaces the previous pending one).
   pendingCommits: Record<string, PendingRun>;
@@ -798,7 +804,10 @@ export type WorkspaceState = {
   // Returns which real steps ran, for the Run Log (RunLogSubOutcome.steps) —
   // never fabricated, exactly the same early-return decisions the function
   // already made.
-  runOptionAFullAuto: (subCriterionId: string) => Promise<{ ppdRan: boolean; evidenceRan: boolean; findingsCompiled: number; outcomeReviewApplied: boolean }>;
+  // onStep (optional) fires at each real internal boundary as it STARTS —
+  // used only by runHybridItemDraft to drive its live overlay; Full Auto
+  // passes nothing and is unaffected. Never changes what runs or in what order.
+  runOptionAFullAuto: (subCriterionId: string, onStep?: (step: "ppd" | "evidence" | "findings" | "review") => void) => Promise<{ ppdRan: boolean; evidenceRan: boolean; findingsCompiled: number; outcomeReviewApplied: boolean }>;
 
   // LEGACY change-log copy: kept in state only so the one-time migration into
   // the dedicated append-only useChangeLogStore can read previously-persisted
@@ -1176,6 +1185,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       reviewPanelAuditorIds: [],
       reviewPanelMode: "on-demand",
       fullAuditProgress: null,
+      hybridDraftProgress: null,
       pendingCommits: {},
       changeLog: [],
       showDeveloperTools: DEFAULT_SHOW_DEVELOPER_TOOLS,
@@ -2654,6 +2664,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       },
 
       dismissFullAuditProgress: () => set({ fullAuditProgress: null }),
+      dismissHybridDraftProgress: () => set({ hybridDraftProgress: null }),
 
       autoScoreAssessedItems: async (subIds) => {
         const set: string[] = [];
@@ -2821,11 +2832,39 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // sub-criterion straight through and stops — never touches another.
         if (!useScoringConfigStore.getState().autoScoreBands) return;
         const runStartedAt = new Date().toISOString();
+        // Live overlay: five real steps, all pending. Marked done/skipped only
+        // when the step's real await resolves (see onStep + the reconcile
+        // below) — never a fake animated bar.
+        const stepDefs: HybridDraftProgress["steps"] = [
+          { key: "ppd", label: "PPD review", status: "pending" },
+          { key: "evidence", label: "Evidence assessment", status: "pending" },
+          { key: "findings", label: "Compile findings", status: "pending" },
+          { key: "review", label: "Outcomes & Review", status: "pending" },
+          { key: "band", label: "Score band", status: "pending" },
+        ];
+        const ORDER = stepDefs.map((s) => s.key);
+        const setStep = (key: HybridDraftProgress["steps"][number]["key"], status: HybridDraftProgress["steps"][number]["status"]) =>
+          set((st) => st.hybridDraftProgress ? { hybridDraftProgress: { ...st.hybridDraftProgress, steps: st.hybridDraftProgress.steps.map((s) => s.key === key ? { ...s, status } : s) } } : {});
+        set({ hybridDraftProgress: { subCriterionId, steps: stepDefs.map((s) => ({ ...s })), status: "running" } });
         // runOptionAFullAuto: PPD → Evidence → compile → Outcomes/Review (O/R
         // gated on autoScoreBands, already true here). Then the band scores off
         // that now-complete APSR — findings + O/R fully settle before it runs.
         // Both reused verbatim; nothing duplicated. Scoped to this one sub.
-        const steps = await get().runOptionAFullAuto(subCriterionId);
+        // onStep marks the starting step running and every earlier step done —
+        // an earlier step can only be "before" the running one because it
+        // already resolved.
+        const steps = await get().runOptionAFullAuto(subCriterionId, (step) => {
+          const at = ORDER.indexOf(step);
+          ORDER.slice(0, at).forEach((k) => setStep(k, "done"));
+          setStep(step, "running");
+        });
+        // Reconcile the four Option A steps from the REAL returned outcome: a
+        // step that never produced usable rows is "skipped", not "done".
+        setStep("ppd", steps.ppdRan ? "done" : "skipped");
+        setStep("evidence", steps.ppdRan ? (steps.evidenceRan ? "done" : "skipped") : "skipped");
+        setStep("findings", steps.evidenceRan ? "done" : "skipped");
+        setStep("review", steps.evidenceRan ? "done" : "skipped");
+        setStep("band", steps.evidenceRan ? "running" : "skipped");
         const r = await get().autoScoreAssessedItems([subCriterionId]);
         const freshChecklist = useChecklistModuleStore.getState().entries;
         const bandsSet: RunLogEntry["bandsSet"] = r.set
@@ -2836,6 +2875,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const summary = status === "done"
           ? `Hybrid draft complete for ${subCriterionId} — ${steps.findingsCompiled} finding(s) compiled${steps.outcomeReviewApplied ? ", Outcomes & Review applied" : ""}${bandsSet.length > 0 ? `, band ${bandsSet[0].band} (${bandsSet[0].totalPct}%) set` : r.skipped.length > 0 ? `, band not set (${r.skipped[0].reason})` : ""}.`
           : `Hybrid draft for ${subCriterionId} stopped early — ${!steps.ppdRan ? "PPD review returned no rows" : "evidence assessment returned no rows"}.`;
+        // Band step outcome + overlay handover to its final state (kept open;
+        // the user closes it, revealing the Option A result modal underneath).
+        if (steps.evidenceRan) setStep("band", bandsSet.length > 0 ? "done" : "skipped");
+        set((st) => st.hybridDraftProgress ? { hybridDraftProgress: { ...st.hybridDraftProgress, status: "complete", summary } } : {});
         const runLogEntry: RunLogEntry = {
           id: `RUN-${Date.now()}-${++logCounter}`,
           mode: "hybrid-item",
@@ -2957,8 +3000,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return { pendingCommits: rest };
         }),
 
-      runOptionAFullAuto: async (subCriterionId) => {
+      runOptionAFullAuto: async (subCriterionId, onStep) => {
         // Step 1 — PPD review. Stop the chain if it failed or was stopped.
+        onStep?.("ppd");
         await get().runPPDReview(subCriterionId);
         const ppd = get().ppdReviewResults[subCriterionId];
         if (!ppd || ppd.rows.length === 0 || ppd.runWarnings?.some((w) => /stopped/i.test(w))) {
@@ -2966,12 +3010,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
         // Step 2 — evidence assessment. Its finish() applies the checklist
         // writes itself under full_auto.
+        onStep?.("evidence");
         await get().runEvidenceAssessment(subCriterionId);
         const ev = get().evidenceAssessments[subCriterionId];
         if (!ev || ev.rows.length === 0 || ev.rows.every((r) => r.verdict === "Not assessed")) {
           return { ppdRan: true, evidenceRan: false, findingsCompiled: 0, outcomeReviewApplied: false };
         }
         // Step 3 — compile findings (existing deduped pipeline).
+        onStep?.("findings");
         const findingsCompiled = get().compileEvidenceFindings(subCriterionId);
         // Step 4 — hands-off sweeps only: also run + apply the Outcomes &
         // Review pass so Option A's Systems & Outcomes and Review legs carry
@@ -2986,6 +3032,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // applyOutcomeReviewResult writes only those two legs, never the band.
         let outcomeReviewApplied = false;
         if (useScoringConfigStore.getState().autoScoreBands) {
+          onStep?.("review");
           await get().runOutcomeReviewPass(subCriterionId);
           if (get().outcomeReviewResults[subCriterionId]) {
             outcomeReviewApplied = get().applyOutcomeReviewResult(subCriterionId) > 0;
