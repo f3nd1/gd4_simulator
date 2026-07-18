@@ -16,7 +16,7 @@ function presetName(t: { provisional: number; fourYear: number; star: number }):
 }
 
 export function GD4ScoringSetup() {
-  const { awardThresholds, aiStrictness, apsrScale, setAwardThresholds, setAiStrictness, setApsrScale, resetApsrScale, applyPreset } = useScoringConfigStore();
+  const { awardThresholds, aiStrictness, apsrScale, autoScoreBands, setAwardThresholds, setAiStrictness, setApsrScale, resetApsrScale, applyPreset, setAutoScoreBands } = useScoringConfigStore();
   const avg = (v: number) => (v / 200).toFixed(2);
   const isDefaultScale =
     apsrScale.maxPctPerDimension === DEFAULT_APSR_SCALE.maxPctPerDimension &&
@@ -82,6 +82,36 @@ export function GD4ScoringSetup() {
         <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 8 }}>
           Below {awardThresholds.provisional} = Not certified. Bigger gaps between tiers make the jump harder — "Hard" makes both Provisional→4-Year and 4-Year→Star large, so Star is genuinely difficult while Provisional stays attainable. Strict AI marking lowers coverage, which also raises the bar.
         </div>
+      </Card>
+
+      <Card>
+        <h3 style={{ marginTop: 0, fontSize: 14 }}>Band auto-scoring — Full Auto / Hybrid first draft</h3>
+        {/* Mandatory confirm on enable: this flips the tool's standing
+            contract ("AI recommends, the human decides the certification
+            score") for automatic runs — never silently activated. Turning it
+            OFF needs no confirm and never touches bands already saved.
+            The automatic run step this governs is wired separately; see
+            docs/auto-scoring-setting.md and docs/target-flow-gap-analysis.md. */}
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", fontSize: 12.5 }}>
+          <input
+            type="checkbox"
+            checked={autoScoreBands}
+            onChange={(e) => {
+              if (!e.target.checked) { setAutoScoreBands(false); return; }
+              if (confirm(
+                "Turning this on means the AI will set your certification band automatically during a Full Auto run or a Hybrid first-pass draft, without your review at the moment it is set.\n\nEvery band set this way is marked \"AI-scored, not yet reviewed\" wherever it appears, and you can still open and change any band afterward. Bands you have already saved are never changed by this setting.\n\nAre you sure?"
+              )) setAutoScoreBands(true);
+            }}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            <b>Auto-score bands in Full Auto / Hybrid draft</b>{" "}
+            {autoScoreBands ? <Pill s="medium">On — AI decides, you review after</Pill> : <Pill s="neutral">Off — you decide every band (default)</Pill>}
+            <span style={{ display: "block", fontSize: 11.5, color: "#6b7280", marginTop: 3 }}>
+              Off (the default): every band is set by you on the Sub-Criterion Checklist — the AI only ever suggests. On: an automatic run may also fill in the band itself, using the AI's suggested scores and its written reasoning; the band is then labelled "AI-scored, not yet reviewed" everywhere it appears until you open it and save it yourself. It never changes bands you have already saved, and it never removes your ability to override. Plain-English details: docs/auto-scoring-setting.md.
+            </span>
+          </span>
+        </label>
       </Card>
 
       <Card>

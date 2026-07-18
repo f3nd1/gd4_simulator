@@ -16,11 +16,21 @@ export type ScoringConfigState = {
   // The APSR percentage scale (max % per dimension + total→band thresholds).
   // Reconstructed from one auditor example, so it's editable, not hardcoded.
   apsrScale: ApsrScale;
+  // Opt-in: let a Full Auto run / Hybrid first-pass draft set the APSR band
+  // matrix automatically (AI decides, human reviews AFTER instead of before).
+  // DEFAULT OFF — the tool's standing contract is "AI recommends, human
+  // decides the certification score" (docs/target-flow-gap-analysis.md); this
+  // flips that for automatic runs only, per the user's explicit choice on the
+  // GD4 Scoring Setup page (mandatory confirm dialog there — never silently).
+  // Never changes bands already saved; human saves are unaffected either way.
+  // See docs/auto-scoring-setting.md.
+  autoScoreBands: boolean;
   setAwardThresholds: (t: AwardThresholds) => void;
   setAiStrictness: (s: AiStrictness) => void;
   setApsrScale: (s: ApsrScale) => void;
   resetApsrScale: () => void;
   applyPreset: (name: string) => void;
+  setAutoScoreBands: (on: boolean) => void;
 };
 
 // /1000 totals. Average band needed = threshold / 200 (since max = 1000 = all
@@ -38,6 +48,7 @@ export const useScoringConfigStore = create<ScoringConfigState>()(
       awardThresholds: AWARD_PRESETS.Hard,
       aiStrictness: "Strict",
       apsrScale: { ...DEFAULT_APSR_SCALE },
+      autoScoreBands: false,
       setAwardThresholds: (awardThresholds) => set({ awardThresholds }),
       setAiStrictness: (aiStrictness) => set({ aiStrictness }),
       setApsrScale: (apsrScale) => set({ apsrScale }),
@@ -46,6 +57,7 @@ export const useScoringConfigStore = create<ScoringConfigState>()(
         const p = AWARD_PRESETS[name];
         if (p) set({ awardThresholds: { ...p } });
       },
+      setAutoScoreBands: (autoScoreBands) => set({ autoScoreBands }),
     }),
     { name: "ucc-gd4-scoring-config:v1", storage: workspaceStorage }
   )
