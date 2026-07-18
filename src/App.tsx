@@ -20,6 +20,7 @@ import { Findings } from "./pages/Findings";
 import { AFIClosure } from "./pages/AFIClosure";
 import { AIReview } from "./pages/AIReview";
 import { HumanDecisionLog } from "./pages/HumanDecisionLog";
+import { RunLog } from "./pages/RunLog";
 import { AIDebugLog } from "./pages/AIDebugLog";
 import { Finalisation } from "./pages/Finalisation";
 import { ExportCentre } from "./pages/ExportCentre";
@@ -64,6 +65,7 @@ export default function App() {
           <Route element={<DevToolsRoute />}>
             <Route path="/ai-review" element={<AIReview />} />
             <Route path="/human-decision-log" element={<HumanDecisionLog />} />
+            <Route path="/run-log" element={<RunLog />} />
             <Route path="/ai-debug" element={<AIDebugLog />} />
             <Route path="/ai-calibration" element={<AICalibration />} />
           </Route>

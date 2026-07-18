@@ -1382,6 +1382,48 @@ export type HumanDecisionEntry = {
   memoryId?: string;
 };
 
+// ── Run Log ───────────────────────────────────────────────────────────────
+// A visible record of what an AUTOMATED run actually did, distinct from
+// AIReviewLogEntry (per-AI-call prompt/output detail) and HumanDecisionEntry
+// (per-decision human trail). One entry per Full Auto sweep or per Hybrid
+// per-item hands-off run (useWorkspaceStore.runFullAudit/runHybridItemDraft).
+// Persisted (see runLog in useWorkspaceStore), capped, never used for scoring
+// — a record of what happened, not an input to it.
+
+// Per-sub-criterion outcome within a run. `steps` is populated ONLY for
+// Option A sub-criteria (runOptionAFullAuto's own real early-return
+// decisions) — Option B's staged pipeline bundles verdicts, a built-in
+// Outcomes & Review pass and auto-raised findings internally and is not
+// separately instrumented here; its `status`/`note` are what is genuinely
+// observable for it. Never fabricate a `steps` value for path B.
+export type RunLogSubOutcome = {
+  subCriterionId: string;
+  path: "A" | "B";
+  status: "done" | "skipped" | "error";
+  note?: string;
+  steps?: { ppdRan: boolean; evidenceRan: boolean; findingsCompiled: number; outcomeReviewApplied: boolean };
+};
+
+// A band the run auto-scored, with the REAL resulting band/percentage read
+// back from the saved holisticBand record right after autoScoreAssessedItems
+// wrote it — never a guessed or re-derived value.
+export type RunLogBandResult = { itemId: string; band: Band; totalPct: number };
+
+export type RunLogEntry = {
+  id: string;
+  mode: "full-auto" | "hybrid-item";
+  subCriterionIds: string[];
+  startedAt: string;
+  endedAt: string;
+  status: "complete" | "cancelled";
+  perSub: RunLogSubOutcome[];
+  bandsSet: RunLogBandResult[];
+  bandsSkipped: { itemId: string; reason: string }[];
+  // The same human-readable wrap-up line already shown on the completion
+  // overlay/summary for this run — reused, not duplicated wording.
+  summary: string;
+};
+
 // ── Prompt Review feature ────────────────────────────────────────────────────
 // A PARALLEL, user-authored "reviewable prompt" object and a connected
 // review → revise → log loop. Deliberately does NOT touch the app's real

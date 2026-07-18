@@ -17,6 +17,9 @@ import type {
   AIReviewType,
   Confidence,
   HumanDecisionEntry,
+  RunLogEntry,
+  RunLogSubOutcome,
+  RunLogBandResult,
   CalibrationExample,
   CalibrationMemory,
   CalibrationMemoryStatus,
@@ -127,6 +130,11 @@ const PROMPT_PERSIST_CAP = 4_000;
 // Task 2: how many PAST (non-current) Option A runs to keep per
 // sub-criterion, same cap convention as useCalibrationStore's RUN_HISTORY_CAP.
 const OPTION_A_RUN_HISTORY_CAP = 20;
+
+// Run Log: how many past automated runs (Full Auto sweeps + Hybrid per-item
+// drafts) to keep, newest first. Entries are lightweight summaries (no raw
+// AI prompts/output — that stays in aiReviewLog), so a generous cap is cheap.
+const RUN_LOG_CAP = 50;
 function capPersistedText(t: string | undefined): string | undefined {
   if (!t || t.length <= PROMPT_PERSIST_CAP) return t;
   return `${t.slice(0, PROMPT_PERSIST_CAP)}\n…[truncated for storage — full text was available in the session that produced it]`;
@@ -563,6 +571,11 @@ export type WorkspaceState = {
   itemReviews: Record<string, ItemAIVerdict>;
   aiReviewLog: AIReviewLogEntry[];
   humanDecisionLog: HumanDecisionEntry[];
+  // What an automated run (Full Auto sweep / Hybrid per-item draft) actually
+  // did — distinct from aiReviewLog (per-AI-call detail). Read-only record,
+  // never an input to scoring. See useWorkspaceStore's runFullAudit/
+  // runHybridItemDraft (writers) and src/pages/RunLog.tsx (viewer).
+  runLog: RunLogEntry[];
   calibrationExamples: CalibrationExample[];
   calibrationMemories: CalibrationMemory[];
   samples: SampleRecord[];
@@ -775,7 +788,10 @@ export type WorkspaceState = {
   discardPendingRun: (subCriterionId: string) => void;
   // Option A in Full auto: PPD review → evidence assessment → compile
   // findings, end to end with no stops (each step is the existing engine).
-  runOptionAFullAuto: (subCriterionId: string) => Promise<void>;
+  // Returns which real steps ran, for the Run Log (RunLogSubOutcome.steps) —
+  // never fabricated, exactly the same early-return decisions the function
+  // already made.
+  runOptionAFullAuto: (subCriterionId: string) => Promise<{ ppdRan: boolean; evidenceRan: boolean; findingsCompiled: number; outcomeReviewApplied: boolean }>;
 
   // LEGACY change-log copy: kept in state only so the one-time migration into
   // the dedicated append-only useChangeLogStore can read previously-persisted
@@ -1079,6 +1095,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       itemReviews: {},
       aiReviewLog: [],
       humanDecisionLog: [],
+      runLog: [],
       calibrationExamples: [],
       calibrationMemories: [],
       samples: [],
@@ -2677,6 +2694,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const setFull = (patch: Partial<FullAuditProgress>) =>
           set((st) => ({ fullAuditProgress: { ...(st.fullAuditProgress ?? { status: "running", current: 0, total: plan.length, currentSubCriterionId: "", currentName: "" }), ...patch, entries: entries.map((e) => ({ ...e })) } as FullAuditProgress }));
         setFull({ status: "running", total: plan.length, current: 0 });
+        const runStartedAt = new Date().toISOString();
+        // Real per-sub step outcome for Run Log purposes, Option A only (see
+        // RunLogSubOutcome.steps) — captured as each entry actually runs,
+        // never guessed after the fact.
+        const optionASteps = new Map<string, { ppdRan: boolean; evidenceRan: boolean; findingsCompiled: number; outcomeReviewApplied: boolean }>();
 
         // The resilient loop lives in lib/fullAudit.ts (pure + tested):
         // every sub-criterion terminates via success, error, per-item timeout
@@ -2684,7 +2706,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const { cancelled } = await runFullAuditPlan(plan, entries, {
           run: async (entry) => {
             if (entry.path === "A") {
-              await get().runOptionAFullAuto(entry.subCriterionId);
+              optionASteps.set(entry.subCriterionId, await get().runOptionAFullAuto(entry.subCriterionId));
             } else {
               await get().auditFolderStaged(entry.folderId, "all", undefined, { current: plan.indexOf(entry) + 1, total: plan.length });
             }
@@ -2718,24 +2740,55 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // half-finished sweep. Each item is banded once here, from its fully
         // settled checklist state, covering both Option A and staged items.
         let autoScore: FullAuditProgress["autoScore"];
+        let bandsSet: RunLogEntry["bandsSet"] = [];
+        let bandsSkipped: RunLogEntry["bandsSkipped"] = [];
         if (!cancelled) {
           const doneSubIds = entries.filter((e) => e.status === "done").map((e) => e.subCriterionId);
           const r = await get().autoScoreAssessedItems(doneSubIds);
           // Undefined when the setting was off (nothing attempted) so the
           // overlay stays identical to a pre-feature run; populated otherwise.
           if (r.set.length > 0 || r.skipped.length > 0) autoScore = { set: r.set.length, skipped: r.skipped };
+          // Read back the REAL band/percentage autoScoreAssessedItems just
+          // wrote, for the Run Log — never re-derived or guessed.
+          const freshChecklist = useChecklistModuleStore.getState().entries;
+          bandsSet = r.set
+            .map((itemId) => freshChecklist[itemId]?.holisticBand)
+            .map((hb, i) => hb ? { itemId: r.set[i], band: hb.band, totalPct: hb.totalPct } : null)
+            .filter((b): b is RunLogBandResult => b !== null);
+          bandsSkipped = r.skipped;
         }
         const autoScorePhrase = autoScore
           ? ` Auto-scored ${autoScore.set} band(s)${autoScore.skipped.length > 0 ? `, ${autoScore.skipped.length} left for manual scoring` : ""}.`
           : "";
+        const finalSummary = cancelled
+          ? `Cancelled — ${doneCount} of ${linkedCount} linked sub-criteria completed before the stop.`
+          : `Full audit complete — ${doneCount} of ${linkedCount} linked sub-criteria audited${errorCount > 0 ? `, ${errorCount} errored/timed out` : ""}; ${plan.length - linkedCount} had no links.${autoScorePhrase}`;
 
         setFull({
           status: cancelled ? "cancelled" : "complete",
           autoScore,
-          summary: cancelled
-            ? `Cancelled — ${doneCount} of ${linkedCount} linked sub-criteria completed before the stop.`
-            : `Full audit complete — ${doneCount} of ${linkedCount} linked sub-criteria audited${errorCount > 0 ? `, ${errorCount} errored/timed out` : ""}; ${plan.length - linkedCount} had no links.${autoScorePhrase}`,
+          summary: finalSummary,
         });
+
+        const runLogEntry: RunLogEntry = {
+          id: `RUN-${Date.now()}-${++logCounter}`,
+          mode: "full-auto",
+          subCriterionIds: plan.map((p) => p.subCriterionId),
+          startedAt: runStartedAt,
+          endedAt: new Date().toISOString(),
+          status: cancelled ? "cancelled" : "complete",
+          perSub: entries.map((e): RunLogSubOutcome => ({
+            subCriterionId: e.subCriterionId,
+            path: plan.find((p) => p.subCriterionId === e.subCriterionId)?.path ?? "B",
+            status: e.status === "waiting" || e.status === "running" ? "skipped" : e.status,
+            note: e.note,
+            steps: optionASteps.get(e.subCriterionId),
+          })),
+          bandsSet,
+          bandsSkipped,
+          summary: finalSummary,
+        };
+        set((st) => ({ runLog: [runLogEntry, ...st.runLog].slice(0, RUN_LOG_CAP) }));
       },
 
       runHybridItemDraft: async (subCriterionId) => {
@@ -2744,12 +2797,35 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // when on; this guard is the belt-and-braces backstop). Drives ONE
         // sub-criterion straight through and stops — never touches another.
         if (!useScoringConfigStore.getState().autoScoreBands) return;
+        const runStartedAt = new Date().toISOString();
         // runOptionAFullAuto: PPD → Evidence → compile → Outcomes/Review (O/R
         // gated on autoScoreBands, already true here). Then the band scores off
         // that now-complete APSR — findings + O/R fully settle before it runs.
         // Both reused verbatim; nothing duplicated. Scoped to this one sub.
-        await get().runOptionAFullAuto(subCriterionId);
-        await get().autoScoreAssessedItems([subCriterionId]);
+        const steps = await get().runOptionAFullAuto(subCriterionId);
+        const r = await get().autoScoreAssessedItems([subCriterionId]);
+        const freshChecklist = useChecklistModuleStore.getState().entries;
+        const bandsSet: RunLogEntry["bandsSet"] = r.set
+          .map((itemId) => freshChecklist[itemId]?.holisticBand)
+          .map((hb, i) => hb ? { itemId: r.set[i], band: hb.band, totalPct: hb.totalPct } : null)
+          .filter((b): b is RunLogBandResult => b !== null);
+        const status: RunLogSubOutcome["status"] = steps.ppdRan && steps.evidenceRan ? "done" : "skipped";
+        const summary = status === "done"
+          ? `Hybrid draft complete for ${subCriterionId} — ${steps.findingsCompiled} finding(s) compiled${steps.outcomeReviewApplied ? ", Outcomes & Review applied" : ""}${bandsSet.length > 0 ? `, band ${bandsSet[0].band} (${bandsSet[0].totalPct}%) set` : r.skipped.length > 0 ? `, band not set (${r.skipped[0].reason})` : ""}.`
+          : `Hybrid draft for ${subCriterionId} stopped early — ${!steps.ppdRan ? "PPD review returned no rows" : "evidence assessment returned no rows"}.`;
+        const runLogEntry: RunLogEntry = {
+          id: `RUN-${Date.now()}-${++logCounter}`,
+          mode: "hybrid-item",
+          subCriterionIds: [subCriterionId],
+          startedAt: runStartedAt,
+          endedAt: new Date().toISOString(),
+          status: "complete",
+          perSub: [{ subCriterionId, path: "A", status, steps }],
+          bandsSet,
+          bandsSkipped: r.skipped,
+          summary,
+        };
+        set((st) => ({ runLog: [runLogEntry, ...st.runLog].slice(0, RUN_LOG_CAP) }));
       },
 
       resolvePendingItem: (subCriterionId, itemId, decision, overrideStatus) => {
@@ -2862,14 +2938,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Step 1 — PPD review. Stop the chain if it failed or was stopped.
         await get().runPPDReview(subCriterionId);
         const ppd = get().ppdReviewResults[subCriterionId];
-        if (!ppd || ppd.rows.length === 0 || ppd.runWarnings?.some((w) => /stopped/i.test(w))) return;
+        if (!ppd || ppd.rows.length === 0 || ppd.runWarnings?.some((w) => /stopped/i.test(w))) {
+          return { ppdRan: false, evidenceRan: false, findingsCompiled: 0, outcomeReviewApplied: false };
+        }
         // Step 2 — evidence assessment. Its finish() applies the checklist
         // writes itself under full_auto.
         await get().runEvidenceAssessment(subCriterionId);
         const ev = get().evidenceAssessments[subCriterionId];
-        if (!ev || ev.rows.length === 0 || ev.rows.every((r) => r.verdict === "Not assessed")) return;
+        if (!ev || ev.rows.length === 0 || ev.rows.every((r) => r.verdict === "Not assessed")) {
+          return { ppdRan: true, evidenceRan: false, findingsCompiled: 0, outcomeReviewApplied: false };
+        }
         // Step 3 — compile findings (existing deduped pipeline).
-        get().compileEvidenceFindings(subCriterionId);
+        const findingsCompiled = get().compileEvidenceFindings(subCriterionId);
         // Step 4 — hands-off sweeps only: also run + apply the Outcomes &
         // Review pass so Option A's Systems & Outcomes and Review legs carry
         // real judgements before the post-sweep band pass scores off them —
@@ -2881,10 +2961,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // a per-row iteration re-run (runEvidenceAssessment/auditFolderStaged
         // direct) never reaches here and keeps Apply manual. Scoring-neutral —
         // applyOutcomeReviewResult writes only those two legs, never the band.
+        let outcomeReviewApplied = false;
         if (useScoringConfigStore.getState().autoScoreBands) {
           await get().runOutcomeReviewPass(subCriterionId);
-          if (get().outcomeReviewResults[subCriterionId]) get().applyOutcomeReviewResult(subCriterionId);
+          if (get().outcomeReviewResults[subCriterionId]) {
+            outcomeReviewApplied = get().applyOutcomeReviewResult(subCriterionId) > 0;
+          }
         }
+        return { ppdRan: true, evidenceRan: true, findingsCompiled, outcomeReviewApplied };
       },
 
       // Fills the workspace with realistic sample evidence ratings plus the

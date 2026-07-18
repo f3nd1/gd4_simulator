@@ -66,6 +66,7 @@ export const NAV: NavGroup[] = [
       { path: "/ai-review", label: "AI Review Log", hint: "Log of every AI review run, live or simulated" },
       { path: "/ai-debug", label: "AI Debug Log", hint: "Log of every buildSystemPrompt() call with module and the full prompt block (in-memory, cleared on reload)" },
       { path: "/human-decision-log", label: "Human Decision Log", hint: "Audit trail of every human override or acceptance of an AI output" },
+      { path: "/run-log", label: "Run Log", hint: "What an automated run (Full Auto sweep or Hybrid per-item draft) actually did — steps taken, skipped, and bands set" },
     ],
   },
   {
@@ -111,6 +112,7 @@ export const DEVELOPER_TOOL_PATHS = [
   "/ai-review",
   "/ai-debug",
   "/human-decision-log",
+  "/run-log",
   // Measurement/benchmark tooling (Benchmark + Consistency + A vs B tabs) —
   // an advanced feature, gated with the other diagnostic surfaces.
   "/ai-calibration",
