@@ -1906,23 +1906,68 @@ function FullAuditOverlay() {
   );
 }
 
+// The real live sub-signal a running step is emitting, if any: PPD and Evidence
+// carry a window counter + current file + a stage detail; Outcomes & Review
+// carries a human detail line. Compile-findings (synchronous) and Score-band
+// (one black-box AI call) have no intermediate signal — those return null and
+// the row falls back to the elapsed timer. Never fabricated: only fields the
+// leaf function actually set are shown.
+function fmtHybridLiveDetail(p: { detail?: string; window?: { current: number; total: number }; currentFile?: string }): string | null {
+  const bits: string[] = [];
+  if (p.detail) bits.push(p.detail);
+  if (p.window && p.window.total > 0) bits.push(`window ${p.window.current} of ${p.window.total}`);
+  if (p.currentFile) bits.push(p.currentFile);
+  return bits.length ? bits.join(" · ") : null;
+}
+
 // Live overlay for a Hybrid per-item hands-off draft — Full Auto has its own
 // (FullAuditOverlay); this is the single-item equivalent so the run does not
 // look frozen. Reads hybridDraftProgress, which the store sets one step at a
 // time only when each real await resolves. Five steps; a step that produced no
-// usable rows shows "skipped", never a fake "done".
+// usable rows shows "skipped", never a fake "done". The RUNNING step shows real
+// live activity: the leaf function's own progress detail where it emits one
+// (PPD/Evidence/O&R), plus an elapsed-seconds counter and a subtle pulse for
+// every running step (reused from FullAuditOverlay's timer + audit-pulse-ring)
+// so a slow black-box AI call visibly ticks instead of sitting static.
 function HybridDraftOverlay() {
   const progress = useWorkspaceStore((s) => s.hybridDraftProgress);
   const dismiss = useWorkspaceStore((s) => s.dismissHybridDraftProgress);
+  const ppdP = useWorkspaceStore((s) => s.ppdReviewProgress);
+  const evP = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
+  const orP = useWorkspaceStore((s) => s.outcomeReviewProgress);
+  const running = progress?.status === "running";
+  const runningKey = progress?.steps.find((s) => s.status === "running")?.key ?? null;
+  // Per-step elapsed timer: reset when the running step changes, so each step
+  // times from its own start; 1s tick forces the re-render (same pattern as
+  // FullAuditOverlay's elapsed indicator).
+  const [stepStartedAt, setStepStartedAt] = useState(() => Date.now());
+  const [, setTick] = useState(0);
+  useEffect(() => { setStepStartedAt(Date.now()); }, [runningKey]);
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [running]);
   if (!progress) return null;
-  const running = progress.status === "running";
+
+  const elapsedS = Math.max(0, Math.floor((Date.now() - stepStartedAt) / 1000));
   const toneOf = (s: "pending" | "running" | "done" | "skipped") =>
     s === "done" ? TONE.good : s === "skipped" ? TONE.medium : s === "running" ? TONE.progress : TONE.neutral;
   const word = (s: "pending" | "running" | "done" | "skipped") =>
-    s === "running" ? "running…" : s === "done" ? "done" : s === "skipped" ? "skipped" : "waiting";
+    s === "done" ? "done" : s === "skipped" ? "skipped" : "waiting";
+  // Match the live progress field to the running step, only when it is for THIS
+  // sub-criterion (a stale field from an earlier run is never shown).
+  const liveDetailFor = (key: string): string | null => {
+    const sub = progress.subCriterionId;
+    if (key === "ppd" && ppdP?.subCriterionId === sub) return fmtHybridLiveDetail(ppdP);
+    if (key === "evidence" && evP?.subCriterionId === sub) return fmtHybridLiveDetail(evP);
+    if (key === "review" && orP?.subCriterionId === sub) return orP.detail || null;
+    return null;
+  };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 120, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: "#fff", borderRadius: 16, padding: "24px 28px 20px", width: "100%", maxWidth: 460, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+      <style>{MODAL_KEYFRAMES}</style>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "24px 28px 20px", width: "100%", maxWidth: 480, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginBottom: 4 }}>
           {running ? `Drafting ${progress.subCriterionId}…` : `Hybrid draft complete — ${progress.subCriterionId}`}
         </div>
@@ -1932,11 +1977,18 @@ function HybridDraftOverlay() {
         <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 12px", margin: "10px 0 14px" }}>
           {progress.steps.map((s) => {
             const tone = toneOf(s.status);
+            const isRun = s.status === "running";
+            const detail = isRun ? liveDetailFor(s.key) : null;
             return (
-              <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, lineHeight: 2 }}>
-                <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: tone.fg, flexShrink: 0, opacity: s.status === "pending" ? 0.4 : 1 }} />
-                <span style={{ color: tone.fg, fontWeight: s.status === "running" ? 700 : 500, opacity: s.status === "pending" ? 0.7 : 1, flex: 1 }}>{s.label}</span>
-                <span style={{ color: tone.fg, opacity: 0.85, fontSize: 11 }}>{word(s.status)}</span>
+              <div key={s.key} style={{ padding: "2px 0" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, lineHeight: 1.9 }}>
+                  <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: tone.fg, flexShrink: 0, opacity: s.status === "pending" ? 0.4 : 1, animation: isRun ? "audit-pulse-ring 1.6s ease-in-out infinite" : "none" }} />
+                  <span style={{ color: tone.fg, fontWeight: isRun ? 700 : 500, opacity: s.status === "pending" ? 0.7 : 1, flex: 1 }}>{s.label}</span>
+                  <span style={{ color: tone.fg, opacity: 0.85, fontSize: 11, whiteSpace: "nowrap" }}>{isRun ? `running… ${elapsedS}s` : word(s.status)}</span>
+                </div>
+                {detail && (
+                  <div style={{ marginLeft: 17, fontSize: 10.5, color: "#64748b", lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis" }}>{detail}</div>
+                )}
               </div>
             );
           })}
