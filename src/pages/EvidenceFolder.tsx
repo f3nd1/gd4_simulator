@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import { Card, inputStyle } from "../components/ui/Card";
 import { RunModeBanner } from "../components/ui/RunModeBanner";
 import type { FolderProbeResult } from "../lib/driveGuard";
@@ -2057,6 +2058,8 @@ export function EvidenceFolder() {
   const auditMode           = useWorkspaceStore((s) => s.auditMode);
   const fullAuditProgress   = useWorkspaceStore((s) => s.fullAuditProgress);
   const runFullAudit        = useWorkspaceStore((s) => s.runFullAudit);
+  const runHybridFirstDraft = useWorkspaceStore((s) => s.runHybridFirstDraft);
+  const autoScoreBands      = useScoringConfigStore((s) => s.autoScoreBands);
   const pendingGates        = useWorkspaceStore((s) => Object.values(s.pendingCommits).reduce((a, r) => a + r.items.length, 0));
   const tip = useTip();
 
@@ -2613,10 +2616,11 @@ export function EvidenceFolder() {
       {/* Cycle mode chip + Full-auto master action. The chip is instructional
           (it just states the current mode), so its ✕ dismiss is EPHEMERAL —
           local state, reappears on reload — matching the other instructional
-          tips. In Full-auto the SAME chip hosts the "Run full audit" action, so
-          the ✕ is not offered there (hiding it would hide the run control);
-          full-auto therefore never hides. */}
-      {!(modeChipHidden && auditMode !== "full-auto") && (
+          tips. In Full-auto (and in Hybrid when auto-scoring is on) the SAME
+          chip hosts the master run action, so the ✕ is not offered there
+          (hiding it would hide the run control); the chip therefore never
+          hides while it carries a run button. */}
+      {!(modeChipHidden && !(auditMode === "full-auto" || (auditMode === "hybrid" && autoScoreBands))) && (
       <div id="wt-mode-chip" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10, padding: "8px 12px", border: "1px solid #ddd6fe", background: "#faf5ff", borderRadius: 8 }}>
         <span style={{ fontSize: 12.5, fontWeight: 700, color: "#5b21b6" }}>
           Audit mode: {auditModeLabel(auditMode)}
@@ -2634,6 +2638,21 @@ export function EvidenceFolder() {
             style={{ marginLeft: "auto", cursor: busy || noAuditors ? "not-allowed" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #7c3aed", background: noAuditors ? "#c4b5fd" : "#7c3aed", color: "#fff" }}
           >
             ⚡ Run full audit
+          </button>
+        ) : auditMode === "hybrid" && autoScoreBands ? (
+          // One-click Hybrid first draft — only offered when auto-scoring is on
+          // (the whole behaviour is gated on it). Runs the full sweep like Full
+          // auto and auto-scores the bands, producing one complete draft; the
+          // per-row run buttons below stay for the iterate phase afterwards.
+          // When auto-scoring is off this branch is absent and Hybrid shows no
+          // new control, exactly as today.
+          <button
+            onClick={() => runHybridFirstDraft()}
+            disabled={!!busy || fullAuditProgress?.status === "running" || noAuditors}
+            title={noAuditors ? MSG_NO_AUDITORS_EXIST : tip("Runs every linked sub-criterion end to end like Full auto and AI-scores each band (labelled 'AI-scored, not yet reviewed'), producing one complete draft. Afterwards, re-run any row individually to refine it with the normal per-line approval.")}
+            style={{ marginLeft: "auto", cursor: busy || noAuditors ? "not-allowed" : "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #7c3aed", background: noAuditors ? "#c4b5fd" : "#7c3aed", color: "#fff" }}
+          >
+            🤝 Run Hybrid first draft
           </button>
         ) : (
           <DismissX onClick={() => setModeChipHidden(true)} title="Hide for now (reappears on reload)" color="#7c3aed" />

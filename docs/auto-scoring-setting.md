@@ -96,7 +96,13 @@ completion summary for you to band by hand, never guessed. When the setting
 is OFF the run stops at verdicts and findings exactly as before, sets no
 band, and the completion summary is unchanged.
 
-Not yet wired: the Hybrid "first pass = Full Auto" flow (a separate change
-with its own per-line approval gates). The single automatic band step above
-lives in the Full Auto sweep only; a manual single-folder audit never
-auto-scores.
+Also live for Hybrid's first draft. When the setting is ON, Hybrid mode
+gains a one-click "Run Hybrid first draft" button that runs the whole sweep
+exactly like Full Auto - verdicts and findings commit immediately (no
+per-line queue, no Compile click) and the bands auto-score - producing one
+complete draft in a single trigger. Afterwards you refine by re-running any
+row individually, and those individual re-runs keep the normal Hybrid gates
+(per-line approval, Compile click). When the setting is OFF the button is
+absent and Hybrid behaves exactly as before (per-row runs, per-line approval,
+Compile click, no auto-band). A manual single-folder audit never auto-scores,
+and Full Manual mode is completely unaffected in every case.

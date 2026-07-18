@@ -36,6 +36,17 @@ export function auditModeLabel(mode: AuditMode): string {
   return AUDIT_MODES.find((m) => m.value === mode)?.label ?? mode;
 }
 
+// The effective automation mode for a single run. Normally the cycle's mode,
+// but a Hybrid FIRST-PASS sweep (runHybridFirstDraft, gated on autoScoreBands)
+// runs like Full auto end to end: forceFullAuto flips it to "full-auto" for the
+// sweep's duration only. Every per-row Hybrid run leaves forceFullAuto false,
+// so its per-line queue / Compile-click gates are untouched. Pure so the
+// distinction is unit-testable (forceFullAuto false → mode returned verbatim,
+// i.e. Hybrid stays byte-identical to today).
+export function effectiveAutomationMode(mode: AuditMode, forceFullAuto: boolean): AuditMode {
+  return forceFullAuto ? "full-auto" : mode;
+}
+
 // Splits a run's checklist writes by mode:
 //   commit — apply to the checklist now
 //   queue  — hold as PendingCommitItems for human approval (hybrid's gates)

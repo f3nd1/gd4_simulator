@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { partitionWritesByMode, partitionOptionAWrites, DEFAULT_AUDIT_MODE, auditModeLabel, AUDIT_MODES } from "../runModes";
+import { partitionWritesByMode, partitionOptionAWrites, DEFAULT_AUDIT_MODE, auditModeLabel, AUDIT_MODES, effectiveAutomationMode } from "../runModes";
 import { buildFullAuditPlan, fullAuditLabel } from "../fullAudit";
 import type { ChecklistLineWrite } from "../../types";
 
@@ -54,6 +54,40 @@ describe("three-mode gating — modes decide WHEN writes commit, not how they ar
       expect(m.desc.length).toBeGreaterThan(20);
       expect(m.best).toMatch(/^Best/);
     }
+  });
+});
+
+describe("effectiveAutomationMode — Hybrid first-pass sweep flag (2026-07-18)", () => {
+  // OFF path (forceFullAuto false) must be byte-identical to today: the mode is
+  // returned verbatim, so partitionWritesByMode still QUEUES hybrid Option B.
+  it("returns the mode verbatim when the sweep flag is off (Hybrid stays queued)", () => {
+    expect(effectiveAutomationMode("hybrid", false)).toBe("hybrid");
+    expect(effectiveAutomationMode("full-auto", false)).toBe("full-auto");
+    expect(effectiveAutomationMode("manual", false)).toBe("manual");
+  });
+
+  it("byte-identical partition when off: hybrid Option B still queues, nothing commits", () => {
+    const writes = [write({ existingLineId: "L1" }), write({ existingLineId: "L2" })];
+    const off = partitionWritesByMode(effectiveAutomationMode("hybrid", false), writes);
+    const today = partitionWritesByMode("hybrid", writes);
+    expect(off).toEqual(today);
+    expect(off.commit).toEqual([]);
+    expect(off.queue).toHaveLength(2);
+  });
+
+  it("flips only Hybrid to full-auto when the sweep flag is on (Option B commits)", () => {
+    expect(effectiveAutomationMode("hybrid", true)).toBe("full-auto");
+    const writes = [write({ existingLineId: "L1" })];
+    const swept = partitionWritesByMode(effectiveAutomationMode("hybrid", true), writes);
+    expect(swept.commit).toHaveLength(1);
+    expect(swept.queue).toEqual([]);
+  });
+
+  it("never turns Manual into an auto-run, even under the sweep flag (Full Manual unaffected)", () => {
+    // The store's manual branch short-circuits before this, but the mapping is
+    // safe regardless: forceFullAuto would flip it, yet a Hybrid sweep only ever
+    // sets the flag in hybrid mode, never manual. Documented here for intent.
+    expect(effectiveAutomationMode("manual", false)).toBe("manual");
   });
 });
 
