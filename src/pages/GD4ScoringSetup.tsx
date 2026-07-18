@@ -107,8 +107,12 @@ export function GD4ScoringSetup() {
           <span>
             <b>Auto-score bands in Full Auto / Hybrid draft</b>{" "}
             {autoScoreBands ? <Pill s="medium">On — AI decides, you review after</Pill> : <Pill s="neutral">Off — you decide every band (default)</Pill>}
-            <span style={{ display: "block", fontSize: 11.5, color: "#6b7280", marginTop: 3 }}>
-              Off (the default): every band is set by you on the Sub-Criterion Checklist — the AI only ever suggests. On: an automatic run may also fill in the band itself, using the AI's suggested scores and its written reasoning; the band is then labelled "AI-scored, not yet reviewed" everywhere it appears until you open it and save it yourself. It never changes bands you have already saved, and it never removes your ability to override. Plain-English details: docs/auto-scoring-setting.md.
+            <span style={{ display: "block", fontSize: 11.5, color: "#6b7280", marginTop: 3, lineHeight: 1.55 }}>
+              <b>What this affects:</b> only the certification <b>band</b> (the 1 to 5 score), and only when it is produced by a <b>Full Auto run</b> (the "Run full audit" sweep). It does not change any verdict, finding, or evidence rating, and it does not touch a manual single-folder audit or a band you set yourself.
+              <br />
+              <b>Off (the default):</b> a Full Auto run stops at verdicts and findings and leaves every band blank for you to set on the Sub-Criterion Checklist. The AI only ever suggests a band; you decide it.
+              <br />
+              <b>On:</b> at the end of a Full Auto run, for each item it assessed, the AI also fills in the band itself from its own per-dimension scores and written reasoning. Each band set this way is marked <b>"AI-scored, not yet reviewed"</b> on the Sub-Criterion Checklist, the Final Report (and its PDF), the Criterion Scorecard, and the Export Centre pack, and is logged as an <b>Automatic</b> decision in the Human Decision Log. The label clears only when you open that item and save the band yourself. Bands you have already saved are never changed, and you can always override an AI-scored one. An item the AI cannot score cleanly is left blank and listed for you to do by hand, never guessed. Plain-English details: docs/auto-scoring-setting.md.
             </span>
           </span>
         </label>
