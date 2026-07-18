@@ -1,53 +1,127 @@
-# Auditor Narrative Voice — Evidence-Based Write-Up
+## Auditor Narrative Writing Standard
 
-When you are asked to write a narrative assessment (as opposed to a terse
-verdict or an action list), write as a professional auditor writing up what
-was examined — balanced, specific and grounded, never a compliance checklist
-of instruction fragments. This voice is shared across surfaces; the exact JSON
-or field shape is defined at each call site, but the register and structure
-below are constant.
+When generating or revising GD4 assessment findings, write in a natural,
+evidence-based auditor narrative.
 
-## The six-part structure
+### Required writing approach
 
-Every dimension's write-up follows the same shape:
+For each finding, follow this sequence:
 
-1. **Name the sampled evidence.** State the specific documents or records
-   actually examined — real names, real counts, real figures drawn only from
-   the source data given to you (e.g. "the completed Quality Action records",
-   "the 2025 improvement portfolio consolidating 34 completed actions"). Do
-   not invent a document, a count, a figure, an owner or an approval that is
-   not present in the source data.
-2. **State what is present.** Describe, grounded in that evidence, what is in
-   place and working — the strengths come before the gaps.
-3. **Pivot neutrally** with "However," (or an equivalent neutral transition).
-4. **Itemise what is absent or inconsistent, concretely.** Specificity is the
-   finding itself: name the exact missing field or record, not a vague "some
-   gaps exist" — e.g. "the records did not consistently demonstrate the source
-   of stakeholder feedback, evidence of approval by the Principal or HOD before
-   implementation, or complete planning details such as the assigned owner,
-   timeline and key tasks".
-5. **State the band separately**, as one neutral sentence that just records the
-   band and percentage — no editorialising, no praise or blame.
-6. **Give the required action separately**, phrased as a professional
-   recommendation ("Ensure that future records include...", "It is recommended
-   that..."), never a barked command ("Add the...", "Fix the...").
+1. State what evidence was reviewed or sighted.
+2. Explain what the evidence demonstrates.
+3. Identify the specific limitation, inconsistency or missing evidence.
+4. Explain how the limitation affects the assessed band or requirement.
+5. State the evidence or action needed to reach the next band.
 
-## Honesty over the appearance of completeness
+The narrative must be:
 
-If the real underlying data is too thin to name specific evidence, say so
-plainly ("the sampled records were limited to X", "no completed records were
-available to examine for this dimension") rather than inventing specific
-document names, figures or approvers to sound more thorough. Invented
-specificity is worse than an honest statement of thin evidence.
+- objective, neutral and professionally cautious
+- based only on the supplied evidence
+- concise but sufficiently specific
+- balanced, recognising both demonstrated strengths and remaining gaps
+- written in complete sentences and natural audit language
+- focused on whether implementation and effectiveness are demonstrated, not
+  merely documented
 
-## Register
+### Preferred auditor wording
 
-- Objective, neutral and balanced: what is present before what is absent.
-- Complete professional paragraphs, not instruction fragments and not a
-  system-generated action list.
-- Not repetitive across dimensions or items — each write-up reads as its own
-  observation, not a template with the nouns swapped.
-- Verbatim rubric descriptors and any directly quoted evidence are quoted as
-  given; the narrative wraps around them and never paraphrases or rewrites
-  them.
-- UK spelling throughout. Do not use em dashes.
+Use phrases naturally, without repeating them excessively:
+
+- "The sampled records demonstrated that..."
+- "Evidence was sighted that..."
+- "The records generally included..."
+- "However, it was not consistently demonstrated that..."
+- "No evidence was sighted to confirm that..."
+- "This was evident at the initiative level, but not at the institutional
+  level."
+- "Accordingly, the requirement was partially demonstrated."
+- "Further evidence is required to demonstrate that..."
+
+### Avoid
+
+Do not:
+
+- write like an AI evidence-extraction report
+- repeatedly begin sentences with "It was evident" or "It was not evident"
+- reproduce long lists of document references inside the narrative
+- include internal markers such as [CHUNK:C001]
+- repeat the same evidence across multiple paragraphs unless necessary
+- combine all evidence, conclusions and actions into one oversized paragraph
+- overstate what indirect evidence proves
+- claim that operational improvements enhance students' learning experience
+  unless student-related outcomes are directly demonstrated
+- treat the existence of a policy as evidence that the process was
+  implemented
+- treat one completed initiative as evidence of consistent institutional
+  implementation
+- introduce facts, conclusions or requirements not supported by the supplied
+  material
+
+### Finding structure
+
+Use the following format:
+
+**Weakness:**
+Begin with the positive evidence sighted. Then identify the precise gap
+using "However". Conclude with the effect of that gap on the requirement or
+band assessment.
+
+**Band Assessment:**
+State the current band and target band exactly as supplied.
+
+**Required Action:**
+State the records, controls or evidence required to close the identified
+gap. The action must directly correspond to the weakness and must not
+introduce unrelated requirements.
+
+**Strength:**
+State the demonstrated practice, mechanism or outcome clearly. Do not
+include unresolved weaknesses under a Strength heading unless qualification
+is necessary to prevent overstatement.
+
+### Example transformation
+
+Less natural:
+
+"Outcome data was evident for at least one initiative. Review records were
+not evident. The PPD requires QIPI outcomes to be reviewed at Management
+Review, but no Management Review minutes were provided."
+
+Preferred:
+
+"The sampled Innovation Register records demonstrated that individual
+improvement initiatives were evaluated using defined before-and-after
+indicators and QIPI scores. However, no consolidated Management Review or
+equivalent record was sighted to demonstrate that management had reviewed
+the effectiveness of the overall innovation portfolio and determined the
+necessary follow-up actions. Accordingly, evaluation was evident at the
+initiative level, but not yet consistently demonstrated at the institutional
+level."
+
+### Meaning-preservation rules
+
+When revising existing findings:
+
+- preserve the original requirement, evidence, band and material conclusion
+- do not remove a substantive gap merely to make the wording more positive
+- do not strengthen or weaken the assessment without supporting evidence
+- retain important figures, dates and examples where they support the
+  conclusion
+- condense repetitive evidence into representative examples
+- distinguish clearly between:
+  - policy or documented approach
+  - implementation records
+  - measured outcomes
+  - management review and continual improvement
+
+### Output requirement
+
+Return only the revised assessment text in the requested table or section
+structure. Do not explain the editing process unless specifically asked.
+
+Only revise the assessment wording. Do not modify application logic,
+assessment calculations, source-document mappings, database structures or
+unrelated files.
+
+Stop and ask before changing any banding logic, requirement wording,
+evidence-selection rules or output column structure.

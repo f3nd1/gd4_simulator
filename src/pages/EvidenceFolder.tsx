@@ -2161,6 +2161,7 @@ export function EvidenceFolder() {
   const hybridDraftProgress = useWorkspaceStore((s) => s.hybridDraftProgress);
   const runFullAudit        = useWorkspaceStore((s) => s.runFullAudit);
   const runHybridItemDraft  = useWorkspaceStore((s) => s.runHybridItemDraft);
+  const dismissHybridDraftProgress = useWorkspaceStore((s) => s.dismissHybridDraftProgress);
   const autoScoreBands      = useScoringConfigStore((s) => s.autoScoreBands);
   const pendingGates        = useWorkspaceStore((s) => Object.values(s.pendingCommits).reduce((a, r) => a + r.items.length, 0));
   const tip = useTip();
@@ -3012,7 +3013,20 @@ export function EvidenceFolder() {
                       // Review → band), hands-off, and the modal shows it
                       // running. Scoped to this sub only; never a sweep.
                       <button
-                        onClick={() => { setOptionAModal(f.subCriterionId); if (auditMode === "hybrid" && autoScoreBands) runHybridItemDraft(f.subCriterionId); }}
+                        onClick={async () => {
+                          if (auditMode === "hybrid" && autoScoreBands) {
+                            // Item 1: confirm before a multi-minute hands-off run.
+                            if (!confirm(`This will run PPD review, evidence assessment, compile findings, Outcomes & Review, and auto-score the band for ${f.subCriterionId} — it can take several minutes. Continue?`)) return;
+                            setOptionAModal(f.subCriterionId);
+                            const outcome = await runHybridItemDraft(f.subCriterionId);
+                            // Item 4: only a genuine completion jumps to the Final
+                            // Report — a cancelled or stopped-early run stays on the
+                            // overlay so the user sees why it did not finish.
+                            if (outcome === "done") { dismissHybridDraftProgress(); navigate("/final-report"); }
+                          } else {
+                            setOptionAModal(f.subCriterionId);
+                          }
+                        }}
                         disabled={noAuditors}
                         title={noAuditors ? MSG_NO_AUDITORS_EXIST
                           : auditMode === "hybrid" && autoScoreBands

@@ -603,6 +603,16 @@ export function suggestionKey(itemId: string, dimKey: DimensionFindingsGroup["ke
 // target, and every assessed row's ref, verdict and FULL recorded text.
 // Not-assessed rows and ineligible dimensions never appear, so the model
 // has nothing unassessed to speculate about.
+// Internal chunk headers ("[CHUNK:C003]") that the assessment engine prepends
+// to document text can end up quoted inside a recorded finding note. They are
+// engine plumbing, not evidence, and were leaking verbatim into the generated
+// narrative — strip them from the grounding text so the model never sees them
+// (and cannot copy them into user-facing prose). Collapse any doubled space
+// the removal leaves behind.
+export function stripChunkMarkers(text: string): string {
+  return text.replace(/\[CHUNK:[^\]]*\]/g, "").replace(/ {2,}/g, " ").trim();
+}
+
 export function buildAiSuggestionUserPrompt(it: ItemReport): string {
   const dims = eligibleSuggestionDims(it.findingsGroups).map((g) => {
     const next = g.band >= 1 && g.band < 5 ? ((g.band + 1) as Band) : undefined;
@@ -611,7 +621,7 @@ export function buildAiSuggestionUserPrompt(it: ItemReport): string {
       : `This dimension is already at Band ${g.band} — suggest how to keep it evidenced, not how to climb.`;
     const rows = g.rows
       .filter((r) => r.verdict !== "not-assessed")
-      .map((r) => `  - [${r.itemRef}] ${r.verdict === "strength" ? "Strength" : "Weakness"}: ${r.finding}${r.verdict === "weakness" && r.afi ? ` | Recorded action: ${r.afi}` : ""}`)
+      .map((r) => `  - [${r.itemRef}] ${r.verdict === "strength" ? "Strength" : "Weakness"}: ${stripChunkMarkers(r.finding)}${r.verdict === "weakness" && r.afi ? ` | Recorded action: ${stripChunkMarkers(r.afi)}` : ""}`)
       .join("\n");
     return `${g.label} (JSON key "${g.key}") — current Band ${g.band} (${g.pct}%).\n${target}\nAssessed findings:\n${rows}`;
   });

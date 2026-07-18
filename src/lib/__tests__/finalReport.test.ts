@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, filterDimensionNarratives, splitEvidenceNote, needsConciseSummary, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport } from "../finalReport";
+import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, filterDimensionNarratives, stripChunkMarkers, splitEvidenceNote, needsConciseSummary, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport } from "../finalReport";
 import { bandLevel } from "../../data/edutrustRubric";
 import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
@@ -483,6 +483,24 @@ describe("AI improvement suggestions — eligibility, prompt grounding, honesty 
 
   it("suggestionKey is the stable item::dimension storage key", () => {
     expect(suggestionKey("6.2.1", "processes")).toBe("6.2.1::processes");
+  });
+
+  it("stripChunkMarkers removes internal [CHUNK:..] markers and tidies spacing", () => {
+    expect(stripChunkMarkers("Outcome data [CHUNK:C003] was sighted in the register.")).toBe("Outcome data was sighted in the register.");
+    expect(stripChunkMarkers("[CHUNK:C001] leading marker")).toBe("leading marker");
+    expect(stripChunkMarkers("no markers here")).toBe("no markers here");
+  });
+
+  it("buildAiSuggestionUserPrompt strips chunk markers from the grounding text", () => {
+    const groups = [group("processes", 2, [{ verdict: "weakness" as const, finding: "Records [CHUNK:C007] were incomplete.", afi: "Add [CHUNK:C008] approval records." }])];
+    const it2: ItemReport = {
+      id: "6.3.1", title: "Innovation", criterion: "6", subCriterionId: "6.3", gate: false, band: 2,
+      started: true, hasChecklist: true, completeness: { total: 1, assessed: 1, met: 0, partial: 0, notMet: 1, na: 0 },
+      needsReassessment: false, findingsGroups: groups,
+    };
+    const p = buildAiSuggestionUserPrompt(it2);
+    expect(p).not.toContain("[CHUNK:");
+    expect(p).toContain("Records were incomplete.");
   });
 
   it("filterDimensionNarratives keeps only eligible dimensions and drops entries with no bandLine", () => {

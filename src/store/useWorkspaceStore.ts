@@ -780,7 +780,11 @@ export type WorkspaceState = {
   // Outcomes/Review) then the band auto-scores off that complete data. Scoped
   // to the single sub whose "Run audit" was clicked; never a sweep, never
   // cascades. Wired only from that deliberate click when autoScoreBands is on.
-  runHybridItemDraft: (subCriterionId: string) => Promise<void>;
+  // Returns the terminal outcome so the caller can react: "done" (a full run
+  // that scored the band), "stopped" (ran but stopped early — e.g. no PPD/
+  // evidence rows), or "cancelled" (the user hit Cancel). Only "done" should
+  // navigate the user onward to the Final Report.
+  runHybridItemDraft: (subCriterionId: string) => Promise<"done" | "stopped" | "cancelled">;
   dismissFullAuditProgress: () => void;
   // Live per-step progress for the Hybrid draft (transient, never persisted) —
   // Full Auto has its own overlay (fullAuditProgress); this is only set by
@@ -2830,7 +2834,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // per-item run stays exactly as today (the caller only wires this in
         // when on; this guard is the belt-and-braces backstop). Drives ONE
         // sub-criterion straight through and stops — never touches another.
-        if (!useScoringConfigStore.getState().autoScoreBands) return;
+        if (!useScoringConfigStore.getState().autoScoreBands) return "stopped";
         const runStartedAt = new Date().toISOString();
         // Live overlay: five real steps, all pending. Marked done/skipped only
         // when the step's real await resolves (see onStep + the reconcile
@@ -2892,6 +2896,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           summary,
         };
         set((st) => ({ runLog: [runLogEntry, ...st.runLog].slice(0, RUN_LOG_CAP) }));
+        return status === "done" ? "done" : "stopped";
       },
 
       resolvePendingItem: (subCriterionId, itemId, decision, overrideStatus) => {
