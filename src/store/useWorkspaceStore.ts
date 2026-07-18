@@ -20,6 +20,7 @@ import type {
   RunLogEntry,
   RunLogSubOutcome,
   RunLogBandResult,
+  DimensionNarrative,
   CalibrationExample,
   CalibrationMemory,
   CalibrationMemoryStatus,
@@ -706,6 +707,12 @@ export type WorkspaceState = {
   // replaced, only fronted (full text stays behind the row's expand).
   reportConciseFindings: Record<string, ReportAiSuggestion>;
   setReportConciseFindings: (patch: Record<string, ReportAiSuggestion>) => void;
+  // Auditor-narrative blocks (Strength/Weakness/Band/Required Action) on the
+  // Final Report, keyed "itemId::dimensionKey" — same key scheme and
+  // generate-once-and-save contract as reportAiSuggestions. A dimension-level
+  // synthesis, additional to reportConciseFindings (which is per row).
+  reportDimensionNarratives: Record<string, DimensionNarrative>;
+  setReportDimensionNarratives: (patch: Record<string, DimensionNarrative>) => void;
   // Live progress for a fresh runEvidenceAssessment (bar + heartbeat on the
   // Evidence tab); null when no assessment is running.
   evidenceAssessmentProgress: EvidenceAssessmentProgress | null;
@@ -1145,6 +1152,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           reportConciseFindings: {
             ...s.reportConciseFindings,
             ...Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, { ...v, text: v.text.slice(0, 2000) }])),
+          },
+        })),
+      reportDimensionNarratives: {},
+      // Same cap-at-write-time rule as the two suggestion stores above —
+      // applied to each of the three free-text fields independently.
+      setReportDimensionNarratives: (patch) =>
+        set((s) => ({
+          reportDimensionNarratives: {
+            ...s.reportDimensionNarratives,
+            ...Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, {
+              ...v,
+              strength: v.strength?.slice(0, 2000),
+              weakness: v.weakness?.slice(0, 2000),
+              bandLine: v.bandLine.slice(0, 500),
+              requiredAction: v.requiredAction?.slice(0, 2000),
+            }])),
           },
         })),
       ppdReviewProgress: null,

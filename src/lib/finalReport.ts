@@ -636,6 +636,37 @@ export function filterAiSuggestions(
   return out;
 }
 
+// The honesty filter for the auditor-narrative shape: same eligibility rule
+// as filterAiSuggestions (only real assessed dimensions), but each surviving
+// dimension carries a structured { strength?, weakness?, bandLine,
+// requiredAction? } record rather than one string. bandLine is the only
+// mandatory field — a dimension with no strength or weakness rows (should
+// not occur given the eligibility check above, but never assumed) still
+// needs no fabricated prose; strength/weakness/requiredAction are dropped
+// individually if empty rather than forcing the whole dimension out.
+export function filterDimensionNarratives(
+  raw: unknown,
+  groups: DimensionFindingsGroup[]
+): Record<DimensionFindingsGroup["key"], { strength?: string; weakness?: string; bandLine: string; requiredAction?: string }> {
+  const eligible = new Set(eligibleSuggestionDims(groups).map((g) => g.key));
+  const out: Record<string, { strength?: string; weakness?: string; bandLine: string; requiredAction?: string }> = {};
+  if (raw && typeof raw === "object") {
+    for (const key of APSR_DIM_KEYS) {
+      if (!eligible.has(key)) continue;
+      const v = (raw as Record<string, unknown>)[key];
+      if (!v || typeof v !== "object") continue;
+      const rec = v as Record<string, unknown>;
+      const bandLine = typeof rec.bandLine === "string" ? rec.bandLine.trim() : "";
+      if (!bandLine) continue; // the one mandatory field — no bandLine, no entry
+      const strength = typeof rec.strength === "string" && rec.strength.trim() ? rec.strength.trim() : undefined;
+      const weakness = typeof rec.weakness === "string" && rec.weakness.trim() ? rec.weakness.trim() : undefined;
+      const requiredAction = typeof rec.requiredAction === "string" && rec.requiredAction.trim() ? rec.requiredAction.trim() : undefined;
+      out[key] = { strength, weakness, bandLine, requiredAction };
+    }
+  }
+  return out as Record<DimensionFindingsGroup["key"], { strength?: string; weakness?: string; bandLine: string; requiredAction?: string }>;
+}
+
 export function buildFinalReport(
   scored: Scored,
   entries: Record<string, SubCriterionChecklistEntry>,

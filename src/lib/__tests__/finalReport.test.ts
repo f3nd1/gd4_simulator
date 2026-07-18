@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, splitEvidenceNote, needsConciseSummary, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport } from "../finalReport";
+import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, filterDimensionNarratives, splitEvidenceNote, needsConciseSummary, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport } from "../finalReport";
 import { bandLevel } from "../../data/edutrustRubric";
 import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
@@ -483,6 +483,25 @@ describe("AI improvement suggestions — eligibility, prompt grounding, honesty 
 
   it("suggestionKey is the stable item::dimension storage key", () => {
     expect(suggestionKey("6.2.1", "processes")).toBe("6.2.1::processes");
+  });
+
+  it("filterDimensionNarratives keeps only eligible dimensions and drops entries with no bandLine", () => {
+    const out = filterDimensionNarratives(
+      {
+        approach: { strength: "Owner and cadence are named.", bandLine: "Currently Band 3 (15%)." },
+        processes: { weakness: "Improvement records are absent.", bandLine: "Currently Band 2 (10%).", requiredAction: "Consider retaining intake survey records." },
+        systemsOutcomes: { strength: "Fabricated — not assessed.", bandLine: "Currently Band 1 (5%)." },
+        review: { bandLine: "Currently Band 1 (5%)." },
+        junk: { bandLine: 42 },
+      },
+      GROUPS
+    );
+    expect(out).toEqual({
+      approach: { strength: "Owner and cadence are named.", weakness: undefined, bandLine: "Currently Band 3 (15%).", requiredAction: undefined },
+      processes: { strength: undefined, weakness: "Improvement records are absent.", bandLine: "Currently Band 2 (10%).", requiredAction: "Consider retaining intake survey records." },
+    });
+    expect(filterDimensionNarratives(null, GROUPS)).toEqual({});
+    expect(filterDimensionNarratives({ approach: { strength: "x" } }, GROUPS)).toEqual({});
   });
 });
 

@@ -4,10 +4,10 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, splitEvidenceNote, conciseKey, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, filterDimensionNarratives, splitEvidenceNote, conciseKey, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { buildAnalytics } from "../lib/analytics";
-import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
+import { chatComplete, effectiveSettings, type AIUsage } from "../lib/ai/aiClient";
 import { buildSystemPrompt } from "../lib/ai/skills";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useScoringConfigStore } from "../store/useScoringConfigStore";
@@ -461,11 +461,22 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
   const logSuggestionDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const [sugBusy, setSugBusy] = useState(false);
   const [sugError, setSugError] = useState<string | null>(null);
-  const [sugFeedback, setSugFeedback] = useState<{ key: string; text: string } | null>(null);
+  const [sugFeedback, setSugFeedback] = useState<{ key: string; text: string; field?: string } | null>(null);
 
   const eligibleDims = eligibleSuggestionDims(it.findingsGroups);
   const hasSuggestions = eligibleDims.some((g) => suggestions[suggestionKey(it.id, g.key)]);
   const aiReady = aiSettings.enabled && !!aiSettings.apiKey;
+
+  // Auditor-narrative pilot: a dimension-level Strength/Weakness/Band/Required
+  // Action block, additional to (not a replacement for) the per-row concise
+  // summaries above and the short AI suggestion below — same eligibility,
+  // same key scheme (suggestionKey), same generate-once-and-save contract.
+  const narratives = useWorkspaceStore((s) => s.reportDimensionNarratives);
+  const setReportDimensionNarratives = useWorkspaceStore((s) => s.setReportDimensionNarratives);
+  const pushAIReviewLog = useWorkspaceStore((s) => s.pushAIReviewLog);
+  const [narBusy, setNarBusy] = useState(false);
+  const [narError, setNarError] = useState<string | null>(null);
+  const hasNarratives = eligibleDims.some((g) => narratives[suggestionKey(it.id, g.key)]);
 
   // Item 2: concise auditor-voice summaries for long/multi-entry finding text
   // — same generate-once-and-save contract as the suggestions above. The raw
@@ -539,6 +550,64 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
       setSugBusy(false);
     }
   }
+
+  // Auditor-narrative pilot (Final Report, one surface per
+  // docs/auditor-narrative-investigation.md): reuses buildAiSuggestionUserPrompt
+  // unchanged as grounding (it already carries band/%, the verbatim next-band
+  // rubric target, and every assessed row's ref+verdict+full text+action) and
+  // writes the gold-standard shape — Strength paragraph, Weakness paragraph,
+  // neutral Band Assessment line, Required Action as a recommendation — per
+  // eligible dimension. Log-split fix: also writes the raw prompt/output to
+  // the AI Review Log, which generateSuggestions/generateConciseSummaries above
+  // never did.
+  async function generateDimensionNarratives() {
+    setNarBusy(true);
+    setNarError(null);
+    try {
+      const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(schoolContext) });
+      const sys =
+        "You are an experienced EduTrust auditor writing the narrative assessment for a GD4 internal audit readiness report for a Singapore PEI. For EACH dimension in the user message, write a structured narrative reasoning ONLY from the assessed findings listed for that dimension and the quoted verbatim next-band rubric target — never invent a document, figure, approver, number or fact not present in the source text. Use UK spelling, no em dashes. For each dimension produce: " +
+        "\"strength\" — a paragraph naming the sampled evidence that is present and what it shows (omit if the dimension has no strength rows); " +
+        "\"weakness\" — a paragraph that states what is present, then \"However,\" and itemises concretely what is absent (omit if the dimension has no weakness rows); " +
+        "\"bandLine\" — one neutral sentence stating the current band and percentage, required for every dimension given; " +
+        "\"requiredAction\" — the recommended action to close the gap, phrased as a professional recommendation, not a command (omit if there is no weakness to act on). " +
+        "Respond with JSON only: {\"narratives\": {\"approach\"?: {\"strength\"?: string, \"weakness\"?: string, \"bandLine\": string, \"requiredAction\"?: string}, \"processes\"?: {...}, \"systemsOutcomes\"?: {...}, \"review\"?: {...}}} — include only the dimensions given, using the same shape for each." +
+        buildSystemPrompt("bandRecommend", null, "FinalReport.generateDimensionNarratives");
+      const user = buildAiSuggestionUserPrompt(it);
+      let model: string | undefined;
+      let usage: AIUsage | undefined;
+      const content = await chatComplete([{ role: "system", content: sys }, { role: "user", content: user }], settings, { onUsage: (u) => { model = u.model; usage = u; } });
+      let raw: unknown;
+      try {
+        raw = (JSON.parse(content) as { narratives?: unknown }).narratives;
+      } catch {
+        const match = content.match(/\{[\s\S]*\}/);
+        if (match) { try { raw = (JSON.parse(match[0]) as { narratives?: unknown }).narratives; } catch { /* no usable JSON */ } }
+      }
+      const filtered = filterDimensionNarratives(raw, it.findingsGroups);
+      const keys = Object.keys(filtered) as Array<keyof typeof filtered>;
+      if (keys.length === 0) throw new Error("The AI returned no usable narratives — try again.");
+      const generatedAt = new Date().toISOString();
+      setReportDimensionNarratives(Object.fromEntries(keys.map((k) => [suggestionKey(it.id, k), { ...filtered[k]!, generatedAt, model }])));
+      pushAIReviewLog({
+        agent: "Final Report Narrative Writer",
+        reviewType: "Finalisation",
+        subjectId: it.id,
+        verdict: `Narrative written for ${keys.length} dimension${keys.length === 1 ? "" : "s"}`,
+        confidence: "Medium",
+        keyConcerns: keys.map((k) => it.findingsGroups.find((g) => g.key === k)?.label || k),
+        recommendedAction: "Review the Strength/Weakness narrative and Required Action for each dimension below.",
+        live: true,
+        generatedContent: content,
+        promptSent: `SYSTEM:\n${sys}\n\nUSER:\n${user}`,
+        usage,
+      });
+    } catch (err) {
+      setNarError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNarBusy(false);
+    }
+  }
   // An item that was never started, has no checklist AND has no findings
   // collapses to a single summary line; with 29 such placeholders the page was
   // dominated by empty cards. An item that DOES have findings always falls
@@ -599,9 +668,21 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
             {conciseBusy ? "Writing…" : hasConcise ? "Rewrite concise summaries" : `Write concise summaries (${qualifying.length})`}
           </button>
         )}
+        {eligibleDims.length > 0 && (
+          <button
+            className="no-print"
+            disabled={narBusy || !aiReady}
+            onClick={generateDimensionNarratives}
+            title={!aiReady ? "Enable AI and set an API key in Settings first." : "One analysis-model call grounded on this item's assessed findings and the verbatim next-band rubric descriptors, written as a Strength/Weakness/Band/Required Action narrative. Saved once — it does not regenerate on its own."}
+            style={{ marginLeft: 0, cursor: narBusy || !aiReady ? "default" : "pointer", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", opacity: aiReady ? 1 : 0.5, whiteSpace: "nowrap" }}
+          >
+            {narBusy ? "Writing…" : hasNarratives ? "Rewrite auditor narrative" : "Write auditor narrative"}
+          </button>
+        )}
       </div>
       {sugError && <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>AI suggestions failed: {sugError}</div>}
       {conciseError && <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>Concise summaries failed: {conciseError}</div>}
+      {narError && <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 4 }}>Auditor narrative failed: {narError}</div>}
       {it.overallSummary && (
         <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.5, margin: "6px 0 0" }}>{it.overallSummary}</p>
       )}
@@ -620,6 +701,10 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                 // as one extra labelled row under the group; the verbatim rubric
                 // quote in the AFI column stays as the target, untouched.
                 const sug = g.rows.length > 0 ? suggestions[suggestionKey(it.id, g.key)] : undefined;
+                // Auditor-narrative pilot: same read-only, generate-once-and-save
+                // contract as the suggestion row above — an additional,
+                // separately-labelled row, never replacing it.
+                const nar = g.rows.length > 0 ? narratives[suggestionKey(it.id, g.key)] : undefined;
                 const dimCell = (rowSpan: number) => (
                   <>
                     <td rowSpan={rowSpan} style={{ verticalAlign: "top", whiteSpace: "nowrap", fontWeight: 700, fontSize: 11.5 }}>{g.label}</td>
@@ -650,10 +735,11 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                 // instead of silent absence.
                 const sugEligible = g.rows.length > 0 && g.rows.some((r) => r.verdict !== "not-assessed");
                 const missingSug = !sug && hasSuggestions && sugEligible;
+                const missingNar = !nar && hasNarratives && sugEligible;
                 // A leg-derived group (Bug B) gets a lead-in row explaining
                 // why other lines' refs appear under this dimension — the
                 // lead-in then carries the rowSpan'd dimension cells.
-                const totalRows = g.rows.length + (sug || missingSug ? 1 : 0) + (g.rowsFromLegs ? 1 : 0);
+                const totalRows = g.rows.length + (sug || missingSug ? 1 : 0) + (nar || missingNar ? 1 : 0) + (g.rowsFromLegs ? 1 : 0);
                 const rowEls = g.rows.map((r, i) => {
                   // Three distinct states: strength (green), weakness (red),
                   // not-assessed (neutral grey) — an absence of assessment is
@@ -750,6 +836,41 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                     </tr>
                   );
                 }
+                if (nar) {
+                  const key = suggestionKey(it.id, g.key);
+                  // The gold-standard shape: Strength paragraph, "However,"
+                  // Weakness paragraph, neutral Band Assessment line, Required
+                  // Action as a recommendation — reproduced verbatim from what
+                  // the AI returned, never re-worded here.
+                  const narText = [nar.strength, nar.weakness, nar.bandLine, nar.requiredAction].filter(Boolean).join("\n\n");
+                  rowEls.push(
+                    <tr key={`${g.key}-ai-narrative`}>
+                      <td colSpan={3} style={{ background: "#fefce8", fontSize: 11.5 }}>
+                        <div style={{ fontWeight: 700, color: "#854d0e", marginBottom: 4 }}>
+                          Auditor narrative for {g.label} (covers all rows above):
+                          <span className="no-print" style={{ marginLeft: 8, verticalAlign: "middle" }}>
+                            <ThumbsButtons
+                              onAccept={() => logSuggestionDecision({ module: "Final Report", subjectId: key, field: "dimensionNarrative", aiOutput: narText, humanDecision: narText, changed: false, decisionType: "Accepted", reason: "" })}
+                              onReject={() => setSugFeedback({ key, text: narText, field: "dimensionNarrative" })}
+                            />
+                          </span>
+                        </div>
+                        {nar.strength && <p style={{ color: "#374151", margin: "0 0 6px" }}><b>Strength: </b>{nar.strength}</p>}
+                        {nar.weakness && <p style={{ color: "#374151", margin: "0 0 6px" }}><b>Weakness: </b>{nar.weakness}</p>}
+                        <p style={{ color: "#374151", margin: "0 0 6px" }}><b>Band assessment: </b>{nar.bandLine}</p>
+                        {nar.requiredAction && <p style={{ color: "#374151", margin: 0 }}><b>Required action: </b>{nar.requiredAction}</p>}
+                      </td>
+                    </tr>
+                  );
+                } else if (missingNar) {
+                  rowEls.push(
+                    <tr key={`${g.key}-ai-narrative-missing`}>
+                      <td colSpan={3} style={{ background: "#f8fafc", fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>
+                        No auditor narrative was generated for {g.label}. Click "Rewrite auditor narrative" above to fill it in.
+                      </td>
+                    </tr>
+                  );
+                }
                 return rowEls;
               })}
             </tbody>
@@ -816,7 +937,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         aiOutput={sugFeedback?.text ?? ""}
         onClose={() => setSugFeedback(null)}
         onSubmit={(fb) => {
-          logSuggestionDecision({ module: "Final Report", subjectId: sugFeedback?.key ?? it.id, field: "aiSuggestion", aiOutput: sugFeedback?.text ?? "", humanDecision: fb.correction || sugFeedback?.text || "", changed: !!fb.correction, decisionType: "Overridden", reason: fb.reason });
+          logSuggestionDecision({ module: "Final Report", subjectId: sugFeedback?.key ?? it.id, field: sugFeedback?.field ?? "aiSuggestion", aiOutput: sugFeedback?.text ?? "", humanDecision: fb.correction || sugFeedback?.text || "", changed: !!fb.correction, decisionType: "Overridden", reason: fb.reason });
           setSugFeedback(null);
         }}
       />

@@ -1136,6 +1136,27 @@ export type ReportAiSuggestion = {
   model?: string;
 };
 
+// One dimension's auditor-narrative block on the Final Report, persisted per
+// item-dimension (key "itemId::dimensionKey" in
+// useWorkspaceStore.reportDimensionNarratives, same key scheme as
+// ReportAiSuggestion — see suggestionKey). Generate-once-and-save, same
+// contract as ReportAiSuggestion: written only by the explicit per-item
+// "Write auditor narrative" button, never regenerated on render. Additional
+// to (not a replacement for) the per-row concise summaries — this is a
+// dimension-level synthesis (Strength/Weakness read across ALL of a
+// dimension's rows), a different unit of aggregation from a single row's
+// text. strength/weakness/requiredAction are optional because a dimension
+// may genuinely have only strengths, only weaknesses, or (rarely) neither
+// assessed row category present — never forced non-empty.
+export type DimensionNarrative = {
+  strength?: string;
+  weakness?: string;
+  bandLine: string;
+  requiredAction?: string;
+  generatedAt: string;
+  model?: string;
+};
+
 // Result of comparing the Actual Evidence folder's CURRENT Drive listing
 // (file id + modifiedTime) against a stored EvidenceAssessmentResult's
 // fileLedger — lets the Evidence tab tell the user their existing result may
