@@ -106,3 +106,13 @@ row individually, and those individual re-runs keep the normal Hybrid gates
 absent and Hybrid behaves exactly as before (per-row runs, per-line approval,
 Compile click, no auto-band). A manual single-folder audit never auto-scores,
 and Full Manual mode is completely unaffected in every case.
+
+Complete-draft chaining (both sweeps, when the setting is ON): a hands-off
+sweep - Full Auto or the Hybrid first draft - now also runs and applies the
+Outcomes & Review pass for each Option A sub-criterion before the band scores,
+so the Systems & Outcomes and Review dimensions carry real judgements instead
+of "not assessed" placeholders and the auto-band rests on complete data. This
+runs only inside a sweep; an individual per-row re-run during iteration still
+leaves the Outcomes & Review "Apply to checklist" step manual, unchanged.
+Applying those legs never moves a band by itself - only the auto-score step
+sets the band, off the now-complete data.

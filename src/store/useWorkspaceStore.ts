@@ -2880,6 +2880,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!ev || ev.rows.length === 0 || ev.rows.every((r) => r.verdict === "Not assessed")) return;
         // Step 3 — compile findings (existing deduped pipeline).
         get().compileEvidenceFindings(subCriterionId);
+        // Step 4 — hands-off sweeps only: also run + apply the Outcomes &
+        // Review pass so Option A's Systems & Outcomes and Review legs carry
+        // real judgements before the post-sweep band pass scores off them —
+        // without this the auto-band rested on "not assessed" placeholders.
+        // Gated on autoScoreBands (the one master switch for hands-off
+        // drafts), so it fires in BOTH Full auto and the Hybrid first draft
+        // when on, and never when off. Safe for individual re-runs by
+        // construction: runOptionAFullAuto is called ONLY by runFullAudit, so
+        // a per-row iteration re-run (runEvidenceAssessment/auditFolderStaged
+        // direct) never reaches here and keeps Apply manual. Scoring-neutral —
+        // applyOutcomeReviewResult writes only those two legs, never the band.
+        if (useScoringConfigStore.getState().autoScoreBands) {
+          await get().runOutcomeReviewPass(subCriterionId);
+          if (get().outcomeReviewResults[subCriterionId]) get().applyOutcomeReviewResult(subCriterionId);
+        }
       },
 
       // Fills the workspace with realistic sample evidence ratings plus the
