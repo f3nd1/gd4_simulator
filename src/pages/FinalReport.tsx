@@ -183,7 +183,7 @@ export function FinalReport() {
           <span style={{ fontSize: 16, fontWeight: 700, marginLeft: 8 }}>{report.overall.award}</span>
         </div>
         <div style={{ fontSize: 12, color: report.overall.gatePass ? "#9fe0bd" : "#f4b3aa", marginTop: 4 }}>
-          {report.overall.gatePass ? "Score gate met (4.2, 4.6, C5 at Band 3+)" : `Score gate NOT met: ${report.overall.gateFail.join(", ")}`} · Open AFIs: {report.overall.openAFIs}
+          {report.overall.gatePass ? "Score gate met (4.2.1, 4.2.2, 4.6, C5 at Band 3+)" : `Score gate NOT met: ${report.overall.gateFail.join(", ")}`} · Open AFIs: {report.overall.openAFIs}
         </div>
         <div style={{ fontSize: 11, color: "#7e8da0", marginTop: 8 }}>Not an official SSG or EduTrust result. Internal readiness simulation only.</div>
         <div style={{ background: "#fff", color: INK, borderRadius: 10, padding: "10px 12px", marginTop: 12 }}>

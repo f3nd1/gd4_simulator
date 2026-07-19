@@ -165,9 +165,17 @@ export function buildScored(state: ScoringInput) {
 
   // Official gate rule (GD4 section 20): an average minimum of Band 3 of 5 is
   // required in sub-criterion 4.2, sub-criterion 4.6, and Criterion 5 as a
-  // whole. These are group-level averages, not per-item pass/fail.
+  // whole. 4.6 and Criterion 5 remain group-level averages. Sub-criterion 4.2
+  // was split into two items (4.2.1 Student Contract, 4.2.2 Fee Collection &
+  // FPS); at Felix's explicit instruction (2026-07-19) each is gated
+  // INDEPENDENTLY here rather than averaged together as one "Sub-criterion
+  // 4.2" group — stricter than the literal §20 wording (a single
+  // sub-criterion average), a deliberate deviation the user chose over the
+  // official-average reading. A strong 4.2.1 can no longer offset a weak
+  // 4.2.2, or vice versa.
   const gateGroups = [
-    { id: "Sub-criterion 4.2", items: items.filter((i) => i.subCriterionId === "4.2") },
+    { id: "4.2.1", items: items.filter((i) => i.id === "4.2.1") },
+    { id: "4.2.2", items: items.filter((i) => i.id === "4.2.2") },
     { id: "Sub-criterion 4.6", items: items.filter((i) => i.subCriterionId === "4.6") },
     { id: "Criterion 5", items: items.filter((i) => i.crit === "5") },
   ].map((g) => {

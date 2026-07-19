@@ -76,11 +76,15 @@ describe("holistic band → scoring override integration", () => {
     const passScored = buildScored({ evidence: allMissing(), reviewer: {}, confirmed: {}, closures: {}, checklistBandOverrides: computeChecklistOverrides(passEntries, GD4_REQUIREMENTS) });
     expect(passScored.gatePass).toBe(true);
 
+    // 4.2.1 and 4.2.2 are gated independently (2026-07-19), not as one
+    // "Sub-criterion 4.2" average — both items are knocked down here, so both
+    // gate ids fail.
     const failEntries: Record<string, SubCriterionChecklistEntry> = { ...passEntries };
     for (const r of gateItems.filter((x) => x.subCriterionId === "4.2")) failEntries[r.id] = entry(r.id, 2);
     const failScored = buildScored({ evidence: allMissing(), reviewer: {}, confirmed: {}, closures: {}, checklistBandOverrides: computeChecklistOverrides(failEntries, GD4_REQUIREMENTS) });
     expect(failScored.gatePass).toBe(false);
-    expect(failScored.gateFail.some((g) => g.id === "Sub-criterion 4.2")).toBe(true);
+    expect(failScored.gateFail.some((g) => g.id === "4.2.1")).toBe(true);
+    expect(failScored.gateFail.some((g) => g.id === "4.2.2")).toBe(true);
   });
 
   it("criterion point rollup: a uniform Band-4 criterion scores 4/5 of its points", () => {

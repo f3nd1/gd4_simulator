@@ -171,9 +171,12 @@ export function Dashboard() {
   const samplesRecorded = Object.values(checklistEntries).reduce((sum, e) => sum + e.specific.filter((l) => l.sampling).length, 0);
   const findingsClosed = findings.length - scored.openAFIs;
 
+  // gateTotal reads scored.gates.length rather than a hardcoded count, so the
+  // 4.2 -> 4.2.1/4.2.2 split (now 4 gate groups, not 3) needed no number here.
+  const gateTotal = scored.gates.length;
   const gateGroupsSummary = scored.gateFail.length === 0
-    ? `${scored.gateFail.length === 0 ? "3/3" : `${3 - scored.gateFail.length}/3`} gate groups at Band 3+`
-    : `${3 - scored.gateFail.length}/3 gate groups at Band 3+ — failing: ${scored.gateFail.map((g) => g.id).join(", ")}`;
+    ? `${gateTotal}/${gateTotal} gate groups at Band 3+`
+    : `${gateTotal - scored.gateFail.length}/${gateTotal} gate groups at Band 3+ — failing: ${scored.gateFail.map((g) => g.id).join(", ")}`;
 
   // 4-step workflow (journey IA): 1 Set up · 2 Audit & evidence · 3 Findings &
   // review · 4 Close out (scoring lives inside Close out). Optional tools sit
@@ -208,7 +211,7 @@ export function Dashboard() {
         </div>
         <div style={{ fontSize: 16, fontWeight: 700 }}>{scored.award}</div>
         <div style={{ fontSize: 12, color: scored.gatePass ? "#9fe0bd" : "#f4b3aa", marginTop: 4 }}>
-          {scored.gatePass ? "Score gate met (4.2, 4.6, C5 at Band 3+)" : `Score gate NOT met: ${scored.gateFail.map((g) => g.id).join(", ")}`}
+          {scored.gatePass ? "Score gate met (4.2.1, 4.2.2, 4.6, C5 at Band 3+)" : `Score gate NOT met: ${scored.gateFail.map((g) => g.id).join(", ")}`}
         </div>
         <div style={{ fontSize: 11, color: "#7e8da0", marginTop: 8 }}>Not an official SSG or EduTrust result. Placeholder scoring table pending UCC's official GD4 rubric.</div>
         <ThreePillarNote dark />

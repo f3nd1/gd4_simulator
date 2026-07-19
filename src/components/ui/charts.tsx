@@ -128,7 +128,7 @@ export function AttainmentLadder({ total, award, thresholds = DEFAULT_THRESHOLDS
       </div>
       {capped && (
         <div style={{ fontSize: 11.5, color: "#b23121", marginTop: 6 }}>
-          A critical gate (Sub-criterion 4.2 / 4.6 / Criterion 5 at Band 3+) is not met, so no award tier is granted regardless of the score, until that gate is cleared.
+          A critical gate (4.2.1 / 4.2.2 / Sub-criterion 4.6 / Criterion 5 at Band 3+) is not met, so no award tier is granted regardless of the score, until that gate is cleared.
         </div>
       )}
     </div>

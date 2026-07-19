@@ -38,7 +38,7 @@ export function buildBoardSummaryMd(input: BoardSummaryInput): string {
   lines.push("");
   lines.push(`## Headline`);
   lines.push(`- Projected score: **${input.total} / 1000 — ${input.award}**`);
-  lines.push(`- Score gate (4.2, 4.6, C5 at Band 3+): **${input.gatePass ? "MET" : `NOT MET (${input.gateFailIds.join(", ")})`}**`);
+  lines.push(`- Score gate (4.2.1, 4.2.2, 4.6, C5 at Band 3+): **${input.gatePass ? "MET" : `NOT MET (${input.gateFailIds.join(", ")})`}**`);
   lines.push(`- Findings: **${open.length} open** (${majorNc.length} Major NC · ${minorNc.length} Minor NC) · ${closed} closed`);
   lines.push("");
   lines.push(`## Criterion bands`);

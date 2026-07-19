@@ -126,6 +126,34 @@ describe("buildScored — gate failure caps the award", () => {
   });
 });
 
+// 2026-07-19: 4.2.1 and 4.2.2 are gated INDEPENDENTLY (Felix's explicit
+// instruction), not averaged as one "Sub-criterion 4.2" group — this is the
+// behaviour change locked in by these tests.
+describe("buildScored — 4.2.1 and 4.2.2 are independent gates, not averaged", () => {
+  it("Band 4 on 4.2.1 does NOT rescue a Band 2 on 4.2.2 (avg would be 3, but each must independently clear 3)", () => {
+    const evidence = fullEvidence("good", true);
+    // 4.2.1 -> Band 4 (aiScore 72.5, rounds to 73, >=70 <85).
+    evidence["4.2.1"] = { approach: "Partial", processes: "Partial", systemsOutcomes: "good", review: "good", owner: "SQ", age: 10, trace: 100, drive: "https://drive.google.com/x" };
+    // 4.2.2 -> Band 2 (aiScore 45, >=40 <55).
+    evidence["4.2.2"] = { approach: "Missing", processes: "Missing", systemsOutcomes: "good", review: "good", owner: "SQ", age: 10, trace: 100, drive: "https://drive.google.com/x" };
+    const s = buildScored(input(evidence));
+    expect(s.items.find((i) => i.id === "4.2.1")?.band).toBe(4);
+    expect(s.items.find((i) => i.id === "4.2.2")?.band).toBe(2);
+    // Averaged, (4+2)/2 = 3 would PASS the old single "Sub-criterion 4.2"
+    // group — the independent-gate behaviour must fail it instead.
+    expect(s.gateFail.some((g) => g.id === "4.2.2")).toBe(true);
+    expect(s.gateFail.some((g) => g.id === "4.2.1")).toBe(false);
+    expect(s.gatePass).toBe(false);
+  });
+
+  it("both at Band 3+ independently: gate passes on 4.2.1/4.2.2 (all-good baseline)", () => {
+    const s = buildScored(input(fullEvidence("good", true)));
+    expect(s.items.find((i) => i.id === "4.2.1")?.band).toBe(5);
+    expect(s.items.find((i) => i.id === "4.2.2")?.band).toBe(5);
+    expect(s.gateFail.some((g) => g.id === "4.2.1" || g.id === "4.2.2")).toBe(false);
+  });
+});
+
 // Batch 1 scoring-honesty fixes: criterion points come from CAPPED item
 // bands (not raw eff), and a failed gate denies the tier outright.
 describe("buildScored — award computed from capped bands", () => {

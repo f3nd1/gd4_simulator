@@ -81,7 +81,7 @@ export function ExportCentre() {
     if (aiAutoBandItems.length > 0) {
       md += `## ⚠ Draft (AI) bands — confirm to finalise\n\n**${aiAutoBandItems.length} item(s) carry a band set automatically by AI and not yet confirmed by a human: ${aiAutoBandItems.join(", ")}.**\n\nCriterion scores below include these bands. Confirm or re-save each band in the Sub-Criterion Checklist before relying on this pack.\n\n`;
     }
-    md += `## Readiness\nProjected ${scored.total}/1000 — ${scored.award}\nScore gate (4.2, 4.6, C5): ${scored.gatePass ? "met" : "NOT met (" + scored.gateFail.map((g) => g.id).join(", ") + ")"}\n\n`;
+    md += `## Readiness\nProjected ${scored.total}/1000 — ${scored.award}\nScore gate (4.2.1, 4.2.2, 4.6, C5): ${scored.gatePass ? "met" : "NOT met (" + scored.gateFail.map((g) => g.id).join(", ") + ")"}\n\n`;
     md += `## Criterion scores\n` + scored.crits.map((c) => `- C${c.id} ${c.title}: Band ${c.band}, ${c.scored}/${c.points}`).join("\n") + "\n\n";
     md +=
       `## Open findings (${scored.openAFIs})\n` +
