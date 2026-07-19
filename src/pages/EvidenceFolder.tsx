@@ -18,6 +18,7 @@ import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { PpdReviewContent, HybridGatePanel, ResultNavLinks } from "./PPDReview";
 import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
+import { typicalRunDurationSec, formatRoughDuration } from "../lib/runLogCorrelation";
 import { TONE } from "../lib/theme";
 import type { FullAuditEntry } from "../lib/fullAudit";
 import { resolveAnalysisPath } from "../lib/fullAudit";
@@ -1760,6 +1761,28 @@ const SCOPE_OPTIONS: { value: AuditScope; label: string; desc: string }[] = [
 // Full-screen progress for the Full-auto sweep: heading, bar, current
 // sub-criterion, live completion log, Cancel via the existing abort
 // mechanism, and "View report →" on completion.
+// Rough "how long this usually takes" line shown at the top of both drafting
+// overlays (Full Auto + Hybrid), visible from the modal's first paint so the
+// user has a sense of scale before any step finishes, and throughout the run
+// beside the honest per-step elapsed timer. The figure is the MEDIAN whole-run
+// duration of past complete runs of this same mode (typicalRunDurationSec) —
+// real history only. No file count (the app knows none before the run) and no
+// per-step ETA (no per-step timing is recorded), so nothing here implies
+// precision the data cannot support; when there is no history it says so
+// rather than inventing a number.
+function RunTimeEstimate({ mode }: { mode: "full-auto" | "hybrid-item" }) {
+  const runLog = useWorkspaceStore((s) => s.runLog);
+  const est = typicalRunDurationSec(runLog, mode);
+  const modeName = mode === "full-auto" ? "Full auto" : "Hybrid";
+  return (
+    <div style={{ fontSize: 11.5, color: "#64748b", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "6px 10px", marginBottom: 10 }}>
+      {est
+        ? <>Similar runs typically take <b>{formatRoughDuration(est.medianSec)}</b> (from your last {est.sampleCount} {modeName} {est.sampleCount === 1 ? "run" : "runs"}). Rough guide only — AI speed varies, so the live timer below is the real progress.</>
+        : <>No past {modeName} runs yet to estimate from, so there is no time guide for this one. After it completes, future runs will show a typical time here.</>}
+    </div>
+  );
+}
+
 function FullAuditOverlay() {
   const progress = useWorkspaceStore((s) => s.fullAuditProgress);
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
@@ -1809,6 +1832,7 @@ function FullAuditOverlay() {
             ? `Auditing ${progress.current} of ${progress.total} sub-criteria`
             : progress.status === "complete" ? "Full audit complete" : "Full audit cancelled"}
         </div>
+        {running && <RunTimeEstimate mode="full-auto" />}
         {running && (
           <div style={{ fontSize: 13, color: "#475569", marginBottom: 6 }}>
             Now: <b>{progress.currentName}</b>
@@ -1972,6 +1996,7 @@ function HybridDraftOverlay() {
         <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginBottom: 4 }}>
           {running ? `Drafting ${progress.subCriterionId}…` : progress.status === "cancelled" ? `Hybrid draft cancelled — ${progress.subCriterionId}` : `Hybrid draft complete — ${progress.subCriterionId}`}
         </div>
+        {running && <RunTimeEstimate mode="hybrid-item" />}
         {!running && progress.summary && (
           <div style={{ fontSize: 12, color: "#475569", marginBottom: 8 }}>{progress.summary}</div>
         )}
