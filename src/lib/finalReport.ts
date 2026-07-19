@@ -554,7 +554,7 @@ export type ConciseRowRef = {
   text: string;
 };
 
-export function qualifyingConciseRows(it: ItemReport): ConciseRowRef[] {
+export function qualifyingConciseRows(it: Pick<ItemReport, "id" | "title" | "band" | "findingsGroups">): ConciseRowRef[] {
   const out: ConciseRowRef[] = [];
   for (const g of it.findingsGroups) {
     for (const r of g.rows) {
@@ -567,7 +567,7 @@ export function qualifyingConciseRows(it: ItemReport): ConciseRowRef[] {
 
 // The grounding block: each qualifying row's key, dimension, verdict and
 // FULL raw text — the model may only reference facts already in that text.
-export function buildConciseUserPrompt(it: ItemReport): string {
+export function buildConciseUserPrompt(it: Pick<ItemReport, "id" | "title" | "band" | "findingsGroups">): string {
   const rows = qualifyingConciseRows(it).map((q) =>
     `Row key "${q.key}" — ${q.dimLabel}, ${q.verdict}, requirement line ${q.itemRef}.\nRaw assessment text:\n"""\n${q.text}\n"""`
   );
@@ -577,7 +577,7 @@ export function buildConciseUserPrompt(it: ItemReport): string {
 // The honesty filter on the reply: only REQUESTED row keys survive, and only
 // as non-empty strings — the model can never attach a summary to a row that
 // was not asked about (e.g. a not-assessed row).
-export function filterConciseSummaries(raw: unknown, it: ItemReport): Record<string, string> {
+export function filterConciseSummaries(raw: unknown, it: Pick<ItemReport, "id" | "title" | "band" | "findingsGroups">): Record<string, string> {
   const wanted = new Set(qualifyingConciseRows(it).map((q) => q.key));
   const out: Record<string, string> = {};
   if (raw && typeof raw === "object") {

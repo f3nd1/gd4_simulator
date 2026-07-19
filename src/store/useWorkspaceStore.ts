@@ -100,7 +100,7 @@ import { DEFAULT_AUDIT_MODE, partitionWritesByMode, partitionOptionAWrites, audi
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
 import { effectiveVerdictTemp, describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
 import { narrativeInputForEntry, suggestionKey } from "../lib/finalReport";
-import { runNarrativeWriter } from "../lib/ai/narrativeWriter";
+import { runNarrativeWriter, runConciseLineSummaries } from "../lib/ai/narrativeWriter";
 import { lineApsr, findingDimension, buildDraftFinding, apsrMatrixResult } from "../lib/checklistBanding";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
@@ -2720,6 +2720,30 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               promptSent: res.promptSent,
               usage: res.usage,
             });
+            // Per-line one-sentence synthesis for the LONG rows (Systems &
+            // Outcomes / Review raw evidence merges) so their finding cell reads
+            // as short as the Approach/Processes cells instead of a raw citation
+            // stack. Same run + generate-once contract as the narratives; the
+            // full raw evidence stays reachable behind the report's expand.
+            // Returns null (no AI call) when no row is long enough to qualify.
+            const concise = await runConciseLineSummaries(input, settings);
+            if (concise && Object.keys(concise.summaries).length > 0) {
+              const conciseAt = new Date().toISOString();
+              get().setReportConciseFindings(Object.fromEntries(Object.entries(concise.summaries).map(([k, text]) => [k, { text, generatedAt: conciseAt, model: concise.model }])));
+              get().pushAIReviewLog({
+                agent: "Final Report Line Summariser",
+                reviewType: "Finalisation",
+                subjectId: itemId,
+                verdict: `Condensed ${Object.keys(concise.summaries).length} long evidence row${Object.keys(concise.summaries).length === 1 ? "" : "s"}`,
+                confidence: "Medium",
+                keyConcerns: [],
+                recommendedAction: "Review the one-sentence summaries on the Final Report; the full raw evidence stays behind each row's expand.",
+                live: true,
+                generatedContent: concise.content,
+                promptSent: concise.promptSent,
+                usage: concise.usage,
+              });
+            }
             written++;
           } catch {
             // A narrative failure never fails the run — scoring data is already

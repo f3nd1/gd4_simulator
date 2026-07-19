@@ -1,6 +1,6 @@
 import { chatComplete, type AIUsage } from "./aiClient";
 import { buildSystemPrompt } from "./skills";
-import { buildAiSuggestionUserPrompt, filterDimensionNarratives, type ItemReport } from "../finalReport";
+import { buildAiSuggestionUserPrompt, filterDimensionNarratives, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport } from "../finalReport";
 import type { AISettings } from "../../types";
 
 // The auditor-narrative generator, extracted from FinalReport.tsx so BOTH the
@@ -60,6 +60,51 @@ export async function runNarrativeWriter(input: NarrativeInput, settings: AISett
   }
   return {
     narratives: filterDimensionNarratives(raw, input.findingsGroups),
+    content,
+    promptSent: `SYSTEM:\n${sys}\n\nUSER:\n${user}`,
+    usage,
+    model,
+  };
+}
+
+export type ConciseSummariesResult = {
+  summaries: Record<string, string>; // conciseKey -> one-sentence synthesis
+  content: string;
+  promptSent: string;
+  usage?: AIUsage;
+  model?: string;
+};
+
+// Per-LINE one-sentence synthesis for the findings table. The Approach/Processes
+// cells already read short because their leg note IS the audit pass's short
+// verdict (the PPD "Documented, because..." shortComment); Systems & Outcomes /
+// Review legs come from the outcome/review pass as a raw multi-window
+// renderWindowNotes merge, so their cells dumped 8-10 numbered citations. This
+// condenses ONLY the rows long enough to qualify (needsConciseSummary — the
+// long S&O/Review blobs), so their cell shows one plain auditor sentence by
+// default while the full raw evidence stays reachable behind the report's
+// "view evidence" expand. Reuses the existing (previously-unwired) concise
+// grounding + honesty filter; returns null when no row qualifies (no AI call).
+export async function runConciseLineSummaries(input: NarrativeInput, settings: AISettings): Promise<ConciseSummariesResult | null> {
+  if (qualifyingConciseRows(input).length === 0) return null;
+  const sys =
+    "You are an experienced EduTrust auditor condensing raw evidence notes into the finding column of a GD4 internal audit readiness report for a Singapore PEI. For EACH row key in the user message, write ONE short sentence (two at most) that states that row's strength or weakness in a plain, concise auditor register, grounded ONLY in that row's raw assessment text. " +
+    "Never invent a document, figure, approver, quote or citation not present in that text; if the text is too thin to name specifics, say so plainly rather than inventing them. Do NOT reproduce the numbered \"#1 [file · chunk]:\" citations, chunk ids or long verbatim quotes; state the point in your own words. Keep the row's polarity: a strength stays a demonstrated strength, a weakness stays a gap. Use UK spelling, no em dashes, plain prose only (no markdown, no leading label). " +
+    "Respond with JSON only: {\"summaries\": {\"<row key>\": string, ...}} — include ONLY the row keys given, using each key exactly as written." +
+    buildSystemPrompt("narrativeWriter", null, "narrativeWriter.runConciseLineSummaries");
+  const user = buildConciseUserPrompt(input);
+  let model: string | undefined;
+  let usage: AIUsage | undefined;
+  const content = await chatComplete([{ role: "system", content: sys }, { role: "user", content: user }], settings, { onUsage: (u) => { model = u.model; usage = u; } });
+  let raw: unknown;
+  try {
+    raw = (JSON.parse(content) as { summaries?: unknown }).summaries;
+  } catch {
+    const match = content.match(/\{[\s\S]*\}/);
+    if (match) { try { raw = (JSON.parse(match[0]) as { summaries?: unknown }).summaries; } catch { /* no usable JSON */ } }
+  }
+  return {
+    summaries: filterConciseSummaries(raw, input),
     content,
     promptSent: `SYSTEM:\n${sys}\n\nUSER:\n${user}`,
     usage,

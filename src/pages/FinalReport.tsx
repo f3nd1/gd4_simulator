@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, findingParagraphs, splitEvidenceNote, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, conciseKey, buildAiSuggestionUserPrompt, filterAiSuggestions, findingParagraphs, splitEvidenceNote, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
@@ -419,8 +419,26 @@ function bandJumpPills(fromBand: number, dimLabel: string) {
 // behind the expand and remains on the Sub-Criterion Checklist card. A single
 // ordinary note (the Approach/Processes norm) renders unchanged.
 const EVIDENCE_VISIBLE = 2;
-function EvidenceCell({ finding }: { finding: string }) {
+function EvidenceCell({ finding, concise }: { finding: string; concise?: string }) {
   const entries = splitEvidenceNote(finding);
+  // A one-sentence AI synthesis exists for this (long) row: show it as the
+  // default text, exactly like the short Approach/Processes cells, and tuck the
+  // full raw evidence behind a "view evidence" expand (2026-07-19). Written by
+  // runConciseLineSummaries during a run / "Regenerate report text"; grounded in
+  // the raw text below and honesty-filtered, never fabricated.
+  if (concise) {
+    return (
+      <>
+        <span style={{ whiteSpace: "pre-wrap" }}>{concise}</span>
+        <details style={{ marginTop: 4 }}>
+          <summary style={{ cursor: "pointer", color: "#64748b", fontSize: 11 }}>
+            View evidence ({entries.length} observation{entries.length === 1 ? "" : "s"})
+          </summary>
+          {entries.map((e, i) => <p key={i} style={{ whiteSpace: "pre-wrap", margin: "6px 0 0" }}>{e}</p>)}
+        </details>
+      </>
+    );
+  }
   // One note, or an already-short 1-2 entry cell: render in full as before.
   if (entries.length <= EVIDENCE_VISIBLE) {
     const paras = entries.length > 1 ? entries : findingParagraphs(finding);
@@ -519,6 +537,10 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
   // per-row "concise summaries" feature was superseded by the narrative and
   // its button removed (2026-07-18); its persisted data is simply unread.
   const narratives = useWorkspaceStore((s) => s.reportDimensionNarratives);
+  // Per-line one-sentence syntheses for long rows (Systems & Outcomes / Review
+  // raw evidence merges); when present the cell shows the sentence, not the
+  // stack. Same generate-once-and-save contract as the narratives above.
+  const conciseFindings = useWorkspaceStore((s) => s.reportConciseFindings);
   const writeReportNarratives = useWorkspaceStore((s) => s.writeReportNarratives);
   const [narBusy, setNarBusy] = useState(false);
   const [narError, setNarError] = useState<string | null>(null);
@@ -705,7 +727,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                       </td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5, color, wordBreak: "break-word" }}>
                         <b>{label}:</b>{" "}
-                        <EvidenceCell finding={r.finding} />
+                        <EvidenceCell finding={r.finding} concise={conciseFindings[conciseKey(it.id, g.key, r.lineId)]?.text} />
                       </td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5 }}>{renderAfi(r.afi, r.verdict === "weakness" ? { band: g.band, label: g.label } : undefined, r.verdict === "strength" ? nar?.requiredAction : undefined)}</td>
                     </tr>
