@@ -38,6 +38,7 @@ import type {
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders, reconcileFolders } from "../data/folders";
+import { itemIdsForScope, folderScopeId, runScopesForSub, scopeTitle } from "../lib/evidenceScope";
 import { currentItemIds, currentSubIds, pruneRecordByKeys, reconcileEvidenceMap } from "../lib/structuralReconcile";
 import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
@@ -1281,7 +1282,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // standalone review, not part of the scored audit pipeline.
       runPPDReview: async (subCriterionId) => {
         const s = get();
-        const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
+        const folder = s.folders.find((f) => folderScopeId(f) === subCriterionId);
         if (!folder) return;
         // Every audit entry point refuses to start without a named auditor —
         // an "Unassigned" run has no attribution and breaks the review panel.
@@ -1375,7 +1376,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Describe/Show lines, so 5 rows. Notes/Expected Evidence bullets
           // are excluded; those aren't requirement lines an auditor tests.
           const requirements: PPDRequirementInput[] = GD4_REQUIREMENTS
-            .filter((r) => r.subCriterionId === subCriterionId)
+            .filter((r) => itemIdsForScope(subCriterionId).includes(r.id))
             .flatMap((r) =>
               (r.flatAuditPoints ?? [])
                 .filter((p) => p.sourceType === "describeShow")
@@ -1593,7 +1594,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const s = get();
         const ppd = s.ppdReviewResults[subCriterionId];
         if (!ppd || ppd.rows.length === 0 || ppd.rows.some((r) => !r.ref)) return false;
-        const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
+        const folder = s.folders.find((f) => folderScopeId(f) === subCriterionId);
 
         const entries = useChecklistModuleStore.getState().entries;
         // Index every audited (has a runId-tagged evidence item) checklist line
@@ -1602,7 +1603,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // that matched in the staged audit (e.g. "DS: 6.1.1.DS1.a") miss in
         // this derive, falsely marking assessed lines as unmatched.
         const lineByRef = new Map<string, { status: SpecificLineStatus; apsr?: ApsrBreakdown; note?: string }>();
-        for (const req of GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId)) {
+        for (const req of GD4_REQUIREMENTS.filter((r) => itemIdsForScope(subCriterionId).includes(r.id))) {
           const entry = entries[req.id];
           if (!entry) continue;
           for (const line of entry.specific) {
@@ -1683,7 +1684,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // line, with live progress and per-line failure isolation.
       runEvidenceAssessment: async (subCriterionId, retryRefs) => {
         const s = get();
-        const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
+        const folder = s.folders.find((f) => folderScopeId(f) === subCriterionId);
         if (!folder) return;
         // See runPPDReview: no run without a named auditor.
         const auditorGate = checkAuditorForRun(s.auditors, s.activeAuditorId);
@@ -2210,7 +2211,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         };
 
         try {
-          const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId);
+          const items = GD4_REQUIREMENTS.filter((r) => itemIdsForScope(subCriterionId).includes(r.id));
           const allAuditPoints = items.flatMap((r) => r.flatAuditPoints ?? []);
           if (allAuditPoints.length === 0) { finish(null, "No audit points are defined for this sub-criterion."); return; }
 
@@ -2309,7 +2310,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const res = get().outcomeReviewResults[subCriterionId];
         if (!res) return 0;
         const checklist = useChecklistModuleStore.getState();
-        const itemIds = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId).map((r) => r.id);
+        const itemIds = GD4_REQUIREMENTS.filter((r) => itemIdsForScope(subCriterionId).includes(r.id)).map((r) => r.id);
         const linesByItem = Object.fromEntries(
           itemIds
             .filter((id) => checklist.entries[id])
@@ -2348,7 +2349,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // missing answer is never presented as a false "nothing changed".
       checkEvidenceDrift: async (subCriterionId) => {
         const s = get();
-        const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
+        const folder = s.folders.find((f) => folderScopeId(f) === subCriterionId);
         const assessment = s.evidenceAssessments[subCriterionId];
         const ledger = assessment?.fileLedger?.filter((r) => r.bucket === "evidence" && r.driveFileId);
         if (!folder || !ledger || ledger.length === 0) {
@@ -2454,7 +2455,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // was raised but the score never moved). The finding is then
             // confirmed through the normal checklist path below — no more
             // synthetic store-less branch.
-            const folder = s.folders.find((f) => f.subCriterionId === subCriterionId);
+            const folder = s.folders.find((f) => folderScopeId(f) === subCriterionId);
             const checklist = useChecklistModuleStore.getState();
             const writes = buildOptionALineWrites(
               [row],
@@ -2510,7 +2511,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // stable synthetic ref per contradiction. (`ppd` hoisted to the top
         // of this action — the row loop's source traces need it too.)
         if (ppd?.contradictions?.length) {
-          const subItems = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId);
+          const subItems = GD4_REQUIREMENTS.filter((r) => itemIdsForScope(subCriterionId).includes(r.id));
           const anchorItem = subItems[0];
           if (anchorItem) {
             const gateSensitive = subItems.some((r) => r.gateSensitive);
@@ -4265,7 +4266,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set({ driveBlockedReason: null });
         if (!token) { auditHadError = true; finish(DRIVE_EXPIRED_MID_RUN, false, DRIVE_EXPIRED_MID_RUN); return; } // should be unreachable past the guard; never strand busy
 
-        const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === folder.subCriterionId);
+        const items = GD4_REQUIREMENTS.filter((r) => itemIdsForScope(folderScopeId(folder)).includes(r.id));
         if (items.length === 0) {
           auditHadError = true;
           finish("No GD4 items map to this sub-criterion, so there is nothing to audit.", false);
@@ -5382,7 +5383,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const runRecord: AuditRunRecord = {
           runId,
           folderId: id,
-          subCriterionId: folder.subCriterionId,
+          // Scope (item id for a split 4.2 folder, else the sub) so downstream
+          // pending/gate lookups match; identical to subCriterionId elsewhere.
+          subCriterionId: folderScopeId(folder),
           subCriterionTitle: folder.folderName,
           scope,
           status: auditHadError ? "failed" : "completed",
@@ -5657,7 +5660,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set({ driveBlockedReason: null });
         if (!token) { auditHadError = true; finish(DRIVE_EXPIRED_MID_RUN, false, DRIVE_EXPIRED_MID_RUN); return; } // should be unreachable past the guard; never strand busy
 
-        const items = GD4_REQUIREMENTS.filter((r) => r.subCriterionId === folder.subCriterionId);
+        const items = GD4_REQUIREMENTS.filter((r) => itemIdsForScope(folderScopeId(folder)).includes(r.id));
         if (items.length === 0) { auditHadError = true; finish("No GD4 items map to this sub-criterion.", false); return; }
 
         // Stage 1: Load FlatAuditPoints
@@ -6397,7 +6400,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Band per GD4 item — holistic human judgment, never computed by a
         // run (see the classic path above for the same rule).
         const freshEntriesStaged = useChecklistModuleStore.getState().entries;
-        const req = GD4_REQUIREMENTS.find((r) => r.subCriterionId === folder.subCriterionId);
+        const req = GD4_REQUIREMENTS.find((r) => itemIdsForScope(folderScopeId(folder)).includes(r.id));
         const bandPartsStaged: string[] = [];
         if (req) {
           const e = freshEntriesStaged[req.id];
@@ -6511,7 +6514,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         finish(summary, live, undefined, auditUsage, auxUsage, stagedPromptSent);
 
         const runRecord: AuditRunRecord = {
-          runId, folderId: id, subCriterionId: folder.subCriterionId, subCriterionTitle: folder.folderName,
+          runId, folderId: id, subCriterionId: folderScopeId(folder), subCriterionTitle: folder.folderName,
           scope, status: auditHadError ? "failed" : "completed",
           startedAt: new Date(auditStartedAt).toISOString(), endedAt: new Date().toISOString(),
           auditorName, auditLive: live, aiModel: auditUsage?.model,
@@ -7104,7 +7107,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
       // to a surviving item id) is untouched. The reconcile is idempotent, so a
       // workspace at an earlier version is safely brought up to the latest.
-      version: 7,
+      version: 8,
       migrate: (persisted, fromVersion) => {
         let s = persisted as WorkspaceState;
         if (!s) return s;
@@ -7184,6 +7187,57 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ...(f.linkedSourceRefs ? { linkedSourceRefs: f.linkedSourceRefs.map(migrateDs1Ref) } : {}),
             })),
           } as WorkspaceState;
+        }
+        if (fromVersion < 8) {
+          // 4.2 split into per-item Evidence Folder cards/folders/runs
+          // (4.2.1 Student Contract, 4.2.2 Fee Collection & FPS). Replace the
+          // persisted single "4.2" folder with two item folders that CARRY OVER
+          // its Drive links (so no linked evidence is lost — the user re-points
+          // them per item), and DROP the merged "4.2" Option A run results,
+          // which cannot be honestly split between the two items and must be
+          // re-run per item. The per-item checklist bands/lines are keyed by
+          // gd4ItemId in a different store and are untouched.
+          const SPLIT_SUB = "4.2";
+          const scopes = runScopesForSub(SPLIT_SUB); // ["4.2.1","4.2.2"]
+          const dropMerged = <V,>(rec: Record<string, V> | undefined) =>
+            rec ? Object.fromEntries(Object.entries(rec).filter(([k]) => k !== SPLIT_SUB)) as Record<string, V> : rec;
+          const folders = s.folders ?? [];
+          const merged = folders.find((f) => !f.scopeId && f.subCriterionId === SPLIT_SUB);
+          const splitFolders = merged
+            ? scopes.map((scopeId) => ({
+                ...merged,
+                id: `FOLD-${scopeId}`,
+                scopeId,
+                folderName: `${scopeId} ${scopeTitle(scopeId)}`,
+                // Links/access/owner carry over; audit stamps reset because the
+                // merged run's results are dropped, so each item starts fresh.
+                lastAuditAt: undefined, lastAuditSummary: undefined, lastAuditRunId: undefined,
+                lastAuditLive: undefined, lastAuditError: undefined, lastAuditNewestModified: undefined,
+                lastAuditScope: undefined, lastAuditAuditor: undefined,
+              }))
+            : [];
+          const path42 = s.analysisPath?.[SPLIT_SUB];
+          s = {
+            ...s,
+            folders: merged ? [...folders.filter((f) => f !== merged), ...splitFolders] : folders,
+            ppdReviewResults: dropMerged(s.ppdReviewResults),
+            evidenceAssessments: dropMerged(s.evidenceAssessments),
+            ppdReviewHistory: dropMerged(s.ppdReviewHistory),
+            evidenceAssessmentHistory: dropMerged(s.evidenceAssessmentHistory),
+            outcomeReviewResults: dropMerged(s.outcomeReviewResults),
+            pendingCommits: dropMerged(s.pendingCommits),
+            // Carry the A/B path choice to both item scopes; drop the merged key.
+            analysisPath: {
+              ...dropMerged(s.analysisPath),
+              ...(path42 ? Object.fromEntries(scopes.map((sc) => [sc, path42])) : {}),
+            },
+            // The old merged run record is keyed by the old folder id.
+            lastAuditRuns: s.lastAuditRuns
+              ? Object.fromEntries(Object.entries(s.lastAuditRuns).filter(([k]) => k !== `FOLD-${SPLIT_SUB}`))
+              : s.lastAuditRuns,
+          } as WorkspaceState;
+          // Order the two new folders correctly / seed any missing scope.
+          s = { ...s, folders: s.folders ? reconcileFolders(s.folders) : s.folders } as WorkspaceState;
         }
         return s;
       },

@@ -608,6 +608,13 @@ export type EvidenceFolder = {
   auditCycleId: string;
   criterionId: string;
   subCriterionId: string;
+  // The run-scope this folder represents (see lib/evidenceScope). Absent means
+  // "the whole sub-criterion" (folderScopeId falls back to subCriterionId) —
+  // true for every folder except the two that back a per-item split sub (4.2),
+  // where scopeId is the item id "4.2.1" / "4.2.2" so each item gets its own
+  // links, path and Run audit. Kept optional so persisted pre-split folders
+  // (no scopeId) keep behaving as their sub-criterion.
+  scopeId?: string;
   folderName: string;
   sourceSystem: SourceSystem;
   // folderLink is the "Actual Evidence" folder (kept under this name for

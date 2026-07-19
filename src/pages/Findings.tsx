@@ -14,6 +14,7 @@ import { Pill } from "../components/ui/Pill";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS, refLabel, refWithLabel } from "../data/gd4Requirements";
+import { runScopesForSub } from "../lib/evidenceScope";
 import { GOLD, INK } from "../lib/theme";
 import type { Finding, FindingType, Severity, FindingDimension, GroupedFindingDraft, NcSeverity } from "../types";
 import { runLiveFindingObservation, AIClientError } from "../lib/ai/agentRuntime";
@@ -710,11 +711,14 @@ export function Findings() {
           {/* Duplicate of the review modal's Compile action, so a user sent
               here (e.g. from the checklist in Manual mode) with a finished
               PPD + Evidence run isn't bounced to yet another page to use it. */}
-          {subCritFilter !== "All" && evidenceAssessments[subCritFilter] && (
+          {/* Compile from the last Option A run. A sub-criterion may have more
+              than one run-scope (4.2 splits into 4.2.1 / 4.2.2), so gather every
+              scope under the filtered sub and compile each. */}
+          {subCritFilter !== "All" && runScopesForSub(subCritFilter).some((sc) => evidenceAssessments[sc]) && (
             <div style={{ marginTop: 10 }}>
               <button
                 onClick={() => {
-                  const n = compileEvidenceFindings(subCritFilter);
+                  const n = runScopesForSub(subCritFilter).reduce((a, sc) => a + (evidenceAssessments[sc] ? compileEvidenceFindings(sc) : 0), 0);
                   setGenNote(n > 0 ? `${n} finding(s) raised to the register from the last PPD + Evidence run for ${subCritFilter}.` : `No new findings — the last PPD + Evidence run for ${subCritFilter} has no uncompiled gaps.`);
                 }}
                 style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #c7d2fe", background: "#eef2ff", color: "#4338ca" }}

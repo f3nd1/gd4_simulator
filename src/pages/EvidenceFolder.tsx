@@ -18,6 +18,7 @@ import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { PpdReviewContent, HybridGatePanel, ResultNavLinks } from "./PPDReview";
 import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
+import { folderScopeId, itemIdsForScope, subOfScope, scopeTitle } from "../lib/evidenceScope";
 import { typicalRunDurationSec, formatRoughDuration } from "../lib/runLogCorrelation";
 import { TONE } from "../lib/theme";
 import type { FullAuditEntry } from "../lib/fullAudit";
@@ -966,11 +967,12 @@ function CompleteDetail({ p, onExportFileLedger, onExportAISummary }: { p: Audit
   // retired, so there is no separate /ppd-review destination.
   const checklistHref = !p.subCriterionId
     ? "#/sub-checklist"
-    : `#/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === p.subCriterionId)?.id ?? ""}`;
+    : `#/sub-checklist?item=${itemIdsForScope(p.subCriterionId)[0] ?? ""}`;
   const checklistLabel = "Sub-Criterion Checklist";
   // ?subCrit= (a sub-criterion id like "1.2") — ?item= expects a requirement
-  // id ("1.2.1") and would silently ignore a sub-criterion id.
-  const findingsHref  = p.subCriterionId ? `#/findings?subCrit=${p.subCriterionId}` : "#/findings";
+  // id ("1.2.1") and would silently ignore a sub-criterion id. p.subCriterionId
+  // may be a run-scope (an item id for a 4.2 card); map it back to the real sub.
+  const findingsHref  = p.subCriterionId ? `#/findings?subCrit=${subOfScope(p.subCriterionId)}` : "#/findings";
 
   const chipLink: React.CSSProperties = { cursor: "pointer", textDecoration: "none", borderRadius: 6, padding: "5px 11px", fontSize: 12.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 };
 
@@ -1643,8 +1645,10 @@ function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => v
 // (instant render from ppdReviewResults/evidenceAssessments, no AI call) and
 // empty (the tabs' own "Run…" buttons). zIndex 110: above the row modals
 // (100), below the Full-auto overlay (120).
+// subCriterionId here is a run-scope (the item id for a split 4.2 card, else the
+// sub-criterion) — the modal drives runPPDReview / reads results by it.
 function OptionAReviewModal({ subCriterionId, onClose }: { subCriterionId: string; onClose: () => void }) {
-  const sub = GD4_SUB_CRITERIA.find((s) => s.id === subCriterionId);
+  const title = scopeTitle(subCriterionId);
   const runPPDReview = useWorkspaceStore((s) => s.runPPDReview);
   const busy = useWorkspaceStore((s) => s.busy);
   const rerunning = busy === "ppdreview" + subCriterionId;
@@ -1657,7 +1661,7 @@ function OptionAReviewModal({ subCriterionId, onClose }: { subCriterionId: strin
         {/* Fixed header: title + Re-run + close */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 18px", borderBottom: "1px solid #e2e8f0", background: "#f8fafc", flexShrink: 0 }}>
           <h3 style={{ margin: 0, fontSize: 14 }}>
-            PPD + Evidence Review — {subCriterionId}{sub ? ` ${sub.title}` : ""}
+            PPD + Evidence Review — {subCriterionId}{title ? ` ${title}` : ""}
           </h3>
           <button
             onClick={() => runPPDReview(subCriterionId)}
@@ -2354,8 +2358,10 @@ export function EvidenceFolder() {
       compileDone: boolean; findingsCount: number; bandLabel: string;
     }> = {};
     for (const f of folders) {
-      const sc = f.subCriterionId;
-      const itemIds = new Set(GD4_REQUIREMENTS.filter((r) => r.subCriterionId === sc).map((r) => r.id));
+      // Key by run-scope, not sub-criterion, so 4.2's two item folders each get
+      // their own progress row (scope === subCriterionId for every other sub).
+      const sc = folderScopeId(f);
+      const itemIds = new Set(itemIdsForScope(sc));
       const ppd = ppdReviewResults[sc];
       const ev = evidenceAssessments[sc];
       const a = {
@@ -2381,7 +2387,7 @@ export function EvidenceFolder() {
         (!!ppd?.contradictions && ppd.contradictions.some((c) => c.savedFindingId)) ||
         (bRun && customFindings.some((cf) => itemIds.has(cf.gd4ItemId)));
       const findingsCount = customFindings.filter((cf) => itemIds.has(cf.gd4ItemId)).length;
-      const startedBands = scored.items.filter((i) => i.subCriterionId === sc && i.started).map((i) => i.band);
+      const startedBands = scored.items.filter((i) => itemIds.has(i.id) && i.started).map((i) => i.band);
       const bandLabel = startedBands.length === 0
         ? "–"
         : Math.min(...startedBands) === Math.max(...startedBands)
@@ -2799,9 +2805,14 @@ export function EvidenceFolder() {
           const evidenceDismissKey = `${f.id}:evidence:${f.accessCheckAt || ""}`;
           const lastRun = lastAuditRuns[f.id];
           const rowExpanded = expandedSubCritRows.has(f.id);
-          const path = resolveAnalysisPath(analysisPath, f.subCriterionId);
-          const prog = subCritProgress[f.subCriterionId];
-          const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === f.subCriterionId)?.id;
+          // The run-scope this card drives: the item id for a 4.2 split folder,
+          // else the sub-criterion (identical for every other sub). All Option A
+          // run/results/progress/path operations key off this; sub-criterion
+          // display (title, domain lens) still uses f.subCriterionId.
+          const scope = folderScopeId(f);
+          const path = resolveAnalysisPath(analysisPath, scope);
+          const prog = subCritProgress[scope];
+          const firstItemId = itemIdsForScope(scope)[0];
           const linksEditing = editingLinks.has(f.id);
           const rowLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.4, minWidth: 58, flexShrink: 0 };
           const chipBtn: React.CSSProperties = { cursor: "pointer", fontSize: 11, fontWeight: 600, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#374151", borderRadius: 999, padding: "3px 10px", whiteSpace: "nowrap" };
@@ -2859,7 +2870,7 @@ export function EvidenceFolder() {
           return (
             <div
               key={f.id}
-              ref={(el) => { rowRefs.current[f.subCriterionId] = el; }}
+              ref={(el) => { rowRefs.current[scope] = el; }}
               style={{ border: "1px solid #e2e8f0", borderLeft: "4px solid #7c3aed", borderRadius: 10, background: "#fff", maxWidth: "100%" }}
             >
               {/* Header: name (click to expand details) + Status/Owner chips */}
@@ -2948,7 +2959,7 @@ export function EvidenceFolder() {
               <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "3px 0" }}>
                 <span style={rowLabel}>Path</span>
                 <button
-                  onClick={() => setAnalysisPath(f.subCriterionId, "A")}
+                  onClick={() => setAnalysisPath(scope, "A")}
                   title={tip("Option A (PPD + Evidence), two steps: checks whether the PPD documents each requirement, then checks the evidence against it. Slower, but mirrors how SSG assessors work." + (prog?.a.run ? " Option A has saved results." : ""))}
                   style={{ ...chipBtn, border: `1.5px solid ${path === "A" ? "#7c3aed" : "#e2e8f0"}`, background: path === "A" ? "#faf5ff" : "#fff", color: path === "A" ? "#5b21b6" : "#64748b", fontWeight: 700 }}
                 >
@@ -2956,7 +2967,7 @@ export function EvidenceFolder() {
                   {prog?.a.run && <span title="Option A has saved results" style={{ marginLeft: 4, color: "#15803d", fontWeight: 800 }}>✓</span>}
                 </button>
                 <button
-                  onClick={() => setAnalysisPath(f.subCriterionId, "B")}
+                  onClick={() => setAnalysisPath(scope, "B")}
                   title={tip("Option B (Staged audit): a single pass straight to APSR verdicts on the Sub-Criterion Checklist. Faster and cheaper; best for a quick first sweep." + (prog?.b.run ? " Option B has saved results." : ""))}
                   style={{ ...chipBtn, border: `1.5px solid ${path === "B" ? "#7c3aed" : "#e2e8f0"}`, background: path === "B" ? "#faf5ff" : "#fff", color: path === "B" ? "#5b21b6" : "#64748b", fontWeight: 700 }}
                 >
@@ -3054,15 +3065,15 @@ export function EvidenceFolder() {
                         onClick={async () => {
                           if (auditMode === "hybrid" && autoScoreBands) {
                             // Item 1: confirm before a multi-minute hands-off run.
-                            if (!confirm(`This will run PPD review, evidence assessment, compile findings, Outcomes & Review, and auto-score the band for ${f.subCriterionId} — it can take several minutes. Continue?`)) return;
-                            setOptionAModal(f.subCriterionId);
-                            const outcome = await runHybridItemDraft(f.subCriterionId);
+                            if (!confirm(`This will run PPD review, evidence assessment, compile findings, Outcomes & Review, and auto-score the band for ${scope} — it can take several minutes. Continue?`)) return;
+                            setOptionAModal(scope);
+                            const outcome = await runHybridItemDraft(scope);
                             // Item 4: only a genuine completion jumps to the Final
                             // Report — a cancelled or stopped-early run stays on the
                             // overlay so the user sees why it did not finish.
                             if (outcome === "done") { dismissHybridDraftProgress(); navigate("/final-report"); }
                           } else {
-                            setOptionAModal(f.subCriterionId);
+                            setOptionAModal(scope);
                           }
                         }}
                         disabled={noAuditors}
@@ -3093,14 +3104,14 @@ export function EvidenceFolder() {
                         path has a saved result; toggling A/B is a pure view
                         switch — both results coexist untouched. */}
                     {(() => {
-                      const hasA = !!(ppdReviewResults[f.subCriterionId] || evidenceAssessments[f.subCriterionId]);
+                      const hasA = !!(ppdReviewResults[scope] || evidenceAssessments[scope]);
                       const selectedHasResult = path === "A" ? hasA : !!lastRun;
                       if (!selectedHasResult) return null;
                       return (
                         <button
-                          onClick={() => (path === "A" ? setOptionAModal(f.subCriterionId) : setViewingRun(lastRun!))}
+                          onClick={() => (path === "A" ? setOptionAModal(scope) : setViewingRun(lastRun!))}
                           title={path === "A"
-                            ? (ppdReviewResults[f.subCriterionId] ? `View the saved PPD + Evidence review (last run ${new Date(ppdReviewResults[f.subCriterionId].runAt).toLocaleDateString()}) — instant, no AI call` : "View the saved evidence assessment — instant, no AI call")
+                            ? (ppdReviewResults[scope] ? `View the saved PPD + Evidence review (last run ${new Date(ppdReviewResults[scope].runAt).toLocaleDateString()}) — instant, no AI call` : "View the saved evidence assessment — instant, no AI call")
                             : `View run ${lastRun!.runId} — ${new Date(lastRun!.startedAt).toLocaleDateString()} — instant, no AI call`}
                           style={{ cursor: "pointer", fontSize: 11, padding: "5px 8px", borderRadius: 7, border: "1px solid #ddd6fe", background: "#faf5ff", color: "#5b21b6", whiteSpace: "nowrap", fontWeight: 600 }}
                         >
@@ -3235,7 +3246,7 @@ export function EvidenceFolder() {
                           navigation only if the modal's data isn't available. */}
                       {(path === "A" || !!lastRun) ? (
                         <button
-                          onClick={() => (path === "A" ? setOptionAModal(f.subCriterionId) : setViewingRun(lastRun!))}
+                          onClick={() => (path === "A" ? setOptionAModal(scope) : setViewingRun(lastRun!))}
                           style={{ cursor: "pointer", border: "none", background: "transparent", fontSize: 11, color: "#2563eb", whiteSpace: "nowrap", padding: 0 }}
                         >
                           View results →

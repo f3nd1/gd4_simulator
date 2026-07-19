@@ -8,6 +8,7 @@ import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { scopeIdForItem, folderScopeId } from "../lib/evidenceScope";
 import { lineSufficiency, buildDraftFinding, findingDimension, computeRiskCategory, lineCompleteness, needsReassessment, bandEvidenceAdvisories, apsrMatrixResult, classifyUntaggedLinesByContent, resolveLineDimension } from "../lib/checklistBanding";
 import { BandImprovementPanel } from "../components/ui/BandImprovementPanel";
 import { bandTitle, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
@@ -373,14 +374,15 @@ export function SubCriterionChecklist() {
   // Hybrid-gate visibility fix: a newer Evidence/Audit run can sit unapproved
   // in pendingCommits while this checklist still shows the last-approved run
   // (the gate itself is unchanged — this only surfaces that it's holding
-  // something). Keyed by subCriterionId; each run's items carry their own
-  // gd4ItemId, so scoping to req.subCriterionId is correct for this item.
+  // Keyed by run-scope: normally the sub-criterion, but an item of a per-item
+  // split sub (4.2) has its own scope, so 4.2.1 reads only its own pending run.
+  const itemScope = scopeIdForItem(selectedId, req.subCriterionId);
   const pendingCommits = useWorkspaceStore((s) => s.pendingCommits);
   const itemPendingItems = useMemo(
-    () => (pendingCommits[req.subCriterionId]?.items ?? []).filter((i) => i.write.gd4ItemId === selectedId),
-    [pendingCommits, req.subCriterionId, selectedId]
+    () => (pendingCommits[itemScope]?.items ?? []).filter((i) => i.write.gd4ItemId === selectedId),
+    [pendingCommits, itemScope, selectedId]
   );
-  const itemPendingRunId = pendingCommits[req.subCriterionId]?.runId;
+  const itemPendingRunId = pendingCommits[itemScope]?.runId;
   // Every GD4 item id with ANY write awaiting approval, across every sub-
   // criterion — cheap membership check for the "Line completion vs band
   // status" quadrant chart's hasPending flag.
@@ -399,9 +401,9 @@ export function SubCriterionChecklist() {
   // evidence-only mode — verdicts outside that scope are stale from a prior
   // run (or never assessed), so a partial run must never read as complete.
   const partialAuditScope = useMemo(() => {
-    const folder = folders.find((f) => f.subCriterionId === req.subCriterionId);
+    const folder = folders.find((f) => folderScopeId(f) === itemScope);
     return folder?.lastAuditScope && folder.lastAuditScope !== "both" ? folder.lastAuditScope : null;
-  }, [folders, req.subCriterionId]);
+  }, [folders, itemScope]);
 
   // Dedupe for display: the same GD4 source line can end up in `specific`
   // twice (e.g. an audit auto-generated + verdicted copy alongside a freshly

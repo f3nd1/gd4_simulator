@@ -8,6 +8,7 @@ import { inputStyle } from "../components/ui/Card";
 import { RunModeBanner } from "../components/ui/RunModeBanner";
 import { Pill } from "../components/ui/Pill";
 import { GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { itemIdsForScope, folderScopeId, subOfScope, scopeTitle } from "../lib/evidenceScope";
 import { NextStepBanner } from "../components/ui/Guidance";
 import { nextStepText } from "../lib/guidanceText";
 import { findingTypeForStatus, findingTypeTone } from "../lib/findingClassification";
@@ -63,13 +64,14 @@ function overallPanelColors(v: PPDOverallVerdict): { bg: string; border: string 
 // AND the Option B AuditRunModal) so an auditor can go straight from a run
 // result to either the Sub-Criterion Checklist or the Findings register,
 // filtered to the sub-criterion just reviewed. Reuses existing routes only.
+// subCriterionId is a run-scope (item id for a split 4.2 card, else the sub).
 export function ResultNavLinks({ subCriterionId }: { subCriterionId: string }) {
-  const firstItemId = GD4_REQUIREMENTS.find((r) => r.subCriterionId === subCriterionId)?.id ?? "";
+  const firstItemId = itemIdsForScope(subCriterionId)[0] ?? "";
   const linkStyle: CSSProperties = { fontSize: 12, fontWeight: 600, color: "#4338ca", textDecoration: "none", padding: "5px 11px", border: "1px solid #c7d2fe", borderRadius: 7, background: "#eef2ff", whiteSpace: "nowrap" };
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
       <Link to={firstItemId ? `/sub-checklist?item=${firstItemId}` : "/sub-checklist"} style={linkStyle}>Sub-Criterion Checklist →</Link>
-      <Link to={subCriterionId ? `/findings?subCrit=${subCriterionId}` : "/findings"} style={linkStyle}>Findings register →</Link>
+      <Link to={subCriterionId ? `/findings?subCrit=${subOfScope(subCriterionId)}` : "/findings"} style={linkStyle}>Findings register →</Link>
     </div>
   );
 }
@@ -82,8 +84,7 @@ export function OptionAExportButtons({ subCriterionId }: { subCriterionId: strin
   const ppd = useWorkspaceStore((s) => s.ppdReviewResults[subCriterionId]);
   const evidence = useWorkspaceStore((s) => s.evidenceAssessments[subCriterionId]);
   if (!ppd && !evidence) return null;
-  const sub = GD4_SUB_CRITERIA.find((s) => s.id === subCriterionId);
-  const title = sub?.title ?? subCriterionId;
+  const title = scopeTitle(subCriterionId);
   const runId = evidence?.runId;
   const runAt = evidence?.runAt ?? ppd?.runAt ?? new Date().toISOString();
   const hasLedger = !!evidence?.fileLedger?.length;
@@ -115,8 +116,9 @@ export function OptionAExportButtons({ subCriterionId }: { subCriterionId: strin
 // its own run button, live progress panel and results). Extracted from the
 // page so the Evidence Folder's near-fullscreen Option A modal can host the
 // EXACT same content — one component, two surfaces, zero drift.
+// selectedId is a run-scope (item id for a split 4.2 card, else the sub-criterion).
 export function PpdReviewContent({ selectedId }: { selectedId: string }) {
-  const sub = GD4_SUB_CRITERIA.find((s) => s.id === selectedId);
+  const sub = GD4_SUB_CRITERIA.find((s) => s.id === subOfScope(selectedId));
   const [tab, setTab] = useState<"ppd" | "precheck" | "evidence">("ppd");
   // Set only by "Continue to Evidence" (below) — gives EvidenceTab a one-shot
   // signal to show a clear "you just arrived here" confirmation banner, so
@@ -125,14 +127,14 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
   const [justContinued, setJustContinued] = useState(false);
   const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const folders = useWorkspaceStore((s) => s.folders);
-  const folder = folders.find((f) => f.subCriterionId === selectedId);
+  const folder = folders.find((f) => folderScopeId(f) === selectedId);
   // Count of verdicts queued for this sub-criterion's hybrid approval gate —
   // badged on the Evidence tab so the gate (which lives beside the evidence
   // rows there) is discoverable even when the review opens on the PPD tab.
   const pendingGateCount = useWorkspaceStore((s) => s.pendingCommits[selectedId]?.items.length ?? 0);
 
   const requirementItems = useMemo(
-    () => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === selectedId),
+    () => GD4_REQUIREMENTS.filter((r) => itemIdsForScope(selectedId).includes(r.id)),
     [selectedId]
   );
   const totalLines = useMemo(
@@ -198,7 +200,7 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
       </div>
 
       <p style={{ fontSize: 11.5, color: "#6b7280", marginTop: -2, marginBottom: 10 }}>
-        {sub.title} — {sub.description}
+        {scopeTitle(selectedId)} — {sub.description}
         {" "}· {totalLines} requirement line{totalLines === 1 ? "" : "s"} across {requirementItems.length} item{requirementItems.length === 1 ? "" : "s"}
         {!folder?.policyLink && !folder?.folderLink && <span style={{ color: "#b23121" }}> · No folder linked yet (Evidence Folder page).</span>}
       </p>
@@ -258,7 +260,7 @@ function PreCheckTab({ selectedId, onContinue }: { selectedId: string; onContinu
   const ppd = useWorkspaceStore((s) => s.ppdReviewResults[selectedId]);
   const assessment = useWorkspaceStore((s) => s.evidenceAssessments[selectedId]);
   const checklists = usePreCheckChecklistStore((s) => s.checklists);
-  const itemIds = useMemo(() => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === selectedId).map((r) => r.id), [selectedId]);
+  const itemIds = useMemo(() => itemIdsForScope(selectedId), [selectedId]);
 
   if (!hasChecklist(checklists, itemIds)) {
     return (
@@ -275,7 +277,7 @@ function PreCheckTab({ selectedId, onContinue }: { selectedId: string; onContinu
     );
   }
 
-  const subTitle = GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? "";
+  const subTitle = scopeTitle(selectedId);
   const files = [...(ppd?.fileLedger ?? []), ...(assessment?.fileLedger ?? [])];
   return (
     <PreAnalysisChecklistPanel
@@ -666,7 +668,7 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
           <LineageDiagram
             mode="ppd"
             ppd={viewedResult!}
-            runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()}
+            runLabel={`${selectedId} ${scopeTitle(selectedId)}`.trim()}
             renderExtra={(ref) => {
               const row = viewedResult!.rows.find((r) => r.ref === ref);
               return row ? <PpdRowExtra row={row} selectedId={selectedId} setLineFeedback={setLineFeedback} /> : null;
@@ -1116,7 +1118,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
   // panel would actually be shown, since the drift check is a real (if
   // cheap, metadata-only) Drive API call. Flag count reuses the EXACT same
   // "flagged" definition runEvidenceAssessment's prompt injection uses.
-  const itemIds = useMemo(() => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === selectedId).map((r) => r.id), [selectedId]);
+  const itemIds = useMemo(() => itemIdsForScope(selectedId), [selectedId]);
   const flagCount = useMemo(() => {
     if (!justArrived || assessment) return 0;
     const files: DetectFile[] = [...(ppd?.fileLedger ?? [])].map((rec) => {
