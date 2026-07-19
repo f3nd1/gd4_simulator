@@ -141,20 +141,21 @@ describe("buildFinalReport — findingsGroups (overall summary + per-line findin
     expect(item.findingsGroups.map((g) => g.key)).toEqual(["approach", "processes", "systemsOutcomes", "review"]);
   });
 
-  it("(a-Task1) the overall summary is analytical/prescriptive: diagnoses the pattern + one priority action, and NEVER repeats the band number or %", () => {
+  it("(a-Task1) the overall summary names the constraining dimension from its REAL band + gives one grounded priority step, with no % restatement", () => {
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
     const s = item.overallSummary!;
-    // approach 5 (strong), review 1 (weak) → diagnosis contrasts the two.
-    expect(s).toContain("The approach is clearly documented");
-    expect(s).toMatch(/reviewed for effectiveness/i);
-    // Prescriptive: names a single highest-priority step, phrased as an action
-    // (a verb), not a bare list of dimension names to "raise".
-    expect(s).toContain("The single highest-priority step is to");
-    // Must NOT restate the band/% already shown in the panel header above it.
-    expect(s).not.toMatch(/Band \d/);
+    // approach 5 (strong) named as well-evidenced; review 1 named directly as
+    // the constraint AT ITS OWN BAND (per the 2026-07-19 rework — the TLDR now
+    // pulls the weak dimension's band straight from matrixScores).
+    expect(s).toMatch(/Approach is well evidenced/);
+    expect(s).toMatch(/review remains at Band 1 and is the main constraint/i);
+    // One priority step, auditor register (no "single highest-priority step").
+    expect(s).toContain("The most immediate priority is");
+    // Still no OVERALL band/% restatement (the panel header shows those); a
+    // per-dimension band ("Review remains at Band 1") is new, intended info.
     expect(s).not.toMatch(/\d+%/);
-    expect(s).not.toMatch(/\bAFIs?\b/); // no "Closing N AFIs" restatement either
+    expect(s).not.toMatch(/\bAFIs?\b/);
   });
 
   it("(b-Task2) a strength row's AFI quotes the NEXT band's rubric descriptor for ITS OWN dimension, verbatim", () => {
@@ -330,7 +331,7 @@ describe("buildFinalReport — 'not assessed' is a distinct third state, never a
     expect(pRow.afi).toBe("File the records.");
   });
 
-  it("(Task 1) the overall summary is a tight diagnosis + one priority action, with no band/% restatement", () => {
+  it("(Task 1) the overall summary names ALL constraining dimensions from real bands + grounds the priority step in a real recorded action", () => {
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
     const s = item.overallSummary!;
@@ -338,11 +339,29 @@ describe("buildFinalReport — 'not assessed' is a distinct third state, never a
     expect(sentenceCount).toBeGreaterThanOrEqual(2);
     expect(sentenceCount).toBeLessThanOrEqual(4);
     // approach 4 (strong) vs processes/systemsOutcomes/review 1 (weak): the
-    // classic "documented but not acted on / measured / reviewed" pattern.
-    expect(s).toContain("The approach is clearly documented");
-    expect(s).toContain("The single highest-priority step is to");
-    expect(s).not.toMatch(/Band \d/);
+    // three weak dimensions are named directly, at their shared band.
+    expect(s).toMatch(/Approach is well evidenced/);
+    expect(s).toMatch(/processes, Systems & Outcomes and Review remain at Band 1 and are the main constraints/i);
+    // Priority step is grounded in the weakest dimension's OWN recorded action
+    // ("File the records."), never a generic template sentence.
+    expect(s).toContain("The most immediate priority is Processes:");
+    expect(s.toLowerCase()).toContain("file the records");
     expect(s).not.toMatch(/\d+%/);
+  });
+
+  it("(Task 1, 2026-07-19) a SOLID item (no weak dimension) states it is well supported and manufactures NO priority step", () => {
+    // approach 4, processes 4, systemsOutcomes 3, review 3 — nothing at Band 2
+    // or below, so there is no genuine gap to prioritise. The TLDR must not
+    // invent one (the 6.2.1 misfire: a fixed "priority step" fired regardless).
+    const solid: SubCriterionChecklistEntry = {
+      ...ENTRY,
+      holisticBand: { ...ENTRY.holisticBand!, matrixScores: { approach: 4, processes: 4, systemsOutcomes: 3, review: 3 } },
+    };
+    const report = buildFinalReport(scored, { "6.2.1": solid }, [], {});
+    const s = report.items.find((i) => i.id === "6.2.1")!.overallSummary!;
+    expect(s).toMatch(/soundly supported|well supported/);
+    expect(s).not.toMatch(/priority/i);
+    expect(s).not.toMatch(/main constraint/i);
   });
 });
 

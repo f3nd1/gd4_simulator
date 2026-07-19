@@ -24,9 +24,28 @@ The narrative must be:
 - based only on the supplied evidence
 - concise but sufficiently specific
 - balanced, recognising both demonstrated strengths and remaining gaps
-- written in complete sentences and natural audit language
+- a complete sentence from the first word: never open mid-sentence, and never
+  begin with a stray list-item letter or enumeration fragment (for example a
+  leading "g."); drop any such fragment rather than reproducing it
 - focused on whether implementation and effectiveness are demonstrated, not
   merely documented
+
+### Length and evidence selection
+
+Keep every dimension's narrative to a similar short length. Systems & Outcomes
+and Review must be no longer than Approach and Processes. Do not list every
+numbered evidence citation: cite only the one or two strongest pieces of
+evidence needed to support the conclusion, and drop the rest from the narrative
+(the underlying evidence records are retained elsewhere, only the rendered
+wording is shortened).
+
+### Plain language
+
+Prefer plain equivalents over technical jargon:
+
+- "overall process review" instead of "meta-review"
+- "review across several cycles" instead of "longitudinal structured reviews"
+- "overall review of results" instead of "system-level evaluation"
 
 ### Vary sentence structure and transitions
 
@@ -67,6 +86,14 @@ Do not:
   implemented
 - treat one completed initiative as evidence of consistent institutional
   implementation
+- treat completion dates or closure statistics as proof of interim monitoring
+  or effectiveness verification: they show tracking to closure only, unless
+  separate monitoring or effectiveness evidence is present
+- invent a weakness merely to justify movement to the next band, especially
+  Band 4 to Band 5: any stated gap must trace to the rubric and to real
+  evidence, not a generic wish for more documentation
+- reuse a stock opening such as "To reach Band 3" or "To reach Band 4" across
+  unrelated dimensions: tailor each required action to its own requirement
 - introduce facts, conclusions or requirements not supported by the supplied
   material
 
@@ -84,10 +111,11 @@ assessment.
 State the current band and target band exactly as supplied.
 
 **Required Action:**
-Begin with a direct action, and vary the opening (not always "Ensure that"
-or "The PEI should"). State the records to retain and when the control should
-take place. The action must directly address the stated weakness and must not
-introduce unrelated requirements. Suitable openings include:
+Keep it short and direct: state the control required, when it must occur, and
+what evidence must be retained. No padding. Vary the opening (not always
+"Ensure that" or "The PEI should"). The action must directly address the stated
+weakness and must not introduce unrelated requirements. Suitable openings
+include:
 
 - "Before each internal assessment,..."
 - "For future audit cycles,..."

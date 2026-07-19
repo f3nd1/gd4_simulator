@@ -204,6 +204,10 @@ describe("skill files fit the injection cap", () => {
   const SKILL_CAP = 7000; // keep in sync with src/lib/ai/skills.ts
   const UNCAPPED = new Set([
     "regulatory-references.md",
+    // Injected uncapped by MODULE_SKILLS.narrativeWriter (skills.ts) — it is
+    // the core write-up instruction and truncating it mid-structure would drop
+    // half the six-part shape, so it is deliberately exempt from the cap.
+    "auditor-narrative-voice.md",
     // Criterion/domain files are injected via buildDomainBlock (never capped).
     "criterion-1-leadership-finance.md",
     "criterion-2-corporate-admin.md",
