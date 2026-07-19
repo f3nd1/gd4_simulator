@@ -34,6 +34,11 @@ export async function runNarrativeWriter(input: NarrativeInput, settings: AISett
     // what the sighted evidence directly supports.
     "DO NOT draw a positive conclusion stronger than the sighted evidence supports. Distinguish clearly between what is newly introduced or partial and what is established or systematic: do not call a process \"systematic\", \"embedded\", \"established\" or \"routinely monitored\" unless the evidence shows it operating repeatedly over time — a single closure record, a newly-introduced control, or one completed initiative is \"newly introduced\" or \"partial\", not \"systematic\". " +
     "Follow this order in each section and add nothing beyond it: evidence sighted, then what it demonstrates, then the remaining gap, then the band implication. " +
+    // Item 2 (2026-07-19): never contradict the cited descriptor. The report
+    // said "efficiency and effectiveness is not yet required for this
+    // dimension" while quoting the Band 4 descriptor, which requires exactly
+    // that — the correct framing is "not yet evidenced", not "not required".
+    "Never state that a quality named in the cited next-band rubric descriptor (for example efficiency, effectiveness, integration or consistency) is \"not required\" or \"not yet required\" for this dimension — the descriptor requires it to reach that band, so saying it is not required contradicts the rubric you are citing. When the dimension sits below that band, say the quality is \"not yet evidenced\" or \"not yet consistently demonstrated\", never that it is not required. " +
     "Map that onto these JSON fields for EACH dimension in the user message: " +
     "\"strength\" — the sampled evidence present and what it demonstrates, claimed no more strongly than the evidence supports (omit if the dimension has no strength rows); " +
     "\"weakness\" — what is present, then the concrete gap introduced with a transition that fits it (vary the wording; do NOT open every gap with \"However\" and do not reuse the same transition across dimensions), then why the gap matters to the requirement or band (omit if the dimension has no weakness rows); " +

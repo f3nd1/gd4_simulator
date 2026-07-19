@@ -107,6 +107,12 @@ Do not:
   unrelated dimensions: tailor each required action to its own requirement
 - introduce facts, conclusions or requirements not supported by the supplied
   material
+- state that a quality named in the cited next-band rubric descriptor (for
+  example efficiency, effectiveness, integration or consistency) is "not
+  required" or "not yet required" for the dimension: the descriptor requires it
+  to reach that band, so this contradicts the rubric. When the dimension is
+  below that band, say the quality is "not yet evidenced" or "not yet
+  consistently demonstrated", never that it is not required
 
 ### Finding structure
 

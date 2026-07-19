@@ -680,6 +680,15 @@ export function SubCriterionChecklist() {
             >
               Quality Action / AFI →
             </Link>
+            {/* Cross-reference to this same item's Final Report section — reuses
+                the ?item= deep link the Final Report already reads (scrolls to
+                and highlights the item), the same pattern as the Findings link. */}
+            <Link
+              to={`/final-report?item=${selectedId}`}
+              style={{ fontSize: 12, color: "#854d0e", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #fde68a", borderRadius: 6, background: "#fffbeb" }}
+            >
+              Final Report for {selectedId} →
+            </Link>
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
             <h3 style={{ margin: 0, fontSize: 14 }}>{req.id} · {req.requirement}</h3>

@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { CloseoutStepper } from "../components/ui/CloseoutStepper";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
@@ -664,6 +664,16 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         <b style={{ fontSize: 12.5 }}>{it.id}</b>
         <span style={{ fontSize: 12.5 }}>{it.title}</span>
         {it.hasChecklist && <span style={{ fontSize: 11, color: "#94a3b8" }}>· {it.completeness.assessed} of {it.completeness.total} lines assessed ({it.completeness.met} Met · {it.completeness.partial} Partial · {it.completeness.notMet} Not met)</span>}
+        {/* Cross-reference to this same item's Sub-Criterion Checklist entry —
+            reuses the ?item= deep link the checklist page already reads
+            (selectedId), the reverse of the "Final Report for X" link there. */}
+        <Link
+          className="no-print"
+          to={`/sub-checklist?item=${it.id}`}
+          style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, textDecoration: "none", padding: "4px 10px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", color: "#475569", whiteSpace: "nowrap" }}
+        >
+          Sub-Criterion Checklist →
+        </Link>
         {eligibleDims.length > 0 && (
           // The single regenerate control (2026-07-18): the narrative is
           // auto-written by the run, so this exists only as the fallback. One
@@ -674,7 +684,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
             disabled={narBusy || sugBusy || !aiReady}
             onClick={regenerateReportText}
             title={!aiReady ? "Enable AI and set an API key in Settings first." : "Rewrites this item's auditor narrative and improvement suggestion from its assessed findings. The narrative is normally written automatically at the end of a run — use this if it is missing or misses the mark."}
-            style={{ marginLeft: "auto", cursor: narBusy || sugBusy || !aiReady ? "default" : "pointer", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", opacity: aiReady ? 1 : 0.5, whiteSpace: "nowrap" }}
+            style={{ cursor: narBusy || sugBusy || !aiReady ? "default" : "pointer", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", opacity: aiReady ? 1 : 0.5, whiteSpace: "nowrap" }}
           >
             {narBusy || sugBusy ? "Writing…" : "Regenerate report text"}
           </button>
@@ -743,15 +753,6 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                 // why other lines' refs appear under this dimension — the
                 // lead-in then carries the rowSpan'd dimension cells.
                 const totalRows = g.rows.length + (sug || missingSug ? 1 : 0) + (nar || missingNar ? 1 : 0) + (g.rowsFromLegs ? 1 : 0);
-                // Item 1 (2026-07-19): the strength AFI (next-band rubric target
-                // + grounded action) is a DIMENSION-level statement — identical
-                // for every strength row by construction (strengthNextBandAfi
-                // keys only on dimension + band, and the grounded action is the
-                // one dimension narrative). Repeating it verbatim on every
-                // strength row made the report read as templated. Show it on the
-                // FIRST strength row only; later strength rows point back to it.
-                // Weakness rows keep their own per-line action, untouched.
-                const firstStrengthIdx = g.rows.findIndex((r) => r.verdict === "strength");
                 const rowEls = g.rows.map((r, i) => {
                   // Three distinct states: strength (green), weakness (red),
                   // not-assessed (neutral grey) — an absence of assessment is
@@ -773,11 +774,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                         <b>{label}:</b>{" "}
                         <EvidenceCell finding={r.finding} concise={conciseFindings[conciseKey(it.id, g.key, r.lineId)]?.text} />
                       </td>
-                      <td style={{ verticalAlign: "top", fontSize: 11.5 }}>
-                        {r.verdict === "strength" && i !== firstStrengthIdx
-                          ? <span style={{ color: "#94a3b8", fontStyle: "italic", fontSize: 11 }}>See the {g.label} target on the first row above.</span>
-                          : renderAfi(r.afi, r.verdict === "weakness" ? { band: g.band, label: g.label } : undefined, r.verdict === "strength" ? nar?.requiredAction : undefined)}
-                      </td>
+                      <td style={{ verticalAlign: "top", fontSize: 11.5 }}>{renderAfi(r.afi, r.verdict === "weakness" ? { band: g.band, label: g.label } : undefined, r.verdict === "strength" ? nar?.requiredAction : undefined)}</td>
                     </tr>
                   );
                 });
