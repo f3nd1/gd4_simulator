@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../gd4Refs";
+import { normalizeAuditRef, findingDedupeKey, findingKeyOf, migrateDs1Ref } from "../gd4Refs";
 import { buildDraftFinding } from "../checklistBanding";
 import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
 import type { SpecificChecklistLine } from "../../types";
@@ -16,6 +16,58 @@ describe("normalizeAuditRef", () => {
     // an AI-echoed sourceRef that can drift — both must normalize identically.
     expect(normalizeAuditRef("1.1.1.DS1")).toBe(normalizeAuditRef("ds: 1.1.1.ds1"));
     expect(normalizeAuditRef("6.2.1.DS1.a")).toBe(normalizeAuditRef("6.2.1. DS1. a"));
+  });
+});
+
+describe("migrateDs1Ref — 6.1.1.DS1.c split carry-over", () => {
+  it("shifts ONLY the renumbered refs (old d/e/f -> new e/f/g)", () => {
+    expect(migrateDs1Ref("6.1.1.DS1.d")).toBe("6.1.1.DS1.e"); // defining owners
+    expect(migrateDs1Ref("6.1.1.DS1.e")).toBe("6.1.1.DS1.f"); // CAP Approval
+    expect(migrateDs1Ref("6.1.1.DS1.f")).toBe("6.1.1.DS1.g"); // monitoring
+  });
+
+  it("leaves unchanged refs (a/b/c and the new d) exactly as they are", () => {
+    for (const ref of ["6.1.1.DS1.a", "6.1.1.DS1.b", "6.1.1.DS1.c", "6.1.1.DS2", "6.1.1.EE1"]) {
+      expect(migrateDs1Ref(ref)).toBe(ref);
+    }
+  });
+
+  it("never touches any OTHER item's refs (the remap is scoped to 6.1.1.DS1)", () => {
+    for (const ref of ["6.2.1.DS1.e", "1.1.1.DS1.f", "6.1.2.DS1.d", "6.1.1.EE2"]) {
+      expect(migrateDs1Ref(ref)).toBe(ref);
+    }
+  });
+
+  it("carries over prefixed / mixed-case stored variants too (normalised match)", () => {
+    // Old CAP Approval line stored as "DS: 6.1.1.DS1.E" still lands on new f.
+    expect(migrateDs1Ref("DS: 6.1.1.DS1.E")).toBe("6.1.1.DS1.f");
+    expect(migrateDs1Ref("6.1.1. DS1. e")).toBe("6.1.1.DS1.f");
+  });
+
+  it("every shifted target resolves to a REAL current DS1 point (no orphans)", () => {
+    const ds1Refs = new Set(
+      GD4_REQUIREMENTS.find((r) => r.id === "6.1.1")!.flatAuditPoints!.map((p) => p.ref)
+    );
+    for (const target of ["6.1.1.DS1.e", "6.1.1.DS1.f", "6.1.1.DS1.g"]) {
+      expect(ds1Refs.has(target)).toBe(true);
+    }
+    // The prior-task CAP Approval line lands on the point whose text is the
+    // approval obligation, not "defining owners".
+    const capApproval = GD4_REQUIREMENTS.find((r) => r.id === "6.1.1")!.flatAuditPoints!.find((p) => p.ref === migrateDs1Ref("6.1.1.DS1.e"));
+    expect(capApproval!.text).toMatch(/Approving all CAPs/i);
+  });
+});
+
+describe("6.1.1.DS1 split into distinct audit points (2026-07-19)", () => {
+  it("DS1 now has seven lettered points a-g, each a distinct obligation", () => {
+    const ds1 = GD4_REQUIREMENTS.find((r) => r.id === "6.1.1")!.flatAuditPoints!.filter((p) => /^6\.1\.1\.DS1\.[a-z]$/.test(p.ref));
+    expect(ds1.map((p) => p.ref)).toEqual([
+      "6.1.1.DS1.a", "6.1.1.DS1.b", "6.1.1.DS1.c", "6.1.1.DS1.d", "6.1.1.DS1.e", "6.1.1.DS1.f", "6.1.1.DS1.g",
+    ]);
+    const byRef = Object.fromEntries(ds1.map((p) => [p.ref, p.text]));
+    expect(byRef["6.1.1.DS1.c"]).toMatch(/^Compiling all strengths and Areas for Improvement \(AFIs\)$/);
+    expect(byRef["6.1.1.DS1.d"]).toMatch(/^Developing Corrective Action Plans \(CAPs\) for all AFIs$/);
+    expect(byRef["6.1.1.DS1.f"]).toMatch(/^Approving all CAPs/);
   });
 });
 

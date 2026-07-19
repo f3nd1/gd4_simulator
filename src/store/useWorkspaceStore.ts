@@ -94,7 +94,7 @@ function enqueuePanelAutoRun(findingId: string, getRunner: () => (id: string, op
   };
   void drain();
 }
-import { normalizeAuditRef, findingDedupeKey, findingKeyOf } from "../lib/gd4Refs";
+import { normalizeAuditRef, findingDedupeKey, findingKeyOf, migrateDs1Ref } from "../lib/gd4Refs";
 import { buildOptionALineWrites, buildOptionASourceTrace } from "../lib/optionAChecklistWrite";
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, partitionOptionAWrites, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
@@ -7030,10 +7030,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
       // to a surviving item id) is untouched. The reconcile is idempotent, so a
       // workspace at an earlier version is safely brought up to the latest.
-      version: 6,
+      version: 7,
       migrate: (persisted, fromVersion) => {
-        const s = persisted as WorkspaceState;
-        if (!s || fromVersion >= 6) return s;
+        let s = persisted as WorkspaceState;
+        if (!s) return s;
+        if (fromVersion < 6) {
         const validSub = currentSubIds();
         const validItem = currentItemIds();
         // Ids removed by the sub-criterion re-align. The split coarse ids
@@ -7060,7 +7061,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // reconcileEvidenceMap): keep surviving ratings, blank-fill new item
         // ids, drop stale keys (e.g. the old 7.2.x ids).
         const evidence = reconcileEvidenceMap(s.evidence);
-        return {
+        s = {
           ...s,
           folders: reconciled,
           evidence,
@@ -7094,6 +7095,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           samples: s.samples ? s.samples.filter((x) => validItem.has(x.gd4ItemId)) : s.samples,
           interviewQuestions: s.interviewQuestions ? s.interviewQuestions.filter((x) => validItem.has(x.gd4ItemId)) : s.interviewQuestions,
         } as WorkspaceState;
+        }
+        // v6 -> v7: carry finding refs over the 6.1.1.DS1.c split (see
+        // migrateDs1Ref) so a finding raised on the old DS1.d/e/f (e.g. the
+        // DS1.e CAP Approval line) follows its content to the new e/f/g rather
+        // than resolving to the wrong requirement point. Only the ref labels
+        // move; no finding, band or score value is touched.
+        if (fromVersion < 7) {
+          s = {
+            ...s,
+            customFindings: s.customFindings?.map((f) => ({
+              ...f,
+              ...(f.clause ? { clause: migrateDs1Ref(f.clause) } : {}),
+              ...(f.linkedSourceRefs ? { linkedSourceRefs: f.linkedSourceRefs.map(migrateDs1Ref) } : {}),
+            })),
+          } as WorkspaceState;
+        }
+        return s;
       },
       partialize: (s) => {
         const capLog = (entries: AIReviewLogEntry[]) =>

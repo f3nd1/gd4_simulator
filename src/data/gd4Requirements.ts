@@ -466,8 +466,17 @@ const RAW_ITEMS: RawItem[] = [
     id: "6.1.1",
     subCriterionId: "6.1",
     title: "Internal Assessment",
+    // "compiling all strengths and AFIs" and "developing CAPs for all AFIs" are
+    // two distinct obligations bundled under one bullet in the source document;
+    // they are separated here with "; " (the same list separator the other
+    // sub-points use) so each becomes its OWN audit point (DS1.c = compiling,
+    // DS1.d = developing) and renders as its own row instead of one oversized
+    // cell (2026-07-19). This pushes the later sub-points down one letter
+    // (old DS1.d/e/f -> new e/f/g); stored refs are carried over by
+    // migrateDs1Ref (gd4Refs.ts), invoked from the checklist and workspace
+    // store migrations so nothing (e.g. the DS1.e CAP Approval line) is orphaned.
     describeShow: [
-      "Conduct internal assessment to ensure the quality and effectiveness of all your systems and processes. The procedures shall include: defining assessment scope and methodology to ensure alignment of your operations with documented policies and procedures to meet EduTrust requirements and verify effectiveness of your systems and processes; deploying qualified/trained staff who are independent of the areas being assessed to conduct the internal assessment; compiling all strengths and Areas for Improvement (AFIs) and developing Corrective Action Plans (CAPs) for all AFIs; defining the owners and completion timelines for all CAPs; approving all CAPs prior to implementation by the Management; monitoring the implementation of the CAPs",
+      "Conduct internal assessment to ensure the quality and effectiveness of all your systems and processes. The procedures shall include: defining assessment scope and methodology to ensure alignment of your operations with documented policies and procedures to meet EduTrust requirements and verify effectiveness of your systems and processes; deploying qualified/trained staff who are independent of the areas being assessed to conduct the internal assessment; compiling all strengths and Areas for Improvement (AFIs); developing Corrective Action Plans (CAPs) for all AFIs; defining the owners and completion timelines for all CAPs; approving all CAPs prior to implementation by the Management; monitoring the implementation of the CAPs",
       "Review the internal assessment process for continual improvement",
     ],
     notes: ["Comparative studies and/or benchmark of Criterion 7 Performance Outcomes shall be used to verify effectiveness of your systems and processes."],

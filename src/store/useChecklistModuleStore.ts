@@ -17,7 +17,7 @@ import type {
 } from "../types";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildDraftFinding, lineSufficiency, lineApsr, apsrMatrixResult } from "../lib/checklistBanding";
-import { findingDedupeKey, findingKeyOf, normalizeAuditRef } from "../lib/gd4Refs";
+import { findingDedupeKey, findingKeyOf, normalizeAuditRef, migrateDs1Ref } from "../lib/gd4Refs";
 import { findOpenFindingForGap, classificationReviewNote, CLASSIFICATION_REVIEW_MARKER } from "../lib/cycleCarryover";
 import { resolveFindingType } from "../lib/findingClassification";
 import { buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
@@ -883,12 +883,34 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       // gd4ItemId; entries for an item id that no longer exists are parentless
       // dead storage (never rendered — the UI iterates GD4_REQUIREMENTS — but
       // worth clearing). Drop any entry whose id is not a current item.
-      version: 1,
+      version: 2,
       migrate: (persisted, fromVersion) => {
-        const s = persisted as ChecklistModuleState;
-        if (!s || fromVersion >= 1 || !s.entries) return s;
-        const validItem = new Set(GD4_REQUIREMENTS.map((r) => r.id));
-        return { ...s, entries: Object.fromEntries(Object.entries(s.entries).filter(([id]) => validItem.has(id))) };
+        let s = persisted as ChecklistModuleState;
+        if (!s || !s.entries) return s;
+        // v0 -> v1: drop entries whose id is not a current GD4 item.
+        if (fromVersion < 1) {
+          const validItem = new Set(GD4_REQUIREMENTS.map((r) => r.id));
+          s = { ...s, entries: Object.fromEntries(Object.entries(s.entries).filter(([id]) => validItem.has(id))) };
+        }
+        // v1 -> v2: carry every stored line ref over the 6.1.1.DS1.c split
+        // (see migrateDs1Ref) so a line keyed to the old DS1.d/e/f follows its
+        // content to the new e/f/g instead of resolving to the wrong point.
+        if (fromVersion < 2) {
+          const migLine = (l: SpecificChecklistLine): SpecificChecklistLine => ({
+            ...l,
+            ...(l.clause ? { clause: migrateDs1Ref(l.clause) } : {}),
+            ...(l.sourceRef ? { sourceRef: migrateDs1Ref(l.sourceRef) } : {}),
+          });
+          s = {
+            ...s,
+            entries: Object.fromEntries(Object.entries(s.entries).map(([id, e]) => [id, {
+              ...e,
+              specific: (e.specific ?? []).map(migLine),
+              pendingGenerated: (e.pendingGenerated ?? []).map(migLine),
+            }])),
+          };
+        }
+        return s;
       },
     }
   )
