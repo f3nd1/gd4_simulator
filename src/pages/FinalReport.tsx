@@ -4,7 +4,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
-import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, findingParagraphs, type ItemReport, type FindingReport } from "../lib/finalReport";
+import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, findingParagraphs, splitEvidenceNote, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { buildAnalytics } from "../lib/analytics";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
@@ -407,6 +407,42 @@ function bandJumpPills(fromBand: number, dimLabel: string) {
   );
 }
 
+// The per-line evidence cell. When the audit accumulated several sliding-window
+// observations into one numbered "#1 [file · chunk]: … #2 …" block, only the
+// strongest first two are shown; the rest go behind an expand instead of
+// stacking every citation verbatim (Fix 1, 2026-07-19). Systems & Outcomes and
+// Review span the whole document, so their positive verdicts pick up 8-10
+// window notes and were dumping all of them, making those cells many times
+// longer than Approach/Processes. This restores splitEvidenceNote's original
+// "first entries visible, rest behind an expand" intent that findingParagraphs
+// had regressed to rendering all. Nothing is deleted: the full text stays here
+// behind the expand and remains on the Sub-Criterion Checklist card. A single
+// ordinary note (the Approach/Processes norm) renders unchanged.
+const EVIDENCE_VISIBLE = 2;
+function EvidenceCell({ finding }: { finding: string }) {
+  const entries = splitEvidenceNote(finding);
+  // One note, or an already-short 1-2 entry cell: render in full as before.
+  if (entries.length <= EVIDENCE_VISIBLE) {
+    const paras = entries.length > 1 ? entries : findingParagraphs(finding);
+    return paras.length === 1
+      ? <span style={{ whiteSpace: "pre-wrap" }}>{paras[0]}</span>
+      : <>{paras.map((p, pi) => <p key={pi} style={{ whiteSpace: "pre-wrap", margin: pi === 0 ? "0" : "6px 0 0" }}>{p}</p>)}</>;
+  }
+  const visible = entries.slice(0, EVIDENCE_VISIBLE);
+  const rest = entries.slice(EVIDENCE_VISIBLE);
+  return (
+    <>
+      {visible.map((e, i) => <p key={i} style={{ whiteSpace: "pre-wrap", margin: i === 0 ? "0" : "6px 0 0" }}>{e}</p>)}
+      <details style={{ marginTop: 4 }}>
+        <summary style={{ cursor: "pointer", color: "#64748b", fontSize: 11 }}>
+          Show {rest.length} more evidence observation{rest.length === 1 ? "" : "s"}
+        </summary>
+        {rest.map((e, i) => <p key={i} style={{ whiteSpace: "pre-wrap", margin: "6px 0 0" }}>{e}</p>)}
+      </details>
+    </>
+  );
+}
+
 // Strength AFI from strengthNextBandAfi() uses double-quoted descriptor:
 //   Band N strength. To reach Band N+1 on DimLabel, the EduTrust rubric looks for: "...". Keep this evidenced...
 // Parse that format to show the band-jump pills. Not-assessed rows get muted
@@ -656,12 +692,10 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   // never dressed up as a red finding.
                   const label = r.verdict === "strength" ? "Strength" : r.verdict === "weakness" ? "Weakness" : "Not assessed";
                   const color = r.verdict === "strength" ? "#15803d" : r.verdict === "weakness" ? "#b23121" : "#64748b";
-                  // Item 4 (2026-07-18): a long finding renders as scannable
-                  // paragraphs (multi-entry evidence merges split on their own
-                  // entries; one long blob is grouped into ~2-sentence paras)
-                  // instead of one crammed cell. wordBreak stops a long file
-                  // name stretching the table.
-                  const paras = findingParagraphs(r.finding);
+                  // The cell shows the strongest 1-2 evidence observations; a
+                  // long multi-window citation stack is collapsed behind an
+                  // expand (see EvidenceCell). wordBreak stops a long file name
+                  // stretching the table.
                   return (
                     <tr key={r.lineId}>
                       {!g.rowsFromLegs && i === 0 && dimCell(totalRows)}
@@ -671,11 +705,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                       </td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5, color, wordBreak: "break-word" }}>
                         <b>{label}:</b>{" "}
-                        {paras.length === 1
-                          ? <span style={{ whiteSpace: "pre-wrap" }}>{paras[0]}</span>
-                          : paras.map((p, pi) => (
-                              <p key={pi} style={{ whiteSpace: "pre-wrap", margin: pi === 0 ? "0" : "6px 0 0" }}>{p}</p>
-                            ))}
+                        <EvidenceCell finding={r.finding} />
                       </td>
                       <td style={{ verticalAlign: "top", fontSize: 11.5 }}>{renderAfi(r.afi, r.verdict === "weakness" ? { band: g.band, label: g.label } : undefined, r.verdict === "strength" ? nar?.requiredAction : undefined)}</td>
                     </tr>
