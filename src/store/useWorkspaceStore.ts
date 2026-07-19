@@ -3141,9 +3141,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }),
 
       runOptionAFullAuto: async (subCriterionId, onStep) => {
+        // Cancel gate for the WHOLE chain (2026-07-19 fix). cancelBusy() aborts
+        // the in-flight AI call and bumps auditRunToken, but each pass below
+        // creates its OWN AbortController and busy state — so without a check
+        // BETWEEN passes, cancelling one pass just let the next one start a
+        // fresh AI call and the run visibly continued (findings/evidence/O&R
+        // kept writing after Cancel). auditRunToken only ever changes on
+        // cancelBusy(), so a bump means "user cancelled": stop the chain here
+        // and return the progress so far. Nothing after a cancel is scored.
+        const startToken = get().auditRunToken;
+        const cancelled = () => get().auditRunToken !== startToken;
         // Step 1 — PPD review. Stop the chain if it failed or was stopped.
         onStep?.("ppd");
         await get().runPPDReview(subCriterionId);
+        if (cancelled()) return { ppdRan: false, evidenceRan: false, findingsCompiled: 0, outcomeReviewApplied: false };
         const ppd = get().ppdReviewResults[subCriterionId];
         if (!ppd || ppd.rows.length === 0 || ppd.runWarnings?.some((w) => /stopped/i.test(w))) {
           return { ppdRan: false, evidenceRan: false, findingsCompiled: 0, outcomeReviewApplied: false };
@@ -3152,6 +3163,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // writes itself under full_auto.
         onStep?.("evidence");
         await get().runEvidenceAssessment(subCriterionId);
+        if (cancelled()) return { ppdRan: true, evidenceRan: false, findingsCompiled: 0, outcomeReviewApplied: false };
         const ev = get().evidenceAssessments[subCriterionId];
         if (!ev || ev.rows.length === 0 || ev.rows.every((r) => r.verdict === "Not assessed")) {
           return { ppdRan: true, evidenceRan: false, findingsCompiled: 0, outcomeReviewApplied: false };
@@ -3171,10 +3183,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // direct) never reaches here and keeps Apply manual. Scoring-neutral —
         // applyOutcomeReviewResult writes only those two legs, never the band.
         let outcomeReviewApplied = false;
-        if (useScoringConfigStore.getState().autoScoreBands) {
+        if (useScoringConfigStore.getState().autoScoreBands && !cancelled()) {
           onStep?.("review");
           await get().runOutcomeReviewPass(subCriterionId);
-          if (get().outcomeReviewResults[subCriterionId]) {
+          // A cancel during the O&R pass must not apply its (partial) legs.
+          if (!cancelled() && get().outcomeReviewResults[subCriterionId]) {
             outcomeReviewApplied = get().applyOutcomeReviewResult(subCriterionId) > 0;
           }
         }

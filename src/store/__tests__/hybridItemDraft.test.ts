@@ -20,6 +20,10 @@ const { useWorkspaceStore } = await import("../useWorkspaceStore");
 const { useScoringConfigStore } = await import("../useScoringConfigStore");
 
 const SUB = "6.2";
+// The real runOptionAFullAuto, captured before any test's stub() replaces it —
+// the cancel-gate suite below needs the genuine implementation, not the mock
+// the other suites install into shared store state.
+const REAL_RUN_OPTION_A_FULL_AUTO = useWorkspaceStore.getState().runOptionAFullAuto;
 
 function stub() {
   // Matches runOptionAFullAuto's real return shape (2026-07-18, the Run Log
@@ -97,5 +101,64 @@ describe("runHybridItemDraft — Run Log entry (2026-07-18)", () => {
     expect(log.length).toBe(50);
     expect(log[0].subCriterionIds).toEqual([SUB]); // the new entry, newest first
     expect(log[49].id).toBe("OLD-48"); // oldest filler entry dropped off the cap
+  });
+});
+
+// The actual root-cause fix (2026-07-19): a Cancel mid-run bumps auditRunToken
+// (cancelBusy). runOptionAFullAuto must re-check it BETWEEN passes and stop the
+// chain — before this, cancelling one pass just let the next pass start a fresh
+// AI call, so evidence/compile/O&R kept running and writing after Cancel.
+describe("runOptionAFullAuto — cancel stops the chain, never starts the next pass", () => {
+  const ppdOk = () => useWorkspaceStore.setState({ ppdReviewResults: { [SUB]: { subCriterionId: SUB, rows: [{}], runAt: "", live: true } } as never });
+  const evOk = () => useWorkspaceStore.setState({ evidenceAssessments: { [SUB]: { subCriterionId: SUB, rows: [{ verdict: "Met" }], runAt: "", live: true } } as never });
+
+  beforeEach(() => {
+    useScoringConfigStore.setState({ autoScoreBands: true });
+    // Restore the genuine orchestrator (an earlier suite's stub() mocked it).
+    useWorkspaceStore.setState({ runOptionAFullAuto: REAL_RUN_OPTION_A_FULL_AUTO, auditRunToken: 0, ppdReviewResults: {}, evidenceAssessments: {}, outcomeReviewResults: {} });
+  });
+
+  it("cancel during PPD: evidence, compile and O&R are NEVER started", async () => {
+    const runEvidenceAssessment = vi.fn().mockResolvedValue(undefined);
+    const compileEvidenceFindings = vi.fn().mockReturnValue(0);
+    const runOutcomeReviewPass = vi.fn().mockResolvedValue(undefined);
+    // PPD writes some rows, then the user hits Cancel (cancelBusy bumps token).
+    const runPPDReview = vi.fn().mockImplementation(async () => { ppdOk(); useWorkspaceStore.getState().cancelBusy(); });
+    useWorkspaceStore.setState({ runPPDReview, runEvidenceAssessment, compileEvidenceFindings, runOutcomeReviewPass } as never);
+    const steps = await useWorkspaceStore.getState().runOptionAFullAuto(SUB);
+    expect(runPPDReview).toHaveBeenCalledOnce();
+    expect(runEvidenceAssessment).not.toHaveBeenCalled();
+    expect(compileEvidenceFindings).not.toHaveBeenCalled();
+    expect(runOutcomeReviewPass).not.toHaveBeenCalled();
+    expect(steps).toEqual({ ppdRan: false, evidenceRan: false, findingsCompiled: 0, outcomeReviewApplied: false });
+  });
+
+  it("cancel during Evidence: compile and O&R are NEVER started, no legs applied", async () => {
+    const compileEvidenceFindings = vi.fn().mockReturnValue(3);
+    const runOutcomeReviewPass = vi.fn().mockResolvedValue(undefined);
+    const applyOutcomeReviewResult = vi.fn().mockReturnValue(2);
+    const runPPDReview = vi.fn().mockImplementation(async () => { ppdOk(); });
+    const runEvidenceAssessment = vi.fn().mockImplementation(async () => { evOk(); useWorkspaceStore.getState().cancelBusy(); });
+    useWorkspaceStore.setState({ runPPDReview, runEvidenceAssessment, compileEvidenceFindings, runOutcomeReviewPass, applyOutcomeReviewResult } as never);
+    const steps = await useWorkspaceStore.getState().runOptionAFullAuto(SUB);
+    expect(runEvidenceAssessment).toHaveBeenCalledOnce();
+    expect(compileEvidenceFindings).not.toHaveBeenCalled();
+    expect(runOutcomeReviewPass).not.toHaveBeenCalled();
+    expect(applyOutcomeReviewResult).not.toHaveBeenCalled();
+    expect(steps).toEqual({ ppdRan: true, evidenceRan: false, findingsCompiled: 0, outcomeReviewApplied: false });
+  });
+
+  it("no cancel: the full chain runs (regression guard)", async () => {
+    const compileEvidenceFindings = vi.fn().mockReturnValue(2);
+    const runOutcomeReviewPass = vi.fn().mockImplementation(async () => { useWorkspaceStore.setState({ outcomeReviewResults: { [SUB]: {} } as never }); });
+    const applyOutcomeReviewResult = vi.fn().mockReturnValue(1);
+    const runPPDReview = vi.fn().mockImplementation(async () => { ppdOk(); });
+    const runEvidenceAssessment = vi.fn().mockImplementation(async () => { evOk(); });
+    useWorkspaceStore.setState({ runPPDReview, runEvidenceAssessment, compileEvidenceFindings, runOutcomeReviewPass, applyOutcomeReviewResult } as never);
+    const steps = await useWorkspaceStore.getState().runOptionAFullAuto(SUB);
+    expect(compileEvidenceFindings).toHaveBeenCalledOnce();
+    expect(runOutcomeReviewPass).toHaveBeenCalledOnce();
+    expect(applyOutcomeReviewResult).toHaveBeenCalledOnce();
+    expect(steps).toEqual({ ppdRan: true, evidenceRan: true, findingsCompiled: 2, outcomeReviewApplied: true });
   });
 });
