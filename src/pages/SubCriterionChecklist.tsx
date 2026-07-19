@@ -275,6 +275,7 @@ export function SubCriterionChecklist() {
   const ensureEntry = useChecklistModuleStore((s) => s.ensureEntry);
   const setHolisticBand = useChecklistModuleStore((s) => s.setHolisticBand);
   const clearHolisticBand = useChecklistModuleStore((s) => s.clearHolisticBand);
+  const confirmAiAutoBand = useChecklistModuleStore((s) => s.confirmAiAutoBand);
   const setApsrMatrix = useChecklistModuleStore((s) => s.setApsrMatrix);
   const clearApsrMatrix = useChecklistModuleStore((s) => s.clearApsrMatrix);
   const suggestBand = useChecklistModuleStore((s) => s.suggestBand);
@@ -722,9 +723,20 @@ export function SubCriterionChecklist() {
                 <Pill s={bandTone(savedBand.band)}>{bandTitle(savedBand.band)}</Pill>
                 <span style={{ fontSize: 11.5, color: "#475569", fontFamily: "ui-monospace,monospace" }}>APSR total {savedBand.total}%</span>
                 {/* An "ai-auto" band is unmistakably marked until a human
-                    re-saves it here (the ONLY thing that clears the label). */}
+                    confirms it — either the one-click Confirm button here
+                    (reuses setHolisticBand exactly, via confirmAiAutoBand) or
+                    a full manual re-save below (the same underlying action). */}
                 {holisticBand.source === "ai-auto" ? (
-                  <Pill s="medium">AI-scored — not yet reviewed</Pill>
+                  <>
+                    <Pill s="medium">Draft (AI) · Confirm to finalise</Pill>
+                    <button
+                      onClick={() => confirmAiAutoBand(selectedId)}
+                      title="Confirm this AI-set band as reviewed — records the same human decision a manual re-save would, without changing the scores or rationale."
+                      style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#fff", background: "#15803d", border: "none", borderRadius: 6, padding: "3px 9px" }}
+                    >
+                      Confirm
+                    </button>
+                  </>
                 ) : null}
                 <span style={{ fontSize: 11, color: "#94a3b8" }}>
                   {holisticBand.source === "ai-auto" ? "Set automatically by AI" : holisticBand.source === "ai-accepted" ? "AI scores accepted by reviewer" : "Set by reviewer"} · {new Date(holisticBand.decidedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}

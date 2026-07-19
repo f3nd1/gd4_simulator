@@ -143,9 +143,9 @@ export type ItemReport = {
   bandRationale?: string;
   bandTotalPct?: number;
   // Who committed the band (HolisticBandRecord.source). "ai-auto" drives the
-  // "AI-scored, not yet reviewed" marker on the report — display only, and it
-  // clears only when a human re-saves the band (source becomes human/
-  // ai-accepted). Undefined when no band is saved.
+  // "Draft (AI) - Confirm to finalise" marker on the report — display only,
+  // and it clears only when a human confirms or re-saves the band (source
+  // becomes human/ai-accepted). Undefined when no band is saved.
   bandSource?: "human" | "ai-accepted" | "ai-auto";
   // Ten-second read above the findings table: band, %, which dimensions are
   // strong/limiting, and roughly how many AFIs would close the gap to the

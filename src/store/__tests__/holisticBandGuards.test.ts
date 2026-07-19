@@ -274,6 +274,62 @@ describe('setHolisticBand — "ai-auto" source (auto-score setting, 2026-07-18)'
   });
 });
 
+describe('confirmAiAutoBand — one-click "Draft (AI) · Confirm to finalise" clear (2026-07-19)', () => {
+  beforeEach(() => {
+    useWorkspaceStore.setState({ humanDecisionLog: [] });
+  });
+
+  it("flips source ai-auto -> human, keeping the SAME matrixScores/rationale, and logs a real human decision", () => {
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "AI rationale from suggestion.", source: "ai-auto" });
+    useChecklistModuleStore.getState().confirmAiAutoBand(ITEM);
+    const hb = useChecklistModuleStore.getState().entries[ITEM]!.holisticBand!;
+    expect(hb.source).toBe("human");
+    expect(hb.matrixScores).toEqual(WORKED); // scores unchanged — confirm never edits them
+    expect(hb.rationale).toBe("AI rationale from suggestion."); // rationale unchanged
+    expect(hb.band).toBe(3); // same worked-example band as before
+    const log = useWorkspaceStore.getState().humanDecisionLog;
+    expect(log).toHaveLength(2); // [0] confirm, [1] the original ai-auto save
+    expect(log[0].decisionType).not.toBe("Automatic");
+    expect(log[0].humanDecision).toContain("Band 3");
+  });
+
+  it("produces the IDENTICAL Human Decision Log entry shape a manual re-save would (same rationale, unchanged band)", () => {
+    // Path 1: ai-auto save, then confirmAiAutoBand.
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "AI rationale.", source: "ai-auto" });
+    useWorkspaceStore.setState({ humanDecisionLog: [] });
+    useChecklistModuleStore.getState().confirmAiAutoBand(ITEM);
+    const viaConfirm = useWorkspaceStore.getState().humanDecisionLog[0];
+
+    // Path 2 (a fresh item): ai-auto save, then a manual re-save with the
+    // SAME rationale and matrixScores — the exact action confirmAiAutoBand
+    // reuses under the hood.
+    const OTHER_ITEM = "6.2.2";
+    useChecklistModuleStore.getState().setHolisticBand(OTHER_ITEM, { matrixScores: WORKED, rationale: "AI rationale.", source: "ai-auto" });
+    useWorkspaceStore.setState({ humanDecisionLog: [] });
+    useChecklistModuleStore.getState().setHolisticBand(OTHER_ITEM, { matrixScores: WORKED, rationale: "AI rationale.", source: "human" });
+    const viaManualResave = useWorkspaceStore.getState().humanDecisionLog[0];
+
+    expect(viaConfirm.decisionType).toBe(viaManualResave.decisionType);
+    expect(viaConfirm.humanDecision).toBe(viaManualResave.humanDecision);
+    expect(viaConfirm.module).toBe(viaManualResave.module);
+    expect(viaConfirm.field).toBe(viaManualResave.field);
+  });
+
+  it("is a no-op when the item has no holisticBand at all", () => {
+    useChecklistModuleStore.getState().confirmAiAutoBand("6.9.9");
+    expect(useChecklistModuleStore.getState().entries["6.9.9"]).toBeUndefined();
+    expect(useWorkspaceStore.getState().humanDecisionLog).toHaveLength(0);
+  });
+
+  it("is a no-op when the band is already human-sourced — nothing to confirm", () => {
+    useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "My own reasoning.", source: "human" });
+    useWorkspaceStore.setState({ humanDecisionLog: [] });
+    useChecklistModuleStore.getState().confirmAiAutoBand(ITEM);
+    expect(useWorkspaceStore.getState().humanDecisionLog).toHaveLength(0); // no second entry written
+    expect(useChecklistModuleStore.getState().entries[ITEM]!.holisticBand!.source).toBe("human");
+  });
+});
+
 describe("auto-score setting OFF — byte-identical scoring (nothing reads the toggle)", () => {
   it("computeChecklistOverrides and buildScored are byte-identical with autoScoreBands off vs on", () => {
     useChecklistModuleStore.getState().setHolisticBand(ITEM, { matrixScores: WORKED, rationale: "A=20, P=20, S=10, R=0 = 50%.", source: "human" });

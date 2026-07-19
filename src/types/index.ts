@@ -568,10 +568,11 @@ export type HolisticBandRecord = {
   // "ai-accepted" = the reviewer clicked "Accept AI scores & save" (still a
   // human decision); "ai-auto" = an automatic run saved the AI's suggestion
   // WITHOUT a human in the loop (the opt-in autoScoreBands setting,
-  // docs/auto-scoring-setting.md). "ai-auto" doubles as the "AI-scored, not
-  // yet reviewed" flag everywhere bands render — it clears ONLY when a human
-  // re-saves via setHolisticBand with one of the two human values, never by
-  // time or viewing.
+  // docs/auto-scoring-setting.md). "ai-auto" doubles as the "Draft (AI)
+  // Confirm to finalise" flag everywhere bands render — it clears ONLY when a
+  // human confirms or re-saves via setHolisticBand with one of the two human
+  // values (see confirmAiAutoBand for the one-click path), never by time or
+  // viewing.
   source: "human" | "ai-accepted" | "ai-auto";
   decidedAt: string;
   decidedBy?: string;

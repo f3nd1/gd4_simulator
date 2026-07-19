@@ -84,6 +84,13 @@ export type ChecklistModuleState = {
   // every source — the AI's generated rationale satisfies Gate 2, it is
   // never bypassed.
   setHolisticBand: (itemId: string, input: { matrixScores: ApsrMatrixScores; rationale: string; source: "human" | "ai-accepted" | "ai-auto" }) => void;
+  // One-click "I reviewed this" for a "Draft (AI) · Confirm to finalise" band
+  // (2026-07-19): reuses setHolisticBand EXACTLY, with the matrixScores/
+  // rationale already on record and only source flipped to "human" — the
+  // SAME clearing mechanism a manual re-save on the Sub-Criterion Checklist
+  // already triggers (identical gates, identical Human Decision Log entry).
+  // A no-op when the item has no ai-auto band — nothing to confirm.
+  confirmAiAutoBand: (itemId: string) => void;
   clearHolisticBand: (itemId: string) => void;
   // Wipe the whole working matrix (all four dimensions) back to un-set, to undo
   // an AI-first-pass suggestion that filled it without a band being saved.
@@ -263,6 +270,15 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
                 reason: full.rationale ?? "",
               }
         );
+      },
+
+      confirmAiAutoBand: (itemId) => {
+        const hb = get().entries[itemId]?.holisticBand;
+        // Gate 2 in setHolisticBand already requires a non-empty rationale, so
+        // every REAL ai-auto save has one — this only guards the rationale
+        // field's optional type (kept for older pre-rationale records).
+        if (!hb || hb.source !== "ai-auto" || !hb.rationale) return;
+        get().setHolisticBand(itemId, { matrixScores: hb.matrixScores, rationale: hb.rationale, source: "human" });
       },
 
       clearHolisticBand: (itemId) =>

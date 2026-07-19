@@ -307,7 +307,7 @@ export function RunLog() {
                             {entry.bandsSet.map((b) => (
                               <div key={b.itemId} style={{ fontSize: 11.5, color: "#374151", padding: "3px 0", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                                 <Pill s={bandTone(b.band)}>B{b.band} · {b.totalPct}%</Pill>
-                                <span style={{ flex: 1, minWidth: 180 }}>{b.itemId} — set automatically, labelled "AI-scored, not yet reviewed"</span>
+                                <span style={{ flex: 1, minWidth: 180 }}>{b.itemId} — set automatically, labelled "Draft (AI) · Confirm to finalise"</span>
                                 <Link to={`/sub-checklist?item=${encodeURIComponent(b.itemId)}`} style={drillLinkStyle}>Checklist</Link>
                                 <Link to="/final-report" style={drillLinkStyle}>Final Report</Link>
                               </div>

@@ -3043,7 +3043,7 @@ export function EvidenceFolder() {
                         disabled={noAuditors}
                         title={noAuditors ? MSG_NO_AUDITORS_EXIST
                           : auditMode === "hybrid" && autoScoreBands
-                            ? tip("Runs this ONE sub-criterion end to end and AI-scores its band (labelled 'AI-scored, not yet reviewed'): verdicts, compile findings, Outcomes & Review, band — no mid-run pause. Review it afterwards on the Final Report. No other sub-criterion is touched.")
+                            ? tip("Runs this ONE sub-criterion end to end and AI-scores its band (labelled 'Draft (AI) · Confirm to finalise'): verdicts, compile findings, Outcomes & Review, band — no mid-run pause. Review it afterwards on the Final Report. No other sub-criterion is touched.")
                             : tip("Option A (PPD + Evidence): opens the full review, where you run the PPD review, then the evidence assessment, then compile findings. In Hybrid mode you approve, edit or reject each verdict inside that review — beside the evidence rows that produced it — before it commits.")}
                         style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >

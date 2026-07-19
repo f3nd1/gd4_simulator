@@ -99,7 +99,7 @@ export function GD4ScoringSetup() {
             onChange={(e) => {
               if (!e.target.checked) { setAutoScoreBands(false); return; }
               if (confirm(
-                "Turning this on means the AI will set your certification band automatically during a Full Auto run or a Hybrid first-pass draft, without your review at the moment it is set.\n\nEvery band set this way is marked \"AI-scored, not yet reviewed\" wherever it appears, and you can still open and change any band afterward. Bands you have already saved are never changed by this setting.\n\nAre you sure?"
+                "Turning this on means the AI will set your certification band automatically during a Full Auto run or a Hybrid first-pass draft, without your review at the moment it is set.\n\nEvery band set this way is marked \"Draft (AI) · Confirm to finalise\" wherever it appears, and you can still open and change any band afterward. Bands you have already saved are never changed by this setting.\n\nAre you sure?"
               )) setAutoScoreBands(true);
             }}
             style={{ marginTop: 2 }}
@@ -112,7 +112,7 @@ export function GD4ScoringSetup() {
               <br />
               <b>Off (the default):</b> a Full Auto run stops at verdicts and findings and leaves every band blank for you to set on the Sub-Criterion Checklist. The AI only ever suggests a band; you decide it.
               <br />
-              <b>On:</b> at the end of a Full Auto run, for each item it assessed, the AI also fills in the band itself from its own per-dimension scores and written reasoning. Each band set this way is marked <b>"AI-scored, not yet reviewed"</b> on the Sub-Criterion Checklist, the Final Report (and its PDF), the Criterion Scorecard, and the Export Centre pack, and is logged as an <b>Automatic</b> decision in the Human Decision Log. The label clears only when you open that item and save the band yourself. Bands you have already saved are never changed, and you can always override an AI-scored one. An item the AI cannot score cleanly is left blank and listed for you to do by hand, never guessed. Plain-English details: docs/auto-scoring-setting.md.
+              <b>On:</b> at the end of a Full Auto run, for each item it assessed, the AI also fills in the band itself from its own per-dimension scores and written reasoning. Each band set this way is marked <b>"Draft (AI) · Confirm to finalise"</b> on the Sub-Criterion Checklist, the Final Report (and its PDF), the Criterion Scorecard, and the Export Centre pack, and is logged as an <b>Automatic</b> decision in the Human Decision Log. The label clears only when a human confirms it — either the one-click Confirm button next to the label, or by opening that item and saving the band yourself; both log the same human decision. Bands you have already saved are never changed, and you can always override an AI-scored one. An item the AI cannot score cleanly is left blank and listed for you to do by hand, never guessed. Plain-English details: docs/auto-scoring-setting.md.
             </span>
           </span>
         </label>
