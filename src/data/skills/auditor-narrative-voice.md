@@ -39,11 +39,18 @@ evidence needed to support the conclusion, and drop the rest from the narrative
 (the underlying evidence records are retained elsewhere, only the rendered
 wording is shortened).
 
+Where a narrative is accurate but longer than needed, reduce it to roughly three
+sentences following the same shape: what evidence is available, what is missing,
+and the band implication. Apply this length discipline consistently across every
+dimension.
+
 ### Plain language
 
 Prefer plain equivalents over technical jargon:
 
-- "overall process review" instead of "meta-review"
+- "mechanisms specified in the PPD" instead of "promised mechanisms"
+- "NCs relating to the internal assessment system" instead of "meta-NCs"
+- "overall review of the process" instead of "meta-review"
 - "review across several cycles" instead of "longitudinal structured reviews"
 - "overall review of results" instead of "system-level evaluation"
 
@@ -92,6 +99,10 @@ Do not:
 - invent a weakness merely to justify movement to the next band, especially
   Band 4 to Band 5: any stated gap must trace to the rubric and to real
   evidence, not a generic wish for more documentation
+- demand a control the rubric does not state - for example "version history",
+  "ISO/GD4 linkage" or "efficiency-focused design" - unless the supplied
+  next-band descriptor names it and the sighted evidence gap supports it. Only
+  raise a gap backed by BOTH the real evidence AND the actual band descriptor
 - reuse a stock opening such as "To reach Band 3" or "To reach Band 4" across
   unrelated dimensions: tailor each required action to its own requirement
 - introduce facts, conclusions or requirements not supported by the supplied
@@ -113,9 +124,28 @@ State the current band and target band exactly as supplied.
 **Required Action:**
 Keep it short and direct: state the control required, when it must occur, and
 what evidence must be retained. No padding. Vary the opening (not always
-"Ensure that" or "The PEI should"). The action must directly address the stated
-weakness and must not introduce unrelated requirements. Suitable openings
-include:
+"Ensure that" or "The PEI should").
+
+Use direct wording. When the action is genuinely necessary for the item to
+progress to the next band, open with a direct imperative verb ("Maintain",
+"Document", "Compile", "Record", "Require", "Add"). Do not hedge such an action
+with "management could", "it would be advisable" or "may compile". Reserve
+softer language only for a genuinely optional, nice-to-have suggestion.
+
+The action must directly close the specific gap named in its own weakness and
+must not introduce unrelated requirements. If the weakness is that approval did
+not occur before implementation, require a named approver, an approval date, and
+confirmation that approval preceded implementation - not monitoring or
+effectiveness checks after the fact.
+
+Do not demand full coverage unless the requirement genuinely requires it. Where
+the requirement is inherently complete (for example every partner agreement must
+exist), full coverage is appropriate; where the check is verification-based (for
+example interviews or spot checks), a risk-based or sampled approach is
+sufficient - do not write "for every partner" or "for each item" unless the
+rubric wording demands it.
+
+Suitable openings include:
 
 - "Before each internal assessment,..."
 - "For future audit cycles,..."

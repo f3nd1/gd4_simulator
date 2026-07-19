@@ -273,7 +273,7 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
       // recorded note — they are plumbing the user cannot resolve and were
       // leaking into both the on-screen row and the generated narrative.
       const rawText = lineDimensionDiagnosis(l, key);
-      const text = rawText == null ? rawText : stripChunkMarkers(rawText);
+      const text = rawText == null ? rawText : stripLeadingFragment(stripChunkMarkers(rawText));
       // A dimension Option A structurally never assessed (its per-line note is
       // the not-assessed sentinel) is NEITHER a strength nor a weakness — no
       // data exists to judge it. Detect it first, before any status test, so
@@ -300,7 +300,7 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
       // example still trims to one sentence, via the fixed firstSentence.
       if (isWeakness) {
         const rawAction = lineSuggestedAction(l);
-        const action = rawAction == null ? rawAction : stripChunkMarkers(rawAction);
+        const action = rawAction == null ? rawAction : stripLeadingFragment(stripChunkMarkers(rawAction));
         return {
           lineId: l.id, itemRef, verdict: "weakness",
           finding: text || "No detailed diagnosis recorded for this line.",
@@ -617,6 +617,25 @@ export function stripChunkMarkers(text: string): string {
   return text.replace(/\[CHUNK:[^\]]*\]/g, "").replace(/ {2,}/g, " ").trim();
 }
 
+// Item 3 (2026-07-19): a REAL guard, not just a prompt instruction. Some stored
+// assessment notes (and, rarely, freshly generated ones) begin with a stray
+// enumeration fragment copied from a bulleted source — e.g. "g. The strategic
+// plan..." — so the row's Strength/Weakness text opens mid-clause with a bare
+// list marker. Prompt hardening did not stop it recurring (a NEW "g." instance
+// appeared after the prompt was already hardened), so strip a leading
+// lowercase single-letter or short lowercase roman-numeral list marker
+// deterministically before ANY text is displayed. Anchored to the very start,
+// requires the marker to be followed by whitespace then more content, and only
+// keeps the strip when a readable remainder survives — so it removes a genuine
+// stray marker and never a real word. Lowercase-only by design: a capitalised
+// initial ("A. Tan reviewed...") or "i.e."/"e.g." (no space after the dot) must
+// be preserved, and both are.
+const LEADING_LIST_FRAGMENT = /^\s*(?:[a-z]|[ivx]{2,4})[.)]\s+(?=\S)/;
+export function stripLeadingFragment(text: string): string {
+  const stripped = text.replace(LEADING_LIST_FRAGMENT, "").trim();
+  return stripped.length >= 15 ? stripped : text.trim();
+}
+
 // Param is the minimal Pick (not full ItemReport) so the run flow can build
 // the same grounding for an item WITHOUT constructing a whole report — see
 // narrativeInputForEntry below. A full ItemReport still satisfies it.
@@ -690,10 +709,13 @@ export function filterDimensionNarratives(
 // markers read as broken markup in the table (real live bug, 2026-07-18).
 // Deterministic cleanup only — wording is never changed, just the wrapper.
 function cleanNarrativeField(s: string): string {
-  return s
+  const unwrapped = s
     .replace(/\*\*/g, "")
     .replace(/^\s*(?:strength|weakness|band assessment|required action)\s*:\s*/i, "")
     .trim();
+  // Item 3 (2026-07-19): also drop a leading stray list-item fragment (e.g. a
+  // bare "g.") on freshly generated narrative text, not only on stored notes.
+  return stripLeadingFragment(unwrapped);
 }
 
 // The minimal narrative-generator input for ONE item, built straight from its

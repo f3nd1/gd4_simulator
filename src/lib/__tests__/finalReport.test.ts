@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, filterDimensionNarratives, stripChunkMarkers, findingParagraphs, splitEvidenceNote, needsConciseSummary, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport } from "../finalReport";
+import { buildFinalReport, firstSentence, findingGapNature, eligibleSuggestionDims, suggestionKey, buildAiSuggestionUserPrompt, filterAiSuggestions, filterDimensionNarratives, stripChunkMarkers, stripLeadingFragment, findingParagraphs, splitEvidenceNote, needsConciseSummary, qualifyingConciseRows, buildConciseUserPrompt, filterConciseSummaries, type ItemReport } from "../finalReport";
 import { bandLevel } from "../../data/edutrustRubric";
 import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
@@ -521,6 +521,19 @@ describe("AI improvement suggestions — eligibility, prompt grounding, honesty 
     expect(stripChunkMarkers("Outcome data [CHUNK:C003] was sighted in the register.")).toBe("Outcome data was sighted in the register.");
     expect(stripChunkMarkers("[CHUNK:C001] leading marker")).toBe("leading marker");
     expect(stripChunkMarkers("no markers here")).toBe("no markers here");
+  });
+
+  it("stripLeadingFragment (Item 3) drops a stray leading list marker but preserves real text", () => {
+    // The reported failure: a Strength note that begins "g. ..." — the marker goes.
+    expect(stripLeadingFragment("g. The strategic plan sets targets for key performance indicators.")).toBe("The strategic plan sets targets for key performance indicators.");
+    expect(stripLeadingFragment("a) The PPD documents the approach and names the owner clearly.")).toBe("The PPD documents the approach and names the owner clearly.");
+    expect(stripLeadingFragment("iv. Reviews were conducted each cycle and recorded in the register.")).toBe("Reviews were conducted each cycle and recorded in the register.");
+    // Preserved: a capitalised initial, an abbreviation with no trailing space, and clean prose.
+    expect(stripLeadingFragment("A. Tan reviewed the minutes and signed them off.")).toBe("A. Tan reviewed the minutes and signed them off.");
+    expect(stripLeadingFragment("i.e. the reviews were minuted and retained.")).toBe("i.e. the reviews were minuted and retained.");
+    expect(stripLeadingFragment("The evidence shows the process was implemented.")).toBe("The evidence shows the process was implemented.");
+    // Never blanks a short cell to nothing over a false positive: no readable remainder → keep original.
+    expect(stripLeadingFragment("g. short")).toBe("g. short");
   });
 
   it("buildAiSuggestionUserPrompt strips chunk markers from the grounding text", () => {

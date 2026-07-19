@@ -743,6 +743,15 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                 // why other lines' refs appear under this dimension — the
                 // lead-in then carries the rowSpan'd dimension cells.
                 const totalRows = g.rows.length + (sug || missingSug ? 1 : 0) + (nar || missingNar ? 1 : 0) + (g.rowsFromLegs ? 1 : 0);
+                // Item 1 (2026-07-19): the strength AFI (next-band rubric target
+                // + grounded action) is a DIMENSION-level statement — identical
+                // for every strength row by construction (strengthNextBandAfi
+                // keys only on dimension + band, and the grounded action is the
+                // one dimension narrative). Repeating it verbatim on every
+                // strength row made the report read as templated. Show it on the
+                // FIRST strength row only; later strength rows point back to it.
+                // Weakness rows keep their own per-line action, untouched.
+                const firstStrengthIdx = g.rows.findIndex((r) => r.verdict === "strength");
                 const rowEls = g.rows.map((r, i) => {
                   // Three distinct states: strength (green), weakness (red),
                   // not-assessed (neutral grey) — an absence of assessment is
@@ -764,7 +773,11 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                         <b>{label}:</b>{" "}
                         <EvidenceCell finding={r.finding} concise={conciseFindings[conciseKey(it.id, g.key, r.lineId)]?.text} />
                       </td>
-                      <td style={{ verticalAlign: "top", fontSize: 11.5 }}>{renderAfi(r.afi, r.verdict === "weakness" ? { band: g.band, label: g.label } : undefined, r.verdict === "strength" ? nar?.requiredAction : undefined)}</td>
+                      <td style={{ verticalAlign: "top", fontSize: 11.5 }}>
+                        {r.verdict === "strength" && i !== firstStrengthIdx
+                          ? <span style={{ color: "#94a3b8", fontStyle: "italic", fontSize: 11 }}>See the {g.label} target on the first row above.</span>
+                          : renderAfi(r.afi, r.verdict === "weakness" ? { band: g.band, label: g.label } : undefined, r.verdict === "strength" ? nar?.requiredAction : undefined)}
+                      </td>
                     </tr>
                   );
                 });
