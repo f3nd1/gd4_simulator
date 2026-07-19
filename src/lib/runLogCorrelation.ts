@@ -39,6 +39,21 @@ export function typicalRunDurationSec(
   return { medianSec: Math.round(medianSec), sampleCount: durations.length };
 }
 
+// Rough seconds-per-file for an Option A audit run: reading the file (text or
+// vision) plus its share of the batched AI verdict calls. A deliberately blunt
+// constant — the honest input Felix asked for is the LIVE file count, and this
+// is the tunable per-file assumption applied to it.
+// ponytail: fixed constant; wire to real per-file history if runs ever record
+// their file count (RunLogEntry does not today).
+export const SECONDS_PER_FILE = 12;
+
+// Estimated audit seconds from a LIVE file count (count x per-file seconds).
+// The count must come from an actual Drive listing at check-folder / run time,
+// never a cached or historical figure.
+export function estimateAuditSeconds(fileCount: number): number {
+  return Math.max(0, Math.round(fileCount)) * SECONDS_PER_FILE;
+}
+
 // "about 45s" / "about 4m" / "about 1h 5m" — a rough spoken duration, never a
 // precise countdown (the modal must not imply precision the app lacks).
 export function formatRoughDuration(sec: number): string {

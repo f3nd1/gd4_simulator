@@ -23,23 +23,12 @@ export function CriterionScorecard() {
   // Folder audit stamp per sub-criterion, so each row can say when (and how)
   // its item was last audited instead of presenting an unqualified band.
   const folderBySubCrit = new Map(folders.map((f) => [f.subCriterionId, f]));
-  // "Draft (AI) · Confirm to finalise" marker: driven by the saved band's own
-  // source field; clears only when a human confirms/re-saves the band.
+  // "Already run by AI" marker: driven by the saved band's own source field;
+  // a passive label (Felix, 2026-07-19 — a Hybrid / Full Auto run counts as
+  // already reviewed, so no Confirm step). Clears only when the band is later
+  // re-saved by hand (source flips ai-auto -> human).
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
-  const confirmAiAutoBand = useChecklistModuleStore((s) => s.confirmAiAutoBand);
   const isAiAutoBand = (itemId: string) => checklistEntries[itemId]?.holisticBand?.source === "ai-auto";
-  // The one-click Confirm control shown next to the tag: same clearing
-  // mechanism as a manual re-save on the Sub-Criterion Checklist (see
-  // confirmAiAutoBand), fired directly from this row without navigating away.
-  const confirmBtn = (itemId: string) => (
-    <button
-      onClick={() => confirmAiAutoBand(itemId)}
-      title="Confirm this AI-set band as reviewed — records the same human decision a manual re-save would, without changing the scores or rationale."
-      style={{ cursor: "pointer", fontSize: 10.5, fontWeight: 700, color: "#fff", background: "#15803d", border: "none", borderRadius: 5, padding: "1px 7px", marginLeft: 4 }}
-    >
-      Confirm
-    </button>
-  );
   const stampFor = (itemId: string) => {
     // Resolve the item's sub-criterion via the requirement, not a fixed
     // two-segment string slice: split sub-criteria (e.g. 2.1.1) carry a
@@ -114,7 +103,7 @@ export function CriterionScorecard() {
                 {belowBand3.map((it) => (
                   <tr key={it.id} className="rowh">
                     <td><b>{it.id}</b> {it.title}{it.gate && <Pill s="medium">gate</Pill>}</td>
-                    <td>{it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}{isAiAutoBand(it.id) && <><Pill s="medium">Draft (AI) · Confirm to finalise</Pill>{confirmBtn(it.id)}</>}</td>
+                    <td>{it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}{isAiAutoBand(it.id) && <Pill s="medium">Already run by AI</Pill>}</td>
                     <td>{it.eff}</td>
                   </tr>
                 ))}
@@ -184,7 +173,7 @@ export function CriterionScorecard() {
                   <td>
                     {it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}
                     {it.checklistOverride && <Pill s="progress">via Checklist</Pill>}
-                    {isAiAutoBand(it.id) && <><Pill s="medium">Draft (AI) · Confirm to finalise</Pill>{confirmBtn(it.id)}</>}
+                    {isAiAutoBand(it.id) && <Pill s="medium">Already run by AI</Pill>}
                     {stampFor(it.id) && (
                       <div style={{ fontSize: 10, color: stampFor(it.id)!.includes("offline") ? "#b45309" : "#94a3b8", marginTop: 2, whiteSpace: "nowrap" }}>
                         audited {stampFor(it.id)}

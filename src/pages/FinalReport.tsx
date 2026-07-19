@@ -517,7 +517,6 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
   // button click below, so the report never re-rolls (or re-bills) per
   // render and the on-screen text matches the printed PDF.
   const aiSettings = useAISettingsStore();
-  const confirmAiAutoBand = useChecklistModuleStore((s) => s.confirmAiAutoBand);
   const schoolContext = useWorkspaceStore((s) => s.schoolContext);
   const suggestions = useWorkspaceStore((s) => s.reportAiSuggestions);
   const setReportAiSuggestions = useWorkspaceStore((s) => s.setReportAiSuggestions);
@@ -623,22 +622,12 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         {it.needsReassessment
           ? <Pill s="medium">Needs re-assessment</Pill>
           : <Pill s={bandTone(it.band)}>Band {it.band}</Pill>}
-        {/* An auto-scored band is marked until a human confirms it — prints
-            too, so the PDF carries it; the Confirm button is no-print (it
-            reuses confirmAiAutoBand, the same clearing action a manual
-            re-save on the Sub-Criterion Checklist already triggers). */}
+        {/* Passive marker only (Felix, 2026-07-19): a Hybrid / Full Auto run
+            counts as already reviewed, so no Confirm step — the label states
+            the band came from an AI run and prints onto the PDF. It clears if
+            the band is later re-saved by hand (source flips ai-auto -> human). */}
         {it.bandSource === "ai-auto" && (
-          <>
-            <Pill s="medium">Draft (AI) · Confirm to finalise</Pill>
-            <button
-              className="no-print"
-              onClick={() => confirmAiAutoBand(it.id)}
-              title="Confirm this AI-set band as reviewed — records the same human decision a manual re-save would, without changing the scores or rationale."
-              style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#fff", background: "#15803d", border: "none", borderRadius: 6, padding: "3px 9px" }}
-            >
-              Confirm
-            </button>
-          </>
+          <Pill s="medium">Already run by AI</Pill>
         )}
         {it.gate && <Pill s="high">Gate</Pill>}
         <b style={{ fontSize: 12.5 }}>{it.id}</b>

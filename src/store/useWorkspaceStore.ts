@@ -1405,6 +1405,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const policyFiles = parseFolderId(folder.policyLink)
             ? allFiles
             : allFiles.filter((f) => classifyFileBucket(f.path) === "policy");
+          // Live recount at run time (Item 4, 2026-07-19): refresh the stored
+          // policy file count from THIS run's listing so the estimate reflects
+          // the folder's current contents, not the last check-access figure.
+          set((st) => ({ folders: st.folders.map((f) => f.id === folder.id ? { ...f, policyFileCount: policyFiles.length, fileCountAt: new Date().toISOString() } : f) }));
           if (policyFiles.length === 0) { finish(null, false, "No Policy & Procedure files found in the linked folder."); return; }
 
           const MAX_PART_CHARS = 24_000;
@@ -1838,6 +1842,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const evidenceFiles = parseFolderId(folder.folderLink)
             ? allFiles
             : allFiles.filter((f) => classifyFileBucket(f.path) === "evidence");
+          // Live recount at run time (Item 4, 2026-07-19): refresh the stored
+          // evidence file count from THIS run's listing.
+          set((st) => ({ folders: st.folders.map((f) => f.id === folder.id ? { ...f, evidenceFileCount: evidenceFiles.length, fileCountAt: new Date().toISOString() } : f) }));
 
           const MAX_PART_CHARS = 24_000;
           const docParts: string[] = [];
@@ -3987,6 +3994,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         let status: DriveAccessStatus;
         let note: string;
+        // Live file count from this check — feeds the pre-run time estimate.
+        let liveFileCount: number | undefined;
         if (!folderId) {
           status = "Error";
           note = `Could not find a Drive folder ID in the ${label} link. Paste a Google Drive folder link (e.g. https://drive.google.com/drive/folders/<id>).`;
@@ -3996,6 +4005,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         } else {
           try {
             const files = await listFolderFilesRecursive(folderId, token);
+            liveFileCount = files.length;
             status = "Connected";
             note = files.length
               ? `Connected — found ${files.length} file${files.length === 1 ? "" : "s"} in the ${label} folder (including subfolders).`
@@ -4013,8 +4023,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           folders: st.folders.map((f) =>
             f.id === id
               ? tab === "policy"
-                ? { ...f, policyAccessStatus: status, policyAccessNote: note, policyAccessAt: checkedAt }
-                : { ...f, accessCheckStatus: status, accessCheckNote: note, accessCheckAt: checkedAt }
+                ? { ...f, policyAccessStatus: status, policyAccessNote: note, policyAccessAt: checkedAt, ...(liveFileCount != null ? { policyFileCount: liveFileCount, fileCountAt: checkedAt } : {}) }
+                : { ...f, accessCheckStatus: status, accessCheckNote: note, accessCheckAt: checkedAt, ...(liveFileCount != null ? { evidenceFileCount: liveFileCount, fileCountAt: checkedAt } : {}) }
               : f
           ),
           busy: null,

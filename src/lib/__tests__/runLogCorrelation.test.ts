@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { aiCallsForRun, typicalRunDurationSec, formatRoughDuration } from "../runLogCorrelation";
+import { aiCallsForRun, typicalRunDurationSec, formatRoughDuration, estimateAuditSeconds, SECONDS_PER_FILE } from "../runLogCorrelation";
 import type { AIReviewLogEntry, RunLogEntry } from "../../types";
 
 function logEntry(over: Partial<AIReviewLogEntry> & { subjectId: string; createdAt: string }): AIReviewLogEntry {
@@ -82,6 +82,18 @@ describe("typicalRunDurationSec — whole-run median from real history", () => {
       runEntry({ startedAt: "2026-07-18T11:00:00Z", endedAt: "2026-07-18T11:04:00Z" }), // 240s
     ];
     expect(typicalRunDurationSec(log, "hybrid-item")).toEqual({ medianSec: 180, sampleCount: 2 });
+  });
+});
+
+describe("estimateAuditSeconds — live file count drives the estimate", () => {
+  it("scales linearly with the file count (count x SECONDS_PER_FILE)", () => {
+    expect(estimateAuditSeconds(0)).toBe(0);
+    expect(estimateAuditSeconds(1)).toBe(SECONDS_PER_FILE);
+    expect(estimateAuditSeconds(10)).toBe(10 * SECONDS_PER_FILE);
+  });
+  it("rounds and floors negatives to zero", () => {
+    expect(estimateAuditSeconds(2.4)).toBe(2 * SECONDS_PER_FILE);
+    expect(estimateAuditSeconds(-5)).toBe(0);
   });
 });
 

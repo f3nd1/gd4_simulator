@@ -19,7 +19,8 @@ import { PpdReviewContent, HybridGatePanel, ResultNavLinks } from "./PPDReview";
 import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
 import { folderScopeId, itemIdsForScope, subOfScope, scopeTitle } from "../lib/evidenceScope";
-import { typicalRunDurationSec, formatRoughDuration } from "../lib/runLogCorrelation";
+import { flushPendingSaves } from "../store/supabaseStorage";
+import { typicalRunDurationSec, formatRoughDuration, estimateAuditSeconds } from "../lib/runLogCorrelation";
 import { TONE } from "../lib/theme";
 import type { FullAuditEntry } from "../lib/fullAudit";
 import { resolveAnalysisPath } from "../lib/fullAudit";
@@ -1774,15 +1775,27 @@ const SCOPE_OPTIONS: { value: AuditScope; label: string; desc: string }[] = [
 // per-step ETA (no per-step timing is recorded), so nothing here implies
 // precision the data cannot support; when there is no history it says so
 // rather than inventing a number.
-function RunTimeEstimate({ mode }: { mode: "full-auto" | "hybrid-item" }) {
+function RunTimeEstimate({ mode, scopeId }: { mode: "full-auto" | "hybrid-item"; scopeId?: string }) {
   const runLog = useWorkspaceStore((s) => s.runLog);
-  const est = typicalRunDurationSec(runLog, mode);
+  const folders = useWorkspaceStore((s) => s.folders);
   const modeName = mode === "full-auto" ? "Full auto" : "Hybrid";
+  // Prefer the LIVE file count for THIS run's folder (Item 4, 2026-07-19): the
+  // count was refreshed from the actual Drive listing at check-access and again
+  // at run start, so the estimate = live files x per-file seconds. Historical
+  // median is only the fallback when no live count exists (e.g. Full Auto's
+  // whole sweep, or a folder never listed yet).
+  const folder = scopeId ? folders.find((f) => folderScopeId(f) === scopeId) : undefined;
+  const liveFiles = folder && (folder.policyFileCount != null || folder.evidenceFileCount != null)
+    ? (folder.policyFileCount ?? 0) + (folder.evidenceFileCount ?? 0)
+    : null;
+  const est = typicalRunDurationSec(runLog, mode);
   return (
     <div style={{ fontSize: 11.5, color: "#64748b", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "6px 10px", marginBottom: 10 }}>
-      {est
-        ? <>Similar runs typically take <b>{formatRoughDuration(est.medianSec)}</b> (from your last {est.sampleCount} {modeName} {est.sampleCount === 1 ? "run" : "runs"}). Rough guide only — AI speed varies, so the live timer below is the real progress.</>
-        : <>No past {modeName} runs yet to estimate from, so there is no time guide for this one. After it completes, future runs will show a typical time here.</>}
+      {liveFiles != null
+        ? <>Based on <b>{liveFiles} file{liveFiles === 1 ? "" : "s"}</b> found in this folder now, this run should take roughly <b>{formatRoughDuration(estimateAuditSeconds(liveFiles))}</b>. Rough guide only — AI speed varies, so the live timer below is the real progress.</>
+        : est
+          ? <>Similar runs typically take <b>{formatRoughDuration(est.medianSec)}</b> (from your last {est.sampleCount} {modeName} {est.sampleCount === 1 ? "run" : "runs"}). Rough guide only — AI speed varies, so the live timer below is the real progress.</>
+          : <>No past {modeName} runs yet to estimate from, so there is no time guide for this one. After it completes, future runs will show a typical time here.</>}
     </div>
   );
 }
@@ -1961,6 +1974,7 @@ function HybridDraftOverlay() {
   const progress = useWorkspaceStore((s) => s.hybridDraftProgress);
   const dismiss = useWorkspaceStore((s) => s.dismissHybridDraftProgress);
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
+  const navigate = useNavigate();
   const ppdP = useWorkspaceStore((s) => s.ppdReviewProgress);
   const evP = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
   const orP = useWorkspaceStore((s) => s.outcomeReviewProgress);
@@ -2000,7 +2014,12 @@ function HybridDraftOverlay() {
         <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginBottom: 4 }}>
           {running ? `Drafting ${progress.subCriterionId}…` : progress.status === "cancelled" ? `Hybrid draft cancelled — ${progress.subCriterionId}` : `Hybrid draft complete — ${progress.subCriterionId}`}
         </div>
-        {running && <RunTimeEstimate mode="hybrid-item" />}
+        {running && <RunTimeEstimate mode="hybrid-item" scopeId={progress.subCriterionId} />}
+        {progress.status === "complete" && (
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#166534", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "8px 12px", marginBottom: 8 }}>
+            ✓ Report ready — {progress.subCriterionId} has been drafted and its band scored. Open the Final Report below to review it.
+          </div>
+        )}
         {!running && progress.summary && (
           <div style={{ fontSize: 12, color: "#475569", marginBottom: 8 }}>{progress.summary}</div>
         )}
@@ -2036,12 +2055,22 @@ function HybridDraftOverlay() {
               Cancel
             </button>
           ) : (
-            <button
-              onClick={dismiss}
-              style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: "#374151" }}
-            >
-              Close
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={dismiss}
+                style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: "#374151" }}
+              >
+                Close
+              </button>
+              {progress.status === "complete" && (
+                <button
+                  onClick={() => { const item = itemIdsForScope(progress.subCriterionId)[0]; dismiss(); navigate(item ? `/final-report?item=${item}` : "/final-report"); }}
+                  style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "7px 16px", borderRadius: 8, border: "1px solid #16a34a", background: "#16a34a", color: "#fff" }}
+                >
+                  View the Final Report →
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -2203,7 +2232,6 @@ export function EvidenceFolder() {
   const hybridDraftProgress = useWorkspaceStore((s) => s.hybridDraftProgress);
   const runFullAudit        = useWorkspaceStore((s) => s.runFullAudit);
   const runHybridItemDraft  = useWorkspaceStore((s) => s.runHybridItemDraft);
-  const dismissHybridDraftProgress = useWorkspaceStore((s) => s.dismissHybridDraftProgress);
   const autoScoreBands      = useScoringConfigStore((s) => s.autoScoreBands);
   const pendingGates        = useWorkspaceStore((s) => Object.values(s.pendingCommits).reduce((a, r) => a + r.items.length, 0));
   const tip = useTip();
@@ -2926,6 +2954,17 @@ export function EvidenceFolder() {
                 {linkChip("evidence")}
                 {f.policyLink && <a href={f.policyLink} target="_blank" rel="noreferrer" title="Open the Policy folder in Drive" style={{ fontSize: 11, color: "#3b82f6", textDecoration: "none" }}>Policy ↗</a>}
                 {f.folderLink && <a href={f.folderLink} target="_blank" rel="noreferrer" title="Open the Evidence folder in Drive" style={{ fontSize: 11, color: "#16a34a", textDecoration: "none" }}>Evidence ↗</a>}
+                {/* Pre-run time estimate from the LIVE file count captured by
+                    Check access / the last run (Item 4). Shows once at least one
+                    folder has been counted. */}
+                {(f.policyFileCount != null || f.evidenceFileCount != null) && (() => {
+                  const total = (f.policyFileCount ?? 0) + (f.evidenceFileCount ?? 0);
+                  return (
+                    <span style={{ fontSize: 11, color: "#64748b" }} title="Rough guide: current file count times a per-file time assumption. Re-checking access or running the audit recounts the files.">
+                      ≈ {total} file{total === 1 ? "" : "s"} · {formatRoughDuration(estimateAuditSeconds(total))} to run
+                    </span>
+                  );
+                })()}
               </div>
               {linksEditing && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: "0 0 6px" }}>
@@ -2935,9 +2974,23 @@ export function EvidenceFolder() {
                       placeholder="Policy folder link…"
                       value={f.policyLink || ""}
                       onChange={(e) => setFolderField(f.id, "policyLink", e.target.value)}
+                      // Force the link to Supabase the moment editing ends, not
+                      // only after the 600ms debounce — a link typed then closed
+                      // quickly used to reach localStorage but never Supabase, so
+                      // a second device saw nothing (2026-07-19).
+                      onBlur={() => void flushPendingSaves()}
                       style={{ ...inputStyle, flex: 1, minWidth: 180, padding: "4px 6px", fontSize: 11 }}
                     />
                     {f.policyAccessStatus && <Pill s={ACCESS_TONE[f.policyAccessStatus]}>{f.policyAccessStatus}</Pill>}
+                    {f.policyLink && (
+                      <button
+                        onClick={() => { setFolderField(f.id, "policyLink", ""); void flushPendingSaves(); }}
+                        title="Remove the Policy folder link — clears it here and on Supabase, so other devices lose it too."
+                        style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#b23121", background: "#fff5f5", border: "1px solid #fca5a5", borderRadius: 6, padding: "3px 9px" }}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                     <span style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", minWidth: 58, textTransform: "uppercase", letterSpacing: 0.3 }}>Evidence</span>
@@ -2945,11 +2998,21 @@ export function EvidenceFolder() {
                       placeholder="Evidence folder link…"
                       value={f.folderLink || ""}
                       onChange={(e) => setFolderField(f.id, "folderLink", e.target.value)}
+                      onBlur={() => void flushPendingSaves()}
                       style={{ ...inputStyle, flex: 1, minWidth: 180, padding: "4px 6px", fontSize: 11 }}
                     />
                     {f.accessCheckStatus && <Pill s={ACCESS_TONE[f.accessCheckStatus]}>{f.accessCheckStatus}</Pill>}
+                    {f.folderLink && (
+                      <button
+                        onClick={() => { setFolderField(f.id, "folderLink", ""); void flushPendingSaves(); }}
+                        title="Remove the Evidence folder link — clears it here and on Supabase, so other devices lose it too."
+                        style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#b23121", background: "#fff5f5", border: "1px solid #fca5a5", borderRadius: 6, padding: "3px 9px" }}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
-                  <button onClick={() => toggleEditingLinks(f.id)} style={{ alignSelf: "flex-start", cursor: "pointer", fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#64748b" }}>
+                  <button onClick={() => { void flushPendingSaves(); toggleEditingLinks(f.id); }} style={{ alignSelf: "flex-start", cursor: "pointer", fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#64748b" }}>
                     Done
                   </button>
                 </div>
@@ -3066,12 +3129,18 @@ export function EvidenceFolder() {
                           if (auditMode === "hybrid" && autoScoreBands) {
                             // Item 1: confirm before a multi-minute hands-off run.
                             if (!confirm(`This will run PPD review, evidence assessment, compile findings, Outcomes & Review, and auto-score the band for ${scope} — it can take several minutes. Continue?`)) return;
-                            setOptionAModal(scope);
-                            const outcome = await runHybridItemDraft(scope);
-                            // Item 4: only a genuine completion jumps to the Final
-                            // Report — a cancelled or stopped-early run stays on the
-                            // overlay so the user sees why it did not finish.
-                            if (outcome === "done") { dismissHybridDraftProgress(); navigate("/final-report"); }
+                            // Do NOT also open the static review modal here: the
+                            // live HybridDraftOverlay (set by runHybridItemDraft) is
+                            // the progress UI for a hands-off run. Opening the
+                            // review modal too left a generic "PPD + Evidence
+                            // Review" page showing behind/after the overlay, which
+                            // read as a stuck generic state (Item 5, 2026-07-19).
+                            // The overlay stays up in its "complete" (or
+                            // cancelled) state so the finish is an explicit
+                            // moment with a "View the Final Report" button
+                            // (Item 6, 2026-07-19), instead of silently whisking
+                            // the user away the instant the run ends.
+                            await runHybridItemDraft(scope);
                           } else {
                             setOptionAModal(scope);
                           }
@@ -3079,7 +3148,7 @@ export function EvidenceFolder() {
                         disabled={noAuditors}
                         title={noAuditors ? MSG_NO_AUDITORS_EXIST
                           : auditMode === "hybrid" && autoScoreBands
-                            ? tip("Runs this ONE sub-criterion end to end and AI-scores its band (labelled 'Draft (AI) · Confirm to finalise'): verdicts, compile findings, Outcomes & Review, band — no mid-run pause. Review it afterwards on the Final Report. No other sub-criterion is touched.")
+                            ? tip("Runs this ONE sub-criterion end to end and AI-scores its band (labelled 'Already run by AI'): verdicts, compile findings, Outcomes & Review, band — no mid-run pause. Review it afterwards on the Final Report. No other sub-criterion is touched.")
                             : tip("Option A (PPD + Evidence): opens the full review, where you run the PPD review, then the evidence assessment, then compile findings. In Hybrid mode you approve, edit or reject each verdict inside that review — beside the evidence rows that produced it — before it commits.")}
                         style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >

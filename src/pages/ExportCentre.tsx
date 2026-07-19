@@ -33,7 +33,6 @@ export function ExportCentre() {
   const aiReviewLog = useWorkspaceStore((s) => s.aiReviewLog);
   const humanDecisionLog = useWorkspaceStore((s) => s.humanDecisionLog);
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
-  const confirmAiAutoBand = useChecklistModuleStore((s) => s.confirmAiAutoBand);
   const scored = useScored();
   const findings = useAllFindings();
   // What / when / which model / what coverage — stamped on every export.
@@ -61,9 +60,9 @@ export function ExportCentre() {
       .map((item) => item.id);
   }, [scored.items, checklistEntries]);
 
-  // Items whose band was written by an automatic run (source "ai-auto") and not
-  // yet re-saved by a human — the pack must carry the same "not yet reviewed"
-  // label the screens show, because criterion bands aggregate these items.
+  // Items whose band was written by an automatic run (source "ai-auto") — the
+  // pack carries the same passive "Already run by AI" note the screens show,
+  // because criterion bands aggregate these items.
   const aiAutoBandItems = useMemo(
     () =>
       Object.entries(checklistEntries)
@@ -79,7 +78,7 @@ export function ExportCentre() {
       md += `## ⚠ WARNING — Unverified scored items\n\n**${zeroEvidenceItems.length} sub-criterion/criteria are scored via the checklist but have NO evidence attached to any specific line: ${zeroEvidenceItems.join(", ")}.**\n\nBands for these items are based solely on self-reported checklist status with no supporting documents. EduTrust assessors will not accept these scores without evidence. Attach evidence before submitting.\n\n`;
     }
     if (aiAutoBandItems.length > 0) {
-      md += `## ⚠ Draft (AI) bands — confirm to finalise\n\n**${aiAutoBandItems.length} item(s) carry a band set automatically by AI and not yet confirmed by a human: ${aiAutoBandItems.join(", ")}.**\n\nCriterion scores below include these bands. Confirm or re-save each band in the Sub-Criterion Checklist before relying on this pack.\n\n`;
+      md += `## AI-run bands\n\n**${aiAutoBandItems.length} item(s) carry a band set automatically by a Hybrid or Full Auto run: ${aiAutoBandItems.join(", ")}.**\n\nCriterion scores below include these bands. Re-save a band in the Sub-Criterion Checklist if you want it recorded as hand-set instead.\n\n`;
     }
     md += `## Readiness\nProjected ${scored.total}/1000 — ${scored.award}\nScore gate (4.2.1, 4.2.2, 4.6, C5): ${scored.gatePass ? "met" : "NOT met (" + scored.gateFail.map((g) => g.id).join(", ") + ")"}\n\n`;
     md += `## Criterion scores\n` + scored.crits.map((c) => `- C${c.id} ${c.title}: Band ${c.band}, ${c.scored}/${c.points}`).join("\n") + "\n\n";
@@ -196,22 +195,11 @@ export function ExportCentre() {
         {aiAutoBandItems.length > 0 && (
           <div style={{ background: "#fefce8", border: "1px solid #eab308", borderRadius: 8, padding: "10px 14px", marginTop: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-              <Pill s="medium">Draft (AI) · Confirm to finalise</Pill>
+              <Pill s="medium">Already run by AI</Pill>
               <b style={{ fontSize: 12.5, color: "#854d0e" }}>{aiAutoBandItems.length} band(s) set automatically by AI</b>
-              {/* Confirms every listed item in one click — each call reuses
-                  confirmAiAutoBand, the SAME clearing action a manual re-save
-                  would trigger, so this logs one genuine Human Decision Log
-                  entry per item, not a bulk bypass. */}
-              <button
-                onClick={() => aiAutoBandItems.forEach((id) => confirmAiAutoBand(id))}
-                title="Confirm every listed band as reviewed — records the same human decision a manual re-save would for each one, without changing any scores or rationale."
-                style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#fff", background: "#15803d", border: "none", borderRadius: 6, padding: "3px 9px", marginLeft: "auto" }}
-              >
-                Confirm all {aiAutoBandItems.length}
-              </button>
             </div>
             <div style={{ fontSize: 12, color: "#713f12", lineHeight: 1.5 }}>
-              {aiAutoBandItems.join(", ")} — the band was written by an automatic run and no human has reviewed it yet. The exported pack carries the same warning. Confirm above, or re-save each band in the Sub-Criterion Checklist, to clear it.
+              {aiAutoBandItems.join(", ")} — the band was set by an automatic Hybrid or Full Auto run. The exported pack carries the same note. Re-save a band in the Sub-Criterion Checklist if you want to record it as hand-set instead.
             </div>
           </div>
         )}

@@ -568,11 +568,10 @@ export type HolisticBandRecord = {
   // "ai-accepted" = the reviewer clicked "Accept AI scores & save" (still a
   // human decision); "ai-auto" = an automatic run saved the AI's suggestion
   // WITHOUT a human in the loop (the opt-in autoScoreBands setting,
-  // docs/auto-scoring-setting.md). "ai-auto" doubles as the "Draft (AI)
-  // Confirm to finalise" flag everywhere bands render — it clears ONLY when a
-  // human confirms or re-saves via setHolisticBand with one of the two human
-  // values (see confirmAiAutoBand for the one-click path), never by time or
-  // viewing.
+  // docs/auto-scoring-setting.md). "ai-auto" doubles as the passive "Already
+  // run by AI" flag everywhere bands render — it clears ONLY when a human
+  // re-saves via setHolisticBand with one of the two human values, never by
+  // time or viewing.
   source: "human" | "ai-accepted" | "ai-auto";
   decidedAt: string;
   decidedBy?: string;
@@ -634,6 +633,13 @@ export type EvidenceFolder = {
   policyAccessStatus?: DriveAccessStatus;
   policyAccessNote?: string;
   policyAccessAt?: string;
+  // Live file counts from the most recent Drive listing of each folder —
+  // captured both when "Check access" runs and at the start of a real audit
+  // run, so the pre-run time estimate is derived from the ACTUAL current file
+  // count (count x per-file seconds), never a stale or historical guess.
+  policyFileCount?: number;
+  evidenceFileCount?: number;
+  fileCountAt?: string;
   // "Run audit" results: real Drive file text was read and scored against
   // this sub-criterion's Sub-Criterion Checklist lines, which were updated
   // directly (Met/Partial/Not met) — see useWorkspaceStore.auditFolderContents.
