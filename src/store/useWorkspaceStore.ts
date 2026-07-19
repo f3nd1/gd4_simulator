@@ -7040,6 +7040,32 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     {
       name: "ucc-gd4-workspace:v3",
       storage: workspaceStorage,
+      // Transient run-state never survives a page load: the JS run that owned
+      // it is gone once the tab reloads. These fields (the live drafting /
+      // full-audit overlays, the busy marker, per-pass progress, the
+      // vision-budget pause) drive in-flight UI ONLY. A run interrupted by a
+      // reload/deploy/close persisted them as "running", and on the next load
+      // the merge below used to keep that value, resurrecting a ZOMBIE
+      // "Drafting…" modal on the Evidence Folder that no live run backs — so its
+      // Cancel had nothing to stop and the modal looked stuck (2026-07-19 bug).
+      // At rehydration there is NEVER a genuine in-flight run (a run only starts
+      // on user action AFTER load), so force every one of these back to its idle
+      // null over whatever the persisted blob holds. This replicates zustand's
+      // default shallow merge, then overrides the run-state. Does NOT touch the
+      // cancel-gate logic (runOptionAFullAuto) — a genuine same-session run sets
+      // these in memory and behaves exactly as before.
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<WorkspaceState>),
+        busy: null,
+        bulkAuditStatus: null,
+        hybridDraftProgress: null,
+        fullAuditProgress: null,
+        ppdReviewProgress: null,
+        evidenceAssessmentProgress: null,
+        outcomeReviewProgress: null,
+        visionBudgetPrompt: null,
+      }),
       // Schema migrations for the Evidence Folder sub-criterion re-align:
       //   v1 — split 2.1 → 2.1.1/2.1.2 (and 2.3, 2.4, 5.1, 5.2) to match the
       //        GD4 Library's finer breakdown.
