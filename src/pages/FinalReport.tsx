@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { CloseoutStepper } from "../components/ui/CloseoutStepper";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
@@ -54,6 +55,27 @@ export function FinalReport() {
   const [filterCrit, setFilterCrit] = useState("All");
   const [filterSubCrit, setFilterSubCrit] = useState("All");
   useEffect(() => { if (aiSummary) setEditedSummary(aiSummary); }, [aiSummary]);
+
+  // ?item=<gd4ItemId> deep link (Evidence Folder's "View the Final Report"
+  // completion button, and any other future linker): pre-filter to the
+  // item's criterion/sub-criterion so it survives the filteredItems narrowing
+  // below, then scroll to and briefly highlight its card — the same pattern
+  // AFIClosure.tsx uses for its own ?item= link. report.items is
+  // intentionally not a dep: re-running on every report recompute would yank
+  // the user back to the deep-linked card while they work.
+  const [searchParams] = useSearchParams();
+  const focusItem = searchParams.get("item");
+  const [highlightItemId, setHighlightItemId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focusItem) return;
+    const target = report.items.find((r) => r.id === focusItem);
+    if (target) { setFilterCrit(target.criterion); setFilterSubCrit(target.subCriterionId); }
+    setHighlightItemId(focusItem);
+    const scrollTimer = setTimeout(() => document.getElementById(`fr-item-${focusItem}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+    const clearTimer = setTimeout(() => setHighlightItemId(null), 2500);
+    return () => { clearTimeout(scrollTimer); clearTimeout(clearTimer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusItem]);
 
   const subCritOptions = useMemo(
     () => report.subCriteria.filter((sc) => filterCrit === "All" || sc.criterionId === filterCrit),
@@ -374,6 +396,7 @@ export function FinalReport() {
                   confirmDeleteId={confirmDeleteFindingId}
                   setConfirmDeleteId={setConfirmDeleteFindingId}
                   onDelete={removeCustomFinding}
+                  highlighted={it.id === highlightItemId}
                 />
               ))}
         </div>
@@ -505,12 +528,13 @@ function renderAfi(afi: string | undefined, dim?: { band: number; label: string 
   );
 }
 
-function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete }: {
+function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete, highlighted }: {
   it: ItemReport;
   findings: FindingReport[];
   confirmDeleteId: string | null;
   setConfirmDeleteId: (id: string | null) => void;
   onDelete: (id: string) => void;
+  highlighted?: boolean;
 }) {
   // Item 3: AI improvement suggestions — generate-once-and-save. Rendering
   // only ever READS the persisted map; the AI is called only by the explicit
@@ -601,7 +625,11 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
   // add a print-force-expand rule.
   if (!it.started && !it.hasChecklist && findings.length === 0) {
     return (
-      <details style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "6px 10px" }}>
+      <details
+        id={`fr-item-${it.id}`}
+        open={highlighted}
+        style={{ border: highlighted ? `2px solid ${GOLD}` : "1px solid #e2e8f0", borderRadius: 10, padding: "6px 10px" }}
+      >
         <summary style={{ cursor: "pointer", fontSize: 12.5 }}>
           <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap", verticalAlign: "middle" }}>
             {it.gate && <Pill s="high">Gate</Pill>}
@@ -617,7 +645,10 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
     );
   }
   return (
-    <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px" }}>
+    <div
+      id={`fr-item-${it.id}`}
+      style={{ border: highlighted ? `2px solid ${GOLD}` : "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px" }}
+    >
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         {it.needsReassessment
           ? <Pill s="medium">Needs re-assessment</Pill>
