@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { workspaceStorage } from "./supabaseStorage";
+import { workspaceStorage, flushPendingSaves } from "./supabaseStorage";
 import type {
   AuditCycle,
   AuditorProfile,
@@ -4018,6 +4018,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ),
           busy: null,
         }));
+
+        // Durability race (2026-07-19 bug): the link and this check-access
+        // result both persist via the shared 600ms-debounced Supabase write,
+        // and the beforeunload flush is fire-and-forget (browsers do not await
+        // async unload work). "Check access" is the natural last action before
+        // a user refreshes to confirm the folder saved, so a refresh inside the
+        // debounce window pulled the OLDER Supabase row on load AND cached it
+        // back over the good localStorage copy, wiping the link/result. Force
+        // an immediate flush of the pending workspace write (which has coalesced
+        // the just-typed link) so it is durable before any refresh can lose it.
+        await flushPendingSaves();
       },
 
       // Folder pre-flight probe — reuses classifyFileBucket (bucketing) and
