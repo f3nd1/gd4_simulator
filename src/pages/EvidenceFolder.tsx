@@ -2081,7 +2081,7 @@ function PathGuidance() {
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, background: "#f8fafc", padding: "8px 12px", marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1e293b" }}>
-          Option B (default) runs in place and batches; Option A is the advanced, assessor-grade PPD-first check.
+          Option A (default) is the assessor-grade PPD-first check; Option B runs in place and batches, for a faster first sweep.
         </span>
         <button
           onClick={() => { setOpen((v) => !v); setModesOpen(false); }}
@@ -2114,14 +2114,14 @@ function PathGuidance() {
       {open && (
         <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr", marginTop: 8 }}>
           <div style={{ background: "#fff", border: "1px solid #ddd6fe", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
-            <b style={{ color: "#5b21b6" }}>Option A: PPD + Evidence (advanced, deepest check).</b>{" "}
+            <b style={{ color: "#5b21b6" }}>Option A: PPD + Evidence (default, deepest check).</b>{" "}
             Two steps: first checks whether your PPD documents each requirement, then checks the evidence against it.
             Slower and uses more AI, but mirrors how SSG assessors actually work. Most real EduTrust findings are
             "not documented in PPD" or "not implemented per PPD" gaps, which this path is built to catch. Use it for a
             thorough, assessor-grade check on the sub-criteria that matter.
           </div>
           <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
-            <b style={{ color: "#1e293b" }}>Option B: Staged audit (the default).</b>{" "}
+            <b style={{ color: "#1e293b" }}>Option B: Staged audit (faster opt-in).</b>{" "}
             A single pass straight to APSR verdicts on the Sub-Criterion Checklist. Faster and cheaper, and simpler to review. Best for a quick first
             sweep to see where you stand, or when the PPD is already solid and you only need to check implementation.
             It blends policy and evidence into one verdict, so it is less likely to isolate a pure policy-documentation gap.

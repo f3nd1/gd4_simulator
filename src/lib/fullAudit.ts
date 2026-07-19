@@ -4,11 +4,11 @@
 // this stays store-free and unit-testable (driveClient loads pdfjs, which is
 // unavailable under Vitest).
 
-// One-pipeline default (Batch 7 IA): the staged in-place audit (Path B) is
-// the default; Option A (PPD-first, runs on its own page and doesn't batch)
-// is the advanced opt-in. Every read of analysisPath must go through
+// Default path (2026-07-19, Felix): Option A (PPD + Evidence, the deepest,
+// assessor-grade check) is the default; Option B (staged, single-pass) is the
+// opt-in for a faster first sweep. Every read of analysisPath must go through
 // resolveAnalysisPath so the default lives in exactly one place.
-export const DEFAULT_ANALYSIS_PATH: "A" | "B" = "B";
+export const DEFAULT_ANALYSIS_PATH: "A" | "B" = "A";
 
 export function resolveAnalysisPath(analysisPath: Record<string, "A" | "B">, subCriterionId: string): "A" | "B" {
   return analysisPath[subCriterionId] ?? DEFAULT_ANALYSIS_PATH;
@@ -33,7 +33,7 @@ export function buildFullAuditPlan(
     folderId: f.id,
     subCriterionId: f.subCriterionId,
     folderName: f.folderName,
-    // Respect each row's Option A/B choice; staged (B) when unset.
+    // Respect each row's Option A/B choice; PPD + Evidence (A) when unset.
     path: resolveAnalysisPath(analysisPath, f.subCriterionId),
     hasLinks: isLink(f.folderLink) || isLink(f.policyLink),
   }));
