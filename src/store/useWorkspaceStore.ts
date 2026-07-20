@@ -1587,6 +1587,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           finish(result.rows, true, liveError, result.promptSent, result.usage, chunkFileNames, result.overallNarrative, runWarnings.length > 0 ? runWarnings : undefined, result.contradictions, fileRecords);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
+        } finally {
+          // Same class of race as checkFolderAccess (2026-07-19): this result
+          // persists via the shared 600ms-debounced Supabase write, and the
+          // beforeunload flush is fire-and-forget. A user who navigates away
+          // or refreshes right after a run completes can lose the PPD review
+          // result before Supabase ever receives it — a second device then
+          // sees this sub-criterion's Evidence Folder Progress row as blank
+          // even though the run genuinely completed. Force the pending write
+          // durable on every exit path (success, early return, or error).
+          await flushPendingSaves();
         }
       },
 
@@ -2158,6 +2168,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames, coverageNote, fileLedger);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
+        } finally {
+          // Same class of race as checkFolderAccess / runPPDReview: force the
+          // pending Supabase write durable before a fast navigation/refresh
+          // can lose this Evidence Folder Progress-row data on other devices.
+          await flushPendingSaves();
         }
       },
 
@@ -6601,6 +6616,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }
           const msg = outerErr instanceof Error ? outerErr.message : String(outerErr);
           set((st) => ({ folders: st.folders.map((f) => f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `Staged audit failed — ${msg}`, lastAuditLive: false, lastAuditError: msg } : f), busy: null }));
+        } finally {
+          // Same class of race as checkFolderAccess / runPPDReview (Option B's
+          // equivalent): force the pending Supabase write durable so a fast
+          // navigation/refresh right after a staged audit completes cannot
+          // lose lastAuditRuns/lastAuditAt before another device reads it.
+          await flushPendingSaves();
         }
       },
 
