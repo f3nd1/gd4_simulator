@@ -1465,7 +1465,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const file = policyFiles[fi];
             const readFileName = file.path.split("/").pop() || file.path;
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "reading" };
-            patchPpd({ currentFile: readFileName, detail: `Reading ${readFileName}…`, filesFound: [...fileRecords] });
+            patchPpd({ currentFile: readFileName, detail: `Reading ${readFileName}…`, filesFound: [...fileRecords], canSkipCurrentFile: true });
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
             const cached = get().fileTextCache[cacheKey];
             // Same processingMode bookkeeping runEvidenceAssessment/auditFolderContents/
@@ -1479,6 +1479,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             let readMethodUsed: "text" | "vision" = cached?.readMethod ?? "text";
             let skipNote: string | undefined;
             let readErrorMsg = "";
+            // Manual per-file skip (2026-07-20): mirror runEvidenceAssessment's
+            // race so the Drafting overlay's per-file Skip works during the PPD
+            // read too (previously only the Evidence read supported it). The
+            // abandoned read runs on to its own DRIVE_FILE_TIMEOUT_MS in the
+            // background (harmless — nothing awaits it once skipped), so this
+            // stays display/control-layer only.
+            const FILE_SKIPPED = Symbol("file-skipped");
+            let resolveSkip!: () => void;
+            const skipSignal = new Promise<typeof FILE_SKIPPED>((resolve) => { resolveSkip = () => resolve(FILE_SKIPPED); });
             if (cached) {
               body = cached.text;
             } else {
@@ -1487,20 +1496,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const readToken = await useGoogleDriveStore.getState().getFreshToken();
               if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
-                const rr = await readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), ppdVisionCtx);
-                body = rr.text;
-                readMethodUsed = rr.readMethod;
-                skipNote = rr.note;
-                // Only cache genuine (non-empty) extractions — caching `text: null`
-                // made a transient read failure stick until the Drive file's
-                // modifiedTime changed, with no way to retry; caching an empty
-                // string would lock in a blank read AND could clobber a good
-                // vision transcription cached under the same key.
-                if (body != null && body.trim().length > 0) {
-                  const text = body;
-                  set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: readMethodUsed } } }));
+                _currentFileAbort = resolveSkip;
+                const raced = await Promise.race([
+                  readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), ppdVisionCtx),
+                  skipSignal,
+                ]);
+                _currentFileAbort = null;
+                if (raced === FILE_SKIPPED) {
+                  body = null;
+                  skipNote = "Skipped by user";
+                } else {
+                  body = raced.text;
+                  readMethodUsed = raced.readMethod;
+                  skipNote = raced.note;
+                  // Only cache genuine (non-empty) extractions — caching `text: null`
+                  // made a transient read failure stick until the Drive file's
+                  // modifiedTime changed, with no way to retry; caching an empty
+                  // string would lock in a blank read AND could clobber a good
+                  // vision transcription cached under the same key.
+                  if (body != null && body.trim().length > 0) {
+                    const text = body;
+                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: readMethodUsed } } }));
+                  }
                 }
               } catch (err) {
+                _currentFileAbort = null;
                 body = null;
                 readErrored = true;
                 readFailedFiles.push(file.path.split("/").pop() || file.path);
@@ -1528,6 +1548,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             patchPpd({ filesFound: [...fileRecords] });
             logPpd(`Read ${fileName}${cached ? " (cached)" : ""}`, "good");
           }
+          // Reading done — clear the "current file"/skip state so the overlay's
+          // per-file ledger stops showing a live "Reading…"/Skip once the AI
+          // phase begins (mirrors runEvidenceAssessment's reset).
+          patchPpd({ currentFile: undefined, canSkipCurrentFile: false });
           if (docParts.length === 0) { finish(null, false, "No readable text could be extracted from the Policy & Procedure files."); return; }
           const policyDocText = docParts.join("\n\n=== POLICY & PROCEDURE ===\n\n");
 

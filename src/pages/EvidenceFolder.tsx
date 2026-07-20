@@ -2011,6 +2011,7 @@ function HybridDraftOverlay() {
   const progress = useWorkspaceStore((s) => s.hybridDraftProgress);
   const dismiss = useWorkspaceStore((s) => s.dismissHybridDraftProgress);
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
+  const skipCurrentFile = useWorkspaceStore((s) => s.skipCurrentFile);
   const navigate = useNavigate();
   const ppdP = useWorkspaceStore((s) => s.ppdReviewProgress);
   const evP = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
@@ -2044,10 +2045,21 @@ function HybridDraftOverlay() {
     if (key === "review" && orP?.subCriterionId === sub) return orP.detail || null;
     return null;
   };
+  // The reading pass for the running step, only when it has files to show —
+  // feeds the reused FileLedger (per-file list + per-file Skip) so a read that
+  // hangs on one file can be skipped without cancelling the whole run. Only
+  // ppd/evidence read files, and only for THIS sub-criterion's own pass.
+  const readProgFor = (key: string) => {
+    const sub = progress.subCriterionId;
+    if (key === "ppd" && ppdP?.subCriterionId === sub && (ppdP.filesFound?.length ?? 0) > 0) return ppdP;
+    if (key === "evidence" && evP?.subCriterionId === sub && (evP.filesFound?.length ?? 0) > 0) return evP;
+    return null;
+  };
+  const showingLedger = running && !!runningKey && !!readProgFor(runningKey);
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 120, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <style>{MODAL_KEYFRAMES}</style>
-      <div style={{ background: "#fff", borderRadius: 16, padding: "24px 28px 20px", width: "100%", maxWidth: 480, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "24px 28px 20px", width: "100%", maxWidth: showingLedger ? 640 : 480, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", marginBottom: 4 }}>
           {running ? `Drafting ${progress.subCriterionId}…` : progress.status === "cancelled" ? `Hybrid draft cancelled — ${progress.subCriterionId}` : `Hybrid draft complete — ${progress.subCriterionId}`}
         </div>
@@ -2076,6 +2088,27 @@ function HybridDraftOverlay() {
                 {detail && (
                   <div style={{ marginLeft: 17, fontSize: 10.5, color: "#64748b", lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis" }}>{detail}</div>
                 )}
+                {/* Item 2a — per-file breakdown while this step reads files.
+                    Reuses the SAME FileLedger the Full Auto modal uses: a
+                    per-file list with a per-file Skip on the file being read,
+                    so one hung file is skippable without cancelling the run.
+                    The read loop's own currentFile/canSkipCurrentFile drive
+                    the live "Reading…"/Skip; once reading ends no row is
+                    "reading", so no Skip lingers. */}
+                {isRun && (() => {
+                  const rp = readProgFor(s.key);
+                  if (!rp || !rp.filesFound) return null;
+                  return (
+                    <div style={{ marginLeft: 17, marginTop: 6 }}>
+                      <FileLedger
+                        files={rp.filesFound}
+                        isActive={!!rp.currentFile && !!rp.canSkipCurrentFile}
+                        progress={{ currentFileName: rp.currentFile, currentFileAction: undefined }}
+                        onSkipFile={skipCurrentFile}
+                      />
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
