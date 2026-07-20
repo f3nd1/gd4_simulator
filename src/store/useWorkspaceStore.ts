@@ -2861,9 +2861,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               });
             }
             written++;
-          } catch {
+          } catch (err) {
             // A narrative failure never fails the run — scoring data is already
-            // committed; the report just shows the Regenerate placeholder.
+            // committed; the report just shows the Regenerate placeholder. But
+            // it must not vanish either (it used to be swallowed with no trace
+            // anywhere): log it so the Run Log's AI-call drill-down and the AI
+            // Review Log can answer "why is there no narrative".
+            const liveError = err instanceof Error ? err.message : String(err);
+            get().pushAIReviewLog({
+              agent: "Final Report Narrative Writer",
+              reviewType: "Finalisation",
+              subjectId: itemId,
+              verdict: "Narrative generation failed",
+              confidence: "Low",
+              keyConcerns: [liveError],
+              recommendedAction: "Use Regenerate report text on the Final Report to retry.",
+              live: false,
+              liveError,
+            });
           }
         }
         return written;
@@ -2875,14 +2890,29 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // THE gate: setting OFF → do nothing, touch nothing. This is what makes
         // a Full Auto run byte-identical to before the feature when it is off.
         if (!useScoringConfigStore.getState().autoScoreBands) return { set, skipped };
-        const subSet = new Set(subIds);
+        // subIds are RUN SCOPES (a sub-criterion id, or an item id like
+        // "4.2.1" for a split sub) — resolve through itemIdsForScope, the same
+        // mapping every other run consumer uses. Filtering by
+        // r.subCriterionId here was the bug that made a completed 4.2.1/4.2.2
+        // run silently skip its band + narrative (no requirement has
+        // subCriterionId "4.2.1", so the pass found zero items) — the result
+        // then never reached the Final Report (2026-07-20).
+        const scopeItemIds = new Set(subIds.flatMap((sid) => itemIdsForScope(sid)));
         const checklist = useChecklistModuleStore.getState();
         // Only items that were actually assessed (have checklist lines) under a
-        // swept sub-criterion. suggestBand reads live line state, fully settled
-        // by the time the sweep loop has finished.
+        // swept scope. suggestBand reads live line state, fully settled by the
+        // time the sweep loop has finished.
         const items = GD4_REQUIREMENTS.filter(
-          (r) => subSet.has(r.subCriterionId) && (checklist.entries[r.id]?.specific?.length ?? 0) > 0,
+          (r) => scopeItemIds.has(r.id) && (checklist.entries[r.id]?.specific?.length ?? 0) > 0,
         );
+        // Items under a swept scope with NO checklist lines used to be
+        // silently excluded here — the band step then read "skipped" with no
+        // reason recorded anywhere. Report them, don't score them.
+        for (const itemId of scopeItemIds) {
+          if ((checklist.entries[itemId]?.specific?.length ?? 0) === 0) {
+            skipped.push({ itemId, reason: "no checklist lines recorded for this item — nothing to score" });
+          }
+        }
         for (const req of items) {
           // suggestBand is the same AI call + learning-loop + AI-review-log the
           // human accept flow uses; null = AI unavailable/failed → skip, honest.
@@ -2994,6 +3024,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             .map((hb, i) => hb ? { itemId: r.set[i], band: hb.band, totalPct: hb.totalPct } : null)
             .filter((b): b is RunLogBandResult => b !== null);
           bandsSkipped = r.skipped;
+          // Sub-criteria that errored/timed out are excluded from the band pass
+          // (only "done" subs are scored) — their items used to appear in
+          // NEITHER bandsSet NOR bandsSkipped, a genuinely invisible skip.
+          // Record them with the sub's real error note so the Run Log's band
+          // section accounts for every planned item.
+          for (const e of entries.filter((en) => en.status === "error")) {
+            for (const itemId of itemIdsForScope(e.subCriterionId)) {
+              bandsSkipped.push({ itemId, reason: `not scored — this sub-criterion's audit ${e.note ? `failed: ${e.note}` : "errored before scoring"}` });
+            }
+          }
           // Final decoupled step: auto-write report narratives for the items
           // just banded. Runs AFTER every committed step (verdicts, findings,
           // bands are all saved), so a slow/failed narrative call never blocks
@@ -3078,17 +3118,29 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         });
         // Reconcile the four Option A steps from the REAL returned outcome: a
         // step that never produced usable rows is "skipped", not "done".
-        setStep("ppd", steps.ppdRan ? "done" : "skipped");
-        setStep("evidence", steps.ppdRan ? (steps.evidenceRan ? "done" : "skipped") : "skipped");
-        setStep("findings", steps.evidenceRan ? "done" : "skipped");
-        setStep("review", steps.evidenceRan ? "done" : "skipped");
+        // mark() records the final status AND the reason into stepOutcomes so
+        // the Run Log can answer "why was this step skipped" after the fact —
+        // previously only the transient overlay knew, and only as a bare
+        // "skipped" (a real complaint: band/narrative skipped with no visible
+        // reason, 2026-07-20).
+        const stepFinal: Partial<Record<HybridDraftProgress["steps"][number]["key"], { status: "done" | "skipped"; reason?: string }>> = {};
+        const mark = (key: HybridDraftProgress["steps"][number]["key"], stat: "done" | "skipped", reason?: string) => {
+          setStep(key, stat);
+          stepFinal[key] = { status: stat, ...(stat === "skipped" && reason ? { reason } : {}) };
+        };
+        const stepOutcomes = (): NonNullable<RunLogEntry["stepOutcomes"]> =>
+          stepDefs.map((s) => ({ key: s.key, label: s.label, status: stepFinal[s.key]?.status ?? "skipped", ...(stepFinal[s.key]?.reason ? { reason: stepFinal[s.key]?.reason } : {}) }));
+        mark("ppd", steps.ppdRan ? "done" : "skipped", "PPD review returned no usable rows (failed, was stopped, or had nothing to read) — see the AI Review Log");
+        mark("evidence", steps.ppdRan && steps.evidenceRan ? "done" : "skipped", steps.ppdRan ? "evidence assessment returned no usable rows (failed or every line was Not assessed) — see the AI Review Log" : "PPD produced nothing to assess against");
+        mark("findings", steps.evidenceRan ? "done" : "skipped", "no evidence verdicts to compile");
+        mark("review", steps.evidenceRan ? (steps.outcomeReviewApplied ? "done" : "skipped") : "skipped", steps.evidenceRan ? "the Outcomes & Review pass failed or produced nothing applicable — see the AI Review Log" : "no evidence verdicts to review");
         // Cancelled during the audit chain: record honestly and STOP before the
         // band. Steps that genuinely completed keep their writes (a coherent
         // "some lines assessed" state); the band is never scored, so the item
         // reads as un-banded / needs-assessment, never complete-but-isn't.
         if (get().auditRunToken !== startToken) {
-          setStep("band", "skipped");
-          setStep("narrative", "skipped");
+          mark("band", "skipped", "cancelled by user before the band step");
+          mark("narrative", "skipped", "cancelled by user before the band step");
           const cancelSummary = `Hybrid draft for ${subCriterionId} cancelled — steps completed before the stop are kept; the band was not scored.`;
           set((st) => st.hybridDraftProgress ? { hybridDraftProgress: { ...st.hybridDraftProgress, status: "cancelled", summary: cancelSummary } } : {});
           const cancelledEntry: RunLogEntry = {
@@ -3102,6 +3154,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             bandsSet: [],
             bandsSkipped: [],
             summary: cancelSummary,
+            stepOutcomes: stepOutcomes(),
           };
           set((st) => ({ runLog: [cancelledEntry, ...st.runLog].slice(0, RUN_LOG_CAP) }));
           return "cancelled";
@@ -3113,24 +3166,29 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           .map((itemId) => freshChecklist[itemId]?.holisticBand)
           .map((hb, i) => hb ? { itemId: r.set[i], band: hb.band, totalPct: hb.totalPct } : null)
           .filter((b): b is RunLogBandResult => b !== null);
-        if (steps.evidenceRan) setStep("band", bandsSet.length > 0 ? "done" : "skipped");
+        if (!steps.evidenceRan) mark("band", "skipped", "no evidence verdicts to score");
+        else if (bandsSet.length > 0) mark("band", "done");
+        else mark("band", "skipped", r.skipped.length > 0 ? r.skipped.map((k) => `${k.itemId}: ${k.reason}`).join("; ") : "nothing scoreable was found for this sub-criterion");
         // Final decoupled step: auto-write the report narrative for the item(s)
         // just banded. Everything that scores is already committed above; a
         // cancel arriving during the band pass, a narrative failure, or AI
         // being offline just leaves the report's honest "not yet generated —
         // Regenerate" placeholder.
         let narrativesWritten = 0;
-        if (get().auditRunToken !== startToken || r.set.length === 0) {
-          setStep("narrative", "skipped");
+        const lateCancelled = get().auditRunToken !== startToken;
+        if (lateCancelled || r.set.length === 0) {
+          mark("narrative", "skipped", lateCancelled ? "cancelled by user during the band step" : "no band was set, so there is nothing to narrate");
         } else {
           setStep("narrative", "running");
           narrativesWritten = await get().writeReportNarratives(r.set);
-          setStep("narrative", narrativesWritten > 0 ? "done" : "skipped");
+          if (narrativesWritten > 0) mark("narrative", "done");
+          else mark("narrative", "skipped", aiOfflineReason(useAISettingsStore.getState()) ?? "narrative generation failed or returned nothing — see the AI Review Log");
         }
         const status: RunLogSubOutcome["status"] = steps.ppdRan && steps.evidenceRan ? "done" : "skipped";
+        const stoppedEarlyNote = !steps.ppdRan ? "PPD review returned no rows" : "evidence assessment returned no rows";
         const summary = status === "done"
           ? `Hybrid draft complete for ${subCriterionId} — ${steps.findingsCompiled} finding(s) compiled${steps.outcomeReviewApplied ? ", Outcomes & Review applied" : ""}${bandsSet.length > 0 ? `, band ${bandsSet[0].band} (${bandsSet[0].totalPct}%) set` : r.skipped.length > 0 ? `, band not set (${r.skipped[0].reason})` : ""}${narrativesWritten > 0 ? ", report narrative written" : ""}.`
-          : `Hybrid draft for ${subCriterionId} stopped early — ${!steps.ppdRan ? "PPD review returned no rows" : "evidence assessment returned no rows"}.`;
+          : `Hybrid draft for ${subCriterionId} stopped early — ${stoppedEarlyNote}.`;
         // Overlay handover to its final state (kept open; the user closes it,
         // revealing the Option A result modal underneath).
         set((st) => st.hybridDraftProgress ? { hybridDraftProgress: { ...st.hybridDraftProgress, status: "complete", summary } } : {});
@@ -3140,11 +3198,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           subCriterionIds: [subCriterionId],
           startedAt: runStartedAt,
           endedAt: new Date().toISOString(),
-          status: "complete",
-          perSub: [{ subCriterionId, path: "A", status, steps }],
+          // A cancel that arrived during the band pass is still a cancel —
+          // previously this entry said "complete" with the narrative silently
+          // skipped, indistinguishable from a normal finish.
+          status: lateCancelled ? "cancelled" : "complete",
+          perSub: [{ subCriterionId, path: "A", status, ...(status === "skipped" ? { note: stoppedEarlyNote } : {}), steps }],
           bandsSet,
           bandsSkipped: r.skipped,
           summary,
+          stepOutcomes: stepOutcomes(),
         };
         set((st) => ({ runLog: [runLogEntry, ...st.runLog].slice(0, RUN_LOG_CAP) }));
         return status === "done" ? "done" : "stopped";

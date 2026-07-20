@@ -298,6 +298,31 @@ export function RunLog() {
                         ))}
                       </div>
 
+                      {/* Per-step outcomes (hybrid per-item runs): the six
+                          overlay steps with the REAL reason each skipped step
+                          was skipped — so a run nobody watched live can still
+                          be read back step by step. Older entries predate the
+                          field and simply don't show this section. */}
+                      {entry.stepOutcomes && entry.stepOutcomes.length > 0 && (
+                        <>
+                          <div style={{ marginTop: 10, fontSize: 10.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginBottom: 4 }}>
+                            Steps
+                          </div>
+                          <div style={{ background: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: "6px 10px" }}>
+                            {entry.stepOutcomes.map((s) => (
+                              <div key={s.key} style={{ fontSize: 11.5, padding: "3px 0", borderBottom: "1px solid #f1f5f9", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
+                                <span style={{ fontWeight: 700, color: s.status === "done" ? "#166534" : "#b45309", minWidth: 160 }}>
+                                  {s.status === "done" ? "✓" : "⊘"} {s.label}
+                                </span>
+                                <span style={{ color: s.status === "done" ? "#94a3b8" : "#b45309", flex: 1, minWidth: 200 }}>
+                                  {s.status === "done" ? "completed" : `skipped — ${s.reason ?? "no reason recorded"}`}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+
                       {(entry.bandsSet.length > 0 || entry.bandsSkipped.length > 0) && (
                         <>
                           <div style={{ marginTop: 10, fontSize: 10.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginBottom: 4 }}>

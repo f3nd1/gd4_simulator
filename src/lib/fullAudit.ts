@@ -25,18 +25,27 @@ export type FullAuditPlanEntry = {
 };
 
 export function buildFullAuditPlan(
-  folders: Array<{ id: string; subCriterionId: string; folderName: string; folderLink?: string; policyLink?: string }>,
+  folders: Array<{ id: string; subCriterionId: string; folderName: string; scopeId?: string; folderLink?: string; policyLink?: string }>,
   analysisPath: Record<string, "A" | "B">,
   isLink: (link?: string) => boolean
 ): FullAuditPlanEntry[] {
-  return folders.map((f) => ({
-    folderId: f.id,
-    subCriterionId: f.subCriterionId,
-    folderName: f.folderName,
-    // Respect each row's Option A/B choice; PPD + Evidence (A) when unset.
-    path: resolveAnalysisPath(analysisPath, f.subCriterionId),
-    hasLinks: isLink(f.folderLink) || isLink(f.policyLink),
-  }));
+  return folders.map((f) => {
+    // Plan by the folder's RUN SCOPE (its scopeId for a per-item split folder
+    // like 4.2.1/4.2.2, else its sub-criterion — same rule as folderScopeId).
+    // Planning by f.subCriterionId put two merged "4.2" entries in the sweep;
+    // runPPDReview("4.2") then found no folder with that scope and silently
+    // returned, so both 4.2 items showed "done" while nothing actually ran.
+    const scope = f.scopeId ?? f.subCriterionId;
+    return {
+      folderId: f.id,
+      subCriterionId: scope,
+      folderName: f.folderName,
+      // Respect each row's Option A/B choice; PPD + Evidence (A) when unset.
+      // analysisPath is keyed by scope (the Evidence Folder card's toggle).
+      path: resolveAnalysisPath(analysisPath, scope),
+      hasLinks: isLink(f.folderLink) || isLink(f.policyLink),
+    };
+  });
 }
 
 // One row of the full-audit live log, colour-coded by status in the overlay:

@@ -1457,6 +1457,12 @@ export type RunLogEntry = {
   // The same human-readable wrap-up line already shown on the completion
   // overlay/summary for this run — reused, not duplicated wording.
   summary: string;
+  // Hybrid per-item runs only: the six overlay steps' FINAL outcomes with the
+  // real reason each skipped step was skipped, captured at the moment the
+  // orchestration decided it (cancel / upstream produced nothing / AI failed /
+  // legitimate scoring gate) — so a run nobody watched live can still be read
+  // back step by step. Older entries predate this field (optional).
+  stepOutcomes?: { key: string; label: string; status: "done" | "skipped"; reason?: string }[];
 };
 
 // Live progress for a Hybrid per-item hands-off draft (runHybridItemDraft).

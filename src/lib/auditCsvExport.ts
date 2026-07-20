@@ -253,7 +253,7 @@ export function buildRunLogCsv(entries: RunLogEntry[]): string {
     "runId", "mode", "startedAt", "endedAt", "runStatus",
     "subCriterionId", "path", "subStatus", "note",
     "ppdRan", "evidenceRan", "findingsCompiled", "outcomeReviewApplied",
-    "bandsForSubCriterion",
+    "bandsForSubCriterion", "stepOutcomes",
   ];
   const rows: unknown[][] = [];
   for (const e of entries) {
@@ -270,6 +270,7 @@ export function buildRunLogCsv(entries: RunLogEntry[]): string {
         o.steps ? o.steps.findingsCompiled : "",
         o.steps ? (o.steps.outcomeReviewApplied ? "yes" : "no") : "",
         bands,
+        (e.stepOutcomes ?? []).map((s) => `${s.label}: ${s.status}${s.reason ? ` (${s.reason})` : ""}`).join("; "),
       ]);
     }
   }

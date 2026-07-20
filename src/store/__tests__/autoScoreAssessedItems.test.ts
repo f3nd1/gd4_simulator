@@ -80,12 +80,36 @@ describe("autoScoreAssessedItems — setting ON but no AI: skip, never force-sav
   });
 });
 
-describe("autoScoreAssessedItems — only items with checklist lines are considered", () => {
-  it("ignores a sibling requirement item that has no checklist entry", async () => {
+describe("autoScoreAssessedItems — only items with checklist lines are attempted, but every item is accounted for", () => {
+  it("never AI-attempts a sibling with no checklist entry, but reports it skipped with a reason (it used to vanish silently)", async () => {
     // 2.2 holds two requirement items (2.2.1, 2.2.2); only seed one with lines.
     useChecklistModuleStore.setState({ entries: { "2.2.1": { ...linedEntry(), gd4ItemId: "2.2.1", specific: [{ id: "L1", text: "line", status: "Met", evidence: [], generatedBy: "ai" }] } } });
     useScoringConfigStore.setState({ autoScoreBands: true });
     const r = await useWorkspaceStore.getState().autoScoreAssessedItems(["2.2"]);
-    expect(r.skipped.map((s) => s.itemId)).toEqual(["2.2.1"]); // 2.2.2 (no entry) is not attempted
+    expect(r.set).toEqual([]);
+    // 2.2.1 was attempted (AI unavailable here); 2.2.2 was not attempted but
+    // is still reported — a run's band section must account for every item.
+    expect(r.skipped.find((s) => s.itemId === "2.2.1")!.reason).toBe("AI band suggestion unavailable");
+    expect(r.skipped.find((s) => s.itemId === "2.2.2")!.reason).toMatch(/no checklist lines/);
+    expect(r.skipped).toHaveLength(2);
+  });
+});
+
+describe("autoScoreAssessedItems — split run scopes (4.2.1 / 4.2.2) resolve to their item", () => {
+  // The 2026-07-20 bug: subIds are RUN SCOPES, and for the split sub 4.2 they
+  // are ITEM ids ("4.2.1"). Filtering GD4_REQUIREMENTS by r.subCriterionId
+  // found zero items for them, so a completed 4.2.1 run's band + narrative
+  // silently skipped and the result never reached the Final Report.
+  it("scope '4.2.1' finds item 4.2.1 (attempted; skipped here only because no AI is available)", async () => {
+    useChecklistModuleStore.setState({ entries: { "4.2.1": { ...linedEntry(), gd4ItemId: "4.2.1", specific: [{ id: "L1", text: "line", status: "Met", evidence: [], generatedBy: "ai" }] } } });
+    useScoringConfigStore.setState({ autoScoreBands: true });
+    const r = await useWorkspaceStore.getState().autoScoreAssessedItems(["4.2.1"]);
+    expect(r.skipped).toEqual([{ itemId: "4.2.1", reason: "AI band suggestion unavailable" }]);
+  });
+  it("scope '4.2.2' with no checklist lines is reported, never silently dropped", async () => {
+    useChecklistModuleStore.setState({ entries: {} });
+    useScoringConfigStore.setState({ autoScoreBands: true });
+    const r = await useWorkspaceStore.getState().autoScoreAssessedItems(["4.2.2"]);
+    expect(r.skipped).toEqual([{ itemId: "4.2.2", reason: expect.stringMatching(/no checklist lines/) }]);
   });
 });

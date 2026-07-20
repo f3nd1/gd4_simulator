@@ -79,6 +79,22 @@ describe("buildFullAuditPlan — the full-auto sweep never skips silently", () =
     expect(plan.find((p) => p.subCriterionId === "1.2")!.path).toBe("B");
   });
 
+  it("plans a per-item split folder by its RUN SCOPE (4.2.1/4.2.2), never a merged '4.2'", () => {
+    // Both split folders carry subCriterionId "4.2" + a scopeId. Planning by
+    // subCriterionId produced two merged "4.2" entries; runPPDReview("4.2")
+    // then found no folder with that scope and silently returned, so a Full
+    // Auto sweep showed 4.2 "done" while nothing ran (2026-07-20).
+    const split = [
+      { id: "FOLD-4.2.1", subCriterionId: "4.2", scopeId: "4.2.1", folderName: "4.2.1 Student Contract", folderLink: "https://drive/a", policyLink: "" },
+      { id: "FOLD-4.2.2", subCriterionId: "4.2", scopeId: "4.2.2", folderName: "4.2.2 Fee Collection and FPS", folderLink: "", policyLink: "https://drive/b" },
+    ];
+    const plan = buildFullAuditPlan(split, { "4.2.2": "B" }, isLink);
+    expect(plan.map((p) => p.subCriterionId)).toEqual(["4.2.1", "4.2.2"]);
+    // analysisPath is keyed by scope (the Evidence Folder card's A/B toggle).
+    expect(plan.find((p) => p.subCriterionId === "4.2.1")!.path).toBe("A");
+    expect(plan.find((p) => p.subCriterionId === "4.2.2")!.path).toBe("B");
+  });
+
   it("log labels show the sub-criterion number once, not twice", () => {
     expect(fullAuditLabel("6.2", "6.2 Management Review")).toBe("6.2 Management Review");
     expect(fullAuditLabel("1.1", "1.1 Leadership & Corporate Governance")).toBe("1.1 Leadership & Corporate Governance");

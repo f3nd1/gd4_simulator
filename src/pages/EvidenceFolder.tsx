@@ -14,7 +14,7 @@ import type { AuditAISummaryLine, AuditFileRecord, AuditProgressState, AuditRunR
 import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename, progressToRunRecord } from "../lib/auditCsvExport";
 import { samplingCaveat } from "../lib/samplingCaveat";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
-import { GD4_REQUIREMENTS, GD4_SUB_CRITERIA } from "../data/gd4Requirements";
+import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { PpdReviewContent, HybridGatePanel, ResultNavLinks } from "./PPDReview";
 import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
@@ -1154,7 +1154,9 @@ function ErrorDetail({ p }: { p: AuditProgressState }) {
 // clicked never appears blank.
 function PreCheckStepDetail({ p, onAdvanceToAskAI }: { p: AuditProgressState; onAdvanceToAskAI?: () => void }) {
   const subCriterionId = p.subCriterionId ?? "";
-  const itemIds = useMemo(() => GD4_REQUIREMENTS.filter((r) => r.subCriterionId === subCriterionId).map((r) => r.id), [subCriterionId]);
+  // itemIdsForScope, not a subCriterionId filter: a split scope ("4.2.1") has
+  // no requirement with that subCriterionId, which made this list empty.
+  const itemIds = useMemo(() => itemIdsForScope(subCriterionId), [subCriterionId]);
   const readingInProgress = p.stage === "reading" || p.stage === "condensing";
   const checklists = usePreCheckChecklistStore((s) => s.checklists);
 
@@ -1266,7 +1268,7 @@ function AuditProgressModal({
   const viewResultsHref =
     resolveAnalysisPath(analysisPath, subCriterionId) === "A"
       ? `/evidence-folder?sub=${subCriterionId}`
-      : `/sub-checklist?item=${GD4_REQUIREMENTS.find((r) => r.subCriterionId === subCriterionId)?.id ?? ""}`;
+      : `/sub-checklist?item=${itemIdsForScope(subCriterionId)[0] ?? ""}`;
 
   const [selectedStep, setSelectedStep] = useState<number | null>(null);
   const prevCurrentStep = useRef(currentStep);
