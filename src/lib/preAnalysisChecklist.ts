@@ -299,28 +299,62 @@ export function runPreAnalysisChecklist(checklists: ChecklistData, itemIds: stri
 // prompt hint (advisory context, never a verdict override) — factored out
 // here so any other caller (e.g. the Evidence tab's arrival action panel)
 // reuses this single definition of "flagged" instead of re-deriving its own.
-export type PreCheckFlagSummary = { flagsByItemId: Record<string, string[]>; totalCount: number };
+// Manual checks a hands-off run (Full Auto/Hybrid, autoIncludeManual below)
+// auto-surfaces as advisory hints must EXCLUDE the few that documents alone
+// can't settle — genuine professional-judgement calls an AI would only be
+// guessing at. Kept as an id Set (not a per-item flag) so it survives stale
+// persisted checklists that predate this split and stays the single source of
+// truth. These stay human-only and are disclosed as skipped in the run's
+// coverage note. (Investigated 2026-07-20: 28 of 32 seeded manual checks are
+// AI-answerable from evidence; these 4 are not.)
+export const HUMAN_JUDGEMENT_ONLY = new Set<string>([
+  "5.2.1-staff-qualification-match", // adequacy of a lecturer's subject background — professional judgement
+  "5.1.1-academic-board-substance",  // "genuine review vs rubber-stamp" — subjective read of minutes
+  "6.1.1-auditor-independence",      // true independence needs org-structure knowledge beyond the folder
+  "1.1.1-audit-cert",                // cert presence is checkable; AUDITOR independence is the human part
+]);
 
+export type PreCheckFlagSummary = { flagsByItemId: Record<string, string[]>; totalCount: number; skippedHumanOnly: string[] };
+
+// autoIncludeManual: in a hands-off run (Full Auto/Hybrid — no human present to
+// tick), also surface AI-answerable manual checks as advisory "Check —" hints
+// so the Evidence AI weighs them, instead of them being silently skipped as
+// they were before (this was the real gap: 28 manual checks never contributed
+// in hands-off runs). Human-ticked items always count (every mode); the
+// auto-include path rides the SAME advisory-only Evidence-prompt block and
+// never overrides a verdict. Default false keeps every existing caller (the
+// "N flagged" count displays) byte-for-byte unchanged.
 export function computeFlaggedPreCheckItems(
   checklists: ChecklistData,
   preChecks: Record<string, boolean>,
   subCriterionId: string,
   itemIds: string[],
-  files: DetectFile[]
+  files: DetectFile[],
+  autoIncludeManual = false
 ): PreCheckFlagSummary {
   const flagsByItemId: Record<string, string[]> = {};
+  const skippedHumanOnly: string[] = [];
   let totalCount = 0;
   for (const itemId of new Set(itemIds)) {
     const results = runPreAnalysisChecklist(checklists, [itemId], files);
-    const flagged = results.filter((item) =>
-      item.mode === "auto" ? item.outcome?.status === "flag" : !!preChecks[`${subCriterionId}::${item.id}`]
-    );
-    if (flagged.length > 0) {
-      flagsByItemId[itemId] = flagged.map((f) => `${f.title}: ${f.mode === "auto" ? (f.outcome?.message ?? f.description) : f.description}`);
-      totalCount += flagged.length;
+    const flags: string[] = [];
+    for (const item of results) {
+      if (item.mode === "auto") {
+        if (item.outcome?.status === "flag") flags.push(`${item.title}: ${item.outcome?.message ?? item.description}`);
+        continue;
+      }
+      // Manual item: a human tick counts in every mode; otherwise a hands-off
+      // run auto-includes it as a "Check —" hint unless it needs human judgement.
+      if (preChecks[`${subCriterionId}::${item.id}`]) {
+        flags.push(`${item.title}: ${item.description}`);
+      } else if (autoIncludeManual) {
+        if (HUMAN_JUDGEMENT_ONLY.has(item.id)) skippedHumanOnly.push(item.title);
+        else flags.push(`Check — ${item.title}: ${item.description}`);
+      }
     }
+    if (flags.length > 0) { flagsByItemId[itemId] = flags; totalCount += flags.length; }
   }
-  return { flagsByItemId, totalCount };
+  return { flagsByItemId, totalCount, skippedHumanOnly };
 }
 
 // ── Universal checks — a SEPARATE layer from DEFAULT_CHECKLISTS/ChecklistData,

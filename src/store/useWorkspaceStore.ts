@@ -2103,9 +2103,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const cacheKey = rec.driveFileId ? Object.entries(get().fileTextCache).find(([k]) => k.startsWith(`${rec.driveFileId}:`))?.[1] : undefined;
             return { name: rec.name, path: rec.path, bucket: rec.bucket, driveFileId: rec.driveFileId, text: cacheKey?.text ?? null };
           });
-          const { flagsByItemId } = computeFlaggedPreCheckItems(
-            checklistData, get().preAnalysisChecks, subCriterionId, ppd.rows.map((r) => r.gd4ItemId), detectFiles
+          // Hands-off (Full Auto/Hybrid) runs have no human to tick the manual
+          // checks, so auto-include the AI-answerable ones as advisory hints
+          // (the human-only ones are disclosed as skipped below). Full Manual
+          // still relies on the human ticking — same as before.
+          const autoIncludeManual = get().auditMode !== "manual";
+          const { flagsByItemId, skippedHumanOnly } = computeFlaggedPreCheckItems(
+            checklistData, get().preAnalysisChecks, subCriterionId, ppd.rows.map((r) => r.gd4ItemId), detectFiles, autoIncludeManual
           );
+          if (autoIncludeManual && skippedHumanOnly.length > 0) {
+            logEv(`${skippedHumanOnly.length} pre-check item(s) need human judgement and were not auto-evaluated: ${skippedHumanOnly.join("; ")}.`, "warn");
+          }
 
           const inputs: EvidenceAssessmentInput[] = targetPpdRows.map((r) => ({
             ref: r.ref,
@@ -2215,9 +2223,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               rec.citedByLineIds = [...new Set([...(rec.citedByLineIds || []), row.gdRef])];
             }
           }
-          const coverageNote = readFailedFiles.length
-            ? `${readFailedFiles.length} of ${evidenceFiles.length} evidence file(s) could not be read (Drive errors) and were NOT assessed: ${readFailedFiles.slice(0, 5).join(", ")}${readFailedFiles.length > 5 ? ", …" : ""}. Results may be incomplete — fix access and re-run.`
-            : undefined;
+          const coverageParts: string[] = [];
+          if (readFailedFiles.length) coverageParts.push(`${readFailedFiles.length} of ${evidenceFiles.length} evidence file(s) could not be read (Drive errors) and were NOT assessed: ${readFailedFiles.slice(0, 5).join(", ")}${readFailedFiles.length > 5 ? ", …" : ""}. Results may be incomplete — fix access and re-run.`);
+          // Honest disclosure: the human-judgement-only pre-check items a
+          // hands-off run cannot auto-evaluate are named here (durable, shown in
+          // the Run Log), not silently absent.
+          if (autoIncludeManual && skippedHumanOnly.length) coverageParts.push(`${skippedHumanOnly.length} pre-check item(s) require human judgement and were not auto-evaluated in this hands-off run (review manually in Pre-check): ${skippedHumanOnly.join("; ")}.`);
+          const coverageNote = coverageParts.length ? coverageParts.join(" ") : undefined;
           finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames, coverageNote, fileLedger);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));

@@ -194,4 +194,35 @@ describe("computeFlaggedPreCheckItems — the single definition of 'flagged' sha
     expect(totalCount).toBe(0);
     expect(flagsByItemId).toEqual({});
   });
+
+  // Hands-off (Full Auto/Hybrid) auto-inclusion of AI-answerable manual checks.
+  describe("autoIncludeManual — hands-off auto-evaluation of the manual checks", () => {
+    it("default (false) is unchanged: an unticked manual check contributes nothing", () => {
+      const { flagsByItemId, skippedHumanOnly } = computeFlaggedPreCheckItems(DEFAULT_CHECKLISTS, {}, "4.2", ["4.2.1"], []);
+      expect(flagsByItemId["4.2.1"]?.some((m) => m.includes("Cooling-off"))).toBeFalsy();
+      expect(skippedHumanOnly).toEqual([]);
+    });
+
+    it("on: an AI-answerable manual check rides in as an advisory 'Check —' hint", () => {
+      const { flagsByItemId } = computeFlaggedPreCheckItems(DEFAULT_CHECKLISTS, {}, "4.2", ["4.2.1"], [], true);
+      const flags = flagsByItemId["4.2.1"] ?? [];
+      expect(flags.some((m) => m.startsWith("Check — Cooling-off period is at least 7 working days"))).toBe(true);
+      expect(flags.some((m) => m.startsWith("Check — New contract/addendum"))).toBe(true);
+    });
+
+    it("on: a human-judgement-only check is EXCLUDED from flags and reported as skipped", () => {
+      const { flagsByItemId, skippedHumanOnly } = computeFlaggedPreCheckItems(DEFAULT_CHECKLISTS, {}, "5.2", ["5.2.1"], [], true);
+      // 5.2.1-staff-qualification-match needs a human — never a flag, always disclosed.
+      expect(flagsByItemId["5.2.1"]).toBeUndefined();
+      expect(skippedHumanOnly).toContain("Assigned academic staff qualified for the specific module");
+    });
+
+    it("a human tick still wins even when the item is human-judgement-only", () => {
+      const { flagsByItemId, skippedHumanOnly } = computeFlaggedPreCheckItems(
+        DEFAULT_CHECKLISTS, { "5.2::5.2.1-staff-qualification-match": true }, "5.2", ["5.2.1"], [], true
+      );
+      expect(flagsByItemId["5.2.1"]?.some((m) => m.includes("Assigned academic staff qualified"))).toBe(true);
+      expect(skippedHumanOnly).toEqual([]); // ticked, so not "skipped"
+    });
+  });
 });
