@@ -2115,8 +2115,16 @@ function HybridDraftOverlay() {
                     per-file Skip above no longer applies), let the user abandon
                     the current stuck call and move on without cancelling the
                     whole run. Its points fall through to other windows or are
-                    marked "not assessed" (honest). */}
-                {isRun && (s.key === "ppd" || s.key === "evidence") && !readProgFor(s.key)?.currentFile && (
+                    marked "not assessed" (honest). Gated on the pass's own
+                    stage being past "reading" — not merely "no current file" —
+                    because between-files states (e.g. the blocking vision-
+                    budget prompt) have no current file either, and there the
+                    button was visible but silently did nothing (no AI call is
+                    registered to abandon — a real bug, 2026-07-20). */}
+                {isRun && (s.key === "ppd" || s.key === "evidence") && (() => {
+                  const lp = s.key === "ppd" ? ppdP : evP;
+                  return !!lp && lp.subCriterionId === progress.subCriterionId && !!lp.stage && lp.stage !== "reading" && lp.stage !== "done";
+                })() && (
                   <div style={{ marginLeft: 17, marginTop: 4 }}>
                     <button
                       onClick={skipCurrentAiCall}

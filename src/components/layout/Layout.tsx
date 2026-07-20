@@ -7,6 +7,7 @@ import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { useChangeLogStore } from "../../store/useChangeLogStore";
 import { useSaveStatusStore } from "../../store/useSaveStatusStore";
 import { flushPendingSaves } from "../../store/supabaseStorage";
+import { VisionBudgetPromptModal } from "../ui/VisionBudgetPromptModal";
 
 export function Layout() {
   const [navOpen, setNavOpen] = useState(
@@ -48,6 +49,9 @@ export function Layout() {
         {/* Recording is ALWAYS mounted — hiding the developer footer must not
             stop change-log history accumulating in the background. */}
         <ChangeLogRecorder />
+        {/* App-wide by necessity, not convenience: the run that awaits this
+            answer may have been launched from any page (see the component). */}
+        <VisionBudgetPromptModal />
         <GitFooter />
       </div>
     </div>

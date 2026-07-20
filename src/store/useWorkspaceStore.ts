@@ -167,6 +167,13 @@ function timeoutSignal(parent: AbortSignal | undefined, ms: number): AbortSignal
 }
 const DRIVE_LIST_TIMEOUT_MS = 30_000;   // folder listing
 const DRIVE_FILE_TIMEOUT_MS = 60_000;   // single file export/extraction
+// Absolute per-file ceiling, raced alongside the user's Skip in the Option A
+// read loops. Needed because DRIVE_FILE_TIMEOUT_MS only reaches fetches that
+// honour the AbortSignal — pdfjs parsing/rendering takes no signal, so a
+// corrupt/pathological PDF could hang one file (and with it the whole run)
+// indefinitely (a real 6-hour hang, 2026-07-20). 10 minutes clears the
+// legitimate worst case (5 vision pages × 90s AI timeout each + 60s fetch).
+const DRIVE_FILE_HARD_CAP_MS = 600_000;
 
 // Best-effort evidence-type classification for audit-attached evidence, from
 // the checklist line being satisfied (the folder audit reads many files into
@@ -1502,25 +1509,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // background (harmless — nothing awaits it once skipped), so this
             // stays display/control-layer only.
             const FILE_SKIPPED = Symbol("file-skipped");
+            const FILE_TIMED_OUT = Symbol("file-timed-out");
             let resolveSkip!: () => void;
             const skipSignal = new Promise<typeof FILE_SKIPPED>((resolve) => { resolveSkip = () => resolve(FILE_SKIPPED); });
+            // Hard ceiling raced with the read — same reasoning as
+            // runEvidenceAssessment's copy (pdfjs ignores the AbortSignal).
+            let hardCapTimer: ReturnType<typeof setTimeout> | undefined;
+            const hardCap = new Promise<typeof FILE_TIMED_OUT>((resolve) => { hardCapTimer = setTimeout(() => resolve(FILE_TIMED_OUT), DRIVE_FILE_HARD_CAP_MS); });
             if (cached) {
               body = cached.text;
             } else {
               // Refresh the Drive token per uncached read and HARD-STOP when it
               // can't be refreshed — see auditFolderContents.
               const readToken = await useGoogleDriveStore.getState().getFreshToken();
-              if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
+              if (!readToken) { clearTimeout(hardCapTimer); finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
                 _currentFileAbort = resolveSkip;
                 const raced = await Promise.race([
                   readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), ppdVisionCtx),
                   skipSignal,
+                  hardCap,
                 ]);
                 _currentFileAbort = null;
-                if (raced === FILE_SKIPPED) {
+                if (raced === FILE_SKIPPED || raced === FILE_TIMED_OUT) {
                   body = null;
-                  skipNote = "Skipped by user";
+                  skipNote = raced === FILE_SKIPPED ? "Skipped by user" : `Read hung and was auto-skipped after ${Math.round(DRIVE_FILE_HARD_CAP_MS / 60_000)} minutes (the file may be corrupt or too complex to parse) — not assessed.`;
                 } else {
                   body = raced.text;
                   readMethodUsed = raced.readMethod;
@@ -1543,11 +1556,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 readErrorMsg = err instanceof Error ? err.message : String(err);
               }
             }
+            clearTimeout(hardCapTimer);
             const fileName = readFileName;
             if (!body) {
               fileRecords[fi] = { ...fileRecords[fi], readStatus: readErrored ? "failed" : "skipped", auditStatus: "pending", charCount: 0, readMethod: readMethodUsed, processingMode, ...(readErrored ? { failReason: "Drive read error" } : { skipReason: skipNote ?? "No extractable text" }) };
               patchPpd({ filesFound: [...fileRecords], ...(readErrored ? { lastIssue: { at: Date.now(), kind: "file-read-error" as const, message: `Failed to read ${fileName}: ${readErrorMsg}` } } : {}) });
-              logPpd(readErrored ? `FAILED to read ${fileName} (Drive error: ${readErrorMsg})` : `Skipped ${fileName} (empty)`, readErrored ? "bad" : "warn");
+              logPpd(readErrored ? `FAILED to read ${fileName} (Drive error: ${readErrorMsg})` : `Skipped ${fileName}${skipNote === "Skipped by user" ? " (by user)" : skipNote?.startsWith("Read hung") ? " (hung read auto-skipped)" : " (empty)"}`, readErrored ? "bad" : "warn");
               continue;
             }
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
@@ -1972,8 +1986,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // (harmless: nothing awaits it once skipped) rather than being
             // forcibly aborted, so this stays display/control-layer only.
             const FILE_SKIPPED = Symbol("file-skipped");
+            const FILE_TIMED_OUT = Symbol("file-timed-out");
             let resolveSkip!: () => void;
             const skipSignal = new Promise<typeof FILE_SKIPPED>((resolve) => { resolveSkip = () => resolve(FILE_SKIPPED); });
+            // Hard ceiling raced with the read: pdfjs ignores the AbortSignal,
+            // so DRIVE_FILE_TIMEOUT_MS alone can't stop a hung parse/render —
+            // see DRIVE_FILE_HARD_CAP_MS.
+            let hardCapTimer: ReturnType<typeof setTimeout> | undefined;
+            const hardCap = new Promise<typeof FILE_TIMED_OUT>((resolve) => { hardCapTimer = setTimeout(() => resolve(FILE_TIMED_OUT), DRIVE_FILE_HARD_CAP_MS); });
             if (cached) {
               body = cached.text;
               readMethod = cached.readMethod;
@@ -1984,17 +2004,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               _currentFileAbort = resolveSkip;
               const readToken = await useGoogleDriveStore.getState().getFreshToken();
               _currentFileAbort = null;
-              if (!readToken) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return false; }
+              if (!readToken) { clearTimeout(hardCapTimer); finish(null, false, DRIVE_EXPIRED_MID_RUN); return false; }
               try {
                 _currentFileAbort = resolveSkip;
                 const raced = await Promise.race([
                   readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), evVisionCtx),
                   skipSignal,
+                  hardCap,
                 ]);
                 _currentFileAbort = null;
-                if (raced === FILE_SKIPPED) {
+                if (raced === FILE_SKIPPED || raced === FILE_TIMED_OUT) {
                   body = null;
-                  skipNote = "Skipped by user";
+                  skipNote = raced === FILE_SKIPPED ? "Skipped by user" : `Read hung and was auto-skipped after ${Math.round(DRIVE_FILE_HARD_CAP_MS / 60_000)} minutes (the file may be corrupt or too complex to parse) — not assessed.`;
                 } else {
                   body = raced.text;
                   readMethod = raced.readMethod;
@@ -2014,6 +2035,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 readErrorMsg = err instanceof Error ? err.message : String(err);
               }
             }
+            clearTimeout(hardCapTimer);
             if (!body) {
               const failed = readFailedFiles.includes(readFileName);
               fileRecords[fi] = {
@@ -2022,7 +2044,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 ...(failed ? { failReason: "Drive read error — file not assessed." } : { skipReason: skipNote ?? "No extractable text (empty or unreadable)." }),
               };
               patchEv({ filesFound: [...fileRecords], ...(failed ? { lastIssue: { at: Date.now(), kind: "file-read-error" as const, message: `Failed to read ${readFileName}: ${readErrorMsg}` } } : {}) });
-              logEv(failed ? `FAILED to read ${readFileName} (Drive error: ${readErrorMsg}) — not assessed` : `Skipped ${readFileName}${skipNote === "Skipped by user" ? " (by user)" : budgetBlocked ? " (vision budget)" : " (empty)"}`, failed ? "bad" : "warn");
+              logEv(failed ? `FAILED to read ${readFileName} (Drive error: ${readErrorMsg}) — not assessed` : `Skipped ${readFileName}${skipNote === "Skipped by user" ? " (by user)" : skipNote?.startsWith("Read hung") ? " (hung read auto-skipped)" : budgetBlocked ? " (vision budget)" : " (empty)"}`, failed ? "bad" : "warn");
               return budgetBlocked;
             }
             filesReadCount++;
@@ -2054,6 +2076,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (await readAndRecordFile(fi)) budgetBlockedIdx.push(fi);
           }
           if (budgetBlockedIdx.length > 0) {
+            // The overlay must not keep claiming "Reading X…" while the run is
+            // actually paused on the (app-wide) vision-budget modal.
+            patchEv({ detail: `Waiting for your decision on ${budgetBlockedIdx.length} unread scanned file${budgetBlockedIdx.length === 1 ? "" : "s"} (see the "Vision image budget reached" prompt)…`, currentFile: undefined, canSkipCurrentFile: false });
             const estimatedExtraImages = budgetBlockedIdx.length * evVisionCtx.maxPerFile;
             const rate = aiRateFor(evVisionCtx.visionModelId);
             // ~1000 tokens/image is a rough, documented estimate (OpenAI vision
@@ -2082,7 +2107,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const fileLedger: AuditFileRecord[] = fileRecords;
           const evidenceDocText = docParts.join("\n\n=== ACTUAL EVIDENCE ===\n\n");
           logEv(`Read ${filesReadCount} file${filesReadCount === 1 ? "" : "s"} — assessing ${lineRefs.length} requirement line${lineRefs.length === 1 ? "" : "s"}.`);
-          patchEv({ stage: "assessing", currentFile: undefined, canSkipCurrentFile: false });
+          // detail is reset here too — without it the overlay's live line kept
+          // showing the LAST "Reading <file>…" for the whole AI phase, which
+          // read as "stuck on that file" whenever the phase was slow.
+          patchEv({ stage: "assessing", detail: "Assessing evidence against each requirement line…", currentFile: undefined, canSkipCurrentFile: false });
 
           const aiSettings = useAISettingsStore.getState();
           if (!aiSettings.enabled || !aiSettings.apiKey) { finish(null, false, aiOfflineReason(aiSettings) ?? "AI is disabled or no API key is configured in Settings."); return; }

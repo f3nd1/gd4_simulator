@@ -25,8 +25,7 @@ import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import { ppdVerdictTone, ppdVerdictLabel, evVerdictLabel } from "../lib/verdictTone";
-import type { PPDOverallVerdict, EvidenceVerdict, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, PPDReviewRow, EvidenceAssessmentRow, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue, VisionBudgetPrompt } from "../types";
-import { fmtUSD } from "../lib/aiCost";
+import type { PPDOverallVerdict, EvidenceVerdict, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, PPDReviewRow, EvidenceAssessmentRow, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue } from "../types";
 
 // Task 2: a STABLE empty-array reference for "no history yet" — `?? []`
 // inline would allocate a new array on every selector call, and since
@@ -896,33 +895,8 @@ function fmtRunAt(iso: string): string {
 // Task 1a: blocking choice runEvidenceAssessment presents ONCE, after its
 // read loop has attempted every evidence file — bulk, not per-file: every
 // file the run's vision-image budget forced it to skip is collected first,
-// then this one prompt covers all of them. No backdrop-dismiss, no default
-// choice, so the run genuinely pauses until the user picks. Replaces the old
-// silent behaviour (file skipped, 0 chars extracted, no signal) that could
-// produce a false "no evidence" verdict for files that were never read.
-function VisionBudgetPromptModal({ prompt, onChoose }: { prompt: VisionBudgetPrompt; onChoose: (choice: "proceed" | "skip") => void }) {
-  const n = prompt.fileNames.length;
-  return (
-    <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
-      <div style={{ backgroundColor: "#fff", borderRadius: 12, maxWidth: 480, width: "100%", padding: 20, boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 700, color: "#92400e" }}>⚠ Vision image budget reached</div>
-        <p style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5, margin: 0 }}>
-          This run read <b>{prompt.budgetMax} images</b> (scanned pages / photos), then ran out of budget for <b>{n} evidence file{n === 1 ? "" : "s"}</b>: left as-is, {n === 1 ? "it stays" : "they stay"} unread — which can look like "no evidence" even when evidence exists.
-        </p>
-        <ul style={{ fontSize: 11.5, color: "#475569", margin: 0, paddingLeft: 18, maxHeight: 100, overflowY: "auto" }}>
-          {prompt.fileNames.map((name) => <li key={name}>{name}</li>)}
-        </ul>
-        <div style={{ fontSize: 12, color: "#475569", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
-          <b>Proceed with all</b> raises the budget to cover up to {prompt.estimatedExtraImages} more image{prompt.estimatedExtraImages === 1 ? "" : "s"} and re-reads {n === 1 ? "that file" : "those files"} — estimated extra cost <b>{fmtUSD(prompt.estimatedCostUSD)}</b> (rough estimate; actual spend depends on image size/detail).
-        </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
-          <button type="button" onClick={() => onChoose("skip")} style={arrivalSecondaryBtn}>Skip the rest</button>
-          <button type="button" onClick={() => onChoose("proceed")} style={arrivalPrimaryBtn}>Proceed with all →</button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// then one prompt covers all of them — VisionBudgetPromptModal, now mounted
+// app-wide in Layout (see that component for why it must not live on one page).
 
 function EvidenceArrivalPanel({
   state, onRun, onReviewPrecheck, onDismiss, onGoToPpd,
@@ -1093,12 +1067,6 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
   // silent-no-op risk.
   const auditBlockedReason = useWorkspaceStore((s) => s.auditBlockedReason);
 
-  // Task 1a: the blocking vision-budget prompt, scoped to THIS sub-criterion's
-  // run (a different sub-criterion's in-flight prompt must not show here).
-  const visionBudgetPrompt = useWorkspaceStore((s) => s.visionBudgetPrompt);
-  const resolveVisionBudgetPrompt = useWorkspaceStore((s) => s.resolveVisionBudgetPrompt);
-  const budgetPrompt = visionBudgetPrompt?.subCriterionId === selectedId ? visionBudgetPrompt : null;
-
   // Task 2: same read-only past-run viewer as the PPD tab — the current
   // run stays exactly at `assessment` above.
   const evidenceHistory = useWorkspaceStore((s) => s.evidenceAssessmentHistory[selectedId] ?? EMPTY_HISTORY);
@@ -1195,7 +1163,6 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
 
   return (
     <>
-      {budgetPrompt && <VisionBudgetPromptModal prompt={budgetPrompt} onChoose={resolveVisionBudgetPrompt} />}
       {auditBlockedReason && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12, padding: "9px 12px", background: "#fbe7e3", border: "1px solid #f2b8ae", borderRadius: 8, fontSize: 12.5, color: "#b23121", fontWeight: 600 }}>
           <span aria-hidden>⛔</span>
