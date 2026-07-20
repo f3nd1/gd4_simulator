@@ -1800,6 +1800,42 @@ function RunTimeEstimate({ mode, scopeId }: { mode: "full-auto" | "hybrid-item";
   );
 }
 
+// Reconnect-from-the-modal (2026-07-20): a run refused at start, or a run whose
+// Drive session died mid-way, sets driveBlockedReason (canConnect) in the store.
+// The page-level banner that offers Connect sits BEHIND the run overlay
+// (z-index), so it was invisible while the "Drafting…"/"Auditing…" modal was up.
+// This surfaces the SAME reconnect inside the overlay, reusing the identical
+// connect() OAuth flow the page banner uses (and its clientId->Settings guard).
+// Reconnecting clears driveBlockedReason (the page's existing driveToken effect
+// nulls it once a token arrives), so the user can re-run without losing any
+// steps already committed — the interrupted pass is not auto-resumed, but every
+// completed step's result stays.
+function OverlayDriveReconnect() {
+  const reason = useWorkspaceStore((s) => s.driveBlockedReason);
+  const connecting = useGoogleDriveStore((s) => s.connecting);
+  const clientId = useGoogleDriveStore((s) => s.clientId);
+  const navigate = useNavigate();
+  if (!reason || !reason.canConnect) return null;
+  const reconnect = () => {
+    if (!clientId) { navigate(DRIVE_CONNECT_PATH); return; }
+    useGoogleDriveStore.getState().connect().catch(() => {/* lastError shown in Settings */});
+  };
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "0 0 12px", padding: "9px 12px", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 8, fontSize: 12.5, color: "#92600a", fontWeight: 600 }}>
+      <span aria-hidden>🔌</span>
+      <span style={{ flex: 1, minWidth: 200 }}>{reason.message}</span>
+      <button
+        type="button"
+        onClick={reconnect}
+        disabled={connecting}
+        style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: connecting ? "#94a3b8" : "#2563eb", border: "none", borderRadius: 6, padding: "5px 12px", cursor: connecting ? "default" : "pointer", whiteSpace: "nowrap" }}
+      >
+        {connecting ? "Connecting…" : "Reconnect Google Drive"}
+      </button>
+    </div>
+  );
+}
+
 function FullAuditOverlay() {
   const progress = useWorkspaceStore((s) => s.fullAuditProgress);
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
@@ -1850,6 +1886,7 @@ function FullAuditOverlay() {
             : progress.status === "complete" ? "Full audit complete" : "Full audit cancelled"}
         </div>
         {running && <RunTimeEstimate mode="full-auto" />}
+        <OverlayDriveReconnect />
         {running && (
           <div style={{ fontSize: 13, color: "#475569", marginBottom: 6 }}>
             Now: <b>{progress.currentName}</b>
@@ -2015,6 +2052,7 @@ function HybridDraftOverlay() {
           {running ? `Drafting ${progress.subCriterionId}…` : progress.status === "cancelled" ? `Hybrid draft cancelled — ${progress.subCriterionId}` : `Hybrid draft complete — ${progress.subCriterionId}`}
         </div>
         {running && <RunTimeEstimate mode="hybrid-item" scopeId={progress.subCriterionId} />}
+        <OverlayDriveReconnect />
         {progress.status === "complete" && (
           <div style={{ fontSize: 13, fontWeight: 700, color: "#166534", background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "8px 12px", marginBottom: 8 }}>
             ✓ Report ready — {progress.subCriterionId} has been drafted and its band scored. Open the Final Report below to review it.

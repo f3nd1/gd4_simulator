@@ -1366,6 +1366,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               // run's busy flag (the full-audit sweep may already have moved on).
               busy: st.busy === "ppdreview" + subCriterionId ? null : st.busy,
               ppdReviewProgress: st.ppdReviewProgress?.subCriterionId === subCriterionId ? null : st.ppdReviewProgress,
+              // Mid-run Drive expiry (2026-07-20): checkDriveForRun sets
+              // driveBlockedReason at run START, but a token that dies DURING the
+              // read loop only surfaced here as an error message — no reconnect
+              // affordance. Set the same block so the run overlay's Reconnect
+              // button appears (it auto-clears once a token arrives).
+              ...(liveError === DRIVE_EXPIRED_MID_RUN ? { driveBlockedReason: { reason: "not-connected" as const, message: DRIVE_EXPIRED_MID_RUN, canConnect: true, subCriterionId } } : {}),
             };
           });
         };
@@ -1756,6 +1762,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               // Guarded — see runPPDReview's finish.
               busy: st.busy === "evidenceassess" + subCriterionId ? null : st.busy,
               evidenceAssessmentProgress: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? null : st.evidenceAssessmentProgress,
+              // Mid-run Drive expiry — see runPPDReview's finish.
+              ...(liveError === DRIVE_EXPIRED_MID_RUN ? { driveBlockedReason: { reason: "not-connected" as const, message: DRIVE_EXPIRED_MID_RUN, canConnect: true, subCriterionId } } : {}),
             };
           });
           // Write the verdicts into the Sub-Criterion Checklist — the same
