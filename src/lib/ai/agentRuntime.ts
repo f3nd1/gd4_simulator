@@ -1392,6 +1392,26 @@ export type StagedOutcomeReviewAuditResult = {
 const STAGED_BATCH_SIZE = 8; // audit points per AI call (each is smaller than a full checklist line)
 const REQ_BATCH_SIZE = 8; // requirement lines per AI call — Option A's runPPDRequirementsReview and runEvidenceAssessment
 
+// Per-AI-call skip (2026-07-20). A run can appear to hang on one slow extract
+// call (the AI "thinking" over a document window). onCallAbort lets the caller
+// (the store) register a resolver for the CURRENT call; the UI's "Skip this
+// step" button invokes it, and raceCallSkip returns CALL_SKIPPED so the loop
+// treats that call exactly like an empty/failed reply (its points fall through
+// to other windows or are marked "not assessed" — honest, never fabricated).
+// The abandoned chatComplete keeps running to its own AUDIT_BATCH_TIMEOUT_MS in
+// the background (harmless: nothing awaits it once skipped). Same Promise.race
+// shape as the Drive file-read skip, so no in-flight-abort plumbing is needed.
+export const CALL_SKIPPED = Symbol("ai-call-skipped");
+type CallAbortReg = (abort: (() => void) | null) => void;
+export async function raceCallSkip<T>(onCallAbort: CallAbortReg | undefined, call: Promise<T>): Promise<T | typeof CALL_SKIPPED> {
+  if (!onCallAbort) return call;
+  let resolveSkip!: () => void;
+  const skip = new Promise<typeof CALL_SKIPPED>((res) => { resolveSkip = () => res(CALL_SKIPPED); });
+  onCallAbort(resolveSkip);
+  try { return await Promise.race([call, skip]); }
+  finally { onCallAbort(null); }
+}
+
 // Shared assessor-register rule appended to every staged-audit prompt. Brings
 // the staged (Option B) notes to the same standard as the Option A prompts —
 // Technique 1 (decompose and name the missing obligation), Technique 4 (named
@@ -2145,7 +2165,7 @@ export async function runPPDRequirementsReview(
   requirements: PPDRequirementInput[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string) => void; onEvent?: (ev: PPDRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string) => void; onEvent?: (ev: PPDRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal; onCallAbort?: CallAbortReg } = {}
 ): Promise<PPDRequirementsReviewResult> {
   if (requirements.length === 0 || !policyDocText.trim()) {
     return {
@@ -2299,11 +2319,19 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       const system = extractSystem(windows.length > 1 ? `runPPDRequirementsReview (extract, window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview (extract)");
       if (!firstPromptSent) firstPromptSent = `SYSTEM (extract):\n${system}\n\nUSER:\n${user}`;
       try {
-        const content = await chatComplete(
+        const raced = await raceCallSkip(opts.onCallAbort, chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
           { schema: PPD_EXTRACT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
-        );
+        ));
+        if (raced === CALL_SKIPPED) {
+          const label = windows.length > 1 ? `PPD extraction window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD extraction batch ${bi + 1}/${batches.length}`;
+          windowErrors.push(`${label} skipped by user — its points fall through to other windows or are marked not assessed.`);
+          for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
+          opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "Skipped by user.", stage: "extract" });
+          continue;
+        }
+        const content = raced;
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
         // The call RETURNED but nothing parseable came back — a failure per
@@ -2743,7 +2771,7 @@ export async function runEvidenceAssessment(
   inputs: EvidenceAssessmentInput[],
   evidenceDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string, pct?: number) => void; onEvent?: (ev: EvidenceRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string, pct?: number) => void; onEvent?: (ev: EvidenceRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal; onCallAbort?: CallAbortReg } = {}
 ): Promise<EvidenceAssessmentRunResult> {
   if (inputs.length === 0) return { rows: [] };
 
@@ -2889,11 +2917,20 @@ Respond with JSON only:
       const system = extractSystem(windows.length > 1 ? `runEvidenceAssessment (extract, window ${win.index + 1}/${win.total})` : "runEvidenceAssessment (extract)");
       if (!firstPromptSent) firstPromptSent = `SYSTEM (extract):\n${system}\n\nUSER:\n${user}`;
       try {
-        const content = await chatComplete(
+        const raced = await raceCallSkip(opts.onCallAbort, chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
           { schema: EVIDENCE_EXTRACT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
-        );
+        ));
+        if (raced === CALL_SKIPPED) {
+          const label = windows.length > 1 ? `evidence extraction window ${win.index + 1}/${win.total}` : "evidence extraction call";
+          windowErrors.push(`Evidence ${label} skipped by user — its points fall through to other windows or are marked not assessed.`);
+          for (const r of batch) if (!extractedOk.has(r.ref)) failedRefs.add(r.ref);
+          opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "Skipped by user.", stage: "extract" });
+          unitsDone++;
+          continue;
+        }
+        const content = raced;
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
         // Empty/unparseable reply = a failure per "never fabricate from

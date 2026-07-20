@@ -114,6 +114,12 @@ import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 // so a single module-level ref is sufficient.
 let _currentFileAbort: (() => void) | null = null;
 
+// Item 2b (2026-07-20): resolver for skipping the CURRENT in-flight AI
+// extract call (the "thinking" step that can hang on a slow model), set by
+// agentRuntime's onCallAbort around each extract chatComplete and invoked by
+// skipCurrentAiCall(). Same one-run-at-a-time reasoning as _currentFileAbort.
+let _currentAiCallAbort: (() => void) | null = null;
+
 // Task 1a: resolver for the pending vision-budget blocking prompt (see
 // VisionBudgetPrompt) — set while runEvidenceAssessment's read loop is
 // paused waiting for "Proceed with all" / "Skip the rest", cleared once
@@ -863,6 +869,7 @@ export type WorkspaceState = {
   // Skips the file currently being read — aborts its Drive download and/or AI
   // description call and moves the loop to the next file. No-op if not reading.
   skipCurrentFile: () => void;
+  skipCurrentAiCall: () => void;
   // Dismisses the audit progress panel (does not cancel the audit itself).
   clearAuditProgress: () => void;
   runEvidenceAudit: (flags: EvidenceAuditFlag[] | null) => void;
@@ -1231,6 +1238,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // the per-file timeout to fire before releasing the busy state.
         _currentFileAbort?.();
         _currentFileAbort = null;
+        _currentAiCallAbort = null;
         // A cancel while the run is paused on the vision-budget prompt must not
         // leave it awaiting forever — answer it as "skip" (the safe, no-extra-
         // spend default) so the paused await resolves and the run can unwind.
@@ -1260,6 +1268,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Abort only the current file — loop continues to the next one.
         _currentFileAbort?.();
         // Note: _currentFileAbort is cleared by the loop itself after the catch.
+      },
+      skipCurrentAiCall: () => {
+        // Abandon only the current in-flight AI extract call — the loop then
+        // continues to the next window/batch, treating this one like an empty
+        // reply (its points fall through or are marked not assessed). The
+        // abandoned call runs on to its own timeout in the background.
+        _currentAiCallAbort?.();
+        // Cleared by agentRuntime's raceCallSkip finally after this call.
       },
       visionBudgetPrompt: null,
       resolveVisionBudgetPrompt: (choice) => {
@@ -1602,6 +1618,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // Cancel support: cancelBusy() clears busy and aborts the signal.
             shouldStop: () => get().busy !== "ppdreview" + subCriterionId,
             signal: runAbort.signal,
+            // Per-AI-call skip (Item 2b): register each in-flight extract call
+            // so skipCurrentAiCall() can abandon just that call and continue.
+            onCallAbort: (fn) => { _currentAiCallAbort = fn; },
           });
           // Surface window errors / early stop instead of logging a clean
           // success — a revoked key mid-run used to yield all-"Not documented"
@@ -2136,6 +2155,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             },
             shouldStop: () => get().busy !== "evidenceassess" + subCriterionId,
             signal: runAbort.signal,
+            // Per-AI-call skip (Item 2b) — see runPPDReview.
+            onCallAbort: (fn) => { _currentAiCallAbort = fn; },
           });
           patchEv({ stage: "verifying", detail: "Verifying citations…", pct: 99 });
           logEv("Verifying quoted excerpts against the source documents…");

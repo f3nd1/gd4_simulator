@@ -2012,6 +2012,7 @@ function HybridDraftOverlay() {
   const dismiss = useWorkspaceStore((s) => s.dismissHybridDraftProgress);
   const cancelBusy = useWorkspaceStore((s) => s.cancelBusy);
   const skipCurrentFile = useWorkspaceStore((s) => s.skipCurrentFile);
+  const skipCurrentAiCall = useWorkspaceStore((s) => s.skipCurrentAiCall);
   const navigate = useNavigate();
   const ppdP = useWorkspaceStore((s) => s.ppdReviewProgress);
   const evP = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
@@ -2109,6 +2110,23 @@ function HybridDraftOverlay() {
                     </div>
                   );
                 })()}
+                {/* Item 2b — per-AI-call skip. While a PPD/Evidence step is
+                    doing AI extract calls (past the file-reading phase, so the
+                    per-file Skip above no longer applies), let the user abandon
+                    the current stuck call and move on without cancelling the
+                    whole run. Its points fall through to other windows or are
+                    marked "not assessed" (honest). */}
+                {isRun && (s.key === "ppd" || s.key === "evidence") && !readProgFor(s.key)?.currentFile && (
+                  <div style={{ marginLeft: 17, marginTop: 4 }}>
+                    <button
+                      onClick={skipCurrentAiCall}
+                      title="Abandons only the AI call running right now and continues to the next one. Use it if this step seems stuck on the AI. The skipped points are left for later windows or marked 'not assessed' — never guessed."
+                      style={{ cursor: "pointer", fontSize: 10.5, fontWeight: 700, color: "#b45309", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 9px" }}
+                    >
+                      Skip this AI step →
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
