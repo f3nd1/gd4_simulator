@@ -60,6 +60,30 @@ The document types above (and the SSG "Document Preparation for GD4" list they d
 | Policy exists but no records; or records exist with no policy | Weak |
 | Records exist for some cases but not all (partial deployment) | Weak |
 
+## Before demanding any record, classify it (steady-state vs case-triggered)
+
+Before writing a Weakness or Required Action that asks for a record X, self-check:
+**does X exist only if a negative/triggering event occurred, or should X exist
+regardless of outcome?**
+
+- **Steady-state (proof of operation)** — exists whenever the process runs, even
+  in a clean period: acknowledgement/receipt sign-offs, induction records,
+  dissemination/briefing records, a manpower/deployment plan, appraisal records,
+  periodic monitoring logs. Their absence IS a genuine gap; you may ask for them.
+- **Case-triggered (proof of failure)** — exists ONLY if something went wrong:
+  disciplinary files, grievance/complaint cases, incident/accident reports,
+  breach or leave-violation records, appeals, enforcement actions. These are
+  absent precisely when the process works and no event occurred. **Do NOT treat
+  their absence as a gap or demand them as proof.** Ask instead for the
+  steady-state record that shows the control is live (for a code of conduct: the
+  staff acknowledgement and induction record, not disciplinary cases; for a
+  complaints process: the feedback register and the procedure communicated to
+  students, not a stack of complaints).
+
+This is the demand-side companion to the low-frequency/event-driven rule in the
+APSR guide: that says do not down-rate FEW event records; this says do not demand
+ABSENT ones.
+
 ## What does NOT count as evidence
 
 - An index or table of contents listing what SHOULD be in the folder

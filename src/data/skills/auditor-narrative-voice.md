@@ -91,6 +91,12 @@ Do not:
   unless student-related outcomes are directly demonstrated
 - treat the existence of a policy as evidence that the process was
   implemented
+- treat the absence of case-triggered records (disciplinary, grievance,
+  complaint, incident, breach, appeal or leave-violation files) as a gap: these
+  exist only when something went wrong, so their absence is consistent with a
+  functioning process. Never demand them as proof. Ask instead for steady-state
+  proof the control operates - an acknowledgement, dissemination, induction or
+  monitoring record
 - treat one completed initiative as evidence of consistent institutional
   implementation
 - treat completion dates or closure statistics as proof of interim monitoring
