@@ -38,7 +38,7 @@ import type {
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders, reconcileFolders } from "../data/folders";
-import { itemIdsForScope, folderScopeId, runScopesForSub, scopeTitle } from "../lib/evidenceScope";
+import { itemIdsForScope, folderScopeId, runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
 import { currentItemIds, currentSubIds, pruneRecordByKeys, reconcileEvidenceMap } from "../lib/structuralReconcile";
 import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
@@ -984,6 +984,15 @@ export type WorkspaceState = {
   // suggests it; this lets a human set it directly).
   setNcSeverity: (id: string, severity: NcSeverity) => void;
   removeCustomFinding: (id: string) => void;
+  // Clarification stage (2026-07-21): re-assess ONLY the requirement line(s)
+  // this finding traces to, against the (possibly freshly-updated) evidence
+  // folder — reusing runEvidenceAssessment's retryRefs engine, which re-reads
+  // the whole evidence folder and leaves every other line's verdict untouched.
+  // Human-gated: it reports the new verdict but never auto-closes the finding.
+  // Returns a message for the caller to surface. Only Option A evidence
+  // findings (with a prior PPD + Evidence run and a matching line ref) are
+  // re-checkable; anything else returns ok:false with the reason.
+  recheckFinding: (findingId: string) => Promise<{ ok: boolean; message: string }>;
   clearAllFindings: () => void;
   // Delete every finding for ONE sub-criterion, leaving all others intact.
   // Reuses the same back-pointer sweep as clearAllFindings / removeCustomFinding.
@@ -2233,6 +2242,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               promiseChecks: ev?.promiseChecks,
               evidenceQuote: ev?.evidenceQuote,
               suggestedAction: ev?.suggestedAction,
+              // Carry the finding back-pointer across a RE-CHECK (recheckFinding
+              // retries a ref that already raised a finding). Without this the
+              // fresh row drops savedFindingId, orphaning the finding and
+              // letting a later Compile raise a DUPLICATE. The existing "retry
+              // failed lines" button never hit this — it only retries
+              // Not-assessed rows, which never carry a finding.
+              ...(isRetry ? { savedFindingId: priorRowsByRef.get(p.ref)?.savedFindingId } : {}),
             };
           });
           // Tag the ledger with citation status from the assessed rows: a file
@@ -7060,6 +7076,58 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         });
         useChecklistModuleStore.getState().clearSavedFindingId(id);
         useFindingDraftStore.getState().clearSavedFindingId(id);
+      },
+
+      recheckFinding: async (findingId) => {
+        const s = get();
+        const finding = s.customFindings.find((f) => f.id === findingId);
+        if (!finding) return { ok: false, message: "This finding cannot be re-checked (demo/seed findings are not re-runnable)." };
+        const req = GD4_REQUIREMENTS.find((r) => r.id === finding.gd4ItemId);
+        if (!req) return { ok: false, message: `This finding's item (${finding.gd4ItemId}) is not a recognised GD4 requirement.` };
+        // The Evidence Folder scope this item runs under (its item id for a
+        // split sub like 4.2, else the sub-criterion) — the same key the run
+        // results are stored under.
+        const scope = scopeIdForItem(finding.gd4ItemId, req.subCriterionId);
+        const ppd = get().ppdReviewResults[scope];
+        const ev = get().evidenceAssessments[scope];
+        if (!ppd || !ev) return { ok: false, message: "There is no Option A evidence run for this item to re-check. Run the PPD Review and Evidence assessment on the Evidence Folder first, then add your new evidence and re-check." };
+        // The requirement line(s) this finding traces to — its own clause plus
+        // any grouped linkedSourceRefs — that the engine can actually retry
+        // (i.e. that exist as PPD rows). normalizeAuditRef both sides.
+        const candidates = [finding.clause, ...(finding.linkedSourceRefs ?? [])].filter((r): r is string => !!r);
+        const wanted = new Set(candidates.map(normalizeAuditRef));
+        const retryRefs = ppd.rows.filter((r) => wanted.has(normalizeAuditRef(r.ref))).map((r) => r.ref);
+        if (retryRefs.length === 0) return { ok: false, message: "This finding does not trace to a specific evidence line that can be re-checked (no matching requirement-line reference in the last run)." };
+        const beforeVerdict = new Map(ev.rows.map((r) => [normalizeAuditRef(r.gdRef), r.verdict]));
+        const beforeRunAt = ev.runAt;
+        // Re-read the evidence folder fresh and re-assess ONLY these lines.
+        await get().runEvidenceAssessment(scope, retryRefs);
+        const after = get().evidenceAssessments[scope];
+        // runAt unchanged → the run never completed (Drive not connected, no
+        // auditor, no folder link…) — surface the real blocker, never a false
+        // "still not met".
+        if (!after || after.runAt === beforeRunAt) {
+          return { ok: false, message: get().auditBlockedReason ?? "The re-check could not run — check Google Drive is connected and an auditor is selected on the Evidence Folder, then try again." };
+        }
+        const parts = retryRefs.map((rr) => {
+          const key = normalizeAuditRef(rr);
+          const before = beforeVerdict.get(key);
+          const now = after.rows.find((r) => normalizeAuditRef(r.gdRef) === key)?.verdict;
+          const changed = before !== now;
+          return `${rr}: ${changed ? `now ${now} (was ${before})` : `still ${now}`}`;
+        });
+        // Tail advice, honest about what actually happened: a line now Met is
+        // resolvable (human closes it); a changed-but-still-a-gap verdict must
+        // not read as "no change"; only a genuinely unchanged verdict says so.
+        const verdictOf = (rr: string) => after.rows.find((r) => normalizeAuditRef(r.gdRef) === normalizeAuditRef(rr))?.verdict;
+        const anyMet = retryRefs.some((rr) => verdictOf(rr) === "Met");
+        const anyChanged = retryRefs.some((rr) => beforeVerdict.get(normalizeAuditRef(rr)) !== verdictOf(rr));
+        const tail = anyMet
+          ? " If the new evidence resolves this finding, close it in Quality Action / AFI — the re-check never closes a finding for you."
+          : anyChanged
+            ? " The assessment changed but the line is still a gap, so the finding stands — review the updated verdict and close it manually only if you judge it resolved."
+            : " The new evidence did not change the assessment. The finding stands.";
+        return { ok: true, message: `Re-checked ${parts.join("; ")}.${tail}` };
       },
 
       clearAllFindings: () => {

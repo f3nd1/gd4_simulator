@@ -1067,6 +1067,16 @@ function GroupedDraftDetail({
 function FindingDetail({ finding: f }: { finding: Finding }) {
   const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
   const apsr = f.apsr;
+  // Clarification-stage re-check: re-assess ONLY this finding's line against the
+  // (possibly freshly-updated) evidence folder. Human-gated — reports the new
+  // verdict, never closes the finding. Offered only when the finding traces to
+  // a requirement line; the store action does the full eligibility guard and
+  // returns an honest reason when it cannot run.
+  const recheckFinding = useWorkspaceStore((s) => s.recheckFinding);
+  const busy = useWorkspaceStore((s) => s.busy);
+  const [rechecking, setRechecking] = useState(false);
+  const [recheckMsg, setRecheckMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const canRecheck = !!f.clause || (f.linkedSourceRefs?.length ?? 0) > 0;
   const Section = ({ label, text }: { label: string; text?: string }) =>
     text ? (
       <div style={{ marginBottom: 8 }}>
@@ -1094,6 +1104,31 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
           {f.auditRunId && <Link to={`/evidence-folder?run=${f.auditRunId}`} style={{ fontFamily: "ui-monospace,monospace", fontSize: 10.5, color: "#4f46e5", marginLeft: 6, textDecoration: "none" }}>Run: {f.auditRunId} →</Link>}
           {f.dimension && <span style={{ marginLeft: 4 }}><Pill s={dimensionTone(f.dimension)}>{dimensionLabel(f.dimension)}</Pill></span>}
           {f.riskCategory && <span style={{ marginLeft: 4 }}><Pill s={riskCatTone(f.riskCategory) as Parameters<typeof Pill>[0]["s"]}>{riskCatLabel(f.riskCategory)}</Pill></span>}
+        </div>
+      )}
+      {canRecheck && (
+        <div style={{ marginBottom: 10, padding: "8px 10px", background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button
+              onClick={async () => {
+                setRechecking(true); setRecheckMsg(null);
+                const r = await recheckFinding(f.id);
+                setRecheckMsg({ ok: r.ok, text: r.message });
+                setRechecking(false);
+              }}
+              disabled={rechecking || !!busy}
+              title="Re-read the Actual Evidence folder (including anything you have just added) and re-assess ONLY this finding's requirement line. Every other line's result is left untouched, and the finding is never closed automatically."
+              style={{ fontSize: 12, fontWeight: 700, padding: "5px 12px", borderRadius: 7, border: "1px solid #0284c7", background: rechecking || busy ? "#e0f2fe" : "#0284c7", color: rechecking || busy ? "#0369a1" : "#fff", cursor: rechecking || busy ? "default" : "pointer", whiteSpace: "nowrap" }}
+            >
+              {rechecking ? "Re-checking…" : "Re-check this finding →"}
+            </button>
+            <span style={{ fontSize: 11, color: "#475569" }}>Added more evidence? Re-assess just this line against the updated folder.</span>
+          </div>
+          {recheckMsg && (
+            <div style={{ marginTop: 6, fontSize: 11.5, color: recheckMsg.ok ? "#166534" : "#b45309", lineHeight: 1.5 }}>
+              {recheckMsg.ok ? "✓ " : "⚠ "}{recheckMsg.text}
+            </div>
+          )}
         </div>
       )}
       <Section label="Observation — what was found (WHO · WHAT · WHEN · HOW MANY)" text={f.observation} />
