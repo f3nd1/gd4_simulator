@@ -75,6 +75,12 @@ export type ItemFindingRow = {
   // column is never blank (Task 4). Undefined only for strength rows — nothing
   // to close.
   afi?: string;
+  // True when this row appears under a dimension that is NOT the line's
+  // classifier-assigned home — i.e. it is the line's real per-line assessment
+  // for THIS dimension surfaced cross-cuttingly (2026-07-21). Display metadata
+  // only: lets buildOverallSummary prefer a dimension's own home lines for its
+  // priority step so that summary text stays stable. Absent/false = a home row.
+  borrowed?: boolean;
 };
 
 export type DimensionFindingsGroup = {
@@ -238,13 +244,13 @@ export type FinalReport = {
 
 const APSR_DIM_KEYS: DimensionFindingsGroup["key"][] = ["approach", "processes", "systemsOutcomes", "review"];
 
-// Builds the findings table for one item, grouped by dimension: one row per
-// real tagged line (see ItemFindingRow), restructured entirely from data
-// already computed/recorded elsewhere — no new AI call, no free-text parsing.
-// A line tagged to a dimension where it's genuinely weak reads as a weakness
-// row there even if the SAME clause ref also backs a different line tagged
-// strong under another dimension (Task 2's DS2-style case) — each line
-// object produces exactly one row, under its own dimension only.
+// Builds the findings table for one item, grouped by dimension, restructured
+// entirely from data already computed/recorded elsewhere — no new AI call, no
+// free-text parsing. A single line can now produce a row under MORE THAN ONE
+// dimension: its home dimension (classifier) plus any dimension its own
+// per-line APSR carries a real assessment for — so a line's Approach and
+// Processes assessments both surface, the same cross-cutting way Systems &
+// Outcomes always did (see the grouping comment below). Grouping/display only.
 function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scale: ApsrScale): DimensionFindingsGroup[] {
   const hb = entry?.holisticBand;
   if (!hb?.matrixScores) return [];
@@ -261,13 +267,32 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
     if (score === undefined) continue;
     const label = EDUTRUST_DIMENSIONS.find((d) => d.key === key)!.label;
     const rubricDefined = officialPoints.filter((fp) => classifyApsrByContent(fp.text) === label).length;
-    // Group by the line's AUTHORITATIVE dimension (resolved from its official
-    // source ref), NOT its stored apsrDimension — so a line the Option A audit
-    // wrote with a ref but no tag, or one the live-gen AI mis-tagged, still
-    // lands under the correct dimension (Task 3 fix, 2026-07-15). Grouping only;
-    // no band/verdict/score is affected.
-    const dimLines = specific.filter((l) => resolveLineDimension(l) === label && l.status !== "Not Applicable");
-    const buildRow = (l: SpecificChecklistLine, fromLeg: boolean): ItemFindingRow => {
+    // Cross-cutting grouping (2026-07-21). A line appears under a dimension when
+    // that dimension is its classifier-assigned HOME (resolveLineDimension), OR
+    // its own per-line APSR carries a real (non-sentinel) assessment for that
+    // dimension. This gives Approach/Processes/Review the SAME cross-cutting
+    // treatment Systems & Outcomes always had — S&O owns no requirement line, so
+    // it only ever appears through other lines' legs; now a line whose PPD
+    // (Approach), evidence (Processes) or Outcomes & Review leg genuinely speaks
+    // to another dimension shows its real assessment there too, not only under
+    // its single keyword-home dimension (the ItemFindingRow type already
+    // anticipated a line producing rows under more than one dimension).
+    //
+    // DISPLAY GROUPING ONLY. The band, %, matrix scores and every row's verdict
+    // are unchanged: apsrMatrixResult reads matrixScores, never this grouping
+    // (proven byte-identical in the finalReport grouping-parity test). A line's
+    // HOME dimension is always included even with no leg content, so a manual /
+    // never-audited line still shows under its home. And because a borrowed row
+    // is only added where REAL non-sentinel content exists, a genuinely
+    // unassessed dimension (e.g. Review before the O&R pass ran) gains no
+    // borrowed rows and renders exactly as before.
+    const isHome = (l: SpecificChecklistLine) => resolveLineDimension(l) === label;
+    const hasRealLeg = (l: SpecificChecklistLine) => {
+      const note = lineDimensionDiagnosis(l, key);
+      return !!note && !isOptionANotAssessedNote(note);
+    };
+    const dimLines = specific.filter((l) => l.status !== "Not Applicable" && (isHome(l) || hasRealLeg(l)));
+    const buildRow = (l: SpecificChecklistLine, borrowed: boolean): ItemFindingRow => {
       const itemRef = l.clause || l.sourceRef || l.id;
       // Strip engine chunk headers ("[CHUNK:C003]") that can be quoted inside a
       // recorded note — they are plumbing the user cannot resolve and were
@@ -280,7 +305,7 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
       // an unassessed dimension is never mislabelled a finding just because
       // the line's overall status is Not met/Partial.
       if (isOptionANotAssessedNote(text)) {
-        return { lineId: l.id, itemRef, verdict: "not-assessed", finding: NOT_ASSESSED_FINDING, afi: NOT_ASSESSED_AFI };
+        return { lineId: l.id, itemRef, verdict: "not-assessed", finding: NOT_ASSESSED_FINDING, afi: NOT_ASSESSED_AFI, borrowed };
       }
       // The row's verdict comes from the SAME dimension leg its text comes
       // from (Bug A / R4 / INV-06 fix, 2026-07-17): a positive leg status can
@@ -304,10 +329,11 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
         return {
           lineId: l.id, itemRef, verdict: "weakness",
           finding: text || "No detailed diagnosis recorded for this line.",
-          // A leg-derived row's stored action belongs to the line's own
-          // evidence pass and may not be about THIS dimension — show it only
-          // when it exists, never the generic filler.
-          afi: action || (fromLeg ? undefined : "No concrete suggested action recorded for this line."),
+          // A borrowed row's stored action belongs to the line's own evidence
+          // pass and may not be about THIS dimension — show it only when it
+          // exists, never the generic filler.
+          afi: action || (borrowed ? undefined : "No concrete suggested action recorded for this line."),
+          borrowed,
         };
       }
       // A strength gets a next-band-specific AFI quoting the rubric descriptor
@@ -318,28 +344,21 @@ function buildFindingsGroups(entry: SubCriterionChecklistEntry | undefined, scal
         lineId: l.id, itemRef, verdict: "strength",
         finding: text || "No evidence summary recorded for this line.",
         afi: strengthNextBandAfi(key, label, score),
+        borrowed,
       };
     };
-    let rows: ItemFindingRow[] = dimLines.map((l) => buildRow(l, false));
-    // Bug B fix: a scored dimension with NO grouped lines can still carry a
-    // real recorded assessment on the item's OTHER lines' apsr[key] legs
-    // (e.g. the Outcomes & Review pass wrote Systems & Outcomes / Review
-    // judgements onto every line). Surface that verbatim leg content,
-    // attributed to the lines it came from, instead of only a placeholder.
-    // A leg qualifies only with a real non-sentinel note — a dimension with
-    // no such content anywhere keeps the honest empty-group placeholder.
-    let rowsFromLegs = false;
-    if (rows.length === 0) {
-      const legLines = specific.filter((l) => {
-        if (l.status === "Not Applicable") return false;
-        const note = lineDimensionDiagnosis(l, key);
-        return !!note && !isOptionANotAssessedNote(note);
-      });
-      if (legLines.length > 0) {
-        rows = legLines.map((l) => buildRow(l, true));
-        rowsFromLegs = true;
-      }
-    }
+    const rows: ItemFindingRow[] = dimLines.map((l) => buildRow(l, !isHome(l)));
+    // rowsFromLegs stays TRUE only for a PURE cross-cutting group — no home
+    // line, every row borrowed from another line's leg (the Systems & Outcomes
+    // case). FinalReport.tsx renders that group with a lead-in row explaining
+    // why other lines' refs appear, and the dimension cell on the lead-in; that
+    // rendering must stay byte-identical, so the flag keeps its exact old
+    // meaning. A MIXED group (some home + some borrowed) is false: it renders as
+    // an ordinary group, the borrowed rows sitting inline as the honest
+    // same-dimension assessments they are. This subsumes the old rows.length===0
+    // leg fallback — S&O's dimLines is now home(none)∪realLeg == the old
+    // legLines set, in the same order, with the same borrowed=true rows.
+    const rowsFromLegs = dimLines.length > 0 && dimLines.every((l) => !isHome(l));
     out.push({ key, label, band: score, pct: result.pcts[key], rubricDefined, rowsFromLegs, rows });
   }
   return out;
@@ -410,8 +429,13 @@ function buildOverallSummary(groups: DimensionFindingsGroup[]): string {
     // suggested action recorded"/"No detailed diagnosis") are excluded so the
     // step never reads as invented filler; if neither exists, name the
     // dimension plainly rather than fabricate an action.
-    const realAfi = g.rows.find((r) => r.verdict === "weakness" && r.afi && !/^No (concrete|detailed)/i.test(r.afi))?.afi;
-    const realReason = g.rows.find((r) => r.verdict === "weakness" && !/^No (detailed diagnosis|concrete|evidence)/i.test(r.finding))?.finding;
+    // Prefer the dimension's OWN home lines for the priority step, borrowed
+    // (cross-cutting) rows only as a fallback — so this summary line stays
+    // exactly as it was before cross-cutting grouping added borrowed rows.
+    const weaknessRows = g.rows.filter((r) => r.verdict === "weakness");
+    const homeFirst = [...weaknessRows.filter((r) => !r.borrowed), ...weaknessRows.filter((r) => r.borrowed)];
+    const realAfi = homeFirst.find((r) => r.afi && !/^No (concrete|detailed)/i.test(r.afi))?.afi;
+    const realReason = homeFirst.find((r) => !/^No (detailed diagnosis|concrete|evidence)/i.test(r.finding))?.finding;
     const grounded = realAfi || realReason;
     step = grounded
       ? `The most immediate priority is ${labelOf(weakest)}: ${lowerFirst(firstSentence(grounded).replace(/\.$/, ""))}.`

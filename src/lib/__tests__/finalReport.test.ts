@@ -5,7 +5,7 @@ import { OPTION_A_NOT_ASSESSED_NOTE } from "../optionAChecklistWrite";
 import { buildScored } from "../scoring";
 import { blankEvidence } from "../../data/seedEvidence";
 import { GD4_CRITERIA, GD4_REQUIREMENTS } from "../../data/gd4Requirements";
-import { computeChecklistOverrides } from "../checklistBanding";
+import { computeChecklistOverrides, apsrMatrixResult } from "../checklistBanding";
 import type { Finding, SubCriterionChecklistEntry, SpecificChecklistLine, SubChecklistEvidenceItem, ApsrBreakdown } from "../../types";
 
 // Minimal real Scored (blank evidence → every item unstarted) — the findings
@@ -326,9 +326,32 @@ describe("buildFinalReport — 'not assessed' is a distinct third state, never a
   it("a genuinely-assessed line on the same item is still a weakness (the sentinel check does not swallow real findings)", () => {
     const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
     const item = report.items.find((i) => i.id === "6.2.1")!;
-    const pRow = item.findingsGroups.find((g) => g.key === "processes")!.rows[0];
+    // P1's OWN Processes row (found by lineId, not by position): cross-cutting
+    // grouping means S1/R1 — which each carry a real Processes leg in this
+    // optionAApsr fixture — now also appear under Processes as borrowed rows, so
+    // P1 is no longer necessarily rows[0]. Its genuine weakness must survive.
+    const processes = item.findingsGroups.find((g) => g.key === "processes")!;
+    const pRow = processes.rows.find((r) => r.lineId === "P1")!;
     expect(pRow.verdict).toBe("weakness");
     expect(pRow.afi).toBe("File the records.");
+    expect(pRow.borrowed).toBeFalsy(); // EE2 → Processes is P1's HOME dimension
+  });
+
+  it("cross-cutting: a line whose home is elsewhere but which carries a real Processes leg appears under Processes too, marked borrowed", () => {
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    const processes = item.findingsGroups.find((g) => g.key === "processes")!;
+    // S1 (home Systems & Outcomes) and R1 (home Review) each have a real
+    // Processes leg in optionAApsr, so both now surface under Processes as
+    // borrowed rows carrying THAT leg's assessment — the display symmetry S&O
+    // always had, now extended to Approach/Processes/Review.
+    const s1UnderProcesses = processes.rows.find((r) => r.lineId === "S1");
+    expect(s1UnderProcesses).toBeDefined();
+    expect(s1UnderProcesses!.borrowed).toBe(true);
+    // Its S&O HOME row is unaffected and stays not-assessed (the S&O leg is the sentinel).
+    const soRow = item.findingsGroups.find((g) => g.key === "systemsOutcomes")!.rows.find((r) => r.lineId === "S1")!;
+    expect(soRow.verdict).toBe("not-assessed");
+    expect(soRow.borrowed).toBeFalsy();
   });
 
   it("(Task 1) the overall summary names ALL constraining dimensions from real bands + grounds the priority step in a real recorded action", () => {
@@ -779,5 +802,91 @@ describe("concise summaries — qualification, prompt, filter (Item 2)", () => {
       itemReport()
     );
     expect(out).toEqual({ "6.2.1::processes::L1": "A grounded summary." });
+  });
+});
+
+// ── Cross-cutting dimension grouping (2026-07-21): a line appears under every
+// dimension its per-line APSR has real (non-sentinel) content for, not only its
+// classifier-assigned home. The proof Felix needs: this is DISPLAY ONLY — the
+// band, %, matrix scores and the scoring override are byte-identical, since
+// none of them read the findings-table grouping. ──
+describe("buildFinalReport — cross-cutting grouping is DISPLAY ONLY (byte-identical band/score)", () => {
+  function ev(over: Partial<SubChecklistEvidenceItem> = {}): SubChecklistEvidenceItem {
+    return { id: "e1", title: "t", type: "Other", owner: "", date: "", approved: false, reviewed: false, sufficiency: "Present", ...over };
+  }
+  function line(over: Partial<SpecificChecklistLine> & { id: string }): SpecificChecklistLine {
+    return { text: "x", status: "Met", evidence: [], generatedBy: "ai", ...over };
+  }
+  // Real Option A shape: each line carries its OWN Approach (PPD) and Processes
+  // (evidence) assessment — different notes per line — so each line legitimately
+  // has real content under BOTH Approach and Processes. S&O/Review are the
+  // not-assessed sentinel (O&R pass not run here).
+  const optionAApsr = (
+    approachNote: string,
+    processesNote: string,
+    aStatus: ApsrBreakdown["approach"]["status"] = "Meeting",
+    pStatus: ApsrBreakdown["processes"]["status"] = "Deployed",
+  ): ApsrBreakdown => ({
+    approach: { status: aStatus, note: approachNote },
+    processes: { status: pStatus, note: processesNote },
+    systemsOutcomes: { status: "Not evident", note: OPTION_A_NOT_ASSESSED_NOTE },
+    review: { status: "Not evident", note: OPTION_A_NOT_ASSESSED_NOTE },
+  });
+  const ENTRY: SubCriterionChecklistEntry = {
+    gd4ItemId: "6.2.1",
+    specific: [
+      // Home Approach (DS1.b): also has its own real Processes leg.
+      line({ id: "A1", clause: "6.2.1.DS1.b", status: "Met", evidence: [ev({ apsr: optionAApsr("Policy A1 documents the approach.", "Records A1 show it running.") })] }),
+      // Home Processes (EE2): also has its own real Approach leg.
+      line({ id: "P1", clause: "6.2.1.EE2", status: "Met", evidence: [ev({ apsr: optionAApsr("Policy P1 documents the approach.", "Records P1 show it running.") })] }),
+    ],
+    holisticBand: {
+      band: 3, totalPct: 60,
+      matrixScores: { approach: 5, processes: 3, systemsOutcomes: 3, review: 1 },
+      rationale: "x", source: "human", decidedAt: "2026-07-15T00:00:00.000Z",
+    },
+    pendingGenerated: [],
+  };
+
+  it("both lines now appear under BOTH Approach and Processes (cross-cutting), each carrying that dimension's own leg", () => {
+    const report = buildFinalReport(scored, { "6.2.1": ENTRY }, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    const approach = item.findingsGroups.find((g) => g.key === "approach")!;
+    const processes = item.findingsGroups.find((g) => g.key === "processes")!;
+    // Approach shows A1 (home) + P1 (borrowed); Processes shows A1 (borrowed) + P1 (home).
+    expect(approach.rows.map((r) => r.lineId).sort()).toEqual(["A1", "P1"]);
+    expect(processes.rows.map((r) => r.lineId).sort()).toEqual(["A1", "P1"]);
+    expect(approach.rows.find((r) => r.lineId === "A1")!.borrowed).toBeFalsy();
+    expect(approach.rows.find((r) => r.lineId === "P1")!.borrowed).toBe(true);
+    expect(processes.rows.find((r) => r.lineId === "P1")!.borrowed).toBeFalsy();
+    expect(processes.rows.find((r) => r.lineId === "A1")!.borrowed).toBe(true);
+    // The borrowed row shows the OTHER dimension's own leg text, not a duplicate.
+    expect(approach.rows.find((r) => r.lineId === "P1")!.finding).toContain("Policy P1 documents the approach");
+    expect(processes.rows.find((r) => r.lineId === "A1")!.finding).toContain("Records A1 show it running");
+  });
+
+  it("BYTE-IDENTICAL band: the scoring override, item band, %, and per-dimension group bands all come straight from matrixScores, unaffected by the grouping", () => {
+    const entries = { "6.2.1": ENTRY };
+    const expected = apsrMatrixResult(ENTRY.holisticBand!.matrixScores!);
+    // 1. The scoring override that actually feeds scoring.ts is derived from
+    //    matrixScores only — computeChecklistOverrides never reads findingsGroups.
+    const overrides = computeChecklistOverrides(entries, GD4_REQUIREMENTS);
+    expect(overrides["6.2.1"].band).toBe(expected.band);
+    expect(overrides["6.2.1"].eff).toBe({ 1: 20, 2: 45, 3: 60, 4: 75, 5: 90 }[expected.band]);
+    // 2. Feed those overrides into the real scoring pipeline exactly as the app
+    //    does; the item's report band then equals the matrix band. The grouping
+    //    change cannot move it — buildScored/computeChecklistOverrides never see
+    //    findingsGroups.
+    const scoredWithBand = buildScored({ evidence: blankEvidence(), reviewer: {}, confirmed: {}, closures: {}, checklistBandOverrides: overrides });
+    const report = buildFinalReport(scoredWithBand, entries, [], {});
+    const item = report.items.find((i) => i.id === "6.2.1")!;
+    expect(item.band).toBe(expected.band);
+    expect(item.bandTotalPct).toBe(expected.total);
+    // 3. Each dimension group's band/pct equal the matrix's own, regardless of
+    //    how many (home or borrowed) rows now sit under it.
+    for (const g of item.findingsGroups) {
+      expect(g.band).toBe(ENTRY.holisticBand!.matrixScores![g.key]);
+      expect(g.pct).toBe(expected.pcts[g.key]);
+    }
   });
 });
