@@ -872,6 +872,20 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
           </table>
         </div>
       )}
+      {findings.some((f) => !f.closed) && (
+        // Jump straight to this item's findings on the Clarification page,
+        // pre-filtered and highlighted (reuses the app's ?item= deep-link
+        // pattern) — so the user doesn't hunt through the whole open-findings
+        // list to strengthen the finding they're looking at here.
+        <div className="no-print" style={{ marginTop: 6 }}>
+          <Link
+            to={`/clarification?item=${it.id}`}
+            style={{ fontSize: 11.5, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}
+          >
+            Clarify / strengthen these findings →
+          </Link>
+        </div>
+      )}
       {findings.length > 0 && (
         // The item's Findings register, folded in per item. Starts collapsed on
         // screen and in print (empty placeholders add nothing to a printed report).

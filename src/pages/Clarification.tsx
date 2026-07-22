@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { scopeIdForItem, scopeTitle } from "../lib/evidenceScope";
+import { scopeIdForItem, scopeTitle, folderScopeId } from "../lib/evidenceScope";
 import { Card } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
@@ -26,6 +27,7 @@ function verdictPillState(v: string): "critical" | "medium" | "good" {
 export function Clarification() {
   const customFindings = useWorkspaceStore((s) => s.customFindings);
   const closures = useWorkspaceStore((s) => s.closures);
+  const folders = useWorkspaceStore((s) => s.folders);
   const rounds = useWorkspaceStore((s) => s.clarificationRounds);
   const progress = useWorkspaceStore((s) => s.clarificationProgress);
   const busy = useWorkspaceStore((s) => s.busy);
@@ -37,13 +39,44 @@ export function Clarification() {
   const [checkingDrift, setCheckingDrift] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // ?item=<gd4ItemId> deep link (from Final Report's "Clarify" link): filter to
+  // that item's sub-criterion and highlight/scroll its findings, so the user
+  // lands on the right finding instead of scanning the whole open list. Same
+  // ?item= pattern as Findings / Quality Action.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusItem = searchParams.get("item");
+  const focusScope = focusItem ? scopeIdForItem(focusItem, GD4_REQUIREMENTS.find((r) => r.id === focusItem)?.subCriterionId ?? focusItem) : null;
+
   // Open findings only (a finding is "open" when its closure is not Accepted —
   // the same rule the Findings page counts by). Seed/demo findings live outside
   // customFindings and are not re-checkable, so they never appear here.
-  const openFindings = useMemo(
+  const allOpenFindings = useMemo(
     () => customFindings.filter((f) => (closures[f.id]?.human || "") !== "Accepted" && f.status !== "Closed"),
     [customFindings, closures],
   );
+  // When deep-linked to an item, narrow the list to that item's scope.
+  const openFindings = useMemo(
+    () => (focusScope ? allOpenFindings.filter((f) => scopeOf(f) === focusScope) : allOpenFindings),
+    [allOpenFindings, focusScope],
+  );
+
+  // Highlight + scroll to the deep-linked item's first finding row on arrival.
+  useEffect(() => {
+    if (!focusItem) return;
+    const first = allOpenFindings.find((f) => f.gd4ItemId === focusItem) ?? openFindings[0];
+    if (first) setTimeout(() => document.getElementById(`clar-${first.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusItem]);
+
+  // The Drive folder backing a finding's scope — its folderLink is the real
+  // Google Drive URL, so "Open Evidence folder" jumps straight to where the
+  // school uploads evidence (the app is read-only against Drive; there is no
+  // in-app upload). Undefined when the item has no linked folder.
+  function evidenceFolderUrl(f: Finding): string | undefined {
+    const scope = scopeOf(f);
+    const folder = folders.find((fo) => folderScopeId(fo) === scope);
+    return folder?.folderLink || folder?.policyLink || undefined;
+  }
 
   // Group by sub-criterion for a scannable round view.
   const groups = useMemo(() => {
@@ -162,26 +195,45 @@ export function Clarification() {
       </Card>
 
       <Card>
-        <h4 style={{ marginTop: 0, fontSize: 13.5 }}>Open findings ({openFindings.length})</h4>
-        {openFindings.length === 0 && <p style={{ fontSize: 12.5, color: "#6b7280" }}>No open findings to clarify. Raise findings on the Findings page first.</p>}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+          <h4 style={{ margin: 0, fontSize: 13.5 }}>
+            {focusScope ? `Findings for ${focusScope} · ${scopeTitle(focusScope)}` : "Open findings"} ({openFindings.length})
+          </h4>
+          {focusScope && (
+            <button
+              onClick={() => setSearchParams({})}
+              style={{ fontSize: 11.5, color: "#4f46e5", fontWeight: 600, background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}
+            >
+              Show all open findings
+            </button>
+          )}
+        </div>
+        {openFindings.length === 0 && <p style={{ fontSize: 12.5, color: "#6b7280" }}>{focusScope ? "No open findings for this item." : "No open findings to clarify. Raise findings on the Findings page first."}</p>}
         {groups.map((g) => (
           <div key={g.subCritId} style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12.5, fontWeight: 700, color: INK, borderBottom: "2px solid #eef1f5", paddingBottom: 4, marginBottom: 6 }}>
               {g.subCritId} · {scopeTitle(g.subCritId)} <span style={{ color: "#94a3b8", fontWeight: 400 }}>({g.findings.length})</span>
             </div>
-            {g.findings.map((f) => (
-              <label key={f.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 4px", borderBottom: "1px solid #f1f5f9", cursor: "pointer" }}>
-                <input type="checkbox" checked={selected.has(f.id)} onChange={() => toggle(f.id)} disabled={running} style={{ marginTop: 3 }} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <b style={{ fontSize: 12.5 }}>{f.id}</b>
-                    <span style={{ fontSize: 11.5, color: "#64748b" }}>{f.clause || f.gd4ItemId}</span>
-                    {driftBadge(f)}
-                  </div>
-                  <div style={{ fontSize: 12.5, color: "#334155", marginTop: 2 }}>{f.issue}</div>
+            {g.findings.map((f) => {
+              const folderUrl = evidenceFolderUrl(f);
+              const isFocus = !!focusItem && f.gd4ItemId === focusItem;
+              return (
+                <div key={f.id} id={`clar-${f.id}`} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 4px", borderBottom: "1px solid #f1f5f9", background: isFocus ? "#fffbeb" : undefined, borderRadius: isFocus ? 6 : undefined }}>
+                  <input type="checkbox" checked={selected.has(f.id)} onChange={() => toggle(f.id)} disabled={running} style={{ marginTop: 3, cursor: "pointer" }} />
+                  <label style={{ flex: 1, cursor: "pointer" }} onClick={() => toggle(f.id)}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <b style={{ fontSize: 12.5 }}>{f.id}</b>
+                      <span style={{ fontSize: 11.5, color: "#64748b" }}>{f.clause || f.gd4ItemId}</span>
+                      {driftBadge(f)}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: "#334155", marginTop: 2 }}>{f.issue}</div>
+                  </label>
+                  {folderUrl
+                    ? <a href={folderUrl} target="_blank" rel="noreferrer" title="Open this item's evidence folder in Google Drive to add or update files, then come back and re-check" style={{ fontSize: 11, color: "#16a34a", fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap", padding: "2px 4px" }}>Open Evidence folder ↗</a>
+                    : <span title="No evidence folder is linked for this item on the Setup page" style={{ fontSize: 11, color: "#cbd5e1", whiteSpace: "nowrap", padding: "2px 4px" }}>No folder linked</span>}
                 </div>
-              </label>
-            ))}
+              );
+            })}
           </div>
         ))}
       </Card>
