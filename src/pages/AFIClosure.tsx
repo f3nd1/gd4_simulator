@@ -9,6 +9,7 @@ import { Card, inputStyle, filterSelectStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { BLUE, TONE } from "../lib/theme";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
 import { resolveFindingType, resolveNcSeverity, findingTypeTone, ncSeverityTone, isFindingOverdue } from "../lib/findingClassification";
 import { PanelReviewSection } from "../components/ui/PanelReviewSection";
 import type { ClosureFramework } from "../store/useWorkspaceStore";
@@ -43,8 +44,12 @@ export function AFIClosure() {
   const toggleClosureFramework = useWorkspaceStore((s) => s.toggleClosureFramework);
   const [closureFeedback, setClosureFeedback] = useState<{ id: string; aiOutput: string } | null>(null);
 
+  // Split sub-criteria (only 4.2) list one option per item scope (4.2.1, 4.2.2)
+  // so a finding for one item can be isolated — matching the Findings register
+  // and the rest of the app (runScopesForSub / scopeIdForItem).
   const subCritOptions = useMemo(
-    () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter)),
+    () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter))
+      .flatMap((sc) => runScopesForSub(sc.id).map((scopeId) => ({ id: scopeId, title: scopeTitle(scopeId) }))),
     [critFilter]
   );
 
@@ -61,7 +66,7 @@ export function AFIClosure() {
     const req = GD4_REQUIREMENTS.find((r) => r.id === focusItem);
     if (req) {
       setCritFilter(req.criterion);
-      setSubCritFilter(req.subCriterionId);
+      setSubCritFilter(scopeIdForItem(req.id, req.subCriterionId));
     }
     const first = allFindings.find((f) => f.gd4ItemId === focusItem);
     if (first) {
@@ -74,7 +79,7 @@ export function AFIClosure() {
   const findings = allFindings.filter((f) => {
     const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
     if (critFilter !== "All" && req?.criterion !== critFilter) return false;
-    if (subCritFilter !== "All" && req?.subCriterionId !== subCritFilter) return false;
+    if (subCritFilter !== "All" && (!req || scopeIdForItem(req.id, req.subCriterionId) !== subCritFilter)) return false;
     if (dateFilter !== "all" && f.createdAt) {
       const days = dateFilter === "7d" ? 7 : dateFilter === "30d" ? 30 : 90;
       const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;

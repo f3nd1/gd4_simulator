@@ -8,6 +8,7 @@ import { useAllFindings } from "../hooks/useAllFindings";
 import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, conciseKey, buildAiSuggestionUserPrompt, filterAiSuggestions, findingParagraphs, splitEvidenceNote, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { buildAnalytics } from "../lib/analytics";
+import { runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { buildSystemPrompt } from "../lib/ai/skills";
 import { useAISettingsStore } from "../store/useAISettingsStore";
@@ -77,12 +78,18 @@ export function FinalReport() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusItem]);
 
+  // Split sub-criteria (only 4.2) become one option per item scope (4.2.1,
+  // 4.2.2) so the filter can isolate a single item — the same runScopesForSub /
+  // scopeIdForItem split the Sub-Criterion Checklist, gate cards and Findings
+  // register already use. Every other sub yields exactly its own option.
   const subCritOptions = useMemo(
-    () => report.subCriteria.filter((sc) => filterCrit === "All" || sc.criterionId === filterCrit),
+    () => report.subCriteria
+      .filter((sc) => filterCrit === "All" || sc.criterionId === filterCrit)
+      .flatMap((sc) => runScopesForSub(sc.id).map((scopeId) => ({ id: scopeId, title: scopeTitle(scopeId) }))),
     [report.subCriteria, filterCrit]
   );
   const filteredItems = useMemo(
-    () => report.items.filter((it) => (filterCrit === "All" || it.criterion === filterCrit) && (filterSubCrit === "All" || it.subCriterionId === filterSubCrit)),
+    () => report.items.filter((it) => (filterCrit === "All" || it.criterion === filterCrit) && (filterSubCrit === "All" || scopeIdForItem(it.id, it.subCriterionId) === filterSubCrit)),
     [report.items, filterCrit, filterSubCrit]
   );
   function handleSummaryThumbsUp() {

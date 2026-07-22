@@ -2461,12 +2461,16 @@ export function EvidenceFolder() {
   const [critFilter, setCritFilter] = useState("");
   const [subFilter, setSubFilter]   = useState("");
   const criteria = useMemo(() => [...new Set(folders.map((f) => f.subCriterionId.split(".")[0]))].sort((a, b) => Number(a) - Number(b)), [folders]);
+  // Filter by folderScopeId, not subCriterionId: the split 4.2 has two folder
+  // records that both keep subCriterionId "4.2" (distinguished only by scopeId
+  // 4.2.1 / 4.2.2), so keying the option list and the filter on subCriterionId
+  // produced two identical "4.2" options that could not isolate either card.
   const subCriteria = useMemo(
-    () => folders.filter((f) => !critFilter || f.subCriterionId.split(".")[0] === critFilter).map((f) => ({ id: f.subCriterionId, name: f.folderName })),
+    () => folders.filter((f) => !critFilter || f.subCriterionId.split(".")[0] === critFilter).map((f) => ({ id: folderScopeId(f), name: f.folderName })),
     [folders, critFilter]
   );
   const visibleFolders = folders.filter(
-    (f) => (!critFilter || f.subCriterionId.split(".")[0] === critFilter) && (!subFilter || f.subCriterionId === subFilter)
+    (f) => (!critFilter || f.subCriterionId.split(".")[0] === critFilter) && (!subFilter || folderScopeId(f) === subFilter)
   );
 
   // One at-a-glance completion summary per sub-criterion, from the same
