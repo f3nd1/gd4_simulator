@@ -764,7 +764,14 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
                   // expand (see EvidenceCell). wordBreak stops a long file name
                   // stretching the table.
                   return (
-                    <tr key={r.lineId}>
+                    // Key MUST be scoped by dimension: cross-cutting grouping
+                    // (cde9ef2) lets one line appear under more than one
+                    // dimension, and every group's rows are flat-mapped into the
+                    // ONE tbody — so a bare lineId key collides across groups.
+                    // React then omits/duplicates a <tr> on re-render, leaving a
+                    // rowSpan cell spanning rows that no longer exist and
+                    // corrupting the whole table layout (the reported distortion).
+                    <tr key={`${g.key}-${r.lineId}`}>
                       {!g.rowsFromLegs && i === 0 && dimCell(totalRows)}
                       <td style={{ verticalAlign: "top", fontSize: 11 }}>
                         <span style={{ fontFamily: "ui-monospace,monospace", whiteSpace: "nowrap" }}>{r.itemRef}</span>
