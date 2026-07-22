@@ -60,6 +60,7 @@ export const NAV: NavGroup[] = [
     hint: "Raise findings, review them, and decide closures with evidence.",
     items: [
       { path: "/findings", label: "Findings", hint: "Raise and track AFIs / quality actions" },
+      { path: "/clarification", label: "Clarification round", hint: "After adding evidence, batch re-check several open findings at once and track each round" },
       { path: "/afi-closure", label: "Quality Action / AFI", hint: "Decide whether a finding can be closed, then confirm its effectiveness" },
     ],
     tools: [

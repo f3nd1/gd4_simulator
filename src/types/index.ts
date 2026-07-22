@@ -1110,6 +1110,40 @@ export type EvidenceAssessmentResult = {
   model?: string;
 };
 
+// ─── Clarification round (batch re-check) ───────────────────────────────────
+// A "clarification round" batch-re-checks several open findings at once after
+// the institution adds evidence, on top of the per-finding recheckFinding
+// engine. before/after are the finding's WEAKEST line verdict (a grouped
+// finding can trace to several lines); resolved = that weakest verdict is now
+// "Met". Human-gated throughout: the round reports outcomes, never closes a
+// finding — the human decides closure in Quality Action / AFI.
+export type ClarificationRoundFinding = {
+  findingId: string;
+  gd4ItemId: string;
+  clause?: string;
+  refs: string[];       // the requirement-line refs actually re-assessed
+  before: string;       // weakest verdict before this round (or "—")
+  after: string;        // weakest verdict after this round
+  resolved: boolean;    // after === "Met"
+};
+export type ClarificationRound = {
+  id: string;
+  roundNumber: number;
+  runAt: string;
+  findingCount: number;
+  resolvedCount: number;
+  stillOpenCount: number;
+  findings: ClarificationRoundFinding[];
+  // Findings the user selected but that could not be re-checked (no Option A
+  // run for their item, no traceable line…) — recorded honestly, not dropped.
+  skipped?: string[];
+  // Scopes whose re-run did not complete (Drive disconnected, no auditor…) so
+  // the "after" verdicts for their findings may be stale — surfaced, not hidden.
+  blockers?: string[];
+};
+// Transient progress while a round works through scopes sequentially.
+export type ClarificationProgress = { current: number; total: number; scope: string };
+
 // ─── Outcomes & Review pass (Option A, on-demand) ───────────────────────────
 // Result of the on-demand "Also assess Outcomes & Review" button: Option B's
 // staged third pass (runStagedOutcomeReviewAudit) run in isolation over the

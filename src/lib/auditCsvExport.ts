@@ -189,6 +189,60 @@ export function exportOptionASummaryCsv(
   return toCsv(headers, rows);
 }
 
+// Audit-wide requirement → PPD → evidence-file traceability matrix. One row per
+// requirement line across EVERY sub-criterion that has an Option A evidence run,
+// joining each PPD row to its evidence row on ref (same join as the
+// single-sub-criterion exportOptionASummaryCsv above). readMethod is resolved
+// per cited file from the run's own file ledger (the authoritative record of how
+// each file was read). No page-number column: page-level location within a
+// document is not captured for ANY file type (scanned-PDF vision text keeps only
+// an inline "--- Page N ---" marker, decoupled from chunk boundaries; text PDFs
+// lose page info entirely) — so we cite file + verbatim quote and deliberately
+// make no page claim rather than fabricate one.
+export function exportTraceabilityMatrixCsv(
+  results: Array<{
+    subCriterionId: string;
+    ppdRows: PPDReviewRow[];
+    evidenceRows: EvidenceAssessmentRow[];
+    fileLedger?: AuditFileRecord[];
+  }>
+): string {
+  const headers = [
+    "subCriterionId", "lineRef", "requirementText",
+    "ppdVerdict", "evidenceVerdict",
+    "evidenceFileNames", "citedChunkIds", "readMethod", "verbatimQuote",
+  ];
+  const rows: unknown[][] = [];
+  for (const res of results) {
+    const evByRef = new Map(res.evidenceRows.map((r) => [r.gdRef, r]));
+    // File name → how it was read (text/vision), from this run's ledger.
+    const methodByName = new Map<string, string>();
+    for (const f of res.fileLedger ?? []) if (f.readMethod) methodByName.set(f.name, f.readMethod);
+    // PPD rows are the requirement-line spine; fall back to evidence rows if a
+    // scope somehow has evidence but no stored PPD result, so no line is dropped.
+    const spine = res.ppdRows.length
+      ? res.ppdRows.map((p) => ({ ref: p.ref, requirementText: p.requirementText, ppdVerdict: String(p.verdict) }))
+      : res.evidenceRows.map((e) => ({ ref: e.gdRef, requirementText: e.requirementText, ppdVerdict: String(e.ppdVerdict) }));
+    for (const line of spine) {
+      const ev = evByRef.get(line.ref);
+      const fileNames = (ev?.evidenceFiles ?? []).map((f) => f.name);
+      const methods = [...new Set(fileNames.map((n) => methodByName.get(n)).filter(Boolean))];
+      rows.push([
+        res.subCriterionId,
+        line.ref,
+        line.requirementText,
+        line.ppdVerdict,
+        ev?.verdict ?? "",
+        fileNames.join("; "),
+        (ev?.evidenceChunkIds ?? []).join("; "),
+        methods.join("; "),
+        ev?.evidenceQuote ?? "",
+      ]);
+    }
+  }
+  return toCsv(headers, rows);
+}
+
 // Builds a minimal AuditRunRecord from live AuditProgressState for CSV export
 // during or immediately after a run (before the full record is persisted).
 export function progressToRunRecord(p: {

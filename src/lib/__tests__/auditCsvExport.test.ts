@@ -6,6 +6,7 @@ import {
   exportFileLedgerCsvFor,
   exportAISummaryCsv,
   exportOptionASummaryCsv,
+  exportTraceabilityMatrixCsv,
   progressToRunRecord,
   buildRunLogCsv,
   buildFullRunAiCsv,
@@ -459,6 +460,51 @@ describe("exportOptionASummaryCsv — per-line PPD + evidence summary", () => {
     const d = csv.split("\r\n")[1].split(",");
     expect(d[h.indexOf("ppdVerdict")]).toBe("Adequate");
     expect(d[h.indexOf("evidenceVerdict")]).toBe("");
+  });
+});
+
+describe("exportTraceabilityMatrixCsv — audit-wide requirement → PPD → evidence-file", () => {
+  it("emits one row per requirement line across multiple sub-criteria, with file/chunk/quote", () => {
+    const csv = exportTraceabilityMatrixCsv([
+      {
+        subCriterionId: "4.1",
+        ppdRows: [makePpdRow()],
+        evidenceRows: [makeEvRow({ evidenceQuote: "counselling is provided before enrolment", evidenceFiles: [{ name: "counselling.pdf", url: "u" }] })],
+        fileLedger: [makeFile({ name: "counselling.pdf", bucket: "evidence", readMethod: "vision" })],
+      },
+      {
+        subCriterionId: "6.2",
+        ppdRows: [makePpdRow({ ref: "6.2.1.DS1", gd4ItemId: "6.2.1", requirementText: "Management review is conducted", verdict: "Partial" })],
+        evidenceRows: [makeEvRow({ gdRef: "6.2.1.DS1", gd4ItemId: "6.2.1", verdict: "Not met", evidenceFiles: [], evidenceChunkIds: [], evidenceQuote: undefined })],
+        fileLedger: [],
+      },
+    ]);
+    const lines = csv.split("\r\n");
+    expect(lines).toHaveLength(3); // header + 2 lines, one per sub-criterion
+    const h = lines[0].split(",");
+    const row1 = lines[1].split(",");
+    const at = (r: string[], col: string) => r[h.indexOf(col)];
+    expect(at(row1, "subCriterionId")).toBe("4.1");
+    expect(at(row1, "lineRef")).toBe("4.1.1.DS1");
+    expect(at(row1, "evidenceVerdict")).toBe("Met");
+    expect(at(row1, "evidenceFileNames")).toBe("counselling.pdf");
+    expect(at(row1, "readMethod")).toBe("vision"); // resolved from the ledger by file name
+    expect(at(row1, "verbatimQuote")).toBe("counselling is provided before enrolment");
+    const row2 = lines[2].split(",");
+    expect(at(row2, "subCriterionId")).toBe("6.2");
+    expect(at(row2, "evidenceVerdict")).toBe("Not met");
+    expect(at(row2, "verbatimQuote")).toBe(""); // no quote → blank, never fabricated
+  });
+
+  it("has NO page column (page-level location is not captured for any file type)", () => {
+    const csv = exportTraceabilityMatrixCsv([{ subCriterionId: "4.1", ppdRows: [makePpdRow()], evidenceRows: [makeEvRow()], fileLedger: [] }]);
+    const header = csv.split("\r\n")[0].toLowerCase();
+    expect(header).not.toContain("page");
+  });
+
+  it("returns just a header when no sub-criterion has an Option A run", () => {
+    const csv = exportTraceabilityMatrixCsv([]);
+    expect(csv.split("\r\n")).toHaveLength(1);
   });
 });
 

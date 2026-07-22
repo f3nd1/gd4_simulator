@@ -9,7 +9,7 @@ import { ThreePillarNote, THREE_PILLAR_NOTE } from "../components/ui/ThreePillar
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 import { resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
-import { buildFindingsRegisterCsv, downloadCsv, downloadBlob } from "../lib/auditCsvExport";
+import { buildFindingsRegisterCsv, exportTraceabilityMatrixCsv, downloadCsv, downloadBlob } from "../lib/auditCsvExport";
 import { buildProvenance, provenanceLine } from "../lib/provenance";
 import { buildBoardSummaryMd } from "../lib/boardSummary";
 import { buildQaAppendixMd } from "../lib/qaAppendix";
@@ -33,6 +33,8 @@ export function ExportCentre() {
   const aiReviewLog = useWorkspaceStore((s) => s.aiReviewLog);
   const humanDecisionLog = useWorkspaceStore((s) => s.humanDecisionLog);
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
+  const evidenceAssessments = useWorkspaceStore((s) => s.evidenceAssessments);
+  const ppdReviewResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const scored = useScored();
   const findings = useAllFindings();
   // What / when / which model / what coverage — stamped on every export.
@@ -101,6 +103,38 @@ export function ExportCentre() {
       id: `EXP-${Date.now()}`,
       auditCycleId: cycle.id,
       exportName: "GD4_Findings.csv",
+      format: "CSV",
+      exportedAt: new Date().toLocaleString(),
+      exportedBy: cycle.owner,
+    });
+  }
+
+  // Requirement → PPD → evidence-file traceability, every sub-criterion with an
+  // Option A run. Keyed by the SCOPE (map key), which is the join key PPD and
+  // evidence results share (item id for split subs, else sub-criterion id).
+  const traceabilityResults = useMemo(
+    () =>
+      Object.entries(evidenceAssessments)
+        .map(([scope, ev]) => ({
+          subCriterionId: scope,
+          ppdRows: ppdReviewResults[scope]?.rows ?? [],
+          evidenceRows: ev.rows,
+          fileLedger: ev.fileLedger ?? [],
+        }))
+        .sort((a, b) => a.subCriterionId.localeCompare(b.subCriterionId)),
+    [evidenceAssessments, ppdReviewResults],
+  );
+  const traceabilityLineCount = useMemo(
+    () => traceabilityResults.reduce((n, r) => n + (r.ppdRows.length || r.evidenceRows.length), 0),
+    [traceabilityResults],
+  );
+
+  function exportTraceabilityCsv() {
+    downloadCsv(exportTraceabilityMatrixCsv(traceabilityResults), "GD4_Traceability_Matrix.csv");
+    addExportLogEntry({
+      id: `EXP-${Date.now()}`,
+      auditCycleId: cycle.id,
+      exportName: "GD4_Traceability_Matrix.csv",
       format: "CSV",
       exportedAt: new Date().toLocaleString(),
       exportedBy: cycle.owner,
@@ -177,6 +211,19 @@ export function ExportCentre() {
           >
             Internal QA appendix
           </button>
+          <button
+            onClick={exportTraceabilityCsv}
+            disabled={traceabilityLineCount === 0}
+            title={traceabilityLineCount === 0
+              ? "Run the PPD Review and Evidence assessment (Option A) on at least one item first"
+              : "One row per requirement line across every item with an Option A run: PPD verdict, evidence verdict, cited file(s), chunk(s), read method and verbatim quote"}
+            style={{ cursor: traceabilityLineCount === 0 ? "not-allowed" : "pointer", opacity: traceabilityLineCount === 0 ? 0.5 : 1, border: "1px solid #cbd5e1", background: "#fff", color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
+          >
+            Traceability matrix (CSV){traceabilityLineCount > 0 ? ` — ${traceabilityLineCount} lines` : ""}
+          </button>
+        </div>
+        <div style={{ fontSize: 11.5, color: "#475569", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 10px", marginTop: 8 }}>
+          <b>Traceability matrix:</b> each requirement line's PPD clause, evidence verdict, the specific evidence file(s) and chunk(s) it draws on, and a verbatim quote. It cites the <b>file</b> and the <b>quote</b> but <b>not a page number</b> — page-level location within a document is not captured for any file type, so no page is claimed rather than a fabricated one.
         </div>
         <div style={{ fontSize: 11.5, color: "#475569", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 10px", marginTop: 10 }}>
           <b>Coverage:</b> {provenanceLine(provenance)}

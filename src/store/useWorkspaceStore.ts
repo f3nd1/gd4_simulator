@@ -61,7 +61,7 @@ import { selectLineStatusMemories, selectLineStatusCalibration } from "../lib/la
 import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, OutcomeReviewPassResult, ReportAiSuggestion, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, OutcomeReviewPassResult, ReportAiSuggestion, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt, ClarificationRound, ClarificationProgress } from "../types";
 import { orderBySizeForVisionBudget } from "../lib/drive/textUtils";
 import { buildOutcomeReviewLegUpdates } from "../lib/outcomeReviewApply";
 import { aiRateFor } from "../lib/aiCost";
@@ -142,6 +142,41 @@ const PROMPT_PERSIST_CAP = 4_000;
 // Task 2: how many PAST (non-current) Option A runs to keep per
 // sub-criterion, same cap convention as useCalibrationStore's RUN_HISTORY_CAP.
 const OPTION_A_RUN_HISTORY_CAP = 20;
+// Clarification-round history cap — small records (no prompts/blobs), so a
+// generous ceiling; same length-cap-in-the-action convention as the run history.
+const CLARIFICATION_ROUND_CAP = 50;
+
+// Resolve a finding to the Evidence-Folder scope + requirement-line refs that
+// runEvidenceAssessment can retry. Shared by recheckFinding (one finding) and
+// runClarificationRound (a batch), so the "which lines does this finding trace
+// to" logic lives in exactly one place. Pure — no store access.
+export function resolveRecheckTarget(
+  finding: Finding,
+  ppdReviewResults: Record<string, PPDReviewResult>,
+  evidenceAssessments: Record<string, EvidenceAssessmentResult>,
+): { ok: true; scope: string; retryRefs: string[] } | { ok: false; reason: string } {
+  const req = GD4_REQUIREMENTS.find((r) => r.id === finding.gd4ItemId);
+  if (!req) return { ok: false, reason: `This finding's item (${finding.gd4ItemId}) is not a recognised GD4 requirement.` };
+  const scope = scopeIdForItem(finding.gd4ItemId, req.subCriterionId);
+  const ppd = ppdReviewResults[scope];
+  const ev = evidenceAssessments[scope];
+  if (!ppd || !ev) return { ok: false, reason: "There is no Option A evidence run for this item to re-check. Run the PPD Review and Evidence assessment on the Evidence Folder first, then add your new evidence and re-check." };
+  const candidates = [finding.clause, ...(finding.linkedSourceRefs ?? [])].filter((r): r is string => !!r);
+  const wanted = new Set(candidates.map(normalizeAuditRef));
+  const retryRefs = ppd.rows.filter((r) => wanted.has(normalizeAuditRef(r.ref))).map((r) => r.ref);
+  if (retryRefs.length === 0) return { ok: false, reason: "This finding does not trace to a specific evidence line that can be re-checked (no matching requirement-line reference in the last run)." };
+  return { ok: true, scope, retryRefs };
+}
+
+// A grouped finding traces to several lines; its gap status is the WEAKEST of
+// their verdicts (Not met < Partial < Met). "Not assessed" is neutral and
+// ignored. Used to compute a clarification round's before/after per finding.
+const VERDICT_RANK: Record<string, number> = { "Not met": 0, Partial: 1, Met: 3 };
+export function weakestVerdict(verdicts: string[]): string {
+  const ranked = verdicts.filter((v) => v in VERDICT_RANK);
+  if (ranked.length === 0) return verdicts[0] ?? "—";
+  return ranked.reduce((a, b) => (VERDICT_RANK[b] < VERDICT_RANK[a] ? b : a));
+}
 
 // Run Log: how many past automated runs (Full Auto sweeps + Hybrid per-item
 // drafts) to keep, newest first. Entries are lightweight summaries (no raw
@@ -1001,6 +1036,15 @@ export type WorkspaceState = {
   // findings (with a prior PPD + Evidence run and a matching line ref) are
   // re-checkable; anything else returns ok:false with the reason.
   recheckFinding: (findingId: string) => Promise<{ ok: boolean; message: string }>;
+  // Clarification round: batch-re-check several open findings after new evidence
+  // is added. Groups the selected findings by Evidence-Folder scope, unions each
+  // scope's retry refs, then runs runEvidenceAssessment once per scope
+  // SEQUENTIALLY (the engine's shared `busy` flag means concurrent scopes cancel
+  // each other). Records a round to clarificationRounds. Never closes a finding.
+  clarificationRounds: ClarificationRound[];
+  clarificationProgress: ClarificationProgress | null;
+  runClarificationRound: (findingIds: string[]) => Promise<{ ok: boolean; message: string; round?: ClarificationRound }>;
+  clearClarificationRounds: () => void;
   clearAllFindings: () => void;
   // Delete every finding for ONE sub-criterion, leaving all others intact.
   // Reuses the same back-pointer sweep as clearAllFindings / removeCustomFinding.
@@ -3431,6 +3475,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ppdReviewHistory: {},
             evidenceAssessments: {},
             evidenceAssessmentHistory: {},
+            clarificationRounds: [],
             auditRunHistory: {},
             lastAuditRuns: {},
             ...buildDemoDataset(evidence),
@@ -3465,6 +3510,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ppdReviewHistory: {},
           evidenceAssessments: {},
           evidenceAssessmentHistory: {},
+          clarificationRounds: [],
           analysisPath: {},
           pendingCommits: {},
           auditRunHistory: {},
@@ -7101,22 +7147,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const s = get();
         const finding = s.customFindings.find((f) => f.id === findingId);
         if (!finding) return { ok: false, message: "This finding cannot be re-checked (demo/seed findings are not re-runnable)." };
-        const req = GD4_REQUIREMENTS.find((r) => r.id === finding.gd4ItemId);
-        if (!req) return { ok: false, message: `This finding's item (${finding.gd4ItemId}) is not a recognised GD4 requirement.` };
-        // The Evidence Folder scope this item runs under (its item id for a
-        // split sub like 4.2, else the sub-criterion) — the same key the run
-        // results are stored under.
-        const scope = scopeIdForItem(finding.gd4ItemId, req.subCriterionId);
-        const ppd = get().ppdReviewResults[scope];
-        const ev = get().evidenceAssessments[scope];
-        if (!ppd || !ev) return { ok: false, message: "There is no Option A evidence run for this item to re-check. Run the PPD Review and Evidence assessment on the Evidence Folder first, then add your new evidence and re-check." };
-        // The requirement line(s) this finding traces to — its own clause plus
-        // any grouped linkedSourceRefs — that the engine can actually retry
-        // (i.e. that exist as PPD rows). normalizeAuditRef both sides.
-        const candidates = [finding.clause, ...(finding.linkedSourceRefs ?? [])].filter((r): r is string => !!r);
-        const wanted = new Set(candidates.map(normalizeAuditRef));
-        const retryRefs = ppd.rows.filter((r) => wanted.has(normalizeAuditRef(r.ref))).map((r) => r.ref);
-        if (retryRefs.length === 0) return { ok: false, message: "This finding does not trace to a specific evidence line that can be re-checked (no matching requirement-line reference in the last run)." };
+        // Resolve the Evidence-Folder scope + retryable line refs (shared with
+        // the clarification-round batch driver, so the logic lives in one place).
+        const target = resolveRecheckTarget(finding, get().ppdReviewResults, get().evidenceAssessments);
+        if (!target.ok) return { ok: false, message: target.reason };
+        const { scope, retryRefs } = target;
+        const ev = get().evidenceAssessments[scope]!;
         const beforeVerdict = new Map(ev.rows.map((r) => [normalizeAuditRef(r.gdRef), r.verdict]));
         const beforeRunAt = ev.runAt;
         // Re-read the evidence folder fresh and re-assess ONLY these lines.
@@ -7148,6 +7184,90 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             : " The new evidence did not change the assessment. The finding stands.";
         return { ok: true, message: `Re-checked ${parts.join("; ")}.${tail}` };
       },
+
+      clarificationRounds: [],
+      clarificationProgress: null,
+      runClarificationRound: async (findingIds) => {
+        if (get().clarificationProgress) return { ok: false, message: "A clarification round is already running." };
+        const s0 = get();
+        // Resolve every selected finding to its scope + retryable refs; anything
+        // that can't be re-checked is recorded honestly, never silently dropped.
+        type Target = { finding: Finding; scope: string; refs: string[] };
+        const targets: Target[] = [];
+        const skipped: string[] = [];
+        for (const id of findingIds) {
+          const finding = s0.customFindings.find((f) => f.id === id);
+          if (!finding) { skipped.push(`${id}: not a re-checkable finding (demo/seed).`); continue; }
+          const t = resolveRecheckTarget(finding, s0.ppdReviewResults, s0.evidenceAssessments);
+          if (!t.ok) { skipped.push(`${finding.gd4ItemId}: ${t.reason}`); continue; }
+          targets.push({ finding, scope: t.scope, refs: t.retryRefs });
+        }
+        if (targets.length === 0) {
+          return { ok: false, message: skipped.length ? `Nothing could be re-checked. ${skipped[0]}` : "No findings were selected for this round." };
+        }
+        // The finding's gap status BEFORE this round = weakest of its lines'
+        // verdicts, snapshotted now (before any re-run touches the rows).
+        const weakestFor = (scope: string, refs: string[]): string => {
+          const rows = get().evidenceAssessments[scope]?.rows ?? [];
+          const verds = refs.map((rr) => rows.find((r) => normalizeAuditRef(r.gdRef) === normalizeAuditRef(rr))?.verdict).filter((v): v is EvidenceVerdict => !!v);
+          return weakestVerdict(verds);
+        };
+        const beforeOf = new Map(targets.map((t) => [t.finding.id, weakestFor(t.scope, t.refs)]));
+        // Group by scope and union each scope's refs → one runEvidenceAssessment
+        // call per scope, run SEQUENTIALLY (shared busy flag; see the action doc).
+        const byScope = new Map<string, Set<string>>();
+        for (const t of targets) {
+          if (!byScope.has(t.scope)) byScope.set(t.scope, new Set());
+          t.refs.forEach((r) => byScope.get(t.scope)!.add(r));
+        }
+        const scopes = [...byScope.keys()];
+        const blockers: string[] = [];
+        for (let i = 0; i < scopes.length; i++) {
+          const scope = scopes[i];
+          set({ clarificationProgress: { current: i + 1, total: scopes.length, scope } });
+          const beforeRunAt = get().evidenceAssessments[scope]?.runAt;
+          await get().runEvidenceAssessment(scope, [...byScope.get(scope)!]);
+          const after = get().evidenceAssessments[scope];
+          if (!after || after.runAt === beforeRunAt) {
+            blockers.push(`${scope}: ${get().auditBlockedReason ?? "the re-run did not complete (check Drive is connected and an auditor is selected)."}`);
+          }
+        }
+        set({ clarificationProgress: null });
+        // Compute after-verdicts and build the round record.
+        const roundFindings = targets.map((t) => {
+          const after = weakestFor(t.scope, t.refs);
+          return {
+            findingId: t.finding.id,
+            gd4ItemId: t.finding.gd4ItemId,
+            clause: t.finding.clause,
+            refs: t.refs,
+            before: beforeOf.get(t.finding.id) ?? "—",
+            after,
+            resolved: after === "Met",
+          };
+        });
+        const resolvedCount = roundFindings.filter((f) => f.resolved).length;
+        const round: ClarificationRound = {
+          id: `RND-${Date.now().toString(36).toUpperCase()}`,
+          roundNumber: get().clarificationRounds.length + 1,
+          runAt: new Date().toISOString(),
+          findingCount: roundFindings.length,
+          resolvedCount,
+          stillOpenCount: roundFindings.length - resolvedCount,
+          findings: roundFindings,
+          skipped: skipped.length ? skipped : undefined,
+          blockers: blockers.length ? blockers : undefined,
+        };
+        set((st) => ({ clarificationRounds: [round, ...st.clarificationRounds].slice(0, CLARIFICATION_ROUND_CAP) }));
+        await flushPendingSaves();
+        const tail = blockers.length
+          ? ` ${blockers.length} scope(s) could not be re-run — their findings may be unchanged.`
+          : resolvedCount > 0
+            ? " Resolved findings are NOT auto-closed — close them in Quality Action / AFI if you judge them met."
+            : " No findings were resolved this round.";
+        return { ok: true, message: `Round ${round.roundNumber}: ${resolvedCount} of ${roundFindings.length} now resolved, ${round.stillOpenCount} still open.${tail}`, round };
+      },
+      clearClarificationRounds: () => set({ clarificationRounds: [] }),
 
       clearAllFindings: () => {
         const ids = get().customFindings.map((f) => f.id);
@@ -7536,6 +7656,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ...s,
           fileTextCache: {},
           changeLog: [],
+          // Transient run progress must never persist — a reload mid-round would
+          // otherwise restore a stuck progress bar with no run behind it.
+          clarificationProgress: null,
           aiReviewLog: capLog(s.aiReviewLog),
           ppdReviewResults: capPpd(s.ppdReviewResults),
           ppdReviewHistory: capPpdHistory(s.ppdReviewHistory),

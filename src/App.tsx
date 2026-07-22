@@ -17,6 +17,7 @@ import { SubCriterionChecklist } from "./pages/SubCriterionChecklist";
 import { Sampling } from "./pages/Sampling";
 import { Interview } from "./pages/Interview";
 import { Findings } from "./pages/Findings";
+import { Clarification } from "./pages/Clarification";
 import { AFIClosure } from "./pages/AFIClosure";
 import { AIReview } from "./pages/AIReview";
 import { HumanDecisionLog } from "./pages/HumanDecisionLog";
@@ -58,6 +59,7 @@ export default function App() {
           <Route path="/sampling" element={<Sampling />} />
           <Route path="/interview" element={<Interview />} />
           <Route path="/findings" element={<Findings />} />
+          <Route path="/clarification" element={<Clarification />} />
           <Route path="/afi-closure" element={<AFIClosure />} />
           {/* Diagnostic / superseded surfaces — inaccessible when developer
               tools are hidden in Settings (see DEVELOPER_TOOL_PATHS). The
