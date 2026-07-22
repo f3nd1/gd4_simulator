@@ -119,13 +119,50 @@ const EVIDENCE_ASSESSMENT_SCHEMA: ChatSchema = { name: "evidence_assessment", sc
 // contradiction cannot occur there by construction; do not wire this in there.
 const POSITIVE_CONCLUSION_PATTERNS = ["assessed as met", "assessed as adequate", "fully satisfies", "fully meets", "fully evidenced"];
 const NEGATIVE_CONCLUSION_PATTERNS = ["assessed as not met", "assessed as partial", "assessed as not documented", "not evidenced", "does not satisfy", "does not meet"];
-function conclusionMismatch(isPositiveVerdict: boolean, comment: string): string | undefined {
+// Three-way verdict class, so "Partial" and "Not met" are distinguishable: the
+// original boolean guard lumped them into one "negative" bucket, which let a
+// stored "Not met" (shown as "No evidence") sit beside a comment concluding
+// "...rated Partial" undetected (real case: 6.1.1.DS1.g). Word-bounded regex,
+// longest alternative first, so "rated not met" never half-matches as "met"
+// and "incorporated methods" never matches "rated met".
+type VerdictClass = "positive" | "partial" | "negative";
+const EXPLICIT_CONCLUSION_RE = /\b(?:assessed as|rated(?: as)?)\s+"?(not met|not documented|partially met|partial|met|adequate)\b/g;
+const CONCLUSION_CLASS: Record<string, VerdictClass> = {
+  met: "positive", adequate: "positive",
+  partial: "partial", "partially met": "partial",
+  "not met": "negative", "not documented": "negative",
+};
+function conclusionMismatch(verdictClass: VerdictClass, comment: string): string | undefined {
   const tail = comment.slice(-300).toLowerCase();
+  // 1) Explicit named conclusion ("assessed as X" / "rated X"): the LAST one in
+  //    the tail is the model's final word — flag when it names a different
+  //    class than the stored verdict. This is the only path that can tell
+  //    Partial apart from Not met.
+  let last: RegExpMatchArray | null = null;
+  for (const m of tail.matchAll(EXPLICIT_CONCLUSION_RE)) last = m;
+  if (last) return CONCLUSION_CLASS[last[1]] !== verdictClass ? last[0].replace(/"/g, "") : undefined;
+  // 2) No explicit conclusion: fall back to the ORIGINAL loose two-bucket check
+  //    unchanged (positive vs non-positive), so looser vocabulary ("not
+  //    evidenced" naming a promise inside a legitimately-Partial comment)
+  //    keeps exactly its old, conservative behaviour — no new false positives.
+  const isPositiveVerdict = verdictClass === "positive";
   const positiveHit = POSITIVE_CONCLUSION_PATTERNS.find((p) => tail.includes(p));
   const negativeHit = NEGATIVE_CONCLUSION_PATTERNS.find((p) => tail.includes(p));
   if (isPositiveVerdict && negativeHit && !positiveHit) return negativeHit;
   if (!isPositiveVerdict && positiveHit && !negativeHit) return positiveHit;
   return undefined;
+}
+
+// UI-side checker for STORED rows written before (or despite) the generation
+// guard: maps a stored PPD/Evidence verdict to its class and asks whether the
+// narrative's conclusion names a different one. Detail views use it to flag a
+// contradictory stored pair honestly instead of rendering it as coherent —
+// display can't rewrite AI text, only refuse to present a contradiction
+// silently. "Not assessed" never mismatches (it asserts nothing).
+export function verdictNarrativeMismatch(verdict: string | undefined, narrative: string | undefined): string | undefined {
+  if (!verdict || !narrative || verdict === "Not assessed") return undefined;
+  const cls: VerdictClass = verdict === "Met" || verdict === "Adequate" ? "positive" : verdict === "Partial" ? "partial" : "negative";
+  return conclusionMismatch(cls, narrative);
 }
 
 const PPD_EXTRACT_SCHEMA: ChatSchema = { name: "ppd_extract", schema: sObj({
@@ -2623,7 +2660,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     // comment (which legitimately concluded "Adequate" before the downgrade)
     // against the NEW "Partial" verdict would misfire on the gate's own work.
     if (!uncitedAdequate) {
-      const mismatch = conclusionMismatch(verdict === "Adequate", verifiedComment);
+      const mismatch = conclusionMismatch(verdict === "Adequate" ? "positive" : verdict === "Partial" ? "partial" : "negative", verifiedComment);
       if (mismatch) {
         const originalVerdict = verdict;
         verdict = "Not assessed";
@@ -3155,7 +3192,7 @@ Respond with JSON only:
       // all three hard-gates above, so a line those already downgraded (and
       // already appended its own explanatory note to) never also gets this
       // check applied to its now-gate-modified comment text.
-      const mismatch = conclusionMismatch(best.verdict === "Met", verifiedComment);
+      const mismatch = conclusionMismatch(best.verdict === "Met" ? "positive" : best.verdict === "Partial" ? "partial" : "negative", verifiedComment);
       if (mismatch) {
         return {
           ref: inp.ref,

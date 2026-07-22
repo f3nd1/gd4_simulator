@@ -15,6 +15,7 @@ import { BandImprovementPanel } from "../components/ui/BandImprovementPanel";
 import { bandTitle, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
 import { ApsrMatrixSelector } from "../components/ui/ApsrMatrixSelector";
 import type { HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
+import { verdictNarrativeMismatch } from "../lib/ai/agentRuntime";
 
 // Where the "Why is scoring built this way?" link points — the in-repo scoring
 // history/rationale doc (GitHub blob, so it opens for a live-app user).
@@ -1255,6 +1256,13 @@ export function SubCriterionChecklist() {
                                   <span style={{ fontSize: 10.5, color: "#94a3b8", fontStyle: "italic" }}>No policy-only verdict recorded by this run — the reasoning below is its policy assessment.</span>
                                 )}
                                 {aiItem.ppdVerdict && <span style={{ fontSize: 10.5, color: "#94a3b8" }}>PPD reasoning as recorded by this run</span>}
+                                {(() => {
+                                  // Stored rows from before the generation-side consistency
+                                  // guard can carry a verdict whose own narrative concludes
+                                  // differently — flag it rather than render it as coherent.
+                                  const mm = verdictNarrativeMismatch(aiItem.ppdVerdict, aiItem.ppdComment || aiItem.apsr?.approach.note);
+                                  return mm ? <span style={{ fontSize: 10.5, color: "#b45309", fontWeight: 600 }}>⚠ the narrative below concludes "{mm}" — it contradicts this stored verdict; re-run this item for a consistent assessment</span> : null;
+                                })()}
                               </div>
                               {(aiItem.ppdComment || aiItem.apsr?.approach.note) ? (
                                 <div style={{ fontSize: 12, color: "#1e293b", lineHeight: 1.45, whiteSpace: "pre-line" }}>{aiItem.ppdComment || aiItem.apsr?.approach.note}</div>
@@ -1276,6 +1284,13 @@ export function SubCriterionChecklist() {
                                 {aiItem.evidenceVerdict && aiItem.evidenceVerdict !== l.status && (
                                   <span style={{ fontSize: 10.5, color: "#b45309" }}>differs from the current verdict above (edited after this run)</span>
                                 )}
+                                {(() => {
+                                  // Same honest flag as the PPD tab: a pre-guard stored row
+                                  // whose narrative concludes a different verdict than the
+                                  // badge (the 6.1.1.DS1.g case) must not render silently.
+                                  const mm = verdictNarrativeMismatch(aiItem.evidenceVerdict, aiItem.evidenceComment || aiItem.apsr?.processes.note);
+                                  return mm ? <span style={{ fontSize: 10.5, color: "#b45309", fontWeight: 600 }}>⚠ the narrative below concludes "{mm}" — it contradicts this stored verdict; re-run this item for a consistent assessment</span> : null;
+                                })()}
                               </div>
                               {(aiItem.evidenceComment || aiItem.apsr?.processes.note) ? (
                                 <div style={{ fontSize: 12, color: "#1e293b", lineHeight: 1.45, whiteSpace: "pre-line" }}>{aiItem.evidenceComment || aiItem.apsr?.processes.note}</div>

@@ -268,14 +268,14 @@ Give a one-line justification naming what matched or what was missed. Respond wi
           <h3 style={{ marginTop: 0, fontSize: 14 }}>AI Calibration — benchmark against real SSG reports</h3>
           <div style={{ fontSize: 12.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px" }}>
             <b>No benchmark findings left.</b> Every seeded and uploaded finding has been removed. Click{" "}
-            <b>"Reset to original 67 findings"</b> once it reappears below, or upload an audit report above to add
+            <b>"Reset to original 59 findings"</b> once it reappears below, or upload an audit report above to add
             findings with AI. Real finding text is never invented by the app.
           </div>
           <button
-            onClick={() => { if (confirm("Restore the 67 original SSG findings to their seeded text and un-delete any you removed? Any audit reports you've uploaded yourself are not affected.")) resetToDefaults(); }}
+            onClick={() => { if (confirm("Restore the 59 original SSG findings to their seeded text and un-delete any you removed? Any audit reports you've uploaded yourself are not affected.")) resetToDefaults(); }}
             style={{ marginTop: 10, cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
           >
-            Reset to original 67 findings
+            Reset to original 59 findings
           </button>
         </Card>
       </div>
@@ -309,10 +309,10 @@ Give a one-line justification naming what matched or what was missed. Respond wi
             Export CSV
           </button>
           <button
-            onClick={() => { if (confirm("Restore the 67 original SSG findings to their seeded text and un-delete any you removed? Any audit reports you've uploaded yourself are not affected.")) resetToDefaults(); }}
+            onClick={() => { if (confirm("Restore the 59 original SSG findings to their seeded text and un-delete any you removed? Any audit reports you've uploaded yourself are not affected.")) resetToDefaults(); }}
             style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 8, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c" }}
           >
-            Reset to original 67 findings
+            Reset to original 59 findings
           </button>
         </div>
         <p style={{ fontSize: 12, color: "#6b7280", margin: "6px 0 0" }}>
@@ -472,7 +472,7 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
     setEditDraft(null);
   }
   function removeFinding(a: BenchmarkAFI) {
-    if (!confirm(`Remove finding ${a.id}? This cannot be undone (use "Reset to original 67 findings" above to recover a seeded finding).`)) return;
+    if (!confirm(`Remove finding ${a.id}? This cannot be undone (use "Reset to original 59 findings" above to recover a seeded finding).`)) return;
     removeEntry(a.id);
   }
 

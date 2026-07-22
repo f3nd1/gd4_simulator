@@ -92,6 +92,35 @@ describe("Evidence judge verdict/comment self-consistency guard", () => {
     expect(row.comment).not.toContain("⚠ Verdict/comment mismatch");
   });
 
+  it("verdict 'Not met' + comment concluding 'rated Partial' is caught (the 6.1.1.DS1.g case — Partial and Not met are distinct classes)", async () => {
+    mockJudge({
+      evidenceSummary: "Some tracking exists.",
+      verdict: "Not met",
+      comment: "Corrective actions are tracked in the register but the monitoring-timeline promise itself was not shown, so the line is rated Partial.",
+      promiseChecks: [],
+      chunkIds: ["C001"],
+    });
+    const { rows } = await runEvidenceAssessment([LINE], EVIDENCE_DOC, SETTINGS, {});
+    const row = rows.find((r) => r.ref === "3.1.1.DS1")!;
+    expect(row.verdict).toBe("Not assessed");
+    expect(row.comment).toContain("⚠ Verdict/comment mismatch");
+    expect(row.comment).toContain("rated partial");
+  });
+
+  it("verdict 'Partial' whose comment merely mentions 'not evidenced' promises (no explicit conclusion) is NOT flagged — loose vocabulary keeps the old conservative behaviour", async () => {
+    mockJudge({
+      evidenceSummary: "Partial coverage.",
+      verdict: "Partial",
+      comment: "The induction promise is evidenced for two of five staff; the appraisal promise was not evidenced in the given passages.",
+      promiseChecks: [],
+      chunkIds: ["C001"],
+    });
+    const { rows } = await runEvidenceAssessment([LINE], EVIDENCE_DOC, SETTINGS, {});
+    const row = rows.find((r) => r.ref === "3.1.1.DS1")!;
+    expect(row.verdict).toBe("Partial");
+    expect(row.comment).not.toContain("⚠ Verdict/comment mismatch");
+  });
+
   it("verdict 'Met' + comment concluding negatively is also caught (not just the Partial/Met direction)", async () => {
     mockJudge({
       evidenceSummary: "No clear record.",

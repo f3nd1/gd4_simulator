@@ -73,7 +73,7 @@ All persisted via `workspaceStorage` (Supabase-synced adapter in `src/store/supa
 | Store | Purpose | Persist key | `version` |
 |---|---|---|---|
 | `useWorkspaceStore` | Main store: cycle, auditors, folders, audit runs (`auditRunHistory`), Option A results, findings (`customFindings`), closures, calibration memories, human-decision log, `fileTextCache`, snapshots | `ucc-gd4-workspace:v3` | **6** |
-| `useChecklistModuleStore` | Per-item checklist lines/evidence/drafts; `raiseAllUnmetFindings()`, `confirmDraftFinding()`, `replaceAuditEvidence()` | `ucc-gd4-checklist:v2` | 1 |
+| `useChecklistModuleStore` | Per-item checklist lines/evidence/drafts; `raiseAllUnmetFindings()`, `confirmDraftFinding()`, `replaceAuditEvidence()` | `ucc-gd4-checklist:v2` | **2** |
 | `useAISettingsStore` | OpenAI key + model selection (the key DOES sync via Supabase) | `ucc-gd4-ai-settings:v1` | 1 |
 | `useBenchmarkAfiStore` | Full benchmark AFI list (67 seeded + uploads); scoped `resetToDefaults` preserves `CUST-*` uploads | `ucc-gd4-custom-benchmark:v1` | 1 |
 | `useCalibrationStore` | Benchmark match assessments (human-override-wins) | `ucc-gd4-calibration:v1` | 1 |
