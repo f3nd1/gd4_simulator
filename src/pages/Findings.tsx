@@ -5,6 +5,7 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useFindingDraftStore } from "../store/useFindingDraftStore";
 import { PanelReviewSection } from "../components/ui/PanelReviewSection";
 import { NextStepBanner } from "../components/ui/Guidance";
+import { DeepLinkBackBar } from "../components/ui/DeepLinkBackBar";
 import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
@@ -14,7 +15,7 @@ import { Pill } from "../components/ui/Pill";
 import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
 import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS, refLabel, refWithLabel } from "../data/gd4Requirements";
-import { runScopesForSub, scopeIdForItem } from "../lib/evidenceScope";
+import { runScopesForSub, scopeIdForItem, filterableScopes } from "../lib/evidenceScope";
 import { GOLD, INK } from "../lib/theme";
 import type { Finding, FindingType, Severity, FindingDimension, GroupedFindingDraft, NcSeverity } from "../types";
 import { runLiveFindingObservation, AIClientError } from "../lib/ai/agentRuntime";
@@ -127,13 +128,9 @@ export function Findings() {
   // Filter options are run-SCOPES, not sub-criteria, so the split sub 4.2 lists
   // 4.2.1 and 4.2.2 as separate selectable options (every other sub still lists
   // just itself). Returns scope-id strings.
-  const subCritOptions = useMemo(
-    () => {
-      const subs = critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter);
-      return subs.flatMap((sc) => runScopesForSub(sc.id));
-    },
-    [critFilter]
-  );
+  // Canonical, split-aware option list (see filterableScopes) — never rebuild
+  // this from GD4_SUB_CRITERIA here.
+  const subCritOptions = useMemo(() => filterableScopes(critFilter), [critFilter]);
 
   async function draftObservation() {
     const req = GD4_REQUIREMENTS.find((r) => r.id === form.gd4ItemId);
@@ -336,6 +333,7 @@ export function Findings() {
 
   return (
     <Fragment>
+    <DeepLinkBackBar />
     <NextStepBanner
       text={nextStepText("findings", {
         mode: useWorkspaceStore.getState().auditMode,
@@ -687,7 +685,7 @@ export function Findings() {
       <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "nowrap", overflowX: "auto", alignItems: "center" }}>
         {([
           { value: critFilter, onChange: (v: string) => { setCritFilter(v); setSubCritFilter("All"); }, options: [{ value: "All", label: "Criterion" }, ...GD4_CRITERIA.map((c) => ({ value: c.id, label: `${c.id}` }))] },
-          { value: subCritFilter, onChange: (v: string) => setSubCritFilter(v), options: [{ value: "All", label: "Sub-crit" }, ...subCritOptions.map((id) => ({ value: id, label: id }))] },
+          { value: subCritFilter, onChange: (v: string) => setSubCritFilter(v), options: [{ value: "All", label: "Sub-crit" }, ...subCritOptions.map((o) => ({ value: o.id, label: o.id }))] },
           { value: dimFilter, onChange: (v: string) => setDimFilter(v as FindingDimension | "All"), options: [{ value: "All", label: "Dimension" }, ...DIMENSIONS.slice(1).map((d) => ({ value: d, label: d === "Procedure" ? "Procedure" : d === "Evidence" ? "Evidence" : d }))] },
           { value: riskCatFilter, onChange: (v: string) => setRiskCatFilter(v as "A" | "B" | "C" | "D" | "All"), options: [{ value: "All", label: "Risk cat" }, ...RISK_CATS.slice(1).map((c) => ({ value: c, label: `Cat ${c}` }))] },
           { value: typeFilter, onChange: (v: string) => setTypeFilter(v as FindingType | "All"), options: [{ value: "All", label: "Type" }, ...TYPES.slice(1).map((t) => ({ value: t, label: t }))] },

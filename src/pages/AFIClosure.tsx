@@ -8,10 +8,11 @@ import { useAllFindings } from "../hooks/useAllFindings";
 import { Card, inputStyle, filterSelectStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { BLUE, TONE } from "../lib/theme";
-import { GD4_CRITERIA, GD4_SUB_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
+import { GD4_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { scopeIdForItem, filterableScopes } from "../lib/evidenceScope";
 import { resolveFindingType, resolveNcSeverity, findingTypeTone, ncSeverityTone, isFindingOverdue } from "../lib/findingClassification";
 import { PanelReviewSection } from "../components/ui/PanelReviewSection";
+import { DeepLinkBackBar } from "../components/ui/DeepLinkBackBar";
 import type { ClosureFramework } from "../store/useWorkspaceStore";
 
 const FRAMEWORKS: ClosureFramework[] = ["ISO 9001", "EduTrust"];
@@ -44,14 +45,9 @@ export function AFIClosure() {
   const toggleClosureFramework = useWorkspaceStore((s) => s.toggleClosureFramework);
   const [closureFeedback, setClosureFeedback] = useState<{ id: string; aiOutput: string } | null>(null);
 
-  // Split sub-criteria (only 4.2) list one option per item scope (4.2.1, 4.2.2)
-  // so a finding for one item can be isolated — matching the Findings register
-  // and the rest of the app (runScopesForSub / scopeIdForItem).
-  const subCritOptions = useMemo(
-    () => (critFilter === "All" ? GD4_SUB_CRITERIA : GD4_SUB_CRITERIA.filter((sc) => sc.criterionId === critFilter))
-      .flatMap((sc) => runScopesForSub(sc.id).map((scopeId) => ({ id: scopeId, title: scopeTitle(scopeId) }))),
-    [critFilter]
-  );
+  // Canonical, split-aware option list (see filterableScopes) — 4.2 lists as
+  // 4.2.1 / 4.2.2 so a finding for one item can be isolated.
+  const subCritOptions = useMemo(() => filterableScopes(critFilter), [critFilter]);
 
   // ?item=<gd4ItemId> deep link ("Manage closure →" on the Sub-Criterion
   // Checklist): pre-filter to that item's sub-criterion and expand + scroll to
@@ -90,6 +86,7 @@ export function AFIClosure() {
 
   return (
     <Card>
+      <DeepLinkBackBar />
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
         <Link to="/findings" style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
           ← Findings register
@@ -180,11 +177,11 @@ export function AFIClosure() {
             {open && (
               <div style={{ padding: "0 14px 14px", background: "#fbfcfe" }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, paddingTop: 10, borderTop: "1px solid #f1f5f9", flexWrap: "wrap" }}>
-                  <Link to={`/findings?item=${f.gd4ItemId}`} style={{ fontSize: 11.5, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
+                  <Link to={`/findings?item=${f.gd4ItemId}&from=afi-closure`} style={{ fontSize: 11.5, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}>
                     ← View in Findings
                   </Link>
                   {f.linkedChecklistLineIds?.length ? (
-                    <Link to={`/sub-checklist?item=${f.gd4ItemId}`} style={{ fontSize: 11.5, color: "#6b7280", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #e2e8f0", borderRadius: 6, background: "#f8fafc" }}>
+                    <Link to={`/sub-checklist?item=${f.gd4ItemId}&from=afi-closure`} style={{ fontSize: 11.5, color: "#6b7280", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #e2e8f0", borderRadius: 6, background: "#f8fafc" }}>
                       ← Checklist ({f.gd4ItemId})
                     </Link>
                   ) : null}

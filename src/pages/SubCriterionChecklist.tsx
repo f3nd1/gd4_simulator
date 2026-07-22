@@ -4,6 +4,7 @@ import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import { NextStepBanner } from "../components/ui/Guidance";
+import { DeepLinkBackBar } from "../components/ui/DeepLinkBackBar";
 import { nextStepText } from "../lib/guidanceText";
 import { useScored } from "../hooks/useScored";
 import { auditEvidence } from "../lib/evidenceAudit";
@@ -254,7 +255,7 @@ function EvidenceGapPanel({ specific, req, itemId }: {
             Likely: {finding.type}
           </span>
           <span style={{ fontSize: 11.5, color: "#374151", flex: 1 }}>{finding.desc}</span>
-          <Link to={`/findings?item=${itemId}`} style={{ fontSize: 11.5, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff", flexShrink: 0 }}>
+          <Link to={`/findings?item=${itemId}&from=sub-checklist`} style={{ fontSize: 11.5, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff", flexShrink: 0 }}>
             View / raise findings →
           </Link>
         </div>
@@ -546,6 +547,7 @@ export function SubCriterionChecklist() {
 
   return (
     <div>
+    <DeepLinkBackBar />
     <NextStepBanner text={nextStepText("sub-checklist", { mode: useWorkspaceStore.getState().auditMode })} />
     <div className="grid gap-3" style={{ gridTemplateColumns: menuOpen ? "300px 1fr" : "1fr" }}>
       {menuOpen && (
@@ -684,7 +686,7 @@ export function SubCriterionChecklist() {
                 the ?item= deep link the Final Report already reads (scrolls to
                 and highlights the item), the same pattern as the Findings link. */}
             <Link
-              to={`/final-report?item=${selectedId}`}
+              to={`/final-report?item=${selectedId}&from=sub-checklist`}
               style={{ fontSize: 12, color: "#854d0e", fontWeight: 600, textDecoration: "none", padding: "4px 10px", border: "1px solid #fde68a", borderRadius: 6, background: "#fffbeb" }}
             >
               Final Report for {selectedId} →

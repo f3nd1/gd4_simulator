@@ -4,6 +4,8 @@ import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { scopeIdForItem, scopeTitle, folderScopeId } from "../lib/evidenceScope";
 import { Card } from "../components/ui/Card";
+import { ControlLegend } from "../components/ui/ControlLegend";
+import { DeepLinkBackBar } from "../components/ui/DeepLinkBackBar";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
 import type { EvidenceDriftCheck, Finding } from "../types";
@@ -142,6 +144,7 @@ export function Clarification() {
 
   return (
     <div className="grid gap-3">
+      <DeepLinkBackBar />
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 15 }}>Clarification round</h3>
         <p style={{ fontSize: 13, color: "#475569", lineHeight: 1.55, maxWidth: 760 }}>
@@ -181,6 +184,14 @@ export function Clarification() {
             </button>
           )}
         </div>
+
+        <ControlLegend
+          style={{ marginTop: 8, maxWidth: 760 }}
+          items={[
+            { label: "Re-check selected", text: "runs the AI re-assessment on the ticked findings (re-reads each item's evidence folder). This spends AI." },
+            { label: "Check for updated evidence", text: "just refreshes the “evidence changed” badges by comparing Drive files against the last run. No AI, no verdict change." },
+          ]}
+        />
 
         {running && (
           <div style={{ marginTop: 12, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "10px 14px", fontSize: 12.5, color: "#1e3a8a" }}>

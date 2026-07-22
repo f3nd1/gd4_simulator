@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { runScopesForSub, scopeIdForItem, itemIdsForScope, isItemScope, subOfScope, scopeTitle } from "../evidenceScope";
+import { runScopesForSub, scopeIdForItem, itemIdsForScope, isItemScope, subOfScope, scopeTitle, filterableScopes } from "../evidenceScope";
+import { GD4_SUB_CRITERIA } from "../../data/gd4Requirements";
 
 describe("evidenceScope — 4.2 splits per item, everything else stays per sub-criterion", () => {
   it("4.2 yields two run scopes (its two items), in requirement order", () => {
@@ -48,5 +49,26 @@ describe("evidenceScope — 4.2 splits per item, everything else stays per sub-c
     expect(scopeTitle("4.2.1")).toBe("Student Contract");
     expect(scopeTitle("4.2.2")).toBe("Fee Collection and Fee Protection Scheme");
     expect(scopeTitle("4.1")).toContain("Pre-Course Counselling");
+  });
+
+  // The canonical filter-option list every sub-criterion/item dropdown must use.
+  it("filterableScopes splits 4.2 into 4.2.1 / 4.2.2 and never lists a bare 4.2", () => {
+    const ids = filterableScopes().map((s) => s.id);
+    expect(ids).toContain("4.2.1");
+    expect(ids).toContain("4.2.2");
+    expect(ids).not.toContain("4.2");           // the merged sub can never be an option
+    expect(ids).toContain("2.2");               // 2.2 is NOT split, stays merged
+    // Exactly one option per run scope across every sub-criterion, no duplicates.
+    const expected = GD4_SUB_CRITERIA.flatMap((sc) => runScopesForSub(sc.id));
+    expect(ids).toEqual(expected);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("filterableScopes narrows to one criterion and carries title + criterionId", () => {
+    const c4 = filterableScopes("4");
+    expect(c4.every((s) => s.criterionId === "4")).toBe(true);
+    const s421 = c4.find((s) => s.id === "4.2.1");
+    expect(s421).toEqual({ id: "4.2.1", title: "Student Contract", criterionId: "4", subCriterionId: "4.2" });
+    expect(filterableScopes("All").map((s) => s.id)).toEqual(filterableScopes().map((s) => s.id));
   });
 });

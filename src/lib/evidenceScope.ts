@@ -70,3 +70,25 @@ export function scopeTitle(scopeId: string): string {
 export function folderScopeId(f: Pick<EvidenceFolder, "scopeId" | "subCriterionId">): string {
   return f.scopeId ?? f.subCriterionId;
 }
+
+export type FilterableScope = { id: string; title: string; criterionId: string; subCriterionId: string };
+
+// THE canonical list of filterable sub-criterion / item scopes for ANY dropdown
+// or filter that lets a user pick a sub-criterion / item to narrow results by.
+// Split-aware by construction (4.2 → 4.2.1, 4.2.2 via runScopesForSub), so a UI
+// filter physically cannot re-merge a split sub. Every such picker MUST build
+// its options from this instead of iterating GD4_SUB_CRITERIA itself — iterating
+// the raw sub list is exactly what let the "4.2 merged" bug recur in four
+// separate filters. `id` is the scope id to store as the filter value; pair it
+// with scopeIdForItem(item) in the match predicate. Optional criterionId narrows
+// to one criterion ("All" or undefined = every criterion).
+export function filterableScopes(criterionId?: string): FilterableScope[] {
+  return GD4_SUB_CRITERIA
+    .filter((sc) => !criterionId || criterionId === "All" || sc.criterionId === criterionId)
+    .flatMap((sc) => runScopesForSub(sc.id).map((scopeId) => ({
+      id: scopeId,
+      title: scopeTitle(scopeId),
+      criterionId: sc.criterionId,
+      subCriterionId: sc.id,
+    })));
+}

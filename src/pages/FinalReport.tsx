@@ -7,8 +7,9 @@ import { useScored } from "../hooks/useScored";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { buildFinalReport, NOT_ASSESSED_AFI, eligibleSuggestionDims, suggestionKey, conciseKey, buildAiSuggestionUserPrompt, filterAiSuggestions, findingParagraphs, splitEvidenceNote, type ItemReport, type FindingReport } from "../lib/finalReport";
 import { ThumbsButtons } from "../components/ui/ThumbsButtons";
+import { DeepLinkBackBar } from "../components/ui/DeepLinkBackBar";
 import { buildAnalytics } from "../lib/analytics";
-import { runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
+import { scopeIdForItem, filterableScopes } from "../lib/evidenceScope";
 import { chatComplete, effectiveSettings } from "../lib/ai/aiClient";
 import { buildSystemPrompt } from "../lib/ai/skills";
 import { useAISettingsStore } from "../store/useAISettingsStore";
@@ -78,16 +79,9 @@ export function FinalReport() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusItem]);
 
-  // Split sub-criteria (only 4.2) become one option per item scope (4.2.1,
-  // 4.2.2) so the filter can isolate a single item — the same runScopesForSub /
-  // scopeIdForItem split the Sub-Criterion Checklist, gate cards and Findings
-  // register already use. Every other sub yields exactly its own option.
-  const subCritOptions = useMemo(
-    () => report.subCriteria
-      .filter((sc) => filterCrit === "All" || sc.criterionId === filterCrit)
-      .flatMap((sc) => runScopesForSub(sc.id).map((scopeId) => ({ id: scopeId, title: scopeTitle(scopeId) }))),
-    [report.subCriteria, filterCrit]
-  );
+  // Canonical, split-aware option list (see filterableScopes) — 4.2 lists as
+  // 4.2.1 / 4.2.2. Never rebuild this from a raw sub-criteria list here.
+  const subCritOptions = useMemo(() => filterableScopes(filterCrit), [filterCrit]);
   const filteredItems = useMemo(
     () => report.items.filter((it) => (filterCrit === "All" || it.criterion === filterCrit) && (filterSubCrit === "All" || scopeIdForItem(it.id, it.subCriterionId) === filterSubCrit)),
     [report.items, filterCrit, filterSubCrit]
@@ -158,6 +152,7 @@ export function FinalReport() {
 
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: "1fr" }}>
+      <DeepLinkBackBar />
       <CloseoutStepper />
       {/* In-page section jumps. scrollIntoView on ids, NOT href="#..." anchors:
           the app uses HashRouter, so an anchor href would clobber the
@@ -676,7 +671,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
             (selectedId), the reverse of the "Final Report for X" link there. */}
         <Link
           className="no-print"
-          to={`/sub-checklist?item=${it.id}`}
+          to={`/sub-checklist?item=${it.id}&from=final-report`}
           style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, textDecoration: "none", padding: "4px 10px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", color: "#475569", whiteSpace: "nowrap" }}
         >
           Sub-Criterion Checklist →
@@ -886,7 +881,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
         // list to strengthen the finding they're looking at here.
         <div className="no-print" style={{ marginTop: 6 }}>
           <Link
-            to={`/clarification?item=${it.id}`}
+            to={`/clarification?item=${it.id}&from=final-report`}
             style={{ fontSize: 11.5, color: "#4f46e5", fontWeight: 600, textDecoration: "none", padding: "3px 9px", border: "1px solid #c7d2fe", borderRadius: 6, background: "#eef2ff" }}
           >
             Clarify / strengthen these findings →
