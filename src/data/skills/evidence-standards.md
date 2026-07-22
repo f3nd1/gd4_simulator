@@ -84,6 +84,13 @@ This is the demand-side companion to the low-frequency/event-driven rule in the
 APSR guide: that says do not down-rate FEW event records; this says do not demand
 ABSENT ones.
 
+## Credit only the SPECIFIC promise, not adjacent activity
+
+A promise is met only when a record shows THAT specific commitment done; related or
+neighbouring activity does not count for it. "Documented but no record it was done"
+is a genuine gap — the "not implemented per PPD" pattern — never a soft Partial.
+Reserve "Partial" for partial evidence of the specific promise (part of the scope).
+
 ## What does NOT count as evidence
 
 - An index or table of contents listing what SHOULD be in the folder

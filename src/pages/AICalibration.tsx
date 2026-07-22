@@ -54,15 +54,21 @@ function useAppResults(subCriterionId: string) {
   return { ppd, ev, findings };
 }
 
-function appResultsDigest(subCriterionId: string, ppd: ReturnType<typeof useAppResults>["ppd"], ev: ReturnType<typeof useAppResults>["ev"], findings: Finding[]): string {
+// Dual-purpose: `full: false` (default) caps each verdict for the match-analysis
+// AI prompt (a token guard); `full: true` returns the complete, un-truncated text
+// for on-screen display (the "Show app results" panel scrolls, so full is fine) —
+// otherwise verdicts were cut mid-word (a fixed .slice(0,200) with no ellipsis)
+// and the PPD side showed only the brief shortComment.
+function appResultsDigest(subCriterionId: string, ppd: ReturnType<typeof useAppResults>["ppd"], ev: ReturnType<typeof useAppResults>["ev"], findings: Finding[], full = false): string {
+  const cap = (s: string) => (full ? s : s.slice(0, 200));
   const parts: string[] = [];
   if (ppd) {
-    parts.push(`PPD review verdicts:\n${ppd.rows.map((r) => `  [${r.ref}] ${r.verdict}: ${r.shortComment}`).join("\n")}`);
+    parts.push(`PPD review verdicts:\n${ppd.rows.map((r) => `  [${r.ref}] ${r.verdict}: ${full ? (r.fullComment || r.shortComment) : r.shortComment}`).join("\n")}`);
     if (ppd.contradictions?.length) parts.push(`PPD contradictions flagged:\n${ppd.contradictions.map((c) => `  - ${c.description}`).join("\n")}`);
   } else parts.push("PPD review: not run.");
-  if (ev) parts.push(`Evidence assessment verdicts:\n${ev.rows.map((r) => `  [${r.gdRef}] ${r.verdict}: ${(r.comment || r.evidenceSummary).slice(0, 200)}`).join("\n")}`);
+  if (ev) parts.push(`Evidence assessment verdicts:\n${ev.rows.map((r) => `  [${r.gdRef}] ${r.verdict}: ${cap(r.comment || r.evidenceSummary)}`).join("\n")}`);
   else parts.push("Evidence assessment: not run.");
-  if (findings.length > 0) parts.push(`Compiled findings:\n${findings.map((f) => `  [${f.id}] ${f.findingType ?? f.type}: ${f.issue}${f.observation ? ` — ${f.observation.slice(0, 200)}` : ""}`).join("\n")}`);
+  if (findings.length > 0) parts.push(`Compiled findings:\n${findings.map((f) => `  [${f.id}] ${f.findingType ?? f.type}: ${f.issue}${f.observation ? ` — ${cap(f.observation)}` : ""}`).join("\n")}`);
   else parts.push("Compiled findings: none.");
   return parts.join("\n\n");
 }
@@ -442,7 +448,9 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
   setMatch: (afiId: string, status: MatchStatus, justification: string, humanOverride: boolean) => void;
 }) {
   const { ppd, ev, findings } = useAppResults(subCriterionId);
-  const digest = appResultsDigest(subCriterionId, ppd, ev, findings);
+  // full: true — the on-screen "Show app results" panel shows the COMPLETE
+  // verdict text (it scrolls); only the match-analysis prompt digest is capped.
+  const digest = appResultsDigest(subCriterionId, ppd, ev, findings, true);
   const [showApp, setShowApp] = useState(false);
   const updateEntry = useBenchmarkAfiStore((s) => s.updateEntry);
   const removeEntry = useBenchmarkAfiStore((s) => s.removeEntry);

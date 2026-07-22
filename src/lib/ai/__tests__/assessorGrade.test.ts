@@ -456,6 +456,12 @@ describe("judge prompts carry the Phase 2 verdict framework", () => {
     await runEvidenceAssessment([{ ref: "1.1.1.DS1", requirementText: "x", ppdVerdict: "Adequate", ppdExtract: "d", promises: [] }], HR_SOURCE, SETTINGS, {});
     const judgeSystem = systems.find((s) => !s.includes("EXTRACTION pass"))!;
     expect(judgeSystem).toContain(EVIDENCE_BOUNDARY_RULES);
+    // The general specific-promise rule (Fix 1/2): a promise is "evidenced" only
+    // when a record shows THAT specific commitment, not adjacent activity, and a
+    // documented-but-unimplemented promise is a gap, not a soft Partial. Body of
+    // the prompt (not the tail window), so assert against the full judge system.
+    expect(judgeSystem).toContain("SPECIFIC-PROMISE RULE");
+    expect(judgeSystem).toContain("documented but not implemented per PPD");
     const tail = judgeSystem.slice(-700);
     expect(tail).toContain("Final decision procedure");
     expect(tail).toContain("Ties resolve DOWN");
