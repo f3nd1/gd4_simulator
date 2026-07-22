@@ -62,6 +62,7 @@ import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, OutcomeReviewPassResult, ReportAiSuggestion, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt } from "../types";
+import { orderBySizeForVisionBudget } from "../lib/drive/textUtils";
 import { buildOutcomeReviewLegUpdates } from "../lib/outcomeReviewApply";
 import { aiRateFor } from "../lib/aiCost";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
@@ -174,6 +175,13 @@ const DRIVE_FILE_TIMEOUT_MS = 60_000;   // single file export/extraction
 // indefinitely (a real 6-hour hang, 2026-07-20). 10 minutes clears the
 // legitimate worst case (5 vision pages × 90s AI timeout each + 60s fetch).
 const DRIVE_FILE_HARD_CAP_MS = 600_000;
+
+// Default per-run vision-image budget: how many scanned-PDF pages / image files
+// a single audit run will send to the vision model before pausing to ask the
+// user "spend more or skip?". Raised from 10 → 30 (2026-07-22): 10 was only ~2
+// scanned PDFs' worth and starved later files. The prompt (VisionBudgetPromptModal)
+// reads this dynamically, so the "reached" message always shows the real number.
+const DEFAULT_VISION_IMAGE_BUDGET = 30;
 
 // Best-effort evidence-type classification for audit-attached evidence, from
 // the checklist line being satisfied (the folder audit reads many files into
@@ -379,7 +387,7 @@ async function readDriveFileWithVision(
 
   const readScannedPdfViaVision = async (): Promise<VisionReadResult> => {
     if (!ctx.canDescribeImages) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
-    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: `Scanned/image-only PDF not read: the ${ctx.budget.max}-image vision budget for this run was reached.`, budgetBlocked: true };
+    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: `Scanned PDF — read attempted; this run's ${ctx.budget.max}-image vision budget was reached first. Recoverable: click "Proceed with all" on the vision-budget prompt to read it.`, budgetBlocked: true };
     const pagesToRender = Math.min(ctx.maxPerFile, ctx.budget.max - ctx.budget.count);
     const { images, totalPages } = await exportPdfPageImages(file, token, pagesToRender, signal);
     if (images.length === 0) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: no text could be extracted and its pages could not be rendered for vision." };
@@ -410,7 +418,7 @@ async function readDriveFileWithVision(
   // No typed text at all: a standalone image → describe it via vision.
   if (isImage) {
     if (!ctx.canDescribeImages) return { text: null, readMethod: "text", note: "No vision model available to read this image (enable AI and add an API key in Settings)." };
-    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: `Image not read: the ${ctx.budget.max}-image vision budget for this run was reached.`, budgetBlocked: true };
+    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: `Image — read attempted; this run's ${ctx.budget.max}-image vision budget was reached first. Recoverable: click "Proceed with all" on the vision-budget prompt to read it.`, budgetBlocked: true };
     ctx.budget.count++;
     const dataUrl = await exportFileImageDataUrl(file, token, signal);
     const description = await describeImage(dataUrl, ctx.visionSettings, { signal, onUsage: ctx.onUsage });
@@ -1440,9 +1448,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // If policyLink is a dedicated folder, every file in it is policy;
           // if it's the shared single-folder convention (folderLink doubling
           // as both), keep only files under the "Policy & Procedure" subfolder.
-          const policyFiles = parseFolderId(folder.policyLink)
+          // Smallest-first so large scans don't exhaust the vision budget before
+          // smaller/more-relevant files are read (see orderBySizeForVisionBudget).
+          const policyFiles = orderBySizeForVisionBudget(parseFolderId(folder.policyLink)
             ? allFiles
-            : allFiles.filter((f) => classifyFileBucket(f.path) === "policy");
+            : allFiles.filter((f) => classifyFileBucket(f.path) === "policy"));
           // Live recount at run time (Item 4, 2026-07-19): refresh the stored
           // policy file count from THIS run's listing so the estimate reflects
           // the folder's current contents, not the last check-access figure.
@@ -1490,7 +1500,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             canDescribeImages: ppdReadAi.enabled && !!ppdReadAi.apiKey,
             visionSettings: effectiveSettings(ppdReadAi, { purpose: "vision", context: composeSchoolContext(get().schoolContext) }),
             visionModelId: effectiveSettings(ppdReadAi, { purpose: "vision" }).model,
-            budget: { count: 0, max: 10 },
+            budget: { count: 0, max: DEFAULT_VISION_IMAGE_BUDGET },
             maxPerFile: 5,
           };
           for (let fi = 0; fi < policyFiles.length; fi++) {
@@ -1923,9 +1933,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const allFiles = await listFolderFilesRecursive(evidenceId, token, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS));
           // Dedicated evidence folder -> all files are evidence; shared
           // single-folder convention -> keep only the "Actual Evidence" bucket.
-          const evidenceFiles = parseFolderId(folder.folderLink)
+          // Smallest-first so large scans don't exhaust the vision budget before
+          // smaller/more-relevant files are read (see orderBySizeForVisionBudget).
+          const evidenceFiles = orderBySizeForVisionBudget(parseFolderId(folder.folderLink)
             ? allFiles
-            : allFiles.filter((f) => classifyFileBucket(f.path) === "evidence");
+            : allFiles.filter((f) => classifyFileBucket(f.path) === "evidence"));
           // Live recount at run time (Item 4, 2026-07-19): refresh the stored
           // evidence file count from THIS run's listing.
           set((st) => ({ folders: st.folders.map((f) => f.id === folder.id ? { ...f, evidenceFileCount: evidenceFiles.length, fileCountAt: new Date().toISOString() } : f) }));
@@ -1964,7 +1976,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             canDescribeImages: evReadAi.enabled && !!evReadAi.apiKey,
             visionSettings: effectiveSettings(evReadAi, { purpose: "vision", context: composeSchoolContext(get().schoolContext) }),
             visionModelId: effectiveSettings(evReadAi, { purpose: "vision" }).model,
-            budget: { count: 0, max: 10 },
+            budget: { count: 0, max: DEFAULT_VISION_IMAGE_BUDGET },
             maxPerFile: 5,
           };
           // Reads evidenceFiles[fi] and records the result into fileRecords /
@@ -4598,7 +4610,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // photos can't turn one "Run audit" click into dozens of API calls.
         // Scanned-PDF pages rendered for the vision fallback draw from the SAME
         // budget (one page = one image), with a per-file page cap on top.
-        const MAX_IMAGES = 10;
+        const MAX_IMAGES = DEFAULT_VISION_IMAGE_BUDGET;
         const MAX_PDF_VISION_PAGES = 5;
         let imagesDescribed = 0;
         // Tokens spent on the audit's helper AI calls (image descriptions and
@@ -4676,6 +4688,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (isPolicy) policyCount++;
           else evidenceCount++;
         };
+        // Smallest-first so large scans don't exhaust the vision budget before
+        // smaller files are read. In place so the read loop + fileRecords below
+        // stay index-aligned (same splice pattern as the case-scan filter above).
+        taggedFiles.splice(0, taggedFiles.length, ...orderBySizeForVisionBudget(taggedFiles));
         const filesTotal = taggedFiles.length;
         // Per-file read timeouts: 30s for text/PDF/doc, 45s for images (includes AI call).
         const FILE_TEXT_TIMEOUT_MS = 30_000;
@@ -4886,7 +4902,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
             }
             if (imagesDescribed >= MAX_IMAGES) {
-              return { kind: "capped", reason: `Scanned/image-only PDF not read: the ${MAX_IMAGES}-image vision budget for this run was reached.` };
+              return { kind: "capped", reason: `Scanned PDF — read attempted; this run's ${MAX_IMAGES}-image vision budget was reached first. Recoverable: re-run to read it.` };
             }
             const pagesToRender = Math.min(MAX_PDF_VISION_PAGES, MAX_IMAGES - imagesDescribed);
             const { images, totalPages } = await exportPdfPageImages(file, token, pagesToRender, fileAbort.signal);
@@ -5925,7 +5941,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const canDescribeImages = aiSettings.enabled && !!aiSettings.apiKey;
         // Scanned-PDF vision pages share the image budget (one page = one image),
         // with a per-file page cap on top. See auditFolderContents.
-        const MAX_IMAGES = 10;
+        const MAX_IMAGES = DEFAULT_VISION_IMAGE_BUDGET;
         const MAX_PDF_VISION_PAGES = 5;
         let imagesDescribed = 0;
         let auxUsage: AIUsage | undefined;
@@ -5950,6 +5966,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return "Other";
         };
 
+        // Smallest-first so large scans don't exhaust the vision budget before
+        // smaller files are read; in place to keep the read loop + fileRecords aligned.
+        taggedFiles.splice(0, taggedFiles.length, ...orderBySizeForVisionBudget(taggedFiles));
         const MAX_PART_CHARS = 24_000;
         let policyDocParts: string[] = [];
         let evidenceDocParts: string[] = [];
@@ -6059,7 +6078,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Scanned/image-only PDF → vision fallback. See auditFolderContents.
           const readScannedPdfViaVision = async (token: string): Promise<FileReadResult> => {
             if (!canDescribeImages) return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
-            if (imagesDescribed >= MAX_IMAGES) return { kind: "capped", reason: `Scanned/image-only PDF not read: the ${MAX_IMAGES}-image vision budget for this run was reached.` };
+            if (imagesDescribed >= MAX_IMAGES) return { kind: "capped", reason: `Scanned PDF — read attempted; this run's ${MAX_IMAGES}-image vision budget was reached first. Recoverable: re-run to read it.` };
             const pagesToRender = Math.min(MAX_PDF_VISION_PAGES, MAX_IMAGES - imagesDescribed);
             const { images, totalPages } = await exportPdfPageImages(file, token, pagesToRender, fileAbort.signal);
             if (images.length === 0) return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted and its pages could not be rendered for vision." };

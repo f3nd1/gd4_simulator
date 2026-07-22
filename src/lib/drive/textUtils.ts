@@ -273,3 +273,14 @@ export async function extractXlsxEmbeddedImages(buffer: ArrayBuffer): Promise<Em
   for (let i = 0; i < media.length; i++) refs.push(await zipImageToRef(zip, media[i], `Embedded image ${i + 1}`));
   return refs;
 }
+
+// Order files smallest-first for the vision-image budget. Large multi-page
+// scanned PDFs early in the Drive listing would otherwise burn the whole
+// per-run vision budget before smaller/more-relevant files are read, producing
+// false "no evidence found" gaps. `size` is a byte string from Drive; native
+// Google Docs have no size → treated as 0 (sort first, harmless — they read as
+// typed text and never touch the vision budget). Stable: equal sizes keep
+// listing order. Pure copy, no mutation of the input array.
+export function orderBySizeForVisionBudget<T extends { size?: string }>(files: T[]): T[] {
+  return [...files].sort((a, b) => (Number(a.size ?? 0) || 0) - (Number(b.size ?? 0) || 0));
+}

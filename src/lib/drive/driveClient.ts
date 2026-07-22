@@ -209,7 +209,10 @@ export class DriveApiError extends Error {
   reason?: string;
 }
 
-export type DriveFile = { id: string; name: string; mimeType: string; modifiedTime?: string };
+// `size` is a string of bytes (Google's API type), and is ABSENT for native
+// Google Docs/Sheets/Slides (they have no binary size). Used only to order the
+// read so smaller files read first and don't starve the vision budget.
+export type DriveFile = { id: string; name: string; mimeType: string; modifiedTime?: string; size?: string };
 
 async function driveFetch(url: string, accessToken: string, signal?: AbortSignal): Promise<Response> {
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal });
@@ -242,7 +245,7 @@ async function driveFetch(url: string, accessToken: string, signal?: AbortSignal
 // account genuinely has viewer access to it.
 export async function listFolderFiles(folderId: string, accessToken: string, signal?: AbortSignal): Promise<DriveFile[]> {
   const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
-  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
   const all: DriveFile[] = [];
   let pageToken: string | undefined;
   // Guard: cap at 5 pages (500 files) per folder level to prevent runaway
