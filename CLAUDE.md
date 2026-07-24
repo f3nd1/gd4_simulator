@@ -75,7 +75,7 @@ All persisted via `workspaceStorage` (Supabase-synced adapter in `src/store/supa
 | `useWorkspaceStore` | Main store: cycle, auditors, folders, audit runs (`auditRunHistory`), Option A results, findings (`customFindings`), closures, calibration memories, human-decision log, `fileTextCache`, snapshots | `ucc-gd4-workspace:v3` | **6** |
 | `useChecklistModuleStore` | Per-item checklist lines/evidence/drafts; `raiseAllUnmetFindings()`, `confirmDraftFinding()`, `replaceAuditEvidence()` | `ucc-gd4-checklist:v2` | **2** |
 | `useAISettingsStore` | OpenAI key + model selection (the key DOES sync via Supabase) | `ucc-gd4-ai-settings:v1` | 1 |
-| `useBenchmarkAfiStore` | Full benchmark AFI list (67 seeded + uploads); scoped `resetToDefaults` preserves `CUST-*` uploads | `ucc-gd4-custom-benchmark:v1` | 1 |
+| `useBenchmarkAfiStore` | Full benchmark AFI list (59 seeded + uploads); scoped `resetToDefaults` preserves `CUST-*` uploads | `ucc-gd4-custom-benchmark:v1` | 1 |
 | `useCalibrationStore` | Benchmark match assessments (human-override-wins) | `ucc-gd4-calibration:v1` | 1 |
 | `usePreCheckChecklistStore` | Live editable pre-check checklist (seeded from `DEFAULT_CHECKLISTS`); Approve/Revert is the only way `verified` changes | `ucc-gd4-precheck-checklist:v1` | 0 |
 | `useFindingDraftStore` | Grouped finding drafts; `generateFindingsFromChecklist()`, `confirmGroupedDraft()` | `ucc-gd4-finding-drafts:v1` | 0 |
@@ -149,7 +149,7 @@ Key exact-value constraints (TypeScript union types — violations cause TS erro
 ## Definition of done — run before calling anything finished
 
 1. `npx tsc -b` — zero errors.
-2. `npm run test` — all pass (692 tests / 63 files as of `fb3eaca`; your change should only ever raise the count).
+2. `npm run test` — all pass (1092 tests / 94 files as of `0d898ff`; your change should only ever raise the count).
 3. `npm run lint` — no NEW warnings. Pre-existing (ignore, don't drive-by fix): jsx-key in `ProfileOfPei.tsx`, no-unused-expressions in `EvidenceFolder.tsx`/`PPDReview.tsx`, exhaustive-deps in `SubCriterionChecklist.tsx`, unused `GD4_SUB_CRITERIA` import in `useWorkspaceStore.ts`.
 4. `npm run build` — clean (the chunk-size warning is pre-existing).
 5. **Live verification in the browser** for any UI/flow change (cookbook below). State honestly what you could and could not exercise (real Drive/OpenAI don't exist in the sandbox) and give the user the exact click-path to confirm the rest themselves.
