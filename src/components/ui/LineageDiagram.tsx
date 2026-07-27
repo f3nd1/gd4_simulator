@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
 import { excerptAround, findQuoteSpan, type QuoteExcerpt } from "./quoteMatch";
-import { downloadLineageCsv, openLineagePdf, lineageColumnsFor, type LineageExportRow, type LineageExportMeta, type LineageColumnKey, type LineageClauseDetailItem } from "../../lib/lineageExport";
+import { downloadLineageCsv, openLineagePdf, lineageColumnsFor, lineExpands, type LineageCoverage, type LineageExportRow, type LineageExportMeta, type LineageColumnKey, type LineageClauseDetailItem } from "../../lib/lineageExport";
 import { ppdVerdictLabel, evVerdictLabel } from "../../lib/verdictTone";
 import { samplingCaveat } from "../../lib/samplingCaveat";
 import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, AuditFileRecord, PPDVerdict, EvidenceVerdict } from "../../types";
@@ -54,7 +54,9 @@ import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, EvidenceA
 // checked but with no single locatable quote keeps its honest, NON-failure note
 // ("Covered, but spread across the document rather than one passage.").
 
-type Coverage = "covered" | "partial" | "not-covered" | "not-checked";
+// Aliased to the exported type so the coverage vocabulary and the lineExpands
+// rule that switches on it can never drift apart.
+type Coverage = LineageCoverage;
 
 // One cited source file: name, a Drive link where resolvable, and (where the
 // run's ledger has it) the AuditFileRecord so its extracted text can be read.
@@ -308,15 +310,24 @@ function evidenceSpine(row: EvidenceAssessmentRow, files: CitedFile[], chunkFile
   return [{ name: "This requirement", found: true, noExactQuote: true, sourceFile: files[0] }];
 }
 
+// A "Not documented" line still decomposes into named sub-clauses when the AI
+// produced them, and those sub-parts ARE the "which part is missing?" answer an
+// assessor needs — they used to be built and thrown away, so the gap line was
+// the ONE verdict that showed and exported nothing. Only a real decomposition
+// qualifies: policySpine's no-decomposition fallback hardcodes found:true,
+// which under a "Not documented" verdict would render a false "Found".
 function buildPpdLines(ppd: PPDReviewResult, resolveText: ResolveText): MatrixLine[] {
   return ppd.rows.map((r) => {
     const coverage = ppdCoverage(r.verdict);
     const files = citedPolicyFiles(r.chunkIds, ppd.chunkFileNames, ppd.fileLedger);
-    const expandable = coverage === "covered" || coverage === "partial";
+    const positive = coverage === "covered" || coverage === "partial";
+    const expandable = lineExpands(coverage, r.subClauses?.length ?? 0);
     const items = expandable ? policySpine(r, files, ppd.chunkFileNames, resolveText) : [];
     return {
       ref: r.ref, reqLabel: r.requirementText, coverage, expandable, hasDetail: coverage !== "not-checked", verdictLabel: ppdVerdictLabel(r.verdict),
-      files, clauses: uniqStrings(items.map((it) => it.clause)), rowRationale: r.shortComment || undefined, items,
+      // Row-level clause list stays sourced from positive rows only, so opening
+      // up the gap line adds its sub-parts without altering any row's own cells.
+      files, clauses: positive ? uniqStrings(items.map((it) => it.clause)) : [], rowRationale: r.shortComment || undefined, items,
     };
   });
 }
@@ -325,9 +336,18 @@ function buildEvidenceLines(ev: EvidenceAssessmentResult, resolveText: ResolveTe
   return ev.rows.map((r) => {
     const coverage = evCoverage(r.verdict);
     const files = citedEvidenceFiles(r.evidenceFiles, ev.fileLedger);
-    const expandable = coverage === "covered" || coverage === "partial";
+    // See buildPpdLines: a "Not met" line with real promise checks expands so
+    // the specific unevidenced promises are visible and exportable. Requiring
+    // promiseChecks excludes evidenceSpine's fallback, which hardcodes
+    // found:true and would claim "Found" under a "No evidence" verdict.
+    const positive = coverage === "covered" || coverage === "partial";
+    const expandable = lineExpands(coverage, r.promiseChecks?.length ?? 0);
     const items = expandable ? evidenceSpine(r, files, ev.chunkFileNames, resolveText) : [];
-    const passageItem = items.find((it) => it.found && it.quote);
+    // Positive-only, so a "No evidence" row never gains a supporting-passage
+    // cell it did not have before (a mixed gap line can contain an evidenced
+    // promise, and advertising its quote beside "No evidence" reads as a
+    // contradiction).
+    const passageItem = positive ? items.find((it) => it.found && it.quote) : undefined;
     const passageQuote = passageItem?.quote ?? (r.evidenceQuote || undefined);
     // Only attribute the fallback (no spine item) quote to a source file when
     // there's exactly one candidate — guessing among several would be a

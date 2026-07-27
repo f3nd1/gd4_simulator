@@ -11,7 +11,26 @@ import { toCsv, downloadCsv } from "./auditCsvExport";
 // the builders. Nothing in the detail is truncated either: the "no-crop"
 // rule that applies to the flat matrix's columns applies identically here.
 
-// One sub-part of a covered/partial line's clause-by-clause detail, as PLAIN
+export type LineageCoverage = "covered" | "partial" | "not-covered" | "not-checked";
+
+// Whether a requirement line opens to show its clause-by-clause sub-parts, in
+// the matrix AND in the exports. Lives here (not in the component) so it is
+// unit-testable: LineageDiagram.tsx reaches useWorkspaceStore → driveClient,
+// which builds a pdfjs Worker at import time and cannot load under Vitest.
+//
+// A gap line (Not met / Not documented) opens ONLY when the run actually
+// decomposed it into named sub-parts. Those sub-parts are precisely the
+// "which expected evidence is missing?" answer, and they were previously
+// discarded — the gap line was the one verdict that showed and exported
+// nothing. The count gate is load-bearing, not defensive: with no real
+// decomposition, both spine builders fall back to a single item hardcoded
+// found:true, which under a gap verdict would render a false "Found".
+export function lineExpands(coverage: LineageCoverage, subPartCount: number): boolean {
+  if (coverage === "covered" || coverage === "partial") return true;
+  return coverage === "not-covered" && subPartCount > 0;
+}
+
+// One sub-part of an expanded line's clause-by-clause detail, as PLAIN
 // TEXT (the on-screen highlight/fade treatment is a display concern only —
 // export shows the full, real located passage verbatim). Computed once in
 // LineageDiagram.tsx from the SAME SpineItem data the in-app 4-column table
@@ -49,9 +68,11 @@ export type LineageExportRow = {
   // very old stored runs predating the ppdExtract merge step (→ "—").
   policyPromise?: string;
   barColor: string;          // the row's own left-edge coverage colour, reused as-is (not re-derived)
-  // The row's clause-by-clause detail (one entry per sub-part), when this
-  // line is covered/partial and has sub-parts — undefined for flat gap/not-
-  // checked rows, which have nothing to expand in-app either.
+  // The row's clause-by-clause detail (one entry per sub-part), for any line
+  // that expands in-app — see lineExpands: covered/partial always, and a gap
+  // line once the run decomposed it into real sub-parts. Undefined for
+  // not-checked rows and for gap rows with no decomposition, which have
+  // nothing to expand in-app either.
   clauseDetail?: LineageClauseDetailItem[];
 };
 

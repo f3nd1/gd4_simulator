@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildLineageCsv, buildLineagePdfHtml, lineageColumnsFor, type LineageExportMeta, type LineageExportRow, type LineageClauseDetailItem } from "../lineageExport";
+import { buildLineageCsv, buildLineagePdfHtml, lineageColumnsFor, lineExpands, type LineageExportMeta, type LineageExportRow, type LineageClauseDetailItem } from "../lineageExport";
 
 function policyMeta(overrides: Partial<LineageExportMeta> = {}): LineageExportMeta {
   return { tab: "policy", runLabel: "6.2 Management Review", runAt: "2026-07-01T00:00:00.000Z", statusLine: "2 Documented · 1 Not covered", ...overrides };
@@ -360,5 +360,30 @@ describe("buildLineagePdfHtml — clause-by-clause detail (Task 4)", () => {
     const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [row]);
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).toContain("&lt;script&gt;");
+  });
+});
+
+describe("lineExpands — which lines open to their clause-by-clause sub-parts", () => {
+  it("always opens a covered or partial line, with or without sub-parts", () => {
+    expect(lineExpands("covered", 3)).toBe(true);
+    expect(lineExpands("partial", 2)).toBe(true);
+    // No decomposition: the spine falls back to a single line-level item, which
+    // is legitimate under a positive verdict.
+    expect(lineExpands("covered", 0)).toBe(true);
+    expect(lineExpands("partial", 0)).toBe(true);
+  });
+
+  it("opens a GAP line when the run decomposed it — the missing sub-parts are the answer", () => {
+    expect(lineExpands("not-covered", 2)).toBe(true);
+    expect(lineExpands("not-covered", 1)).toBe(true);
+  });
+
+  it("keeps a GAP line closed with no decomposition, so the found:true fallback can never claim 'Found' under a gap verdict", () => {
+    expect(lineExpands("not-covered", 0)).toBe(false);
+  });
+
+  it("never opens a not-assessed line — nothing was checked, so there is nothing to show", () => {
+    expect(lineExpands("not-checked", 0)).toBe(false);
+    expect(lineExpands("not-checked", 5)).toBe(false);
   });
 });
