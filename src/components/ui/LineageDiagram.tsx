@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
 import { excerptAround, findQuoteSpan, type QuoteExcerpt } from "./quoteMatch";
-import { downloadLineageCsv, openLineagePdf, lineageColumnsFor, lineExpands, type LineageCoverage, type LineageExportRow, type LineageExportMeta, type LineageColumnKey, type LineageClauseDetailItem } from "../../lib/lineageExport";
+import { downloadLineageCsv, openLineagePdf, lineageColumnsFor, lineExpands, buildLineagePreview, type LineageCoverage, type LineageExportRow, type LineageExportMeta, type LineageColumnKey, type LineageClauseDetailItem } from "../../lib/lineageExport";
 import { ppdVerdictLabel, evVerdictLabel } from "../../lib/verdictTone";
 import { samplingCaveat } from "../../lib/samplingCaveat";
 import type { PPDReviewResult, PPDReviewRow, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, AuditFileRecord, PPDVerdict, EvidenceVerdict } from "../../types";
@@ -916,6 +916,12 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
   // (it isn't a flat-matrix column at all) — defaults to included per row,
   // resetting to true every time the picker opens.
   const [includeClauseDetail, setIncludeClauseDetail] = useState(true);
+  // Compact = the fixed 3-column cross-reference preset. Defaults to false so
+  // confirming the picker without touching anything still exports exactly what
+  // it always did; Compact is listed FIRST in the mode switch instead, so the
+  // stripped-down view is the prominent choice without silently changing what
+  // an existing user gets.
+  const [exportCompact, setExportCompact] = useState(false);
   const fileTextCache = useWorkspaceStore((s) => s.fileTextCache);
   const resolveText = useCallback<ResolveText>(
     (f) => (f.driveFileId ? fileTextCache[`${f.driveFileId}:${f.driveModifiedTime ?? ""}`]?.text : undefined),
@@ -986,18 +992,26 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
   const openExportPicker = (format: "csv" | "pdf") => {
     setExportCols(new Set(lineageColumnsFor(exportTab).map((c) => c.key))); // all checked by default
     setIncludeClauseDetail(true); // defaults to included
+    setExportCompact(false);      // Full detail is the default — see exportCompact
     setExportPicker(format);
   };
   const toggleExportCol = (key: LineageColumnKey) =>
     setExportCols((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  // Filter the registry (not the Set) so the export keeps matrix order.
+  // Compact ignores the selection entirely: its three columns are fixed.
+  const selectedKeys = lineageColumnsFor(exportTab).map((c) => c.key).filter((k) => exportCols.has(k));
   const runExport = () => {
-    // Filter the registry (not the Set) so the export keeps matrix order.
-    const keys = lineageColumnsFor(exportTab).map((c) => c.key).filter((k) => exportCols.has(k));
-    if (keys.length === 0) return;
-    if (exportPicker === "csv") downloadLineageCsv(exportMeta, exportRows, keys, includeClauseDetail);
-    else openLineagePdf(exportMeta, exportRows, keys, includeClauseDetail);
+    if (!exportCompact && selectedKeys.length === 0) return;
+    if (exportPicker === "csv") downloadLineageCsv(exportMeta, exportRows, selectedKeys, includeClauseDetail, exportCompact);
+    else openLineagePdf(exportMeta, exportRows, selectedKeys, includeClauseDetail, exportCompact);
     setExportPicker(null);
   };
+  // Live preview of exactly what the CSV would write, from the SAME assembly
+  // the builders use — so what Felix sees here cannot drift from the download.
+  // Recomputed only while the picker is open.
+  const preview = exportPicker
+    ? buildLineagePreview(exportMeta, exportRows, selectedKeys, includeClauseDetail, exportCompact, 6)
+    : null;
 
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, background: "#fff", marginBottom: 12, overflow: "hidden" }}>
@@ -1038,29 +1052,100 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
           the matrix itself is collapsed (the export buttons work either way).
           All columns start checked = exact parity with the old fixed export. */}
       {exportPicker && (
-        <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "8px 12px", background: "#f0fdfa", borderBottom: "1px solid #f1f5f9" }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#0f766e" }}>Columns to include in the {exportPicker === "csv" ? "CSV" : "PDF"}:</span>
-          {lineageColumnsFor(exportTab).map((c) => (
-            <label key={c.key} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#334155", cursor: "pointer", whiteSpace: "nowrap" }}>
-              <input type="checkbox" checked={exportCols.has(c.key)} onChange={() => toggleExportCol(c.key)} />
-              {c.label}
-            </label>
-          ))}
-          {/* Not a flat-matrix column — a separate toggle for whether each
-              covered/partial line's clause-by-clause sub-parts are exported
-              at all (CSV: a flattened row per sub-part; PDF: a nested
-              4-column table beneath the line). Defaults to included. */}
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#334155", cursor: "pointer", whiteSpace: "nowrap", borderLeft: "1px solid #99f6e4", paddingLeft: 12 }}>
-            <input type="checkbox" checked={includeClauseDetail} onChange={() => setIncludeClauseDetail((v) => !v)} />
-            Clause-by-clause detail
-          </label>
-          <span style={{ display: "inline-flex", gap: 6, marginLeft: "auto" }}>
-            <button type="button" disabled={exportCols.size === 0} onClick={runExport} style={{ ...exportBtnStyle, opacity: exportCols.size === 0 ? 0.5 : 1, cursor: exportCols.size === 0 ? "not-allowed" : "pointer" }}>
-              Export {exportPicker === "csv" ? "CSV" : "PDF"}
-            </button>
-            <button type="button" onClick={() => setExportPicker(null)} style={{ fontSize: 11, fontWeight: 600, color: "#64748b", padding: "4px 9px", border: "1px solid #cbd5e1", borderRadius: 6, background: "#fff", cursor: "pointer" }}>Cancel</button>
-          </span>
-          {exportCols.size === 0 && <span style={{ fontSize: 10.5, color: "#b45309", width: "100%" }}>Select at least one column to export.</span>}
+        <div onClick={(e) => e.stopPropagation()} style={{ padding: "8px 12px", background: "#f0fdfa", borderBottom: "1px solid #f1f5f9" }}>
+          {/* Mode switch. Compact sits FIRST because it is the view asked for
+              most often, but Full detail stays the default so confirming
+              without touching anything exports what it always did. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#0f766e" }}>View:</span>
+            {([[true, "Compact (3 columns)"], [false, "Full detail"]] as const).map(([mode, label]) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => setExportCompact(mode)}
+                style={{
+                  fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                  border: `1px solid ${exportCompact === mode ? "#0f766e" : "#cbd5e1"}`,
+                  background: exportCompact === mode ? "#0f766e" : "#fff",
+                  color: exportCompact === mode ? "#fff" : "#475569",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+            <span style={{ fontSize: 10.5, color: "#64748b" }}>
+              {exportCompact
+                ? `Requirement · ${isEv ? "Policy promise" : "Policy clause"} · Expected evidence, one row per expected-evidence item. Nothing else.`
+                : "Every column you tick below, with clause-by-clause detail."}
+            </span>
+          </div>
+
+          {/* Column picker — Full detail only: compact's three columns are fixed. */}
+          {!exportCompact && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#0f766e" }}>Columns to include in the {exportPicker === "csv" ? "CSV" : "PDF"}:</span>
+              {lineageColumnsFor(exportTab).map((c) => (
+                <label key={c.key} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#334155", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  <input type="checkbox" checked={exportCols.has(c.key)} onChange={() => toggleExportCol(c.key)} />
+                  {c.label}
+                </label>
+              ))}
+              {/* Not a flat-matrix column — a separate toggle for whether each
+                  expandable line's clause-by-clause sub-parts are exported
+                  at all (CSV: a flattened row per sub-part; PDF: a nested
+                  4-column table beneath the line). Defaults to included. */}
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#334155", cursor: "pointer", whiteSpace: "nowrap", borderLeft: "1px solid #99f6e4", paddingLeft: 12 }}>
+                <input type="checkbox" checked={includeClauseDetail} onChange={() => setIncludeClauseDetail((v) => !v)} />
+                Clause-by-clause detail
+              </label>
+            </div>
+          )}
+
+          {/* Live preview — the actual assembled export rows, so choosing
+              columns stops being export-open-redo trial and error. */}
+          {preview && preview.headers.length > 0 && (
+            <div style={{ background: "#fff", border: "1px solid #99f6e4", borderRadius: 6, padding: "6px 8px", marginBottom: 8 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, color: "#0f766e", marginBottom: 4 }}>
+                Preview · showing {preview.rows.length} of {preview.totalRows} row{preview.totalRows === 1 ? "" : "s"}
+                {exportPicker === "pdf" && !exportCompact && <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: "#64748b" }}> · the PDF nests clause detail under each line instead of as separate rows</span>}
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 10.5 }}>
+                  <thead>
+                    <tr>
+                      {preview.headers.map((h, i) => (
+                        <th key={i} style={{ textAlign: "left", padding: "3px 6px", borderBottom: "1px solid #e2e8f0", color: "#64748b", fontSize: 9.5, textTransform: "uppercase", letterSpacing: 0.3, whiteSpace: "nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.rows.map((row, ri) => (
+                      <tr key={ri}>
+                        {row.map((cell, ci) => (
+                          // Cells are clamped for the preview ONLY — the real
+                          // export never truncates a selected column's content.
+                          <td key={ci} style={{ padding: "3px 6px", borderBottom: "1px solid #f1f5f9", color: "#334155", verticalAlign: "top", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={cell}>{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {preview.totalRows > preview.rows.length && (
+                <div style={{ fontSize: 10, color: "#64748b", marginTop: 3 }}>Long cells are shortened here to fit; the exported file keeps the full text.</div>
+              )}
+            </div>
+          )}
+
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {!exportCompact && exportCols.size === 0 && <span style={{ fontSize: 10.5, color: "#b45309" }}>Select at least one column to export.</span>}
+            <span style={{ display: "inline-flex", gap: 6, marginLeft: "auto" }}>
+              <button type="button" disabled={!exportCompact && exportCols.size === 0} onClick={runExport} style={{ ...exportBtnStyle, opacity: !exportCompact && exportCols.size === 0 ? 0.5 : 1, cursor: !exportCompact && exportCols.size === 0 ? "not-allowed" : "pointer" }}>
+                Export {exportPicker === "csv" ? "CSV" : "PDF"}
+              </button>
+              <button type="button" onClick={() => setExportPicker(null)} style={{ fontSize: 11, fontWeight: 600, color: "#64748b", padding: "4px 9px", border: "1px solid #cbd5e1", borderRadius: 6, background: "#fff", cursor: "pointer" }}>Cancel</button>
+            </span>
+          </div>
         </div>
       )}
 

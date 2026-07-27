@@ -74,6 +74,10 @@ export type LineageExportRow = {
   // not-checked rows and for gap rows with no decomposition, which have
   // nothing to expand in-app either.
   clauseDetail?: LineageClauseDetailItem[];
+  // Compact preset only: the one expected-evidence item this row stands for
+  // (LineageClauseDetailItem.name lifted into its own column). Never set on a
+  // normal matrix row — see compactRowsFrom.
+  expectedEvidence?: string;
 };
 
 export type LineageExportMeta = {
@@ -116,7 +120,9 @@ function formatRunAt(iso: string): string {
 // text, and the evidence tab's "rationale" carries the Suggested Action
 // (rendered inside the same Rationale cell on screen) — so unticking a
 // picker column drops exactly what that on-screen column shows, no more.
-export type LineageColumnKey = "requirement" | "policyPromise" | "verdict" | "files" | "clauseOrPassage" | "rationale";
+// "expectedEvidence" belongs to the compact preset alone — it is deliberately
+// absent from lineageColumnsFor, so it never appears as a picker checkbox.
+export type LineageColumnKey = "requirement" | "policyPromise" | "verdict" | "files" | "clauseOrPassage" | "rationale" | "expectedEvidence";
 
 export type LineageColumnDef = {
   key: LineageColumnKey;
@@ -188,6 +194,89 @@ function clauseDetailAsExportRow(parent: LineageExportRow, tab: LineageExportMet
   };
 }
 
+// ── Compact preset ──────────────────────────────────────────────────────────
+// The stripped-down cross-reference: GD4 Requirement | Policy Promise |
+// Expected Evidence, and nothing else — no files, no passage, no remarks, no
+// verdict. "Expected Evidence" is the clause-by-clause "Clause requirement"
+// field (LineageClauseDetailItem.name), the SAME data the full export already
+// flattens; compact simply lifts it into its own column instead of folding it
+// into the requirement cell behind a "↳" prefix. Exactly three columns on
+// both tabs — the requirement column drops its Ref sub-column here, since
+// "three columns" is the whole point of the preset.
+export function compactColumnsFor(tab: LineageExportMeta["tab"]): LineageColumnDef[] {
+  const ev = tab === "evidence";
+  return [
+    { key: "requirement", label: "GD4 requirement", headers: ["GD4 Requirement"], cells: (r) => [r.requirementText] },
+    { key: "policyPromise", label: ev ? "Policy promise" : "Policy clause", headers: [ev ? "Policy Promise" : "Policy Clause"], cells: (r) => [r.policyPromise || "—"] },
+    { key: "expectedEvidence", label: "Expected evidence", headers: ["Expected Evidence"], cells: (r) => [r.expectedEvidence || "—"] },
+  ];
+}
+
+// One row per expected-evidence item, with the line's requirement and policy
+// text REPEATED down the group — that repetition is what makes the file
+// filterable/pivotable in a spreadsheet, where a blank continuation cell
+// would break sorting. A line whose run recorded no breakdown still emits one
+// row with an em-dash: dropping it would silently shorten the requirement
+// list, which reads as "this requirement does not exist" rather than the
+// truth, "nothing was recorded for it".
+export function compactRowsFrom(tab: LineageExportMeta["tab"], rows: LineageExportRow[]): LineageExportRow[] {
+  const ev = tab === "evidence";
+  const out: LineageExportRow[] = [];
+  for (const r of rows) {
+    const items = r.clauseDetail ?? [];
+    if (items.length === 0) {
+      out.push({ ...r, policyPromise: (ev ? r.policyPromise : r.clauseOrPassage) || "—", expectedEvidence: "—" });
+      continue;
+    }
+    // item.col2 is the policy side at sub-part grain: on the evidence tab it
+    // repeats the line's own PPD promise, on the policy tab it is that
+    // sub-clause's own "§ clause + quote". Both are "what the policy says",
+    // so one rule serves both tabs.
+    for (const it of items) out.push({ ...r, policyPromise: it.col2 || (ev ? r.policyPromise : r.clauseOrPassage) || "—", expectedEvidence: it.name });
+  }
+  return out;
+}
+
+// The single row-assembly used by the CSV AND the on-screen preview, so the
+// preview cannot drift from what actually downloads. Returns the exported
+// header cells and the body rows already flattened to strings.
+function assembleRows(
+  meta: LineageExportMeta,
+  rows: LineageExportRow[],
+  selected: LineageColumnKey[] | undefined,
+  includeClauseDetail: boolean,
+  compact: boolean,
+): { headers: string[]; body: string[][] } {
+  const cols = compact ? compactColumnsFor(meta.tab) : selectedColumns(meta.tab, selected);
+  const dataRows = compact ? compactRowsFrom(meta.tab, rows) : rows;
+  const body: string[][] = [];
+  for (const r of dataRows) {
+    body.push(cols.flatMap((c) => c.cells(r)));
+    // Compact already IS one row per sub-part; re-flattening would duplicate.
+    if (!compact && includeClauseDetail) {
+      for (const item of r.clauseDetail ?? []) body.push(cols.flatMap((c) => c.cells(clauseDetailAsExportRow(r, meta.tab, item))));
+    }
+  }
+  return { headers: cols.flatMap((c) => c.headers), body };
+}
+
+// What the export will contain, for the picker's live preview: the same
+// headers and the first `maxRows` body rows the CSV would write, plus the
+// true total so the UI can say how much is not shown. Pure — no download, no
+// window, safe to call on every keystroke of the picker.
+export type LineagePreview = { headers: string[]; rows: string[][]; totalRows: number };
+export function buildLineagePreview(
+  meta: LineageExportMeta,
+  rows: LineageExportRow[],
+  selected?: LineageColumnKey[],
+  includeClauseDetail = true,
+  compact = false,
+  maxRows = 6,
+): LineagePreview {
+  const { headers, body } = assembleRows(meta, rows, selected, includeClauseDetail, compact);
+  return { headers, rows: body.slice(0, maxRows), totalRows: body.length };
+}
+
 // Pure builder — exported for unit testing (column order/content, full
 // untruncated multi-file "; " join, CSV escaping via the shared csvCell/toCsv
 // utility rather than a second serializer) without needing to trigger a
@@ -199,21 +288,18 @@ function clauseDetailAsExportRow(parent: LineageExportRow, tab: LineageExportMet
 // never how much of one. `includeClauseDetail` (default true — the picker
 // opens with it checked) appends a flattened sub-part row per item directly
 // after its parent line; false omits every sub-part row entirely.
-export function buildLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true): string {
-  const cols = selectedColumns(meta.tab, selected);
-  const csvRows: string[][] = [];
-  for (const r of rows) {
-    csvRows.push(cols.flatMap((c) => c.cells(r)));
-    if (includeClauseDetail) for (const item of r.clauseDetail ?? []) csvRows.push(cols.flatMap((c) => c.cells(clauseDetailAsExportRow(r, meta.tab, item))));
-  }
-  const csv = toCsv(cols.flatMap((c) => c.headers), csvRows);
+// `compact` swaps the picker's column set for the fixed three-column preset
+// (see compactColumnsFor) and emits one row per expected-evidence item.
+export function buildLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true, compact = false): string {
+  const { headers, body } = assembleRows(meta, rows, selected, includeClauseDetail, compact);
+  const csv = toCsv(headers, body);
   // Sampling basis as a trailing note row — the export travels without the
   // app, so the caveat must travel with it. Always quoted for CSV safety.
   return meta.caveat ? `${csv}\r\n"Sampling basis: ${meta.caveat.replace(/"/g, '""')}"` : csv;
 }
 
-export function downloadLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true): void {
-  downloadCsv(buildLineageCsv(meta, rows, selected, includeClauseDetail), `${filenameBase(meta)}.csv`);
+export function downloadLineageCsv(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true, compact = false): void {
+  downloadCsv(buildLineageCsv(meta, rows, selected, includeClauseDetail, compact), `${filenameBase(meta)}${compact ? "-compact" : ""}.csv`);
 }
 
 // Escapes text for safe interpolation into the generated HTML document —
@@ -261,25 +347,30 @@ function clauseDetailTableHtml(tab: LineageExportMeta["tab"], items: LineageClau
 // buildLineageCsv — one registry, one selection semantics for both formats.
 // `includeClauseDetail` (default true) nests each line's clause-by-clause
 // table beneath its row — see clauseDetailTableHtml.
-export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true): string {
-  const cols = selectedColumns(meta.tab, selected);
+export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true, compact = false): string {
+  const cols = compact ? compactColumnsFor(meta.tab) : selectedColumns(meta.tab, selected);
   const headers = cols.flatMap((c) => c.headers);
   const monoFlags = cols.flatMap((c) => c.mono ?? c.headers.map(() => false));
   const title = `${filenameBase(meta)}`;
-  const rowsHtml = rows.map((r) => {
+  // Compact is already one flat row per expected-evidence item, so it never
+  // nests the clause-by-clause sub-table — that detail IS the third column here.
+  const pdfRows = compact ? compactRowsFrom(meta.tab, rows) : rows;
+  const rowsHtml = pdfRows.map((r) => {
     const mainRow = `
     <tr style="border-left:4px solid ${escapeHtml(r.barColor)};">
       ${cols.flatMap((c) => c.cells(r)).map((cell, i) => `<td${monoFlags[i] ? ' class="mono"' : ""}>${escapeHtml(cell)}</td>`).join("\n      ")}
     </tr>`;
-    const detail = includeClauseDetail && r.clauseDetail?.length ? clauseDetailTableHtml(meta.tab, r.clauseDetail, headers.length) : "";
+    const detail = !compact && includeClauseDetail && r.clauseDetail?.length ? clauseDetailTableHtml(meta.tab, r.clauseDetail, headers.length) : "";
     return mainRow + detail;
   }).join("");
   // Earlier export task's limitation ("PDF export is the flat matrix only,
   // expand rows in-app for detail") no longer holds — say so honestly either
   // way, since the caption is what a reader sees once the app isn't open.
-  const detailCaption = includeClauseDetail
-    ? "Clause-by-clause detail for covered/partial lines is included beneath each line below."
-    : "Clause-by-clause detail was excluded from this export (unchecked in the column picker) — expand rows in-app to see it, or re-export with detail included.";
+  const detailCaption = compact
+    ? "Compact view: one row per expected-evidence item, showing only the requirement, the policy text and the expected evidence. Re-export in Full detail for verdicts, files, passages and remarks."
+    : includeClauseDetail
+      ? "Clause-by-clause detail for covered/partial lines is included beneath each line below."
+      : "Clause-by-clause detail was excluded from this export (unchecked in the column picker) — expand rows in-app to see it, or re-export with detail included.";
 
   return `<!doctype html>
 <html>
@@ -324,8 +415,8 @@ export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExport
 // print-to-PDF renders real HTML text (never rasterised), so the output is
 // selectable/searchable by construction. Setting `document.title` in the new
 // window makes the browser's Save-as-PDF dialog default to the right filename.
-export function openLineagePdf(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true): void {
-  const html = buildLineagePdfHtml(meta, rows, selected, includeClauseDetail);
+export function openLineagePdf(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true, compact = false): void {
+  const html = buildLineagePdfHtml(meta, rows, selected, includeClauseDetail, compact);
   const win = window.open("", "_blank");
   if (!win) return; // popup blocked — nothing else to fall back to client-side
   win.document.open();

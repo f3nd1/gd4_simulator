@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildLineageCsv, buildLineagePdfHtml, lineageColumnsFor, lineExpands, type LineageExportMeta, type LineageExportRow, type LineageClauseDetailItem } from "../lineageExport";
+import { buildLineageCsv, buildLineagePdfHtml, lineageColumnsFor, lineExpands, buildLineagePreview, type LineageExportMeta, type LineageExportRow, type LineageClauseDetailItem } from "../lineageExport";
 
 function policyMeta(overrides: Partial<LineageExportMeta> = {}): LineageExportMeta {
   return { tab: "policy", runLabel: "6.2 Management Review", runAt: "2026-07-01T00:00:00.000Z", statusLine: "2 Documented · 1 Not covered", ...overrides };
@@ -385,5 +385,96 @@ describe("lineExpands — which lines open to their clause-by-clause sub-parts",
   it("never opens a not-assessed line — nothing was checked, so there is nothing to show", () => {
     expect(lineExpands("not-checked", 0)).toBe(false);
     expect(lineExpands("not-checked", 5)).toBe(false);
+  });
+});
+
+const twoPartRow = (): LineageExportRow => multiFileRow({
+  requirementText: "Monitor follow-up actions.",
+  policyPromise: "PPD documents owners and timelines.",
+  clauseDetail: [
+    { name: "owners assigned", found: true, col2: "PPD documents owners and timelines.", fileName: "log.xlsx", passage: '"Owner: QA Manager"', remarks: "Owner present." },
+    { name: "timelines tracked", found: false, col2: "PPD documents owners and timelines.", remarks: "No dates located." },
+  ],
+});
+
+describe("compact preset — Requirement | Policy | Expected Evidence, nothing else", () => {
+  it("exports EXACTLY three columns on the evidence tab, one row per expected-evidence item", () => {
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [twoPartRow()], undefined, true, true);
+    const lines = csv.split("\r\n").filter(Boolean);
+    expect(lines[0]).toBe("GD4 Requirement,Policy Promise,Expected Evidence");
+    expect(lines[0].split(",")).toHaveLength(3);
+    // Two sub-parts → two rows, requirement repeated so the file stays filterable.
+    expect(lines[1]).toBe("Monitor follow-up actions.,PPD documents owners and timelines.,owners assigned");
+    expect(lines[2]).toBe("Monitor follow-up actions.,PPD documents owners and timelines.,timelines tracked");
+    expect(lines).toHaveLength(3); // header + 2 items, no parent row
+  });
+
+  it("smuggles in no file names, passages, remarks, verdicts or refs", () => {
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [twoPartRow()], undefined, true, true);
+    expect(csv).not.toContain("log.xlsx");
+    expect(csv).not.toContain("Owner: QA Manager");
+    expect(csv).not.toContain("Owner present.");
+    expect(csv).not.toContain("No dates located.");
+    expect(csv).not.toContain("Partly");          // verdict
+    expect(csv).not.toContain("6.2.1.DS1.a");     // ref
+  });
+
+  it("keeps a line whose run recorded no breakdown, rather than silently dropping the requirement", () => {
+    const csv = buildLineageCsv(policyMeta({ tab: "evidence" }), [multiFileRow({ requirementText: "Bare line.", policyPromise: "Promised.", clauseDetail: undefined })], undefined, true, true);
+    const lines = csv.split("\r\n").filter(Boolean);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toBe("Bare line.,Promised.,—");
+  });
+
+  it("labels the middle column per tab and uses the sub-part's own clause on the policy tab", () => {
+    const policyCsv = buildLineageCsv(policyMeta(), [twoPartRow()], undefined, true, true);
+    expect(policyCsv.split("\r\n")[0]).toBe("GD4 Requirement,Policy Clause,Expected Evidence");
+  });
+
+  it("ignores the column selection entirely — compact's three columns are fixed", () => {
+    const trimmed = buildLineageCsv(policyMeta({ tab: "evidence" }), [twoPartRow()], ["verdict"], true, true);
+    expect(trimmed.split("\r\n")[0]).toBe("GD4 Requirement,Policy Promise,Expected Evidence");
+  });
+
+  it("produces the same flat three columns in the PDF, with no nested clause table", () => {
+    const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [twoPartRow()], undefined, true, true);
+    expect(html).toContain("<th>Expected Evidence</th>");
+    expect(html).toContain("owners assigned");
+    expect(html).toContain("timelines tracked");
+    expect(html).not.toContain("log.xlsx");
+    // Assert on markup the nested table alone emits — ".detail-table" itself
+    // also appears in the document's static <style> block, so matching that
+    // would pass even when the table really had rendered.
+    expect(html).not.toContain("Clause by clause");
+    expect(html).not.toContain("colspan=");
+    // The full-detail export at the same call site still nests it, proving the
+    // assertion above can actually fail.
+    const full = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [twoPartRow()], undefined, true, false);
+    expect(full).toContain("Clause by clause");
+    expect(full).toContain("colspan=");
+  });
+});
+
+describe("buildLineagePreview — what the picker shows must equal what downloads", () => {
+  it("returns exactly the CSV's headers and body rows, capped to maxRows", () => {
+    const meta = policyMeta({ tab: "evidence" });
+    const rows = [twoPartRow()];
+    const preview = buildLineagePreview(meta, rows, undefined, true, true, 6);
+    const csvLines = buildLineageCsv(meta, rows, undefined, true, true).split("\r\n").filter(Boolean);
+    expect(preview.headers.join(",")).toBe(csvLines[0]);
+    expect(preview.rows.map((r) => r.join(","))).toEqual(csvLines.slice(1));
+    expect(preview.totalRows).toBe(2);
+  });
+
+  it("caps the rows shown but still reports the true total", () => {
+    const preview = buildLineagePreview(policyMeta({ tab: "evidence" }), [twoPartRow()], undefined, true, true, 1);
+    expect(preview.rows).toHaveLength(1);
+    expect(preview.totalRows).toBe(2);
+  });
+
+  it("tracks the full-detail column selection too, not just compact", () => {
+    const preview = buildLineagePreview(policyMeta({ tab: "evidence" }), [twoPartRow()], ["requirement", "verdict"], false, false);
+    expect(preview.headers).toEqual(["GD4 Requirement", "Ref", "Evidence Verdict"]);
+    expect(preview.totalRows).toBe(1); // detail excluded → parent line only
   });
 });
