@@ -16,6 +16,7 @@ import { ppdResultSummary } from "../lib/ppdSelection";
 import { auditModeLabel } from "../lib/runModes";
 import { exportOptionASummaryCsv, exportFileLedgerCsvFor, downloadCsv, auditCsvFilename } from "../lib/auditCsvExport";
 import { LineageDiagram } from "../components/ui/LineageDiagram";
+import { OfficialRequirements } from "../components/ui/OfficialRequirements";
 import { RunStepper, ppdRunStep, evidenceRunStep } from "../components/ui/RunStepper";
 import { FileLedger } from "./EvidenceFolder";
 import { RunDetailColumns } from "../components/ui/RunDetailColumns";
@@ -116,9 +117,11 @@ export function OptionAExportButtons({ subCriterionId }: { subCriterionId: strin
 // page so the Evidence Folder's near-fullscreen Option A modal can host the
 // EXACT same content — one component, two surfaces, zero drift.
 // selectedId is a run-scope (item id for a split 4.2 card, else the sub-criterion).
-export function PpdReviewContent({ selectedId }: { selectedId: string }) {
+export type PpdContentTab = "requirements" | "ppd" | "precheck" | "evidence";
+
+export function PpdReviewContent({ selectedId, initialTab }: { selectedId: string; initialTab?: PpdContentTab }) {
   const sub = GD4_SUB_CRITERIA.find((s) => s.id === subOfScope(selectedId));
-  const [tab, setTab] = useState<"ppd" | "precheck" | "evidence">("ppd");
+  const [tab, setTab] = useState<PpdContentTab>(initialTab ?? "ppd");
   // Set only by "Continue to Evidence" (below) — gives EvidenceTab a one-shot
   // signal to show a clear "you just arrived here" confirmation banner, so
   // the Pre-check → Evidence transition is never silent/ambiguous. Cleared on
@@ -206,7 +209,7 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
 
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "1px solid #e2e8f0" }}>
-        {([["ppd", "PPD Review"], ["precheck", "Pre-check"], ["evidence", "Evidence"]] as const).map(([id, label]) => (
+        {([["requirements", "Official requirements"], ["ppd", "PPD Review"], ["precheck", "Pre-check"], ["evidence", "Evidence"]] as const).map(([id, label]) => (
           <button
             key={id}
             onClick={() => { setTab(id); setJustContinued(false); }}
@@ -229,7 +232,11 @@ export function PpdReviewContent({ selectedId }: { selectedId: string }) {
         ))}
       </div>
 
-      {tab === "ppd" ? <PpdTab selectedId={selectedId} totalLines={totalLines} />
+      {/* Pre-audit reference — FIRST because it is the only tab that works
+          before anything has been run, and the natural place to start. It
+          reads static requirement data only, so it is never gated. */}
+      {tab === "requirements" ? <OfficialRequirements scopeId={selectedId} />
+        : tab === "ppd" ? <PpdTab selectedId={selectedId} totalLines={totalLines} />
         : tab === "precheck" ? <PreCheckTab selectedId={selectedId} onContinue={() => { setJustContinued(true); setTab("evidence"); }} />
         : (
           <EvidenceTab

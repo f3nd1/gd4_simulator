@@ -15,7 +15,7 @@ import { downloadCsv, exportFileLedgerCsv, exportAISummaryCsv, auditCsvFilename,
 import { samplingCaveat } from "../lib/samplingCaveat";
 import { domainExpertiseLabelFor } from "../data/skills/domainExpertise";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
-import { PpdReviewContent, HybridGatePanel, ResultNavLinks } from "./PPDReview";
+import { PpdReviewContent, HybridGatePanel, ResultNavLinks, type PpdContentTab } from "./PPDReview";
 import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
 import { folderScopeId, itemIdsForScope, subOfScope, scopeTitle } from "../lib/evidenceScope";
@@ -1650,7 +1650,7 @@ function AuditRunModal({ run, onClose }: { run: AuditRunRecord; onClose: () => v
 // (100), below the Full-auto overlay (120).
 // subCriterionId here is a run-scope (the item id for a split 4.2 card, else the
 // sub-criterion) — the modal drives runPPDReview / reads results by it.
-function OptionAReviewModal({ subCriterionId, onClose }: { subCriterionId: string; onClose: () => void }) {
+function OptionAReviewModal({ subCriterionId, onClose, initialTab }: { subCriterionId: string; onClose: () => void; initialTab?: PpdContentTab }) {
   const title = scopeTitle(subCriterionId);
   const runPPDReview = useWorkspaceStore((s) => s.runPPDReview);
   const busy = useWorkspaceStore((s) => s.busy);
@@ -1684,7 +1684,7 @@ function OptionAReviewModal({ subCriterionId, onClose }: { subCriterionId: strin
         </div>
         {/* Internally scrolling body with the full shared review content */}
         <div style={{ flex: 1, overflowY: "auto", padding: "14px 18px" }}>
-          <PpdReviewContent selectedId={subCriterionId} />
+          <PpdReviewContent selectedId={subCriterionId} initialTab={initialTab} />
         </div>
       </div>
     </div>
@@ -2340,6 +2340,10 @@ export function EvidenceFolder() {
   // Sub-criterion whose Option A (PPD + Evidence) review is open in the
   // near-fullscreen modal; null = closed. Running and re-opening both land here.
   const [optionAModal, setOptionAModal] = useState<string | null>(null);
+  // Which tab the Option A modal opens on. Only set by the "Official
+  // requirements" entry, which must work with no run present; every other
+  // opener leaves it undefined and gets the usual PPD Review tab.
+  const [optionAModalTab, setOptionAModalTab] = useState<PpdContentTab | undefined>(undefined);
   // Folder pre-flight probe results, keyed by folder id. Pre-flight results
   // persist in the store (survive ✕ + reload). Local state only tracks which
   // pre-flight panel is currently hidden from view.
@@ -2632,7 +2636,7 @@ export function EvidenceFolder() {
       <AuditRunModal run={viewingRun} onClose={() => setViewingRun(null)} />
     )}
     {optionAModal && (
-      <OptionAReviewModal subCriterionId={optionAModal} onClose={() => setOptionAModal(null)} />
+      <OptionAReviewModal subCriterionId={optionAModal} initialTab={optionAModalTab} onClose={() => { setOptionAModal(null); setOptionAModalTab(undefined); }} />
     )}
     <Card>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -3302,6 +3306,13 @@ export function EvidenceFolder() {
                       </button>
                       {overflowOpen === f.id && (
                         <div style={{ position: "absolute", right: 0, top: "calc(100% + 4px)", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, boxShadow: "0 4px 14px #0002", zIndex: 30, minWidth: 230, overflow: "hidden" }}>
+                          {overflowItem("📋 Official requirements (no audit needed)", () => {
+                            setOverflowOpen(null);
+                            setOptionAModalTab("requirements");
+                            setOptionAModal(scope);
+                          }, {
+                            title: "The published EduTrust requirement wording for this sub-criterion — readable with no files linked and no audit run. Nothing in it is checked against any document.",
+                          })}
                           {auditMode === "hybrid" && path === "A" &&
                             overflowItem("Run staged audit (Option B)", () => auditFolderStaged(f.id, "all"), {
                               title: "Runs the Option B engine on this folder even though Option A is selected — verdicts land on the Sub-Criterion Checklist",

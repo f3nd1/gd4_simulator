@@ -1,4 +1,5 @@
 import { toCsv, downloadCsv } from "./auditCsvExport";
+import { printHtmlInNewTab, escapeHtml } from "./printableDoc";
 
 // CSV/PDF export for the lineage coverage matrix (LineageDiagram.tsx), Option
 // A only. Both exports work off EXACTLY the rows currently rendered in the
@@ -302,12 +303,6 @@ export function downloadLineageCsv(meta: LineageExportMeta, rows: LineageExportR
   downloadCsv(buildLineageCsv(meta, rows, selected, includeClauseDetail, compact), `${filenameBase(meta)}${compact ? "-compact" : ""}.csv`);
 }
 
-// Escapes text for safe interpolation into the generated HTML document —
-// separate from CSV escaping (csvCell), since this is a different sink.
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
 // The clause-by-clause detail, rendered beneath its parent <tr> as a REAL
 // nested 4-column table — matching the in-app ClauseMatrix structure, not
 // the old spine-prose format the earlier export limitation referred to
@@ -416,14 +411,5 @@ export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExport
 // selectable/searchable by construction. Setting `document.title` in the new
 // window makes the browser's Save-as-PDF dialog default to the right filename.
 export function openLineagePdf(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true, compact = false): void {
-  const html = buildLineagePdfHtml(meta, rows, selected, includeClauseDetail, compact);
-  const win = window.open("", "_blank");
-  if (!win) return; // popup blocked — nothing else to fall back to client-side
-  win.document.open();
-  win.document.write(html);
-  win.document.close();
-  win.document.title = filenameBase(meta);
-  win.focus();
-  // Give the new document a tick to finish laying out before printing.
-  win.setTimeout(() => win.print(), 150);
+  printHtmlInNewTab(buildLineagePdfHtml(meta, rows, selected, includeClauseDetail, compact), filenameBase(meta));
 }
