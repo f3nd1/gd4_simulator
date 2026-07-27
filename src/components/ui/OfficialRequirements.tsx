@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { buildRequirementRows, downloadRequirementsCsv, openRequirementsPdf } from "../../lib/requirementsReference";
 import { scopeTitle } from "../../lib/evidenceScope";
+import { POPUP_BLOCKED_MESSAGE } from "../../lib/printableDoc";
 
 // PRE-AUDIT view: the official EduTrust requirement wording for one scope,
 // read straight from the shipped GD4 data. It renders identically whether the
@@ -16,6 +17,8 @@ import { scopeTitle } from "../../lib/evidenceScope";
 export function OfficialRequirements({ scopeId }: { scopeId: string }) {
   const rows = useMemo(() => buildRequirementRows(scopeId), [scopeId]);
   const items = useMemo(() => [...new Set(rows.map((r) => r.itemId))], [rows]);
+  // A blocked pop-up used to leave the PDF button looking dead — say so.
+  const [pdfBlocked, setPdfBlocked] = useState(false);
 
   const btn: React.CSSProperties = {
     fontSize: 11, fontWeight: 600, color: "#0f766e", padding: "4px 9px",
@@ -38,9 +41,15 @@ export function OfficialRequirements({ scopeId }: { scopeId: string }) {
         </span>
         <span style={{ display: "inline-flex", gap: 6, marginLeft: "auto" }}>
           <button type="button" style={btn} onClick={() => downloadRequirementsCsv(scopeId)} title="Download the official requirement text for this sub-criterion as a CSV">⬇ CSV</button>
-          <button type="button" style={btn} onClick={() => openRequirementsPdf(scopeId)} title="Open the official requirement text as a printable/PDF table (new tab)">⬇ PDF</button>
+          <button type="button" style={btn} onClick={() => setPdfBlocked(!openRequirementsPdf(scopeId))} title="Open the official requirement text as a printable/PDF table (new tab)">⬇ PDF</button>
         </span>
       </div>
+
+      {pdfBlocked && (
+        <div style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px", marginBottom: 8 }}>
+          {POPUP_BLOCKED_MESSAGE}
+        </div>
+      )}
 
       <div style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px", marginBottom: 10, lineHeight: 1.45 }}>
         This is the published EduTrust GD4 requirement wording only. <b>Nothing here has been checked against any document</b> — no file has been read and no audit has run. Use it to prepare; the Requirement coverage view on the other tabs is where assessed results appear.

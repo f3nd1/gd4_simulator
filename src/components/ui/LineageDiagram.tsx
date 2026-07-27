@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { ExtractedTextPanel } from "./ExtractedTextPanel";
 import { excerptAround, findQuoteSpan, type QuoteExcerpt } from "./quoteMatch";
+import { POPUP_BLOCKED_MESSAGE } from "../../lib/printableDoc";
 import { downloadLineageCsv, openLineagePdf, lineageColumnsFor, lineExpands, buildLineagePreview, type LineageCoverage, type LineageExportRow, type LineageExportMeta, type LineageColumnKey, type LineageClauseDetailItem } from "../../lib/lineageExport";
 import { ppdVerdictLabel, evVerdictLabel } from "../../lib/verdictTone";
 import { samplingCaveat } from "../../lib/samplingCaveat";
@@ -910,8 +911,15 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
   // Export column picker state — hooks live above the empty-lines early
   // return; the handlers that use them are defined further down with the
   // export meta/rows they operate on.
-  const [exportPicker, setExportPicker] = useState<"csv" | "pdf" | null>(null);
-  const [exportCols, setExportCols] = useState<Set<LineageColumnKey>>(new Set());
+  // The Options panel is a settings surface, NOT a gate: the ⬇ buttons export
+  // whether it is open or shut.
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [pdfBlocked, setPdfBlocked] = useState(false);
+  // Seeded with every column so an untouched panel exports exactly what the
+  // original fixed export did — the picker only ever trims from here.
+  const [exportCols, setExportCols] = useState<Set<LineageColumnKey>>(
+    () => new Set(lineageColumnsFor(mode === "evidence" ? "evidence" : "policy").map((c) => c.key)),
+  );
   // Clause-by-clause detail is a separate toggle from the column checkboxes
   // (it isn't a flat-matrix column at all) — defaults to included per row,
   // resetting to true every time the picker opens.
@@ -989,27 +997,25 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
   // content within a kept column is never truncated. Zero columns can't be
   // exported (the button disables), so the file can never come out empty.
   const exportTab: LineageExportMeta["tab"] = isEv ? "evidence" : "policy";
-  const openExportPicker = (format: "csv" | "pdf") => {
-    setExportCols(new Set(lineageColumnsFor(exportTab).map((c) => c.key))); // all checked by default
-    setIncludeClauseDetail(true); // defaults to included
-    setExportCompact(false);      // Full detail is the default — see exportCompact
-    setExportPicker(format);
-  };
   const toggleExportCol = (key: LineageColumnKey) =>
     setExportCols((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   // Filter the registry (not the Set) so the export keeps matrix order.
   // Compact ignores the selection entirely: its three columns are fixed.
   const selectedKeys = lineageColumnsFor(exportTab).map((c) => c.key).filter((k) => exportCols.has(k));
-  const runExport = () => {
+  // ⬇ CSV / ⬇ PDF export IMMEDIATELY, using whatever Options currently holds.
+  // They used to only open the picker, so the icon promised a file and
+  // delivered a panel — reported as "the buttons are not working".
+  const runExport = (format: "csv" | "pdf") => {
     if (!exportCompact && selectedKeys.length === 0) return;
-    if (exportPicker === "csv") downloadLineageCsv(exportMeta, exportRows, selectedKeys, includeClauseDetail, exportCompact);
-    else openLineagePdf(exportMeta, exportRows, selectedKeys, includeClauseDetail, exportCompact);
-    setExportPicker(null);
+    setPdfBlocked(false);
+    if (format === "csv") { downloadLineageCsv(exportMeta, exportRows, selectedKeys, includeClauseDetail, exportCompact); return; }
+    // A blocked pop-up returns false: say so instead of doing nothing visible.
+    if (!openLineagePdf(exportMeta, exportRows, selectedKeys, includeClauseDetail, exportCompact)) setPdfBlocked(true);
   };
   // Live preview of exactly what the CSV would write, from the SAME assembly
-  // the builders use — so what Felix sees here cannot drift from the download.
-  // Recomputed only while the picker is open.
-  const preview = exportPicker
+  // the builders use — so what is shown here cannot drift from the download.
+  // Computed only while Options is open.
+  const preview = optionsOpen
     ? buildLineagePreview(exportMeta, exportRows, selectedKeys, includeClauseDetail, exportCompact, 6)
     : null;
 
@@ -1042,16 +1048,32 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
             immediately. stopPropagation so clicking an export button doesn't
             also collapse the panel. */}
         <span style={{ display: "inline-flex", gap: 6 }}>
-          <button type="button" onClick={(e) => { e.stopPropagation(); openExportPicker("csv"); }} style={exportBtnStyle} title="Choose columns, then download every row above (full file lists) as a CSV">⬇ CSV</button>
-          <button type="button" onClick={(e) => { e.stopPropagation(); openExportPicker("pdf"); }} style={exportBtnStyle} title="Choose columns, then open every row above as a printable/PDF table (new tab)">⬇ PDF</button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); runExport("csv"); }} style={exportBtnStyle} title="Download every row above (full file lists) as a CSV, using the current Options">⬇ CSV</button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); runExport("pdf"); }} style={exportBtnStyle} title="Open every row above as a printable/PDF table in a new tab, using the current Options">⬇ PDF</button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setOptionsOpen((v) => !v); }}
+            style={{ ...exportBtnStyle, background: optionsOpen ? "#0f766e" : "#fff", color: optionsOpen ? "#fff" : "#0f766e", borderColor: optionsOpen ? "#0f766e" : "#99f6e4" }}
+            title="Choose Compact or Full detail, pick columns, and preview the file before exporting"
+          >
+            ⚙ Options {optionsOpen ? "▲" : "▼"}
+          </button>
         </span>
         <span style={{ color: "#94a3b8", fontSize: 12 }}>{open ? "▲" : "▼"}</span>
       </div>
 
-      {/* Column picker — shown for whichever format was clicked, even while
-          the matrix itself is collapsed (the export buttons work either way).
-          All columns start checked = exact parity with the old fixed export. */}
-      {exportPicker && (
+      {pdfBlocked && (
+        <div onClick={(e) => e.stopPropagation()} style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", borderBottom: "1px solid #fde68a", padding: "6px 12px", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ flex: 1 }}>{POPUP_BLOCKED_MESSAGE}</span>
+          <button type="button" onClick={() => setPdfBlocked(false)} style={{ cursor: "pointer", border: "none", background: "transparent", color: "#92400e", fontSize: 14, lineHeight: 1 }}>✕</button>
+        </div>
+      )}
+
+      {/* Options — a settings panel, not a step in the export. It can be left
+          open while exporting repeatedly, and closing it changes nothing about
+          what the ⬇ buttons produce. All columns start checked = exact parity
+          with the original fixed export. */}
+      {optionsOpen && (
         <div onClick={(e) => e.stopPropagation()} style={{ padding: "8px 12px", background: "#f0fdfa", borderBottom: "1px solid #f1f5f9" }}>
           {/* Mode switch. Compact sits FIRST because it is the view asked for
               most often, but Full detail stays the default so confirming
@@ -1083,7 +1105,7 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
           {/* Column picker — Full detail only: compact's three columns are fixed. */}
           {!exportCompact && (
             <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#0f766e" }}>Columns to include in the {exportPicker === "csv" ? "CSV" : "PDF"}:</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#0f766e" }}>Columns to include:</span>
               {lineageColumnsFor(exportTab).map((c) => (
                 <label key={c.key} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#334155", cursor: "pointer", whiteSpace: "nowrap" }}>
                   <input type="checkbox" checked={exportCols.has(c.key)} onChange={() => toggleExportCol(c.key)} />
@@ -1107,7 +1129,7 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
             <div style={{ background: "#fff", border: "1px solid #99f6e4", borderRadius: 6, padding: "6px 8px", marginBottom: 8 }}>
               <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, color: "#0f766e", marginBottom: 4 }}>
                 Preview · showing {preview.rows.length} of {preview.totalRows} row{preview.totalRows === 1 ? "" : "s"}
-                {exportPicker === "pdf" && !exportCompact && <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: "#64748b" }}> · the PDF nests clause detail under each line instead of as separate rows</span>}
+                {!exportCompact && includeClauseDetail && <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: "#64748b" }}> · the PDF nests clause detail under each line instead of as separate rows</span>}
               </div>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 10.5 }}>
@@ -1138,13 +1160,9 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
           )}
 
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {!exportCompact && exportCols.size === 0 && <span style={{ fontSize: 10.5, color: "#b45309" }}>Select at least one column to export.</span>}
-            <span style={{ display: "inline-flex", gap: 6, marginLeft: "auto" }}>
-              <button type="button" disabled={!exportCompact && exportCols.size === 0} onClick={runExport} style={{ ...exportBtnStyle, opacity: !exportCompact && exportCols.size === 0 ? 0.5 : 1, cursor: !exportCompact && exportCols.size === 0 ? "not-allowed" : "pointer" }}>
-                Export {exportPicker === "csv" ? "CSV" : "PDF"}
-              </button>
-              <button type="button" onClick={() => setExportPicker(null)} style={{ fontSize: 11, fontWeight: 600, color: "#64748b", padding: "4px 9px", border: "1px solid #cbd5e1", borderRadius: 6, background: "#fff", cursor: "pointer" }}>Cancel</button>
-            </span>
+            {!exportCompact && exportCols.size === 0
+              ? <span style={{ fontSize: 10.5, color: "#b45309" }}>Tick at least one column — with none selected the ⬇ buttons cannot export.</span>
+              : <span style={{ fontSize: 10.5, color: "#64748b" }}>Set these, then use ⬇ CSV or ⬇ PDF above. They always export what you see here.</span>}
           </div>
         </div>
       )}

@@ -5,9 +5,13 @@
 // print-to-PDF renders real HTML text (never rasterised), so the output stays
 // selectable and searchable. Setting document.title makes the Save-as-PDF
 // dialog default to the right filename.
-export function printHtmlInNewTab(html: string, title: string): void {
+// Returns false when the browser refused the new tab (pop-up blocker). The
+// caller MUST surface that: this used to return void, so a blocked pop-up
+// produced no tab, no file and no message, which is indistinguishable from a
+// dead button and was reported as exactly that.
+export function printHtmlInNewTab(html: string, title: string): boolean {
   const win = window.open("", "_blank");
-  if (!win) return; // popup blocked — nothing else to fall back to client-side
+  if (!win) return false;
   win.document.open();
   win.document.write(html);
   win.document.close();
@@ -15,7 +19,13 @@ export function printHtmlInNewTab(html: string, title: string): void {
   win.focus();
   // Give the new document a tick to finish laying out before printing.
   win.setTimeout(() => win.print(), 150);
+  return true;
 }
+
+// One wording for every "the PDF could not open" case, so the two export
+// surfaces cannot drift into saying it differently.
+export const POPUP_BLOCKED_MESSAGE =
+  "The PDF could not open because your browser blocked the new tab. Allow pop-ups for this site, then click PDF again. The CSV download is unaffected.";
 
 // The shared print stylesheet for generated audit documents, so the lineage
 // export and the official-requirements export look like one family.

@@ -478,3 +478,26 @@ describe("buildLineagePreview — what the picker shows must equal what download
     expect(preview.totalRows).toBe(1); // detail excluded → parent line only
   });
 });
+
+describe("untouched-Options default is byte-identical to the historic fixed export", () => {
+  // The header ⬇ buttons now export straight away, passing whatever the Options
+  // panel holds. With the panel untouched that is: every column, clause detail
+  // included, compact off. These assert those exact arguments reproduce the
+  // original no-arguments export byte for byte, so making the buttons one-click
+  // cannot have quietly changed the file anyone already relies on.
+  const rowsFor = () => [multiFileRow(), twoPartRow()];
+
+  for (const tab of ["policy", "evidence"] as const) {
+    it(`CSV — ${tab} tab`, () => {
+      const meta = policyMeta({ tab });
+      const allKeys = lineageColumnsFor(tab).map((c) => c.key);
+      expect(buildLineageCsv(meta, rowsFor(), allKeys, true, false)).toBe(buildLineageCsv(meta, rowsFor()));
+    });
+
+    it(`PDF — ${tab} tab`, () => {
+      const meta = policyMeta({ tab });
+      const allKeys = lineageColumnsFor(tab).map((c) => c.key);
+      expect(buildLineagePdfHtml(meta, rowsFor(), allKeys, true, false)).toBe(buildLineagePdfHtml(meta, rowsFor()));
+    });
+  }
+});

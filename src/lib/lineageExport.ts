@@ -410,6 +410,8 @@ export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExport
 // print-to-PDF renders real HTML text (never rasterised), so the output is
 // selectable/searchable by construction. Setting `document.title` in the new
 // window makes the browser's Save-as-PDF dialog default to the right filename.
-export function openLineagePdf(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true, compact = false): void {
-  printHtmlInNewTab(buildLineagePdfHtml(meta, rows, selected, includeClauseDetail, compact), filenameBase(meta));
+// Returns false when the browser blocked the new tab — the caller shows the
+// message rather than leaving the click looking dead.
+export function openLineagePdf(meta: LineageExportMeta, rows: LineageExportRow[], selected?: LineageColumnKey[], includeClauseDetail = true, compact = false): boolean {
+  return printHtmlInNewTab(buildLineagePdfHtml(meta, rows, selected, includeClauseDetail, compact), filenameBase(meta));
 }

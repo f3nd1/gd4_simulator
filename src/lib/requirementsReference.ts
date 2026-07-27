@@ -116,6 +116,7 @@ export function downloadRequirementsCsv(scopeId: string): void {
   downloadCsv(buildRequirementsCsv(scopeId), `${filenameBase(scopeId)}.csv`);
 }
 
-export function openRequirementsPdf(scopeId: string): void {
-  printHtmlInNewTab(buildRequirementsPdfHtml(scopeId), filenameBase(scopeId));
+// Returns false when the browser blocked the new tab — see openLineagePdf.
+export function openRequirementsPdf(scopeId: string): boolean {
+  return printHtmlInNewTab(buildRequirementsPdfHtml(scopeId), filenameBase(scopeId));
 }
