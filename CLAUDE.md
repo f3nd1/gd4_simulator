@@ -42,6 +42,7 @@ Write commit messages with a full body: what changed, why, which mechanism was r
 
 - **GD4 requirements** live in `src/data/gd4Requirements.ts` — `GD4_CRITERIA` (7), `GD4_SUB_CRITERIA` (29), `GD4_REQUIREMENTS` (31 items), `GENERAL_SUPPORTING_DOCS`. Sub-criteria are the backbone every module refers to by id (e.g. `"6.2"`); items by `id` (e.g. `"6.2.1"`). Each `GD4Requirement` carries `flatAuditPoints: FlatAuditPoint[]` derived from the official text: Describe/Show bullets with a ": sub1; sub2; sub3" list pattern are split into lettered children (refs like `"6.2.1.DS1.a"`); simple bullets produce one point each. Run `npm run validate:gd4` after touching this file.
 - **Refs are joined everywhere** through `src/lib/gd4Refs.ts` — `normalizeAuditRef()` must be applied to BOTH sides of any ref comparison; `findingDedupeKey()`/`findingKeyOf()` define finding identity; `carryoverKey()` (`src/lib/cycleCarryover.ts`) defines "the same recurring gap" across cycles. Never invent a second matching scheme — reuse these.
+- **A sub-criterion id is NOT always two-part.** Criterion 2's sub-criteria are three-part (`"2.1.1"`, `"2.3.1"`, `"2.4.1"`…), so `"2.1"` matches nothing and silently yields an empty list. Never derive a sub id by truncating an item id, and never hand-write one in a test — take them from `GD4_SUB_CRITERIA`/`subCriterionId`. Resolve scope → items through `itemIdsForScope()` in `src/lib/evidenceScope.ts` (it also handles the 4.2 split), never a fresh `GD4_REQUIREMENTS.filter`.
 
 ### Scoring pipeline (`src/lib/scoring.ts`)
 
@@ -59,8 +60,18 @@ Write commit messages with a full body: what changed, why, which mechanism was r
 ### Two audit paths — know which one you're on
 
 - **Option B (staged / full audit)** — `auditFolderStaged` / `auditFolderContents` in `useWorkspaceStore.ts`: three sequential AI passes — Policy (Approach), Evidence (Processes + Outcomes), Outcome/Review (Review) — merged by deterministic `buildStagedApsr()`. Progress stages: `listing → reading → policy_audit → evidence_audit → outcome_review → apsr_build → saving → findings_summary → complete`.
-- **Option A (PPD-first)** — `runPPDReview` + `runEvidenceAssessment` in `useWorkspaceStore.ts`, UI in `src/pages/PPDReview.tsx` (3 tabs: PPD Review · Pre-check · Evidence), also embedded as a modal in EvidenceFolder. The PPD pass reads ONLY the policy bucket and verdicts each requirement line (Adequate/Partial/Not documented, per-sub-clause); the Evidence pass reuses those verdicts, reads the evidence bucket fresh, and produces combined Met/Partial/Not met with promise checks. `compileEvidenceFindings` raises findings. Results live in `ppdReviewResults` / `evidenceAssessments` keyed by sub-criterion; run ids look like `EV-6.2-XXXX`; `/evidence-folder?run=<runId>` deep-links to the result modal.
+- **Option A (PPD-first)** — `runPPDReview` + `runEvidenceAssessment` in `useWorkspaceStore.ts`, UI in `src/pages/PPDReview.tsx` (`PpdReviewContent`, 4 tabs: Official requirements · PPD Review · Pre-check · Evidence; `initialTab` prop picks the landing tab), also embedded as a modal in EvidenceFolder. The PPD pass reads ONLY the policy bucket and verdicts each requirement line (Adequate/Partial/Not documented, per-sub-clause); the Evidence pass reuses those verdicts, reads the evidence bucket fresh, and produces combined Met/Partial/Not met with promise checks. `compileEvidenceFindings` raises findings. Results live in `ppdReviewResults` / `evidenceAssessments` keyed by sub-criterion; run ids look like `EV-6.2-XXXX`; `/evidence-folder?run=<runId>` deep-links to the result modal.
 - Both paths must stay at capability parity for **file reading**: the three-tier read (typed text + Office embedded-image vision → scanned-PDF page-image vision → standalone-image vision) exists as the shared `readDriveFileWithVision()` helper (used by Option A) and as inline copies in the full/staged paths. If you improve reading, improve all paths or extend the shared helper — a path that silently reads less produces false "no evidence found" gaps (this was a real bug).
+
+### Requirement-coverage views and their exports
+
+Two views sit on the Option A tabs. They look similar and mean opposite things — never merge them.
+
+- **Run-derived: "Requirement coverage"** (`src/components/ui/LineageDiagram.tsx`, exports in `src/lib/lineageExport.ts`). One row per requirement line from a completed run, with verdicts. `lineExpands(coverage, subPartCount)` decides which lines open to their clause-by-clause sub-parts: covered/partial always, and a GAP line (Not met / Not documented) only when the run really decomposed it into `promiseChecks`/`subClauses`. That count gate is load-bearing — with no decomposition both spine builders fall back to a single item hardcoded `found: true`, which under a gap verdict would render a false "Found".
+- **Static: "Official requirements — not yet assessed"** (`src/components/ui/OfficialRequirements.tsx`, data + exports in `src/lib/requirementsReference.ts`). The published GD4 wording for a scope, read straight from `GD4_REQUIREMENTS.flatAuditPoints`. Takes ONLY a scope id — no run, no Drive, no store, no AI — which is why it renders on a sub-criterion nobody has touched, and why it must never gain a verdict, tick or status column. Reachable on an unaudited scope via each Evidence Folder card's ⋯ menu ("Official requirements (no audit needed)"), because the card's "View results" button is hidden until a run exists.
+- **Export UI contract**: `⬇ CSV` / `⬇ PDF` export IMMEDIATELY in one click; `⚙ Options` is a settings panel (Compact vs Full detail, column tick boxes, live preview) that never gates the download. Making the ⬇ buttons only open a picker was reported as "the buttons are not working" — do not reintroduce a confirm step. An untouched Options panel must stay byte-identical to the historic no-arguments export (tests assert this for CSV and PDF on both tabs).
+- **Compact preset**: fixed 3 columns (GD4 Requirement · Policy Promise · Expected Evidence), one row per expected-evidence item, reusing the same `LineageClauseDetailItem` data the full export flattens. `assembleRows()` is the single row assembly behind BOTH the CSV and `buildLineagePreview()`, so the on-screen preview cannot drift from the file.
+- **PDF = print-to-tab**, not a generated binary: `printHtmlInNewTab()` in `src/lib/printableDoc.ts` (shared by both views, plus `PRINTABLE_DOC_CSS`/`escapeHtml`). It returns `false` when the browser blocks the pop-up and every caller MUST surface `POPUP_BLOCKED_MESSAGE` — it used to return `void`, so a blocked pop-up gave no tab, no file and no message, indistinguishable from a dead button.
 
 ### Bucket routing (policy vs evidence)
 
@@ -149,7 +160,7 @@ Key exact-value constraints (TypeScript union types — violations cause TS erro
 ## Definition of done — run before calling anything finished
 
 1. `npx tsc -b` — zero errors.
-2. `npm run test` — all pass (1092 tests / 94 files as of `0d898ff`; your change should only ever raise the count).
+2. `npm run test` — all pass (1118 tests / 95 files as of `204ac1f`; your change should only ever raise the count).
 3. `npm run lint` — no NEW warnings. Pre-existing (ignore, don't drive-by fix): jsx-key in `ProfileOfPei.tsx`, no-unused-expressions in `EvidenceFolder.tsx`/`PPDReview.tsx`, exhaustive-deps in `SubCriterionChecklist.tsx`, unused `GD4_SUB_CRITERIA` import in `useWorkspaceStore.ts`.
 4. `npm run build` — clean (the chunk-size warning is pre-existing).
 5. **Live verification in the browser** for any UI/flow change (cookbook below). State honestly what you could and could not exercise (real Drive/OpenAI don't exist in the sandbox) and give the user the exact click-path to confirm the rest themselves.
@@ -167,7 +178,7 @@ Key exact-value constraints (TypeScript union types — violations cause TS erro
 
 ## Tests
 
-Vitest, colocated in `__tests__/` dirs. Test files must import `classifyPdfTextQuality` and `extractSpreadsheetText` from `src/lib/drive/textUtils` (not `driveClient`) — `driveClient` instantiates a pdfjs Worker at module load time which is unavailable in Node/Vitest. Store tests reset state in `afterEach` via `useXStore.setState(...)`; the "Local save failed … localStorage may be full" stderr noise in store tests is benign.
+Vitest, colocated in `__tests__/` dirs. Test files must import `classifyPdfTextQuality` and `extractSpreadsheetText` from `src/lib/drive/textUtils` (not `driveClient`) — `driveClient` instantiates a pdfjs Worker at module load time which is unavailable in Node/Vitest. The same trap makes most `components/ui/*.tsx` untestable by import: anything reaching `useWorkspaceStore` pulls in `driveClient`. So put the decision logic in a lib and test it there (`lineExpands` in `lineageExport.ts` exists in that file for exactly this reason), rather than exporting a component's internals. Store tests reset state in `afterEach` via `useXStore.setState(...)`; the "Local save failed … localStorage may be full" stderr noise in store tests is benign.
 
 ## Routing
 
