@@ -60,7 +60,7 @@ const DETAILS: Record<string, Detail> = {
   },
   "/sub-checklist": {
     what: "The source of truth for scoring. Each item is broken into testable requirement lines with evidence attached, plus the item's APSR band matrix: you score Approach, Processes, Systems & Outcomes and Review against the official §23 descriptors; the four percentages sum to the band.",
-    how: "Generate lines (AI or manual), attach evidence, mark each Met / Partial / Not met, then score the four dimensions on the matrix (an AI first pass can suggest them). A written justification is required. Note the on-page disclaimer: the percentage thresholds are reconstructed from one SSG auditor's worked example and not fully confirmed.",
+    how: "Generate lines (AI or manual), attach evidence, mark each Met / Partial / Not met, then score the four dimensions on the matrix ('Suggest APSR scores' can propose them). A written justification is required. Note the on-page disclaimer: the percentage thresholds are reconstructed from one SSG auditor's worked example and not fully confirmed.",
   },
   "/scorecard": {
     what: "The official band per item, per criterion and overall.",
@@ -88,7 +88,7 @@ const DETAILS: Record<string, Detail> = {
   },
   "/clarification": {
     what: "The batch version of re-checking: all open findings in one list, grouped by sub-criterion, re-checked together as numbered rounds with visible history.",
-    how: "Tick the findings you have new evidence for (or 'Check for updated evidence' to see which folders changed), open each row's 'Open Evidence folder ↗' link to upload in Drive without losing your place, then click 'Re-check selected'. A resolved finding is never closed automatically — you decide in Quality Action / AFI.",
+    how: "Work left to right: 'Step 1 · Check which folders changed' (free) shows which folders have new files, 'Step 2 · Tick the changed' selects them, and 'Step 3 · Re-assess with AI' does the re-assessment. Open each row's 'Open Evidence folder ↗' link to upload in Drive without losing your place. A resolved finding is never closed automatically — you decide in Quality Action / AFI.",
   },
   "/afi-closure": {
     what: "Where each finding's closure is decided — root cause, corrective and preventive action, closure evidence, with AI and human verification.",
@@ -269,7 +269,7 @@ function UsersTab({ nav }: { nav: ReturnType<typeof visibleNav> }) {
           The <Link to="/sub-checklist">Sub-Criterion Checklist</Link> is the scoring source of truth. Each requirement line is
           Met / Partial / Not met with evidence attached. The item's band comes from the <b>APSR matrix</b>: you score
           Approach, Processes, Systems &amp; Outcomes and Review against the official descriptors, the four percentages sum,
-          and the total maps to the band. An <b>AI first pass</b> can suggest the four scores; a written justification is
+          and the total maps to the band. The <b>Suggest APSR scores</b> button can propose the four scores; a written justification is
           always required, and the page honestly notes the percentage thresholds are reconstructed from one SSG auditor's
           example. Failing lines become findings on the <Link to="/findings">Findings</Link> page ('Raise all unmet' does it in one click).
         </P>

@@ -660,7 +660,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
             the band came from an AI run and prints onto the PDF. It clears if
             the band is later re-saved by hand (source flips ai-auto -> human). */}
         {it.bandSource === "ai-auto" && (
-          <Pill s="medium">Already run by AI</Pill>
+          <Pill s="medium">Band set automatically</Pill>
         )}
         {it.gate && <Pill s="high">Gate</Pill>}
         <b style={{ fontSize: 12.5 }}>{it.id}</b>

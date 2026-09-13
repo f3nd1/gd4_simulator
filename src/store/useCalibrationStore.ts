@@ -7,7 +7,12 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import type { ConsistencyTestResult, ABTestResult } from "../lib/calibrationTesting";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 
-export type MatchStatus = "caught" | "partial" | "missed" | "unassessed";
+// "not-audited" is a measurement-integrity status, not a grade: the tool has
+// never run on that sub-criterion, so there is no assessment to compare the
+// real finding against. It is set in code (never by the judge) and excluded
+// from the accuracy scoreboard and the Tuning Advisor — see
+// isSubCriterionAudited in lib/tuningAdvisor.ts for why.
+export type MatchStatus = "caught" | "partial" | "missed" | "unassessed" | "not-audited";
 
 export type MatchAssessment = {
   afiId: string;
@@ -27,6 +32,10 @@ export type CalibrationRunRecord = {
   partial: number;
   missed: number;
   unassessed: number;
+  // Optional so run records written before "not-audited" existed still load
+  // (they predate the field; render them as 0 rather than migrating history
+  // that was accurate for what it measured at the time).
+  notAudited?: number;
 };
 
 const RUN_HISTORY_CAP = 20;

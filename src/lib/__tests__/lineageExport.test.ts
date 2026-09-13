@@ -165,7 +165,7 @@ describe("buildLineagePdfHtml", () => {
     // The old static "Expand rows in-app for quoted passages..." caption no
     // longer applies now that detail CAN be included in the export itself —
     // the caption is now conditional on includeClauseDetail (see below).
-    expect(html).toContain("Clause-by-clause detail for covered/partial lines is included beneath each line below.");
+    expect(html).toContain("Expected evidence is broken out line by line beneath each requirement below.");
   });
 
   it("shows the full untruncated file list and clause text, not a '+N more' summary", () => {
@@ -317,8 +317,8 @@ describe("buildLineagePdfHtml — clause-by-clause detail (Task 4)", () => {
   it("defaults to included and nests a REAL 4-column table beneath the parent row, matching the in-app ClauseMatrix headers", () => {
     const row = multiFileRow({ clauseDetail: [evFoundItem(), evNotFoundItem()] });
     const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [row]);
-    expect(html).toContain("Clause by clause");
-    expect(html).toContain("<th>Clause requirement</th>");
+    expect(html).toContain("Expected evidence, line by line");
+    expect(html).toContain("<th>Expected evidence</th>");
     expect(html).toContain("<th>PPD clause / extract</th>");
     expect(html).toContain("<th>File and Supporting passage</th>");
     expect(html).toContain("<th>Remarks</th>");
@@ -337,9 +337,9 @@ describe("buildLineagePdfHtml — clause-by-clause detail (Task 4)", () => {
   it("includeClauseDetail=false renders no nested table and the caption says so honestly", () => {
     const row = multiFileRow({ clauseDetail: [evFoundItem()] });
     const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [row], undefined, false);
-    expect(html).not.toContain("Clause by clause");
+    expect(html).not.toContain("Expected evidence, line by line");
     expect(html).not.toContain("Stakeholders from different functions are present");
-    expect(html).toContain("Clause-by-clause detail was excluded from this export");
+    expect(html).toContain("Expected evidence was NOT broken out line by line in this export");
   });
 
   it("nested detail content is never truncated", () => {
@@ -352,7 +352,7 @@ describe("buildLineagePdfHtml — clause-by-clause detail (Task 4)", () => {
   it("a row with no clauseDetail renders no nested table beneath it", () => {
     const row = multiFileRow({ clauseDetail: undefined });
     const html = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [row]);
-    expect(html).not.toContain("Clause by clause");
+    expect(html).not.toContain("Expected evidence, line by line");
   });
 
   it("escapes HTML in nested detail content", () => {
@@ -445,12 +445,12 @@ describe("compact preset — Requirement | Policy | Expected Evidence, nothing e
     // Assert on markup the nested table alone emits — ".detail-table" itself
     // also appears in the document's static <style> block, so matching that
     // would pass even when the table really had rendered.
-    expect(html).not.toContain("Clause by clause");
+    expect(html).not.toContain("Expected evidence, line by line");
     expect(html).not.toContain("colspan=");
     // The full-detail export at the same call site still nests it, proving the
     // assertion above can actually fail.
     const full = buildLineagePdfHtml(policyMeta({ tab: "evidence" }), [twoPartRow()], undefined, true, false);
-    expect(full).toContain("Clause by clause");
+    expect(full).toContain("Expected evidence, line by line");
     expect(full).toContain("colspan=");
   });
 });

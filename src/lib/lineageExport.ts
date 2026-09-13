@@ -311,8 +311,8 @@ export function downloadLineageCsv(meta: LineageExportMeta, rows: LineageExportR
 function clauseDetailTableHtml(tab: LineageExportMeta["tab"], items: LineageClauseDetailItem[], colSpan: number): string {
   const ev = tab === "evidence";
   const headers = ev
-    ? ["Clause requirement", "PPD clause / extract", "File and Supporting passage", "Remarks"]
-    : ["Clause requirement", "Policy clause & quote", "File", "Rationale"];
+    ? ["Expected evidence", "PPD clause / extract", "File and Supporting passage", "Remarks"]
+    : ["Expected evidence", "Policy clause & quote", "File", "Rationale"];
   const rowsHtml = items.map((it) => {
     const status = it.found ? "Found" : it.contradicted ? "Contradicted" : "Not found";
     const col3Parts = [it.fileName ? `from ${it.fileName}` : status];
@@ -328,7 +328,7 @@ function clauseDetailTableHtml(tab: LineageExportMeta["tab"], items: LineageClau
   }).join("");
   return `
     <tr class="detail-row"><td colspan="${colSpan}">
-      <div class="detail-label">Clause by clause</div>
+      <div class="detail-label">Expected evidence, line by line</div>
       <table class="detail-table">
         <thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead>
         <tbody>${rowsHtml}</tbody>
@@ -364,8 +364,8 @@ export function buildLineagePdfHtml(meta: LineageExportMeta, rows: LineageExport
   const detailCaption = compact
     ? "Compact view: one row per expected-evidence item, showing only the requirement, the policy text and the expected evidence. Re-export in Full detail for verdicts, files, passages and remarks."
     : includeClauseDetail
-      ? "Clause-by-clause detail for covered/partial lines is included beneath each line below."
-      : "Clause-by-clause detail was excluded from this export (unchecked in the column picker) — expand rows in-app to see it, or re-export with detail included.";
+      ? "Expected evidence is broken out line by line beneath each requirement below."
+      : "Expected evidence was NOT broken out line by line in this export (unticked in the column picker) — expand rows in-app to see it, or re-export with it ticked.";
 
   return `<!doctype html>
 <html>

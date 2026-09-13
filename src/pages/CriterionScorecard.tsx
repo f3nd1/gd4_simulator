@@ -23,7 +23,7 @@ export function CriterionScorecard() {
   // Folder audit stamp per sub-criterion, so each row can say when (and how)
   // its item was last audited instead of presenting an unqualified band.
   const folderBySubCrit = new Map(folders.map((f) => [f.subCriterionId, f]));
-  // "Already run by AI" marker: driven by the saved band's own source field;
+  // "Band set automatically" marker: driven by the saved band's own source field;
   // a passive label (Felix, 2026-07-19 — a Hybrid / Full Auto run counts as
   // already reviewed, so no Confirm step). Clears only when the band is later
   // re-saved by hand (source flips ai-auto -> human).
@@ -103,7 +103,7 @@ export function CriterionScorecard() {
                 {belowBand3.map((it) => (
                   <tr key={it.id} className="rowh">
                     <td><b>{it.id}</b> {it.title}{it.gate && <Pill s="medium">gate</Pill>}</td>
-                    <td>{it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}{isAiAutoBand(it.id) && <Pill s="medium">Already run by AI</Pill>}</td>
+                    <td>{it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}{isAiAutoBand(it.id) && <Pill s="medium">Band set automatically</Pill>}</td>
                     <td>{it.eff}</td>
                   </tr>
                 ))}
@@ -173,7 +173,7 @@ export function CriterionScorecard() {
                   <td>
                     {it.started ? <Pill s={bandTone(it.band)}>Band {it.band}</Pill> : <span style={{ color: "#9ca3af" }}>—</span>}
                     {it.checklistOverride && <Pill s="progress">via Checklist</Pill>}
-                    {isAiAutoBand(it.id) && <Pill s="medium">Already run by AI</Pill>}
+                    {isAiAutoBand(it.id) && <Pill s="medium">Band set automatically</Pill>}
                     {stampFor(it.id) && (
                       <div style={{ fontSize: 10, color: stampFor(it.id)!.includes("offline") ? "#b45309" : "#94a3b8", marginTop: 2, whiteSpace: "nowrap" }}>
                         audited {stampFor(it.id)}

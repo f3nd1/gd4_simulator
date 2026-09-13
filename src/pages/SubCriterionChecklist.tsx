@@ -453,7 +453,7 @@ export function SubCriterionChecklist() {
     [entries]
   );
 
-  // AI first pass: run the per-dimension judgment call, then populate the
+  // Suggest APSR scores: run the per-dimension judgment call, then populate the
   // OFFICIAL APSR matrix from the AI's per-dimension bands (Task 4 — now
   // load-bearing input, no longer a "your own working" diagnostic). Snapshots
   // the line-verdict signature for the staleness check (Task 5).
@@ -741,7 +741,7 @@ export function SubCriterionChecklist() {
                     It still clears if the band is later re-saved by hand (source
                     flips ai-auto -> human). */}
                 {holisticBand.source === "ai-auto" ? (
-                  <Pill s="medium">Already run by AI</Pill>
+                  <Pill s="medium">Band set automatically</Pill>
                 ) : null}
                 <span style={{ fontSize: 11, color: "#94a3b8" }}>
                   {holisticBand.source === "ai-auto" ? "Set automatically by AI" : holisticBand.source === "ai-accepted" ? "AI scores accepted by reviewer" : "Set by reviewer"} · {new Date(holisticBand.decidedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
@@ -789,9 +789,9 @@ export function SubCriterionChecklist() {
                 disabled={busy === "band:" + selectedId}
                 style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "5px 11px", borderRadius: 8, border: `1px solid ${BLUE}`, background: "#eaeef6", color: "#4a5a8a" }}
               >
-                {busy === "band:" + selectedId ? "Assessing…" : bandSuggestion ? "Re-run AI first pass" : "AI first pass (suggest scores)"}
+                {busy === "band:" + selectedId ? "Assessing…" : bandSuggestion ? "Re-run · suggest APSR scores" : "Suggest APSR scores"}
               </button>
-              {/* Undo an accidental AI first pass: it fills the matrix working
+              {/* Undo an accidental score suggestion: it fills the matrix working
                   copy but never saves a band, and the matrix cells can only be
                   re-picked, not un-set — so without this the suggested scores
                   are stuck with no removal path (2026-07-18 bug). Only offered
@@ -816,14 +816,14 @@ export function SubCriterionChecklist() {
                 {suggestionStale && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 6, padding: "6px 9px", marginBottom: 8, fontSize: 12, color: "#92400e", fontWeight: 600 }}>
                     <span aria-hidden>⚠</span>
-                    <span style={{ flex: 1, minWidth: 220 }}>A checklist line verdict changed since this AI first pass — its suggested scores (filled into the matrix below) may be out of date.</span>
+                    <span style={{ flex: 1, minWidth: 220 }}>A checklist line verdict changed since these scores were suggested — the values filled into the matrix below may be out of date.</span>
                     <button onClick={runBandSuggestion} disabled={busy === "band:" + selectedId} style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#fff", background: "#b45309", border: "none", borderRadius: 6, padding: "4px 10px", whiteSpace: "nowrap" }}>
-                      {busy === "band:" + selectedId ? "Assessing…" : "Re-run AI first pass"}
+                      {busy === "band:" + selectedId ? "Assessing…" : "Re-run · suggest APSR scores"}
                     </button>
                   </div>
                 )}
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-                  <b style={{ flex: 1 }}>AI first pass — a suggested band per dimension, filled into the matrix below (review &amp; adjust){suggestionStale ? " · stale" : ""}:</b>
+                  <b style={{ flex: 1 }}>Suggested APSR scores — a band per dimension, filled into the matrix below (review &amp; adjust){suggestionStale ? " · stale" : ""}:</b>
                   <ThumbsButtons
                     onAccept={() => logHumanDecision({ module: "Holistic Band", subjectId: selectedId, field: "suggestion", aiOutput: bandSuggestion.rationale, humanDecision: "Suggestion acknowledged as reasonable", changed: false, decisionType: "Accepted", reason: "" })}
                     onReject={() => setBandFeedback(bandSuggestion.rationale)}
@@ -928,7 +928,7 @@ export function SubCriterionChecklist() {
               disabled={busy === selectedId}
               style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: `1px solid ${BLUE}`, background: "#eaeef6", color: "#4a5a8a" }}
             >
-              {busy === selectedId ? "Generating…" : "AI first pass"}
+              {busy === selectedId ? "Generating…" : "Suggest checklist lines"}
             </button>
             <input
               placeholder="Add a specific line manually…"
@@ -1570,7 +1570,7 @@ export function SubCriterionChecklist() {
             );
           })}
           {sortedSpecific.length === 0 && pending.length === 0 && (
-            <p style={{ fontSize: 12, color: "#94a3b8" }}>No specific lines yet — run "AI first pass" or add one manually.</p>
+            <p style={{ fontSize: 12, color: "#94a3b8" }}>No specific lines yet — run "Suggest checklist lines" or add one manually.</p>
           )}
         </Card>
 

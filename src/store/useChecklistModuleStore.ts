@@ -91,7 +91,7 @@ export type ChecklistModuleState = {
   // One dimension's matrix score (0 = 0%/not-evident, 1-5 = band). This is the
   // OFFICIAL input now. Pass undefined to un-set a dimension.
   setApsrMatrix: (itemId: string, dim: keyof ApsrMatrixScores, value: ApsrDimensionScore | undefined) => void;
-  // AI first pass for the HOLISTIC band: one judgment call across all four
+  // "Suggest APSR scores" for the HOLISTIC band: one judgment call across all four
   // official §23 dimension descriptors, returning a suggestion + rationale.
   // Never commits — the caller shows it and the human accepts via
   // setHolisticBand. Returns null when AI is unavailable or the call fails
@@ -268,7 +268,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
       clearHolisticBand: (itemId) =>
         set((s) => mapEntry(s, itemId, (e) => ({ ...e, holisticBand: undefined }))),
 
-      // Undo an "AI first pass (suggest scores)" that only populated the working
+      // Undo a "Suggest APSR scores" that only populated the working
       // matrix (apsrMatrix) without saving a band. The matrix selector can set a
       // dimension but never unset it, so an accidental suggest click otherwise
       // leaves the four scores stuck on screen with no removal path (2026-07-18).

@@ -15,7 +15,7 @@ import { sObj, sArr, sStr, sEnum } from "../lib/ai/schemaHelpers";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { ConsistencyTab, AvsBTab, RecommendationsPanel } from "./CalibrationLab";
-import { recommendFromBenchmark } from "../lib/tuningAdvisor";
+import { recommendFromBenchmark, isSubCriterionAudited } from "../lib/tuningAdvisor";
 import { BenchmarkBreakdownChart, ImprovementChart } from "../components/ui/calibrationCharts";
 import { RuleTuningTab } from "./RuleTuningTab";
 import { UploadBenchmarkPanel } from "./UploadBenchmarkPanel";
@@ -35,6 +35,17 @@ const STATUS_TONE: Record<MatchStatus, "good" | "medium" | "critical" | "neutral
   partial: "medium",
   missed: "critical",
   unassessed: "neutral",
+  // Deliberately neutral, not critical: an un-audited scope is missing data,
+  // not a failed assessment.
+  "not-audited": "neutral",
+};
+
+const STATUS_LABEL: Record<MatchStatus, string> = {
+  caught: "caught",
+  partial: "partially caught",
+  missed: "missed",
+  unassessed: "unassessed",
+  "not-audited": "not audited yet",
 };
 
 function itemIdsOf(subCriterionId: string): string[] {
@@ -174,7 +185,7 @@ function BenchmarkTab() {
 
   // Scoreboard: totals + by year + by pattern (gap AFIs only).
   const scoreboard = useMemo(() => {
-    const empty = () => ({ caught: 0, partial: 0, missed: 0, unassessed: 0 });
+    const empty = () => ({ caught: 0, partial: 0, missed: 0, unassessed: 0, "not-audited": 0 });
     const total = empty();
     const byYear: Record<string, ReturnType<typeof empty>> = {};
     const byPattern: Record<string, ReturnType<typeof empty>> = {};
@@ -214,6 +225,19 @@ function BenchmarkTab() {
         const afis = gapAFIs.filter((a) => a.subCriterion === sc);
         const ids = new Set(itemIdsOf(sc));
         const findings = customFindings.filter((f) => ids.has(f.gd4ItemId));
+
+        // Never ask the judge about a sub-criterion the tool has not audited.
+        // The digest would read "PPD review: not run. Evidence assessment: not
+        // run.", so the answer is a foregone "missed" — an absence of data
+        // scored as an AI failure. Grade it in code instead, and skip the AI
+        // call entirely (which also stops paying for a foregone answer).
+        if (!isSubCriterionAudited(Boolean(ppdReviewResults[sc]), Boolean(evidenceAssessments[sc]))) {
+          for (const a of afis) {
+            setAiMatch(a.id, "not-audited", `Sub-criterion ${sc} has not been audited yet — no PPD review or evidence assessment exists to compare against, so this is not a measurement of AI accuracy.`);
+          }
+          continue;
+        }
+
         const digest = appResultsDigest(sc, ppdReviewResults[sc], evidenceAssessments[sc], findings);
         const system = `You are judging whether an internal AI audit tool caught the same gaps a real SSG EduTrust assessor raised. For each REAL finding, compare it against the tool's results and verdict exactly one of:
 "caught" — the tool raised a finding or negative verdict covering the SAME gap (same obligation, same failure mode).
@@ -241,9 +265,9 @@ Give a one-line justification naming what matched or what was missed. Respond wi
       // compares like with like). Read fresh store state — the component's
       // `matches` snapshot predates the setAiMatch calls above.
       const fresh = useCalibrationStore.getState().matches;
-      const totals = { caught: 0, partial: 0, missed: 0, unassessed: 0 };
+      const totals = { caught: 0, partial: 0, missed: 0, unassessed: 0, "not-audited": 0 };
       for (const a of allAfis.filter((x) => x.kind === "AFI")) totals[fresh[a.id]?.status ?? "unassessed"]++;
-      recordRun(totals);
+      recordRun({ caught: totals.caught, partial: totals.partial, missed: totals.missed, unassessed: totals.unassessed, notAudited: totals["not-audited"] });
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -335,11 +359,17 @@ Give a one-line justification naming what matched or what was missed. Respond wi
           <Pill s="medium">Partially caught {scoreboard.total.partial}</Pill>
           <Pill s="critical">Missed {scoreboard.total.missed}</Pill>
           <Pill s="neutral">Unassessed {scoreboard.total.unassessed}</Pill>
+          <Pill s="neutral">Not audited yet {scoreboard.total["not-audited"]}</Pill>
         </div>
+        {scoreboard.total["not-audited"] > 0 && (
+          <div style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px", marginBottom: 10, lineHeight: 1.45 }}>
+            <b>{scoreboard.total["not-audited"]} finding(s) are on sub-criteria this tool has not audited yet</b>, so there is nothing to compare them against. They are excluded from Caught/Partial/Missed and from the Tuning Advisor, because counting them as misses would blame the AI for a folder it was never asked to read. Audit those sub-criteria to turn them into a real measurement.
+          </div>
+        )}
         <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: "#f1f5f9" }}>
-              {["Breakdown", "Caught", "Partial", "Missed", "Unassessed"].map((h) => (
+              {["Breakdown", "Caught", "Partial", "Missed", "Unassessed", "Not audited"].map((h) => (
                 <th key={h} style={{ padding: "5px 10px", textAlign: "left", fontWeight: 600, borderBottom: "1px solid #e2e8f0" }}>{h}</th>
               ))}
             </tr>
@@ -348,7 +378,7 @@ Give a one-line justification naming what matched or what was missed. Respond wi
             {Object.entries(scoreboard.byYear).map(([year, c]) => (
               <tr key={year}>
                 <td style={{ padding: "4px 10px", fontWeight: 600 }}>Report {year}</td>
-                <td style={{ padding: "4px 10px" }}>{c.caught}</td><td style={{ padding: "4px 10px" }}>{c.partial}</td><td style={{ padding: "4px 10px" }}>{c.missed}</td><td style={{ padding: "4px 10px" }}>{c.unassessed}</td>
+                <td style={{ padding: "4px 10px" }}>{c.caught}</td><td style={{ padding: "4px 10px" }}>{c.partial}</td><td style={{ padding: "4px 10px" }}>{c.missed}</td><td style={{ padding: "4px 10px" }}>{c.unassessed}</td><td style={{ padding: "4px 10px", color: "#94a3b8" }}>{c["not-audited"]}</td>
               </tr>
             ))}
             {PATTERNS.filter((p) => scoreboard.byPattern[p]).map((p) => {
@@ -356,7 +386,7 @@ Give a one-line justification naming what matched or what was missed. Respond wi
               return (
                 <tr key={p}>
                   <td style={{ padding: "4px 10px" }}>{p}</td>
-                  <td style={{ padding: "4px 10px" }}>{c.caught}</td><td style={{ padding: "4px 10px" }}>{c.partial}</td><td style={{ padding: "4px 10px" }}>{c.missed}</td><td style={{ padding: "4px 10px" }}>{c.unassessed}</td>
+                  <td style={{ padding: "4px 10px" }}>{c.caught}</td><td style={{ padding: "4px 10px" }}>{c.partial}</td><td style={{ padding: "4px 10px" }}>{c.missed}</td><td style={{ padding: "4px 10px" }}>{c.unassessed}</td><td style={{ padding: "4px 10px", color: "#94a3b8" }}>{c["not-audited"]}</td>
                 </tr>
               );
             })}
@@ -369,6 +399,7 @@ Give a one-line justification naming what matched or what was missed. Respond wi
               {runHistory.slice(0, 6).map((r, i) => (
                 <div key={r.runAt} style={{ fontSize: 12, color: i === 0 ? "#1e293b" : "#6b7280", fontWeight: i === 0 ? 600 : 400 }}>
                   {fmtDateTime(r.runAt)}: Caught {r.caught} · Partial {r.partial} · Missed {r.missed} · Unassessed {r.unassessed}
+                  {(r.notAudited ?? 0) > 0 && <span style={{ color: "#94a3b8" }}> · Not audited {r.notAudited}</span>}
                   {i === 0 && runHistory.length > 1 && (() => {
                     const d = r.caught - runHistory[1].caught;
                     return <span style={{ marginLeft: 6, color: d > 0 ? "#15803d" : d < 0 ? "#b91c1c" : "#94a3b8" }}>({d > 0 ? `+${d}` : d} caught vs previous run)</span>;
@@ -537,7 +568,7 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
             );
           }
           return (
-            <div key={a.id} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${st === "caught" ? "#16a34a" : st === "partial" ? "#d97706" : st === "missed" ? "#dc2626" : "#94a3b8"}`, borderRadius: 8, padding: "9px 12px" }}>
+            <div key={a.id} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${st === "caught" ? "#16a34a" : st === "partial" ? "#d97706" : st === "missed" ? "#dc2626" : "#94a3b8"}`, borderRadius: 8, padding: "9px 12px", opacity: st === "not-audited" ? 0.72 : 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
                 <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 12, fontWeight: 700, color: "#4338ca" }}>{a.id}</span>
                 {a.gd4Ref && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#64748b" }}>{a.gd4Ref}</span>}
@@ -548,7 +579,7 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
                 {isGap && (
                   <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     {m?.humanOverride && <Pill s="neutral">human</Pill>}
-                    <Pill s={STATUS_TONE[st]}>{st === "partial" ? "partially caught" : st}</Pill>
+                    <Pill s={STATUS_TONE[st]}>{STATUS_LABEL[st]}</Pill>
                   </span>
                 )}
                 <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
@@ -568,6 +599,7 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
                     <option value="caught">caught</option>
                     <option value="partial">partially caught</option>
                     <option value="missed">missed</option>
+                    <option value="not-audited">not audited yet</option>
                   </select>
                   <input
                     value={m?.justification ?? ""}

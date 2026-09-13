@@ -97,7 +97,7 @@ export function simulateClosure(closure: { root?: string; corr?: string; prev?: 
 }
 
 // Deterministic offline fallback for the Sub-Criterion Checklist module's
-// "AI first pass" button: decomposes an item's real Describe/Show bullets,
+// "Suggest checklist lines" button: decomposes an item's real Describe/Show bullets,
 // Expected Evidence items, and auditable Notes into atomic, citable checklist
 // statements. Semicolon-joined sub-clauses within a single Describe/Show
 // bullet are split into separate lines so each is independently testable.

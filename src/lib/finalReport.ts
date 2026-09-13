@@ -149,7 +149,7 @@ export type ItemReport = {
   bandRationale?: string;
   bandTotalPct?: number;
   // Who committed the band (HolisticBandRecord.source). "ai-auto" drives the
-  // passive "Already run by AI" marker on the report — display only, and it
+  // passive "Band set automatically" marker on the report — display only, and it
   // clears only when a human re-saves the band (source becomes
   // human/ai-accepted). Undefined when no band is saved.
   bandSource?: "human" | "ai-accepted" | "ai-auto";

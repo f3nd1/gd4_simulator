@@ -101,7 +101,7 @@ Findings are numbered sequentially and grouped by nav area, in the same order as
 50. The auditor-gate and Drive-connect blocking banners are literally copy-pasted blocks between the PPD tab and the Evidence tab rather than a shared subcomponent.
 
 ### Sub-Criterion Checklist (`/sub-checklist`)
-51. Two different "AI first pass" buttons, both labelled identically, ~130px apart, doing unrelated things (line generation vs. band-score suggestion).
+51. ~~Two different "AI first pass" buttons, both labelled identically, ~130px apart, doing unrelated things (line generation vs. band-score suggestion).~~ **FIXED** — renamed to "Suggest checklist lines" and "Suggest APSR scores".
 52. The line-generation "AI first pass" button silently forks behaviour by audit mode (auto-confirms in hybrid/full-auto, stops for review in manual) with no UI signal of which will happen.
 53. A cosmetic control (the per-line "Dimension" select, display-only) sits visually identical in weight to a load-bearing one (the "Verdict" select that drives the band) right next to it — the "never changes the band" fact is only in a hover tooltip.
 54. A legacy dual-verdict system is stacked on the current one: the editable live "Verdict" select coexists with read-only "Policy verdict"/"Combined verdict" fields pulled from a frozen AI-run snapshot that can literally disagree with the current editable verdict.
@@ -139,8 +139,8 @@ Findings are numbered sequentially and grouped by nav area, in the same order as
 74. Dimension-filter labels are inconsistent between the pill row (e.g. "Procedure (policy)") and the plain dropdown ("Procedure") for the same underlying value.
 
 ### Clarification round (`/clarification`)
-75. Two similarly-styled buttons do very different things: "Re-check selected" spends AI and changes verdicts; "Check for updated evidence" is a free metadata refresh with no AI — mitigated only by an in-app legend a user could skip.
-76. "Select all changed" depends on having already run "Check for updated evidence" first (drift badges are empty until then) — the sequencing isn't visually indicated as a numbered flow; clicking it first silently selects nothing.
+75. ~~Two similarly-styled buttons do very different things: "Re-check selected" spends AI and changes verdicts; "Check for updated evidence" is a free metadata refresh with no AI.~~ **FIXED** — relabelled "Step 1 · Check which folders changed" / "Step 3 · Re-assess N findings with AI", with cost stated in the legend.
+76. ~~"Select all changed" depends on having already run "Check for updated evidence" first; the sequencing was not visually indicated.~~ **FIXED** — the three controls are now numbered Step 1/2/3 and ordered left to right.
 77. No on-page mapping between badge states (Met/Partial/Not met colours) and what "resolved" precisely means — only visible in the Round History detail.
 78. Seed/demo findings are silently excluded from this page with no on-page explanation of why counts might not match the Findings register total.
 

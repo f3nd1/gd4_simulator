@@ -806,9 +806,14 @@ function ClauseMatrix({ line, isEv, resolveText }: { line: MatrixLine; isEv: boo
   // width rebalance gives it ~50% of the row to match). PPD tab keeps its
   // narrower, unchanged "File" column — its own located quote already lives
   // in column 2 ("Policy clause & quote"), so column 3 there is filename-only.
+  // Column 1 is the expected-evidence item (LineageClauseDetailItem.name). It
+  // used to be headed "Clause requirement" here, "Expected Evidence" in the
+  // compact export and "Clause-by-clause detail" on the toggle that controls
+  // it — three names for one field, which is why searching the Full detail
+  // export for "expected evidence" found nothing. All four surfaces now agree.
   const headers: [string, string, string, string] = isEv
-    ? ["Clause requirement", "PPD clause / extract", "File and Supporting passage", "Remarks"]
-    : ["Clause requirement", "Policy clause & quote", "File", "Rationale"];
+    ? ["Expected evidence", "PPD clause / extract", "File and Supporting passage", "Remarks"]
+    : ["Expected evidence", "Policy clause & quote", "File", "Rationale"];
   const headerCell: React.CSSProperties = { padding: "7px 14px", fontSize: 9.5, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.4, borderLeft: "1px solid #eef2f6" };
   return (
     <div style={{ border: "1px solid #eef2f6", borderRadius: 6, overflow: "hidden", background: "#fff" }}>
@@ -845,7 +850,7 @@ function RowDetail({ line, isEv, resolveText, renderExtra }: { line: MatrixLine;
       {line.items.length > 0 && (
         <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>
-            Clause by clause
+            Expected evidence, line by line
             <span style={{ fontWeight: 400, color: "#94a3b8" }}> · {doneCount} of {line.items.length} {isEv ? "promises evidenced" : "clauses matched"}</span>
           </div>
           <div style={{ fontSize: 10.5, color: "#94a3b8" }}>Same detail as a table: what each sub-part required, {isEv ? "the linked PPD promise" : "the matched policy clause"}, the file it was checked in, and why it does or doesn't satisfy the requirement.</div>
@@ -1098,7 +1103,7 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
             <span style={{ fontSize: 10.5, color: "#64748b" }}>
               {exportCompact
                 ? `Requirement · ${isEv ? "Policy promise" : "Policy clause"} · Expected evidence, one row per expected-evidence item. Nothing else.`
-                : "Every column you tick below, with clause-by-clause detail."}
+                : "Every column you tick below, with expected evidence broken out line by line."}
             </span>
           </div>
 
@@ -1118,7 +1123,7 @@ export function LineageDiagram({ mode, ppd, evidence, runLabel, renderExtra }: {
                   4-column table beneath the line). Defaults to included. */}
               <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "#334155", cursor: "pointer", whiteSpace: "nowrap", borderLeft: "1px solid #99f6e4", paddingLeft: 12 }}>
                 <input type="checkbox" checked={includeClauseDetail} onChange={() => setIncludeClauseDetail((v) => !v)} />
-                Clause-by-clause detail
+                Expected evidence, line by line
               </label>
             </div>
           )}

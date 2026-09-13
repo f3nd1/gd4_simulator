@@ -142,6 +142,21 @@ const PATTERN_TO_AREA: Record<string, string> = {
   "other": "the general assessor-grade specificity guidance (named examples, dates compared)",
 };
 
+// Has the tool actually assessed this sub-criterion at all?
+//
+// This gate exists because of a real measurement bug. A sub-criterion that was
+// never audited produces an app-results digest that literally reads "PPD
+// review: not run. Evidence assessment: not run. Compiled findings: none."
+// Asking the match judge whether the tool "caught" a real assessor finding
+// against that is a foregone "missed" — so every AFI on an un-audited scope
+// scored as an AI failure. That inflated the miss count, skewed the top-pattern
+// headline below, and made every accuracy figure on the page untrustworthy.
+// Un-audited scopes are now graded "not-audited" in code (no AI call at all)
+// and excluded from the scoreboard and from these recommendations.
+export function isSubCriterionAudited(hasPpdResult: boolean, hasEvidenceResult: boolean): boolean {
+  return hasPpdResult || hasEvidenceResult;
+}
+
 export function recommendFromBenchmark(
   matches: Record<string, { status: MatchStatus }>,
   afis: { id: string; findingPattern: string; kind: string }[],
@@ -151,12 +166,33 @@ export function recommendFromBenchmark(
     const st = matches[a.id]?.status;
     return st === "missed" || st === "partial";
   });
+  const notAudited = gapAFIs.filter((a) => matches[a.id]?.status === "not-audited");
+  const coverageNote = notAudited.length > 0
+    ? ` ${notAudited.length} of ${gapAFIs.length} benchmark finding(s) sit on sub-criteria the tool has not audited yet and are excluded from this count — audit those to turn them into a real measurement.`
+    : "";
+
   if (missed.length === 0) {
+    // Never claim a clean sweep when the reason there are no misses is that
+    // nothing has been audited. Before "not-audited" existed this branch could
+    // report a perfect score for a tool that had never run.
+    const assessed = gapAFIs.filter((a) => {
+      const st = matches[a.id]?.status;
+      return st === "caught" || st === "partial" || st === "missed";
+    });
+    if (assessed.length === 0) {
+      return [{
+        id: "bench-no-coverage", severity: "advisory",
+        title: "No benchmark finding has been measured yet",
+        reasoning: `Nothing can be concluded about accuracy: ${notAudited.length > 0 ? `${notAudited.length} finding(s) sit on sub-criteria the tool has not audited` : "no finding has been matched"}, so there is no caught-versus-missed signal at all. Audit some of the benchmarked sub-criteria, then run the match analysis.`,
+        evidence: [`${gapAFIs.length} benchmark finding(s) available`, `${notAudited.length} on un-audited sub-criteria`],
+        benchmarkDerived: true,
+      }];
+    }
     return [{
       id: "bench-ok", severity: "ok",
       title: "No missed or partially-caught benchmark findings",
-      reasoning: "The tool currently catches every real finding it has been matched against. Re-verify against new real findings when available.",
-      evidence: [],
+      reasoning: `The tool caught every real finding it has actually been measured against (${assessed.length} of ${gapAFIs.length}).${coverageNote} Re-verify against new real findings when available.`,
+      evidence: notAudited.length > 0 ? [`${notAudited.length} finding(s) excluded: sub-criterion not audited`] : [],
       benchmarkDerived: true,
     }];
   }
@@ -167,9 +203,12 @@ export function recommendFromBenchmark(
   const area = PATTERN_TO_AREA[topPattern] ?? PATTERN_TO_AREA.other;
   return [{
     id: "bench-weak-pattern", severity: "advisory",
-    title: `${topCount} of ${missed.length} misses are "${topPattern}" — strengthen that assessment area`,
-    reasoning: `The dominant miss pattern is "${topPattern}". The weak point is ${area}. Strengthening it is a prompt/skill change — advisory only, made through the normal deliberate process, never auto-applied.`,
-    evidence: ranked.map(([p, n]) => `${n} miss(es): ${p}`),
+    title: `${topCount} of ${missed.length} measured misses are "${topPattern}" — strengthen that assessment area`,
+    reasoning: `The dominant miss pattern is "${topPattern}". The weak point is ${area}. Strengthening it is a prompt/skill change — advisory only, made through the normal deliberate process, never auto-applied.${coverageNote}`,
+    evidence: [
+      ...ranked.map(([p, n]) => `${n} miss(es): ${p}`),
+      ...(notAudited.length > 0 ? [`${notAudited.length} finding(s) excluded: sub-criterion not audited`] : []),
+    ],
     copyableInstruction: `The GD4 audit tool is missing real SSG findings that follow the "${topPattern}" pattern (${topCount} of ${missed.length} current misses). Strengthen ${area} so this class of gap is caught. Improve the GENERAL detection rule for this pattern — do not encode the specific benchmark findings; the change must generalise to new, unseen findings of the same kind.`,
     benchmarkDerived: true,
   }];

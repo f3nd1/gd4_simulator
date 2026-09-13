@@ -162,7 +162,7 @@ Key exact-value constraints (TypeScript union types — violations cause TS erro
 ## Definition of done — run before calling anything finished
 
 1. `npx tsc -b` — zero errors.
-2. `npm run test` — all pass (1142 tests / 98 files as of the Audit Checklist Library commit; your change should only ever raise the count).
+2. `npm run test` — all pass (1149 tests / 99 files as of the calibration not-audited commit; your change should only ever raise the count).
 3. `npm run lint` — no NEW warnings. Pre-existing (ignore, don't drive-by fix): jsx-key in `ProfileOfPei.tsx`, no-unused-expressions in `EvidenceFolder.tsx`/`PPDReview.tsx`, exhaustive-deps in `SubCriterionChecklist.tsx`, unused `GD4_SUB_CRITERIA` import in `useWorkspaceStore.ts`.
 4. `npm run build` — clean (the chunk-size warning is pre-existing).
 5. **Live verification in the browser** for any UI/flow change (cookbook below). State honestly what you could and could not exercise (real Drive/OpenAI don't exist in the sandbox) and give the user the exact click-path to confirm the rest themselves.

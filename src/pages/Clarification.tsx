@@ -154,30 +154,39 @@ export function Clarification() {
           across several sub-criteria can take a while.
         </p>
 
+        {/* Ordered Step 1 → Step 3 left to right. The old labels ("Re-check
+            selected" / "Check for updated evidence") both opened with a
+            checking verb and inverted the real stakes: the free Drive
+            comparison sounded like the thorough one, while the AI-spending one
+            sounded narrower. The step numbers also expose the sequencing that
+            used to be invisible — "Select all changed" silently selects
+            nothing until the folder check has run. */}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
-          <button
-            onClick={runRound}
-            disabled={running || !!busy || selected.size === 0}
-            style={{ cursor: running || !!busy || selected.size === 0 ? "not-allowed" : "pointer", opacity: running || !!busy || selected.size === 0 ? 0.5 : 1, border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
-          >
-            {running ? "Re-checking…" : `Re-check selected (Round ${nextRoundNumber}) — ${selected.size}`}
-          </button>
           <button
             onClick={checkDrift}
             disabled={checkingDrift || running || openFindings.length === 0}
-            title="Re-list each open finding's evidence folder and flag which changed since its last run (advisory only)"
+            title="Re-list each open finding's evidence folder and flag which changed since its last run. No AI, no verdict change."
             style={{ cursor: checkingDrift || running || openFindings.length === 0 ? "not-allowed" : "pointer", opacity: checkingDrift || running || openFindings.length === 0 ? 0.5 : 1, border: "1px solid #cbd5e1", background: "#fff", color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
           >
-            {checkingDrift ? "Checking evidence…" : "Check for updated evidence"}
+            {checkingDrift ? "Checking folders…" : "Step 1 · Check which folders changed"}
           </button>
           <button
             onClick={selectAllChanged}
             disabled={changedFindingIds.length === 0 || running}
-            title="Tick every finding whose evidence folder changed since its last run"
+            title="Tick every finding whose evidence folder changed since its last run. Run Step 1 first, or nothing is ticked."
             style={{ cursor: changedFindingIds.length === 0 || running ? "not-allowed" : "pointer", opacity: changedFindingIds.length === 0 || running ? 0.5 : 1, border: "1px solid #cbd5e1", background: "#fff", color: INK, fontWeight: 600, padding: "8px 14px", borderRadius: 8 }}
           >
-            Select all changed ({changedFindingIds.length})
+            Step 2 · Tick the {changedFindingIds.length} changed
           </button>
+          <button
+            onClick={runRound}
+            disabled={running || !!busy || selected.size === 0}
+            title="Re-read each ticked finding's evidence folder and re-assess it with AI. This spends AI and can change verdicts."
+            style={{ cursor: running || !!busy || selected.size === 0 ? "not-allowed" : "pointer", opacity: running || !!busy || selected.size === 0 ? 0.5 : 1, border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "8px 14px", borderRadius: 8 }}
+          >
+            {running ? "Re-assessing…" : `Step 3 · Re-assess ${selected.size} finding${selected.size === 1 ? "" : "s"} with AI`}
+          </button>
+          <span style={{ fontSize: 12, color: "#64748b" }}>Round {nextRoundNumber}</span>
           {selected.size > 0 && !running && (
             <button onClick={() => setSelected(new Set())} style={{ cursor: "pointer", border: "none", background: "transparent", color: "#64748b", fontSize: 12.5, textDecoration: "underline" }}>
               Clear selection
@@ -188,8 +197,8 @@ export function Clarification() {
         <ControlLegend
           style={{ marginTop: 8, maxWidth: 760 }}
           items={[
-            { label: "Re-check selected", text: "runs the AI re-assessment on the ticked findings (re-reads each item's evidence folder). This spends AI." },
-            { label: "Check for updated evidence", text: "just refreshes the “evidence changed” badges by comparing Drive files against the last run. No AI, no verdict change." },
+            { label: "Step 1 · Check which folders changed", text: "compares each open finding's Drive folder against its last run and updates the “evidence changed” badges. Free — no AI, no verdict change." },
+            { label: "Step 3 · Re-assess with AI", text: "re-reads the ticked findings' evidence folders and re-assesses them. This spends AI and can change verdicts." },
           ]}
         />
 

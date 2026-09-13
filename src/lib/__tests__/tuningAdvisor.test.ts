@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { recommendFromConsistency, recommendFromAB, recommendFromBenchmark, AGREEMENT_TARGET } from "../tuningAdvisor";
+import { recommendFromConsistency, recommendFromAB, recommendFromBenchmark, isSubCriterionAudited, AGREEMENT_TARGET } from "../tuningAdvisor";
 import type { ConsistencyTestResult, ABTestResult, ABPathOutcome } from "../calibrationTesting";
 
 function cons(over: Partial<ConsistencyTestResult> = {}): ConsistencyTestResult {
@@ -102,5 +102,53 @@ describe("recommendFromBenchmark", () => {
   it("all caught → ok", () => {
     const [rec] = recommendFromBenchmark({ F1: { status: "caught" }, F2: { status: "caught" }, F3: { status: "caught" }, F4: { status: "caught" }, F5: { status: "caught" } }, afis);
     expect(rec.severity).toBe("ok");
+  });
+
+  // A finding on a sub-criterion the tool never audited is missing data, not an
+  // AI failure. Counting it as a miss inflated the miss total and skewed which
+  // pattern looked dominant, which is what made the accuracy figures unusable.
+  it("excludes not-audited findings from the miss count and the dominant pattern", () => {
+    const matches = {
+      F1: { status: "missed" as const },
+      F2: { status: "not-audited" as const },
+      F3: { status: "not-audited" as const },
+      F4: { status: "not-audited" as const },
+      F5: { status: "not-audited" as const },
+    };
+    const [rec] = recommendFromBenchmark(matches, afis);
+    expect(rec.title).toContain("1 of 1 measured misses");
+    expect(rec.reasoning).toContain("4 of 5");
+    expect(rec.evidence.some((e) => e.includes("4 finding(s) excluded"))).toBe(true);
+  });
+
+  it("does NOT declare a clean sweep when nothing has been audited", () => {
+    const allUnaudited = Object.fromEntries(afis.map((a) => [a.id, { status: "not-audited" as const }]));
+    const [rec] = recommendFromBenchmark(allUnaudited, afis);
+    expect(rec.severity).not.toBe("ok");
+    expect(rec.id).toBe("bench-no-coverage");
+    expect(rec.title).toContain("No benchmark finding has been measured");
+  });
+
+  it("still reports ok when everything measured was caught, but says how much was excluded", () => {
+    const matches = {
+      F1: { status: "caught" as const },
+      F2: { status: "caught" as const },
+      F3: { status: "not-audited" as const },
+      F4: { status: "not-audited" as const },
+      F5: { status: "not-audited" as const },
+    };
+    const [rec] = recommendFromBenchmark(matches, afis);
+    expect(rec.severity).toBe("ok");
+    expect(rec.reasoning).toContain("2 of 5");
+    expect(rec.reasoning).toContain("3 of 5 benchmark finding(s) sit on sub-criteria the tool has not audited");
+  });
+});
+
+describe("isSubCriterionAudited", () => {
+  it("is audited when either pass has a result, un-audited only when neither does", () => {
+    expect(isSubCriterionAudited(true, true)).toBe(true);
+    expect(isSubCriterionAudited(true, false)).toBe(true);
+    expect(isSubCriterionAudited(false, true)).toBe(true);
+    expect(isSubCriterionAudited(false, false)).toBe(false);
   });
 });

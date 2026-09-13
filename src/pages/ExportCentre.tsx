@@ -63,7 +63,7 @@ export function ExportCentre() {
   }, [scored.items, checklistEntries]);
 
   // Items whose band was written by an automatic run (source "ai-auto") — the
-  // pack carries the same passive "Already run by AI" note the screens show,
+  // pack carries the same passive "Band set automatically" note the screens show,
   // because criterion bands aggregate these items.
   const aiAutoBandItems = useMemo(
     () =>
@@ -80,7 +80,7 @@ export function ExportCentre() {
       md += `## ⚠ WARNING — Unverified scored items\n\n**${zeroEvidenceItems.length} sub-criterion/criteria are scored via the checklist but have NO evidence attached to any specific line: ${zeroEvidenceItems.join(", ")}.**\n\nBands for these items are based solely on self-reported checklist status with no supporting documents. EduTrust assessors will not accept these scores without evidence. Attach evidence before submitting.\n\n`;
     }
     if (aiAutoBandItems.length > 0) {
-      md += `## AI-run bands\n\n**${aiAutoBandItems.length} item(s) carry a band set automatically by a Hybrid or Full Auto run: ${aiAutoBandItems.join(", ")}.**\n\nCriterion scores below include these bands. Re-save a band in the Sub-Criterion Checklist if you want it recorded as hand-set instead.\n\n`;
+      md += `## Bands set automatically\n\n**${aiAutoBandItems.length} item(s) carry a band set automatically by a Hybrid or Full Auto run: ${aiAutoBandItems.join(", ")}.**\n\nCriterion scores below include these bands. Re-save a band in the Sub-Criterion Checklist if you want it recorded as hand-set instead.\n\n`;
     }
     md += `## Readiness\nProjected ${scored.total}/1000 — ${scored.award}\nScore gate (4.2.1, 4.2.2, 4.6, C5): ${scored.gatePass ? "met" : "NOT met (" + scored.gateFail.map((g) => g.id).join(", ") + ")"}\n\n`;
     md += `## Criterion scores\n` + scored.crits.map((c) => `- C${c.id} ${c.title}: Band ${c.band}, ${c.scored}/${c.points}`).join("\n") + "\n\n";
@@ -242,8 +242,8 @@ export function ExportCentre() {
         {aiAutoBandItems.length > 0 && (
           <div style={{ background: "#fefce8", border: "1px solid #eab308", borderRadius: 8, padding: "10px 14px", marginTop: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-              <Pill s="medium">Already run by AI</Pill>
-              <b style={{ fontSize: 12.5, color: "#854d0e" }}>{aiAutoBandItems.length} band(s) set automatically by AI</b>
+              <Pill s="medium">Band set automatically</Pill>
+              <b style={{ fontSize: 12.5, color: "#854d0e" }}>{aiAutoBandItems.length} band(s) set automatically</b>
             </div>
             <div style={{ fontSize: 12, color: "#713f12", lineHeight: 1.5 }}>
               {aiAutoBandItems.join(", ")} — the band was set by an automatic Hybrid or Full Auto run. The exported pack carries the same note. Re-save a band in the Sub-Criterion Checklist if you want to record it as hand-set instead.

@@ -69,6 +69,7 @@ import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
 import { computePanelConclusion } from "../lib/panelConclusion";
 import { checkAuditorForRun, independenceNotice } from "../lib/auditorGuard";
+import { visionBudgetSkipNote } from "../lib/visionBudget";
 import { checkDriveForRun, DRIVE_EXPIRED_MID_RUN, classifyFileBucket, classifyDriveReadError, analyzeFolderProbe, type DriveRunBlock, type ProbeFile, type FolderProbeResult } from "../lib/driveGuard";
 import { applyCarryover, type PriorCycleArchive } from "../lib/cycleCarryover";
 import { useRuleTuningStore } from "./useRuleTuningStore";
@@ -422,7 +423,7 @@ async function readDriveFileWithVision(
 
   const readScannedPdfViaVision = async (): Promise<VisionReadResult> => {
     if (!ctx.canDescribeImages) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
-    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: `Scanned PDF — read attempted; this run's ${ctx.budget.max}-image vision budget was reached first. Recoverable: click "Proceed with all" on the vision-budget prompt to read it.`, budgetBlocked: true };
+    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: visionBudgetSkipNote("pdf", ctx.budget.max, true), budgetBlocked: true };
     const pagesToRender = Math.min(ctx.maxPerFile, ctx.budget.max - ctx.budget.count);
     const { images, totalPages } = await exportPdfPageImages(file, token, pagesToRender, signal);
     if (images.length === 0) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: no text could be extracted and its pages could not be rendered for vision." };
@@ -453,7 +454,7 @@ async function readDriveFileWithVision(
   // No typed text at all: a standalone image → describe it via vision.
   if (isImage) {
     if (!ctx.canDescribeImages) return { text: null, readMethod: "text", note: "No vision model available to read this image (enable AI and add an API key in Settings)." };
-    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: `Image — read attempted; this run's ${ctx.budget.max}-image vision budget was reached first. Recoverable: click "Proceed with all" on the vision-budget prompt to read it.`, budgetBlocked: true };
+    if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: visionBudgetSkipNote("image", ctx.budget.max, true), budgetBlocked: true };
     ctx.budget.count++;
     const dataUrl = await exportFileImageDataUrl(file, token, signal);
     const description = await describeImage(dataUrl, ctx.visionSettings, { signal, onUsage: ctx.onUsage });
@@ -4948,7 +4949,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
             }
             if (imagesDescribed >= MAX_IMAGES) {
-              return { kind: "capped", reason: `Scanned PDF — read attempted; this run's ${MAX_IMAGES}-image vision budget was reached first. Recoverable: re-run to read it.` };
+              return { kind: "capped", reason: visionBudgetSkipNote("pdf", MAX_IMAGES, false) };
             }
             const pagesToRender = Math.min(MAX_PDF_VISION_PAGES, MAX_IMAGES - imagesDescribed);
             const { images, totalPages } = await exportPdfPageImages(file, token, pagesToRender, fileAbort.signal);
@@ -6124,7 +6125,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Scanned/image-only PDF → vision fallback. See auditFolderContents.
           const readScannedPdfViaVision = async (token: string): Promise<FileReadResult> => {
             if (!canDescribeImages) return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted, and no vision model is available (enable AI and add an API key in Settings)." };
-            if (imagesDescribed >= MAX_IMAGES) return { kind: "capped", reason: `Scanned PDF — read attempted; this run's ${MAX_IMAGES}-image vision budget was reached first. Recoverable: re-run to read it.` };
+            if (imagesDescribed >= MAX_IMAGES) return { kind: "capped", reason: visionBudgetSkipNote("pdf", MAX_IMAGES, false) };
             const pagesToRender = Math.min(MAX_PDF_VISION_PAGES, MAX_IMAGES - imagesDescribed);
             const { images, totalPages } = await exportPdfPageImages(file, token, pagesToRender, fileAbort.signal);
             if (images.length === 0) return { kind: "unreadable", reason: "Scanned/image-only PDF: no text could be extracted and its pages could not be rendered for vision." };
