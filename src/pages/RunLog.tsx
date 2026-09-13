@@ -105,7 +105,7 @@ function RunAiCalls({ entry, aiLog }: { entry: RunLogEntry; aiLog: AIReviewLogEn
           </details>
         ))}
         <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 4 }}>
-          Read live from the AI Review Log — see the <Link to="/ai-review" style={{ color: "#4338ca", fontWeight: 700 }}>AI Review Log</Link> for the full diagnostic page.
+          Read live from the AI Run Log — see the <Link to="/ai-review" style={{ color: "#4338ca", fontWeight: 700 }}>AI Run Log</Link> for the full diagnostic page.
         </div>
       </div>
     </>
@@ -146,7 +146,7 @@ export function RunLog() {
             <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 700 }}>Run Log</h2>
             <p style={{ margin: "0 0 14px", fontSize: 11.5, color: "#6b7280" }}>
               What an automated run actually did — Full Auto sweeps and Hybrid per-item hands-off drafts. A record of
-              what happened, never an input to scoring. For individual AI-call prompts/outputs, see the AI Review Log.
+              what happened, never an input to scoring. For individual AI-call prompts/outputs, see the AI Run Log.
             </p>
           </div>
           {/* Whole-log export: a portable audit trail. CSV opens in Excel (one
@@ -183,7 +183,7 @@ export function RunLog() {
                 stores and are untouched. */}
             <button
               disabled={log.length === 0}
-              onClick={() => { if (confirm(`Delete all ${log.length} run-log ${log.length === 1 ? "entry" : "entries"}? This clears only the run summaries — the AI Review Log, findings and scoring data are not affected. This cannot be undone.`)) clearRunLog(); }}
+              onClick={() => { if (confirm(`Delete all ${log.length} run-log ${log.length === 1 ? "entry" : "entries"}? This clears only the run summaries — the AI Run Log, findings and scoring data are not affected. This cannot be undone.`)) clearRunLog(); }}
               style={{ fontSize: 11, fontWeight: 700, padding: "5px 11px", borderRadius: 7, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", cursor: log.length === 0 ? "default" : "pointer", opacity: log.length === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
             >
               Delete all
@@ -271,7 +271,7 @@ export function RunLog() {
                           Review Log and scoring/finding data are untouched.
                           stopPropagation so it never toggles the row expand. */}
                       <button
-                        onClick={(e) => { e.stopPropagation(); if (confirm(`Delete this run-log entry (${formatTs(entry.startedAt)})? Only the run summary is removed — the AI Review Log, findings and scoring data are not affected.`)) removeRunLogEntry(entry.id); }}
+                        onClick={(e) => { e.stopPropagation(); if (confirm(`Delete this run-log entry (${formatTs(entry.startedAt)})? Only the run summary is removed — the AI Run Log, findings and scoring data are not affected.`)) removeRunLogEntry(entry.id); }}
                         title="Delete this run-log entry"
                         style={{ fontSize: 13, color: "#94a3b8", background: "transparent", border: "none", cursor: "pointer", padding: "0 4px", lineHeight: 1 }}
                       >

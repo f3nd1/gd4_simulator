@@ -9,7 +9,7 @@ export function AIDebugLog() {
     <Card>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <div>
-          <h3 style={{ marginTop: 0, marginBottom: 2, fontSize: 14 }}>AI Debug Log</h3>
+          <h3 style={{ marginTop: 0, marginBottom: 2, fontSize: 14 }}>Prompt Inspector</h3>
           <p style={{ fontSize: 12, color: "#6b7280", margin: 0 }}>
             Every <code>buildSystemPrompt()</code> call logged in memory (dev only). Clears on page reload.
           </p>

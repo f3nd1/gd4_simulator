@@ -33,7 +33,7 @@ import { PromptReview } from "./pages/PromptReview";
 import { ChangeLog } from "./pages/ChangeLog";
 import { ProfileOfPei } from "./pages/ProfileOfPei";
 import { FinalReport } from "./pages/FinalReport";
-import { Analytics } from "./pages/Analytics";
+import { DataDashboard } from "./pages/DataDashboard";
 import { Help } from "./pages/Help";
 
 export default function App() {
@@ -42,7 +42,7 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/analytics" element={<Analytics />} />
+          <Route path="/analytics" element={<DataDashboard />} />
           <Route path="/help" element={<Help />} />
           <Route path="/profile-of-pei" element={<ProfileOfPei />} />
           <Route path="/draft-workspace" element={<DraftWorkspace />} />

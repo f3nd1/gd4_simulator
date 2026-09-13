@@ -2891,7 +2891,7 @@ export function EvidenceFolder() {
       />
 
       {/* Pre-run mode banner — shown before any run entry point on this page
-          (Option A "Run review", Option B "Run audit", and "Run full audit")
+          (Option A "Open review", Option B "Run audit", and "Run full audit")
           so an offline run never begins silently. */}
       <div style={{ marginBottom: 10 }}><RunModeBanner /></div>
 
@@ -3259,7 +3259,7 @@ export function EvidenceFolder() {
                             : tip("Option A (PPD + Evidence): opens the full review, where you run the PPD review, then the evidence assessment, then compile findings. In Hybrid mode you approve, edit or reject each verdict inside that review — beside the evidence rows that produced it — before it commits.")}
                         style={{ ...primaryStyle, ...(noAuditors ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                       >
-                        {auditMode === "hybrid" && autoScoreBands ? "Run audit →" : "Run review"}
+                        {auditMode === "hybrid" && autoScoreBands ? "Run full audit now (no pauses) →" : "Open review →"}
                       </button>
                     ) : (
                       <button

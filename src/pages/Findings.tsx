@@ -406,7 +406,7 @@ export function Findings() {
           title="Analyse all failing checklist lines and group them into logical finding drafts. Related gaps (same GD4 source ref + same APSR dimension) are consolidated into one finding."
           style={{ marginLeft: pendingGroupedDrafts.length > 0 ? 0 : "auto", cursor: draftStoreBusy ? "not-allowed" : "pointer", border: "1px solid #818cf8", background: "#eef2ff", color: "#3730a3", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12, opacity: draftStoreBusy ? 0.6 : 1 }}
         >
-          {draftStoreBusy ? "Generating…" : pendingGroupedDrafts.length > 0 ? "Regenerate drafts" : "Generate grouped findings"}
+          {draftStoreBusy ? "Generating…" : pendingGroupedDrafts.length > 0 ? "Redraft grouped findings (AI)" : "Draft grouped findings (AI)"}
         </button>
         {draftStoreBusy && (
           <button
@@ -451,7 +451,7 @@ export function Findings() {
 
       {pendingGroupedDrafts.length === 0 && !draftStoreBusy && (
         <div style={{ fontSize: 12.5, color: "#94a3b8", padding: "10px 0" }}>
-          No pending drafts. Click <b>Generate grouped findings</b> to analyse failing checklist lines.
+          No pending drafts. Click <b>Draft grouped findings (AI)</b> to analyse failing checklist lines.
         </div>
       )}
 
@@ -519,7 +519,7 @@ export function Findings() {
           title="Turn every Not-met / unverified checklist line into a finding (deduped). Runs automatically after each folder audit too."
           style={{ cursor: "pointer", border: "1px solid #c9a24a", background: "#fbf3df", color: "#7a5c12", fontWeight: 700, padding: "6px 12px", borderRadius: 8, fontSize: 12 }}
         >
-          Generate from gaps
+          Raise one finding per gap
         </button>
         <button
           onClick={() => setShowForm((v) => !v)}
@@ -714,7 +714,7 @@ export function Findings() {
       {/* Grouped findings list */}
       {groupedRows.length === 0 ? (
         <div style={{ padding: "18px 4px", color: "#6b7280", fontSize: 12.5 }}>
-          No findings to show. Run a folder audit (Evidence Folder page) — findings are raised automatically from the gaps — or click <b>Generate from gaps</b> above to create them from the current Sub-Criterion Checklist.
+          No findings to show. Run a folder audit (Evidence Folder page) — findings are raised automatically from the gaps — or click <b>Raise one finding per gap</b> above to create them from the current Sub-Criterion Checklist.
           {/* Duplicate of the review modal's Compile action, so a user sent
               here (e.g. from the checklist in Manual mode) with a finished
               PPD + Evidence run isn't bounced to yet another page to use it. */}

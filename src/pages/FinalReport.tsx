@@ -197,7 +197,7 @@ export function FinalReport() {
               onClick={generateSummary}
               style={{ cursor: aiBusy ? "default" : "pointer", border: "1px solid #3a4660", background: "transparent", color: "#9fe0bd", fontWeight: 700, padding: "7px 12px", borderRadius: 8, fontSize: 12, opacity: !aiSettings.enabled || !aiSettings.apiKey ? 0.5 : 1 }}
             >
-              {aiBusy ? "Writing…" : "Generate AI summary"}
+              {aiBusy ? "Writing…" : "Write executive summary (AI)"}
             </button>
           </div>
         </div>
@@ -508,7 +508,7 @@ function renderAfi(afi: string | undefined, dim?: { band: number; label: string 
         <div style={{ fontSize: 10.5, color: "#6b7280", marginTop: 3 }}><span style={{ fontWeight: 700 }}>Target (rubric): </span><span style={{ fontStyle: "italic" }}>"{quote}"</span></div>
         {strengthGroundedAction
           ? <div style={{ fontSize: 11, color: "#166534", marginTop: 3 }}><span style={{ fontWeight: 700 }}>To reach the next band: </span>{strengthGroundedAction}</div>
-          : <div className="no-print" style={{ fontSize: 10, color: "#94a3b8", marginTop: 3, fontStyle: "italic" }}>Run the audit or click "Regenerate report text" for a grounded, evidence-based suggestion.</div>}
+          : <div className="no-print" style={{ fontSize: 10, color: "#94a3b8", marginTop: 3, fontStyle: "italic" }}>Run the audit or click "Rewrite this item's narrative (AI)" for a grounded, evidence-based suggestion.</div>}
       </span>
     );
   }
@@ -688,7 +688,7 @@ function ItemBlock({ it, findings, confirmDeleteId, setConfirmDeleteId, onDelete
             title={!aiReady ? "Enable AI and set an API key in Settings first." : "Rewrites this item's auditor narrative and improvement suggestion from its assessed findings. The narrative is normally written automatically at the end of a run — use this if it is missing or misses the mark."}
             style={{ cursor: narBusy || sugBusy || !aiReady ? "default" : "pointer", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8, border: "1px solid #c7d2fe", background: "transparent", color: "#4338ca", opacity: aiReady ? 1 : 0.5, whiteSpace: "nowrap" }}
           >
-            {narBusy || sugBusy ? "Writing…" : "Regenerate report text"}
+            {narBusy || sugBusy ? "Writing…" : "Rewrite this item's narrative (AI)"}
           </button>
         )}
       </div>

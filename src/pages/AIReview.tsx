@@ -232,7 +232,7 @@ export function AIReview() {
   return (
     <Card>
       <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
-        <h3 style={{ margin: 0, fontSize: 14 }}>AI agent review log</h3>
+        <h3 style={{ margin: 0, fontSize: 14 }}>AI Run Log</h3>
         <button
           onClick={() => { if (confirm(`Clear all ${log.length} AI review log entries? This cannot be undone.`)) clearAIReviewLog(); }}
           disabled={log.length === 0}

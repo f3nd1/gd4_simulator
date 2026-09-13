@@ -65,8 +65,8 @@ export const NAV: NavGroup[] = [
       { path: "/afi-closure", label: "Quality Action / AFI", hint: "Decide whether a finding can be closed, then confirm its effectiveness" },
     ],
     tools: [
-      { path: "/ai-review", label: "AI Review Log", hint: "Log of every AI review run, live or simulated" },
-      { path: "/ai-debug", label: "AI Debug Log", hint: "Log of every buildSystemPrompt() call with module and the full prompt block (in-memory, cleared on reload)" },
+      { path: "/ai-review", label: "AI Run Log", hint: "Every AI call the app has made — agent, model, tokens, cost, and the exact prompt and output" },
+      { path: "/ai-debug", label: "Prompt Inspector", hint: "The raw system prompt assembled for each AI call, so you can see exactly what the model was told (in-memory, cleared on reload)" },
       { path: "/human-decision-log", label: "Human Decision Log", hint: "Audit trail of every human override or acceptance of an AI output" },
       { path: "/run-log", label: "Run Log", hint: "What an automated run (Full Auto sweep or Hybrid per-item draft) actually did — steps taken, skipped, and bands set" },
     ],

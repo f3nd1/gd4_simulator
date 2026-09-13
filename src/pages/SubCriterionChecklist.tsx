@@ -926,9 +926,17 @@ export function SubCriterionChecklist() {
                 if (auditMode !== "manual") confirmGenerated(selectedId);
               }}
               disabled={busy === selectedId}
+              title={auditMode === "manual"
+                ? "Drafts lines into a Pending list for you to confirm or discard before anything is added."
+                : `Adds the drafted lines straight to the checklist — ${auditMode === "hybrid" ? "Hybrid" : "Full auto"} mode commits them with no Confirm step, matching how Run audit behaves. Switch to Manual mode on Start Audit if you want to review them first.`}
               style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: `1px solid ${BLUE}`, background: "#eaeef6", color: "#4a5a8a" }}
             >
-              {busy === selectedId ? "Generating…" : "Suggest checklist lines"}
+              {/* The label has to track the mode. In Manual this really is a
+                  suggestion (lines land in Pending for Confirm/Discard); in
+                  Hybrid/Full auto the very next statement commits them, so
+                  calling it "Suggest" there would promise a review step the
+                  user never gets. */}
+              {busy === selectedId ? "Generating…" : auditMode === "manual" ? "Suggest checklist lines" : "Generate & add checklist lines"}
             </button>
             <input
               placeholder="Add a specific line manually…"
@@ -1570,7 +1578,7 @@ export function SubCriterionChecklist() {
             );
           })}
           {sortedSpecific.length === 0 && pending.length === 0 && (
-            <p style={{ fontSize: 12, color: "#94a3b8" }}>No specific lines yet — run "Suggest checklist lines" or add one manually.</p>
+            <p style={{ fontSize: 12, color: "#94a3b8" }}>No specific lines yet — use the generate button above, or add one manually.</p>
           )}
         </Card>
 

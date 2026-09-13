@@ -203,7 +203,7 @@ export function RuleTuningTab() {
             <button disabled={!!busy} onClick={() => testBenchmark(savedId)} title="Runs Option B on every connected benchmark sub-criterion and judges against the real findings. Cost ≈ one run per connected benchmark sub-criterion." style={{ cursor: busy ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, padding: "6px 12px", borderRadius: 8, border: "1px solid #4a5a8a", background: "#eaeef6", color: "#4a5a8a", opacity: busy ? 0.6 : 1 }}>Test against benchmark (accuracy)</button>
             <button onClick={() => setSavedId(null)} style={{ cursor: "pointer", fontSize: 12, padding: "6px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}>Skip</button>
           </div>
-          <div style={{ fontSize: 11, color: "#b45309", marginTop: 6 }}>⚠ Real AI calls — tokens logged in the AI Review Log. Scratch runs only; your real audit results are untouched.</div>
+          <div style={{ fontSize: 11, color: "#b45309", marginTop: 6 }}>⚠ Real AI calls — tokens logged in the AI Run Log. Scratch runs only; your real audit results are untouched.</div>
           {busy && (
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "8px 11px" }}>
               <span style={{ fontSize: 12, color: "#1d4ed8", flex: 1 }}>{busy}</span>
@@ -268,7 +268,7 @@ export function RuleTuningTab() {
 
       <div style={{ fontSize: 11, color: "#64748b" }}>
         Not sure where these rules end up? They are added to the assessment prompt and visible in the{" "}
-        <Link to="/ai-debug" style={{ color: "#4338ca", fontWeight: 600 }}>AI Debug Log</Link> under the "TUNABLE ASSESSMENT RULES" block.
+        <Link to="/ai-debug" style={{ color: "#4338ca", fontWeight: 600 }}>Prompt Inspector</Link> under the "TUNABLE ASSESSMENT RULES" block.
       </div>
     </>
   );

@@ -33,7 +33,7 @@ Findings are numbered sequentially and grouped by nav area, in the same order as
 10. The Duplicate-vs-Create-new explanatory paragraph is small, low-contrast text, easy to miss.
 
 ### Analytics / "Data Dashboard" (`/analytics`)
-11. Naming mismatch: route `/analytics`, file `Analytics.tsx`, but the nav label and on-page heading both say "Data Dashboard."
+11. ~~Naming mismatch: route `/analytics`, file `Analytics.tsx`, but the nav label and on-page heading both say "Data Dashboard."~~ **FIXED** — file and component renamed `DataDashboard.tsx` / `DataDashboard`. The `/analytics` route is deliberately kept: it is in bookmarks and browser history, and `lib/analytics.ts` keeps its name because that one really is about analytics computation.
 12. Entirely non-interactive — a redesign is free to restructure without preserving click logic, unusual relative to the rest of the app.
 13. Not linked from Dashboard itself despite containing valuable overview data.
 
@@ -84,7 +84,7 @@ Findings are numbered sequentially and grouped by nav area, in the same order as
 
 ### Evidence Folder (`/evidence-folder`)
 37. Path A/B toggle is view state, not a filter that discards data — switching it changes which "View results" reopens but does not delete the other path's saved results; a user could easily believe switching "loses" the other path's results.
-38. The exact same primary button silently changes what it does ("Run review" opens a modal vs. "Run audit →" runs a multi-minute unattended pipeline after one `confirm()`) purely based on mode+setting — the label is the only signal.
+38. ~~The exact same primary button silently changes what it does ("Run review" opens a modal vs. "Run audit →" runs a multi-minute unattended pipeline after one `confirm()`) purely based on mode+setting — the label is the only signal.~~ **FIXED** — the two states now name their own cost: "Open review →" (opens the modal, spends nothing) vs. "Run full audit now (no pauses) →". The `confirm()` before the hands-off run stays.
 39. The "⋯" overflow menu hides consequential, mode-gated actions: 3 of ~7 items only appear in Hybrid mode; the pre-flight check is the card's only zero-cost diagnostic; "Official requirements" is the only entry point to reference text needing no folders/run at all — all easy to bury or drop as "just a junk drawer."
 40. Very high control density per card, deliberately packed per code comments — a redesign compressing this further risks conflating the Path toggle (semantic selector) with the Progress chips (read-only status), since both render as similarly-sized pills.
 41. Multiple "View results" entry points render identically in different DOM locations — functionally redundant, worth consolidating conceptually.
@@ -102,7 +102,7 @@ Findings are numbered sequentially and grouped by nav area, in the same order as
 
 ### Sub-Criterion Checklist (`/sub-checklist`)
 51. ~~Two different "AI first pass" buttons, both labelled identically, ~130px apart, doing unrelated things (line generation vs. band-score suggestion).~~ **FIXED** — renamed to "Suggest checklist lines" and "Suggest APSR scores".
-52. The line-generation "AI first pass" button silently forks behaviour by audit mode (auto-confirms in hybrid/full-auto, stops for review in manual) with no UI signal of which will happen.
+52. ~~The line-generation "AI first pass" button silently forks behaviour by audit mode (auto-confirms in hybrid/full-auto, stops for review in manual) with no UI signal of which will happen.~~ **FIXED (label, not behaviour)** — investigated: the fork is deliberate and matches `auditFolderContents`/`auditFolderStaged`, which also auto-confirm in hybrid/full-auto. The defect was the absent signal, made worse by finding 51's rename to "Suggest checklist lines", which promised a review step hybrid never gives. The label and tooltip are now mode-aware: "Suggest checklist lines" (manual, lands in Pending) / "Generate & add checklist lines" (hybrid, full auto).
 53. A cosmetic control (the per-line "Dimension" select, display-only) sits visually identical in weight to a load-bearing one (the "Verdict" select that drives the band) right next to it — the "never changes the band" fact is only in a hover tooltip.
 54. A legacy dual-verdict system is stacked on the current one: the editable live "Verdict" select coexists with read-only "Policy verdict"/"Combined verdict" fields pulled from a frozen AI-run snapshot that can literally disagree with the current editable verdict.
 55. Reassessment/band-source warning language has accumulated three eras of terminology from two separate historical rescoring migrations, never consolidated into one consistent banner.
@@ -131,7 +131,7 @@ Findings are numbered sequentially and grouped by nav area, in the same order as
 ## 3 · Findings & review
 
 ### Findings (`/findings`)
-69. Two separate "generate findings" pipelines that look similar but produce different structures: "Generate from gaps" (gold, ungrouped, one finding per line) vs. "Generate grouped findings" (indigo, AI-consolidated multi-line drafts requiring a confirm step) — easy to use the wrong one.
+69. ~~Two separate "generate findings" pipelines that look similar but produce different structures: "Generate from gaps" (gold, ungrouped, one finding per line) vs. "Generate grouped findings" (indigo, AI-consolidated multi-line drafts requiring a confirm step) — easy to use the wrong one.~~ **FIXED** — the labels now state the structural difference: "Raise one finding per gap" vs. "Draft grouped findings (AI)" / "Redraft grouped findings (AI)".
 70. Duplicate filter mechanisms: dimension/risk-category set both via dropdown and via clickable pills, with no visual link between the two.
 71. "Compile findings from the last PPD + Evidence run" only appears buried inside an empty-state message for a scoped filter — the code comment itself acknowledges the primary version lives elsewhere.
 72. The finding-row click target overloads three behaviours (expand, collapse, delete) tightly packed into one compact row.
@@ -146,9 +146,9 @@ Findings are numbered sequentially and grouped by nav area, in the same order as
 
 ### Quality Action / AFI (`/afi-closure`)
 79. The closure gate is text-only, not shown on the fields themselves — the disabled "Accept closure" tooltip lists missing fields, but the textareas have no red border/asterisk/required-field indicator.
-80. Two similarly-worded, similarly-styled AI buttons side by side do conceptually different things: "Suggest actions (AI)" fills fields, "AI closure review" judges the filled fields.
+80. ~~Two similarly-worded, similarly-styled AI buttons side by side do conceptually different things: "Suggest actions (AI)" fills fields, "AI closure review" judges the filled fields.~~ **FIXED** — "Draft root cause & actions (AI)" (writes into the fields) vs. "Check this closure is sound (AI)" (judges what is already there).
 81. The override-reason input only appears conditionally, inserted inline rather than visually tied to the AI-verdict panel below it — easy to miss.
-82. "Accept closure" and "Closed ✓" are the same toggle button — clicking it again reopens the finding with no confirmation, unlike delete.
+82. ~~"Accept closure" and "Closed ✓" are the same toggle button — clicking it again reopens the finding with no confirmation, unlike delete.~~ **FIXED** — once closed the button says "Reopen finding" and drops its green fill, because green read as "closure confirmed" on the control that undoes it. The closed STATUS is still stated by the "closed" pill and the "Closed by … on …" line, so no signal was lost.
 83. Effectiveness confirmation shows a due date only as plain text — no reminder/highlight for overdue, unlike the finding's own Overdue pill which does get distinct red treatment.
 84. The "Act" box's amber→green border is the only per-step visual progress cue on the whole page — every other field looks identical whether empty or filled.
 
@@ -158,7 +158,7 @@ Findings are numbered sequentially and grouped by nav area, in the same order as
 87. Purpose distinctness: this page's filterable/expandable table is nearly identical in shape to Human Decision Log's Decision Log tab and Run Log's row list — nothing in title/icon/colour distinguishes them before a row is expanded and read.
 
 ### AI Debug Log (`/ai-debug`)
-88. By name alone, "AI Debug Log" vs. "AI Review Log" is a very easy mix-up, though the content and layout (accordion, not a data-grid) genuinely differ once seen.
+88. ~~By name alone, "AI Debug Log" vs. "AI Review Log" is a very easy mix-up, though the content and layout (accordion, not a data-grid) genuinely differ once seen.~~ **FIXED** — renamed "AI Run Log" (every call: agent, model, tokens, cost) and "Prompt Inspector" (the raw system prompt). Routes `/ai-review` and `/ai-debug` are unchanged so bookmarks survive, and the persisted module value `"AI Review Log Feedback"` is deliberately untouched — renaming it would orphan existing Human Decision Log rows and calibration memories.
 89. Its description leans on the internal function name `buildSystemPrompt()`, which means nothing to a non-developer.
 90. No indication in the page itself that the data is ephemeral beyond one description line.
 91. No search/filter at all, unlike the other three log pages.
@@ -190,7 +190,7 @@ Findings are numbered sequentially and grouped by nav area, in the same order as
 
 ### Final Report (`/final-report`)
 105. Easily the densest page in the app — one item block can stack up to ~6 pieces of AI-authored prose per dimension group, distinguished from each other only by label text and light background tinting.
-106. Two different "regenerate" surfaces per item ("Generate AI summary" whole-report vs. "Regenerate report text" per-item) both hit AI, easy to conflate.
+106. ~~Two different "regenerate" surfaces per item ("Generate AI summary" whole-report vs. "Regenerate report text" per-item) both hit AI, easy to conflate.~~ **FIXED** — scope is now in the label: "Write executive summary (AI)" vs. "Rewrite this item's narrative (AI)".
 107. `EvidenceCell` has a three-way rendering duality (concise synthesis, raw entries, raw entries with "Show N more") depending on hidden state, with no visible flag for which mode is active.
 108. AFI band-jump pills are parsed out of free-text AI output via a specific regex pattern — a brittle coupling a redesign must not assume is freely restylable.
 109. `it.needsReassessment` overrides the Band pill entirely with "Needs re-assessment" — a fifth possible header state beyond Band 0-5, easy to miss.

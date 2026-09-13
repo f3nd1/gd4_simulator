@@ -287,7 +287,7 @@ export function AFIClosure() {
                         title="AI drafts root cause + corrective + preventive action for you to edit. Won't overwrite fields you've already filled."
                         style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: "1px solid #c9a24a", background: "#fbf3df", color: "#7a5c12" }}
                       >
-                        {busy === "clxdraft" + f.id ? "Drafting…" : "Suggest actions (AI)"}
+                        {busy === "clxdraft" + f.id ? "Drafting…" : "Draft root cause & actions (AI)"}
                       </button>
                       {draftErrors[f.id] && (
                         <span style={{ fontSize: 11.5, color: "#b23121", alignSelf: "center" }}>{draftErrors[f.id]}</span>
@@ -299,7 +299,7 @@ export function AFIClosure() {
                     disabled={busy === "clx" + f.id}
                     style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, border: `1px solid ${BLUE}`, background: TONE.progress.bg, color: TONE.progress.fg }}
                   >
-                    {busy === "clx" + f.id ? "Reviewing…" : "AI closure review"}
+                    {busy === "clx" + f.id ? "Checking…" : "Check this closure is sound (AI)"}
                   </button>
                   {/* Reason input — shown when AI has a conflicting verdict */}
                   {c.ai && c.human !== "Accepted" && (
@@ -330,20 +330,25 @@ export function AFIClosure() {
                             if (c.human !== "Accepted") setClosureReasons((r) => ({ ...r, [f.id]: "" }));
                           }}
                           disabled={blocked}
-                          title={blocked ? `Required before closing: ${missing.join(", ")}` : undefined}
+                          title={blocked ? `Required before closing: ${missing.join(", ")}` : c.human === "Accepted" ? "Reopen this finding — the closure decision is cleared and the finding goes back to open" : undefined}
+                          // Once closed the button's job is to REOPEN, so it
+                          // drops the green fill: green here read as "closure
+                          // confirmed" when it is actually the control that
+                          // undoes it. The closed state is still stated plainly
+                          // by the "Closed by … on …" line below.
                           style={{
                             cursor: blocked ? "not-allowed" : "pointer",
                             fontSize: 12,
                             fontWeight: 700,
                             padding: "7px 12px",
                             borderRadius: 8,
-                            border: `1px solid ${TONE.good.fg}55`,
-                            background: c.human === "Accepted" ? TONE.good.bg : "#fff",
-                            color: blocked ? "#94a3b8" : TONE.good.fg,
+                            border: c.human === "Accepted" ? "1px solid #cbd5e1" : `1px solid ${TONE.good.fg}55`,
+                            background: "#fff",
+                            color: blocked ? "#94a3b8" : c.human === "Accepted" ? "#475569" : TONE.good.fg,
                             opacity: blocked ? 0.6 : 1,
                           }}
                         >
-                          {c.human === "Accepted" ? "Closed ✓" : "Accept closure"}
+                          {c.human === "Accepted" ? "Reopen finding" : "Accept closure"}
                         </button>
                         {blocked && (
                           <span style={{ fontSize: 11, color: "#b45309", alignSelf: "center" }}>Required: {missing.join(", ")}</span>

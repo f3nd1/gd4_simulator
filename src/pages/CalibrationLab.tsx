@@ -426,7 +426,7 @@ export function ConsistencyTab() {
             </>
           )}
         </div>
-        <div style={{ fontSize: 11, color: "#b45309", marginBottom: 6 }}>⚠ Real AI calls: cost ≈ {runs} × a normal run. Tokens are logged in the AI Review Log as usual.</div>
+        <div style={{ fontSize: 11, color: "#b45309", marginBottom: 6 }}>⚠ Real AI calls: cost ≈ {runs} × a normal run. Tokens are logged in the AI Run Log as usual.</div>
         <PrereqNotice selected={selected} />
         {running && (
           <>
@@ -892,7 +892,7 @@ export function AvsBTab() {
             </>
           )}
         </div>
-        <div style={{ fontSize: 11, color: "#b45309", marginBottom: 6 }}>⚠ Real AI calls: cost ≈ two full runs. Tokens are logged in the AI Review Log as usual.</div>
+        <div style={{ fontSize: 11, color: "#b45309", marginBottom: 6 }}>⚠ Real AI calls: cost ≈ two full runs. Tokens are logged in the AI Run Log as usual.</div>
         <PrereqNotice selected={selected} needsTruthNote />
         {running && <RunProgress headline={running.headline} stage={running.stage} startedAt={running.startedAt} onCancel={() => abortRef.current?.abort()} />}
         {error && <div style={{ fontSize: 12, color: "#b91c1c" }}>{error}</div>}

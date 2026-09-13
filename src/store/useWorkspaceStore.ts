@@ -3203,10 +3203,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         };
         const stepOutcomes = (): NonNullable<RunLogEntry["stepOutcomes"]> =>
           stepDefs.map((s) => ({ key: s.key, label: s.label, status: stepFinal[s.key]?.status ?? "skipped", ...(stepFinal[s.key]?.reason ? { reason: stepFinal[s.key]?.reason } : {}) }));
-        mark("ppd", steps.ppdRan ? "done" : "skipped", "PPD review returned no usable rows (failed, was stopped, or had nothing to read) — see the AI Review Log");
-        mark("evidence", steps.ppdRan && steps.evidenceRan ? "done" : "skipped", steps.ppdRan ? "evidence assessment returned no usable rows (failed or every line was Not assessed) — see the AI Review Log" : "PPD produced nothing to assess against");
+        mark("ppd", steps.ppdRan ? "done" : "skipped", "PPD review returned no usable rows (failed, was stopped, or had nothing to read) — see the AI Run Log");
+        mark("evidence", steps.ppdRan && steps.evidenceRan ? "done" : "skipped", steps.ppdRan ? "evidence assessment returned no usable rows (failed or every line was Not assessed) — see the AI Run Log" : "PPD produced nothing to assess against");
         mark("findings", steps.evidenceRan ? "done" : "skipped", "no evidence verdicts to compile");
-        mark("review", steps.evidenceRan ? (steps.outcomeReviewApplied ? "done" : "skipped") : "skipped", steps.evidenceRan ? "the Outcomes & Review pass failed or produced nothing applicable — see the AI Review Log" : "no evidence verdicts to review");
+        mark("review", steps.evidenceRan ? (steps.outcomeReviewApplied ? "done" : "skipped") : "skipped", steps.evidenceRan ? "the Outcomes & Review pass failed or produced nothing applicable — see the AI Run Log" : "no evidence verdicts to review");
         // Cancelled during the audit chain: record honestly and STOP before the
         // band. Steps that genuinely completed keep their writes (a coherent
         // "some lines assessed" state); the band is never scored, so the item
@@ -3255,7 +3255,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           setStep("narrative", "running");
           narrativesWritten = await get().writeReportNarratives(r.set);
           if (narrativesWritten > 0) mark("narrative", "done");
-          else mark("narrative", "skipped", aiOfflineReason(useAISettingsStore.getState()) ?? "narrative generation failed or returned nothing — see the AI Review Log");
+          else mark("narrative", "skipped", aiOfflineReason(useAISettingsStore.getState()) ?? "narrative generation failed or returned nothing — see the AI Run Log");
         }
         const status: RunLogSubOutcome["status"] = steps.ppdRan && steps.evidenceRan ? "done" : "skipped";
         const stoppedEarlyNote = !steps.ppdRan ? "PPD review returned no rows" : "evidence assessment returned no rows";

@@ -1254,7 +1254,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
           untouched, not silently overwritten. Token counter: this is a fresh
           runEvidenceAssessment call, so its live "tokens" chip starts at 0
           and counts only the retry's own AI calls, not the original run's —
-          each run/retry's usage is logged as its own separate AI Review Log
+          each run/retry's usage is logged as its own separate AI Run Log
           entry, never summed into one running total. File reads for lines
           already read successfully hit the in-memory fileTextCache (shared
           with Option B), so only genuinely-unread/failed files are re-fetched

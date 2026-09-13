@@ -40,6 +40,16 @@ const STATUS_TONE: Record<MatchStatus, "good" | "medium" | "critical" | "neutral
   "not-audited": "neutral",
 };
 
+// Very light tints only: the status pill is the primary signal, this just
+// keeps a long list scannable.
+const STATUS_BG: Record<MatchStatus, string> = {
+  caught: "#f6fdf8",
+  partial: "#fffdf5",
+  missed: "#fef8f8",
+  unassessed: "#fff",
+  "not-audited": "#fafafa",
+};
+
 const STATUS_LABEL: Record<MatchStatus, string> = {
   caught: "caught",
   partial: "partially caught",
@@ -568,7 +578,12 @@ function SubCriterionSection({ subCriterionId, afis, statusOf, matchesJustificat
             );
           }
           return (
-            <div key={a.id} style={{ border: "1px solid #e2e8f0", borderLeft: `4px solid ${st === "caught" ? "#16a34a" : st === "partial" ? "#d97706" : st === "missed" ? "#dc2626" : "#94a3b8"}`, borderRadius: 8, padding: "9px 12px", opacity: st === "not-audited" ? 0.72 : 1 }}>
+            // Status is carried by the pill in the header row, not by a thick
+            // accent bar down the side (a generic treatment that duplicated
+            // information already stated in words). What remains is a tinted
+            // background so a scan still separates caught from missed, at much
+            // lower visual weight.
+            <div key={a.id} style={{ border: "1px solid #e2e8f0", background: STATUS_BG[st], borderRadius: 8, padding: "9px 12px", opacity: st === "not-audited" ? 0.72 : 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
                 <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 12, fontWeight: 700, color: "#4338ca" }}>{a.id}</span>
                 {a.gd4Ref && <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 11, color: "#64748b" }}>{a.gd4Ref}</span>}

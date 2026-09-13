@@ -521,7 +521,7 @@ function DevelopersTab() {
         <H>Where to look first when something breaks</H>
         <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.65 }}>
           "The fix doesn't work" → Change Log's deployed hash + a hard refresh + a FRESH run (stale build and stale results are the two usual false alarms).{" "}
-          "The AI said/read something odd" → AI Debug Log (exact prompt), AI Review Log (usage), File Ledger (what a run actually read, per file, with read method).{" "}
+          "The AI said/read something odd" → Prompt Inspector (exact prompt), AI Run Log (usage), File Ledger (what a run actually read, per file, with read method).{" "}
           "A run skipped something" → Run Log records the real per-step reason.{" "}
           Full architecture, store table, DoD gauntlet and Playwright cookbook: <Code>CLAUDE.md</Code> at the repo root — read it before changing anything.
         </div>

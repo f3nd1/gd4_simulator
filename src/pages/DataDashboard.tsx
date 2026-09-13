@@ -12,7 +12,14 @@ import { GOLD } from "../lib/theme";
 
 const SEV_COLOR: Record<string, string> = { Critical: "#c0392b", High: "#d97706", Medium: "#5b6ea8", Low: "#94a3b8" };
 
-export function Analytics() {
+// Named DataDashboard to match what the app actually calls this page ("Data
+// Dashboard" in the sidebar and in its own heading). It was Analytics.tsx,
+// so searching the codebase for the user-facing name found nothing and vice
+// versa. The ROUTE stays /analytics deliberately: it is in users' bookmarks
+// and in the browser history, and renaming it would break those for a purely
+// internal naming tidy-up. The lib it reads (lib/analytics.ts, buildAnalytics)
+// keeps its name too — that one is genuinely about analytics computation.
+export function DataDashboard() {
   const scored = useScored();
   const entries = useChecklistModuleStore((s) => s.entries);
   const findings = useAllFindings();
