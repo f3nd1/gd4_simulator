@@ -46,6 +46,10 @@ const DETAILS: Record<string, Detail> = {
     what: "Reference text for every GD4 requirement — intent, expected evidence and band descriptors.",
     how: "Look up what each item is asking for before attaching evidence.",
   },
+  "/checklist-library": {
+    what: "The specialist checks the AI applies for each criterion: what to look for, the red flags to name immediately, and the evidence SSG expects. This is what makes the AI audit Criterion 4 like a fee-protection specialist and Criterion 7 like a statistician — editing it changes what every AI audit call on that criterion is told to check.",
+    how: "Filter to a criterion, read its checks, and Edit or Hide any that are wrong for this school. Add your own with '+ Add check' — added checks start as a draft and reach the AI only after you Approve them. 'View text sent to the AI' shows the exact block the model receives. Export CSV to edit in a spreadsheet and Import CSV to bring it back.",
+  },
   "/start-audit": {
     what: "The cycle-level choice of how much the AI does: Full auto (runs and commits everything), Hybrid (verdicts commit, you review on the checklist; staged verdicts stop for approval) or Manual (you decide everything, AI suggests on request).",
     how: "Pick a mode card, then continue to Evidence Folder. You can come back and change the mode at any time.",

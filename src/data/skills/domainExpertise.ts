@@ -11,6 +11,8 @@
 // segment of the sub-criterion id, e.g. "4.2" -> "4") and injects it into the
 // system prompt alongside the generic auditor skills.
 
+import { parseDomainMarkdown, composeDomainMarkdown, type ParsedDomainFile } from "../../lib/domainChecklist";
+import { currentDomainOverrides } from "../../store/useDomainChecklistStore";
 import criterion1 from "./criterion-1-leadership-finance.md?raw";
 import criterion2 from "./criterion-2-corporate-admin.md?raw";
 import criterion3 from "./criterion-3-recruitment-agents.md?raw";
@@ -34,23 +36,34 @@ export const DOMAIN_EXPERTISE_LABELS: Record<string, string> = {
   "7": "Performance-measurement & data-integrity specialist",
 };
 
+const DOMAIN_EXPERTISE_SKILLS: Record<string, string> = {
+  "1": criterion1,
+  "2": criterion2,
+  "3": criterion3,
+  "4": criterion4,
+  "5": criterion5,
+  "6": criterion6,
+  "7": criterion7,
+};
+
 // Criterion 4 (student protection) carries three regulatory supplements —
 // refund/cooling-off rules, the Standard Student Contract checks, and FPS
 // mechanics. These are the zero-tolerance areas where the AI previously had
 // to "verify a table it had never seen"; appending them here reaches every
 // C4 call (evidence passes, finding writer, panel) at zero cost to the other
-// criteria.
-const criterion4Full = [criterion4, ssgRefundRules, standardStudentContract, fpsRules].join("\n\n---\n\n");
-
-const DOMAIN_EXPERTISE_SKILLS: Record<string, string> = {
-  "1": criterion1,
-  "2": criterion2,
-  "3": criterion3,
-  "4": criterion4Full,
-  "5": criterion5,
-  "6": criterion6,
-  "7": criterion7,
+// criteria. They are appended verbatim and are NOT part of the editable
+// checklist: fps-rules.md wraps bullets across lines, which the line-oriented
+// checklist parser does not model, so parsing them would risk mangling a
+// regulatory table.
+const SUPPLEMENTS: Record<string, string[]> = {
+  "4": [ssgRefundRules, standardStudentContract, fpsRules],
 };
+
+// Each criterion file parsed once into its editable checklist items. The file
+// on disk stays the seed; the Audit Checklist Library stores only a diff.
+export const PARSED_DOMAIN_FILES: Record<string, ParsedDomainFile> = Object.fromEntries(
+  Object.entries(DOMAIN_EXPERTISE_SKILLS).map(([id, raw]) => [id, parseDomainMarkdown(id, raw)]),
+);
 
 // Normalises any item / sub-criterion / criterion id to its criterion number.
 // "4.2.1" -> "4", "4.2" -> "4", "4" -> "4".
@@ -62,9 +75,17 @@ export function criterionIdOf(anyId: string | undefined | null): string | undefi
 
 // Returns the domain-expertise skill markdown for a given criterion / sub-
 // criterion / item id, or undefined if the id doesn't map to a known criterion.
+//
+// Recomposed from the parsed checklist plus whatever the Audit Checklist
+// Library has edited, so what the AI reads is exactly what that page shows.
+// With no edits this returns the .md file byte for byte (asserted in
+// lib/__tests__/domainChecklist.test.ts), so the editor changed no prompt.
 export function domainExpertiseFor(anyId: string | undefined | null): string | undefined {
   const cid = criterionIdOf(anyId);
-  return cid ? DOMAIN_EXPERTISE_SKILLS[cid] : undefined;
+  if (!cid) return undefined;
+  const composed = composeDomainMarkdown(PARSED_DOMAIN_FILES[cid], currentDomainOverrides());
+  const supplements = SUPPLEMENTS[cid];
+  return supplements ? [composed, ...supplements].join("\n\n---\n\n") : composed;
 }
 
 // Returns the specialist persona label for a given id, or undefined.

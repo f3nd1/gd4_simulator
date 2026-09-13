@@ -89,6 +89,7 @@ All persisted via `workspaceStorage` (Supabase-synced adapter in `src/store/supa
 | `useBenchmarkAfiStore` | Full benchmark AFI list (59 seeded + uploads); scoped `resetToDefaults` preserves `CUST-*` uploads | `ucc-gd4-custom-benchmark:v1` | 1 |
 | `useCalibrationStore` | Benchmark match assessments (human-override-wins) | `ucc-gd4-calibration:v1` | 1 |
 | `usePreCheckChecklistStore` | Live editable pre-check checklist (seeded from `DEFAULT_CHECKLISTS`); Approve/Revert is the only way `verified` changes | `ucc-gd4-precheck-checklist:v1` | 0 |
+| `useDomainChecklistStore` | Edits/hides/additions to the criterion domain-expertise checklists — a DIFF only, never a copy of the markdown | `ucc-gd4-domain-checklist:v1` | 0 |
 | `useFindingDraftStore` | Grouped finding drafts; `generateFindingsFromChecklist()`, `confirmGroupedDraft()` | `ucc-gd4-finding-drafts:v1` | 0 |
 | `useRuleTuningStore` | Rule injections; champion-vs-active gate (`championInjection()`) | `ucc-gd4-rule-tuning:v1` | 0 |
 | `usePromptReviewStore` | Prompt Review prompts + connected review records | `ucc-gd4-prompt-review:v1` | 0 |
@@ -113,6 +114,7 @@ Hard rules: renaming a store NEVER changes its persist key (existing user data d
 - BASE (every AI call): `external-auditor.md`, `evidence-standards.md`, `apsr-rubric.md`, `sg-pei-context.md` (SSG hard requirements: FPS, contracts, refund table).
 - Per-module via `MODULE_SKILLS`; per-skill cap `SKILL_CAP = 7000` chars (`regulatoryReferencesSkill` uncapped to preserve full clause tables); file-type bonus skills for scanned docs / spreadsheets.
 - Criterion-specific (7): `criterion-{1..7}-*.md`, injected uncapped via `domainExpertiseFor(subCriterionId)` (`domainExpertise.ts` maps any id → skill + label).
+- **The criterion files are user-editable in-app** (Audit Checklist Library, `/checklist-library`). The `.md` files stay on disk as the seed and are never written to; `parseDomainMarkdown()` splits each into prose + editable items, `composeDomainMarkdown()` rebuilds it, and `useDomainChecklistStore` persists only the diff. `domainExpertiseFor()` returns the composed text, so with no edits every prompt gets the file byte for byte — asserted for all 7 files against the real bytes on disk (`lib/__tests__/domainChecklist.test.ts`, `data/__tests__/domainExpertise.test.ts`). Break that equality and you have silently changed every audit prompt. A check ADDED in the app starts `verified: false` and reaches no prompt until approved; editing a built-in applies immediately and is revertible. Criterion 4's three regulatory supplements are appended verbatim and deliberately NOT parsed (`fps-rules.md` wraps bullets across lines). `DOMAIN_SKILL_CONSUMERS` (`lib/domainSkillUsage.ts`) lists the 14 AI calls that receive it and is re-derived from the real call sites by a test, so the page's "where used" panel cannot drift.
 - Calibration memories inject as a "LEARNED CORRECTIONS" block via `buildSystemPrompt(..., memories, ...)`; rule-tuning champions inject via `ruleInjection`.
 
 ### Feedback → learning loop (must stay closed on BOTH ends)
@@ -160,7 +162,7 @@ Key exact-value constraints (TypeScript union types — violations cause TS erro
 ## Definition of done — run before calling anything finished
 
 1. `npx tsc -b` — zero errors.
-2. `npm run test` — all pass (1118 tests / 95 files as of `204ac1f`; your change should only ever raise the count).
+2. `npm run test` — all pass (1142 tests / 98 files as of the Audit Checklist Library commit; your change should only ever raise the count).
 3. `npm run lint` — no NEW warnings. Pre-existing (ignore, don't drive-by fix): jsx-key in `ProfileOfPei.tsx`, no-unused-expressions in `EvidenceFolder.tsx`/`PPDReview.tsx`, exhaustive-deps in `SubCriterionChecklist.tsx`, unused `GD4_SUB_CRITERIA` import in `useWorkspaceStore.ts`.
 4. `npm run build` — clean (the chunk-size warning is pre-existing).
 5. **Live verification in the browser** for any UI/flow change (cookbook below). State honestly what you could and could not exercise (real Drive/OpenAI don't exist in the sandbox) and give the user the exact click-path to confirm the rest themselves.
