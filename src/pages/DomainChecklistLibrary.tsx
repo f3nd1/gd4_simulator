@@ -6,6 +6,10 @@ import { GD4_CRITERIA } from "../data/gd4Requirements";
 import { scopeTitle } from "../lib/evidenceScope";
 import { DOMAIN_SKILL_CONSUMERS } from "../lib/domainSkillUsage";
 import { downloadCsv } from "../lib/auditCsvExport";
+import { assembleWorksheetRows, buildWorksheetCsv } from "../lib/manualWorksheet";
+import { runWorksheetConversion } from "../lib/ai/worksheetWriter";
+import { aiOfflineReason } from "../lib/ai/aiClient";
+import { useAISettingsStore } from "../store/useAISettingsStore";
 import {
   domainRowsFor,
   buildDomainChecklistCsv,
@@ -96,7 +100,10 @@ export function DomainChecklistLibrary() {
   const [previewFor, setPreviewFor] = useState<string | null>(null);
   const [showUsage, setShowUsage] = useState(false);
   const [importReport, setImportReport] = useState<DomainImportReport | null>(null);
+  const [worksheet, setWorksheet] = useState<string | null>(null);
+  const [worksheetBusy, setWorksheetBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const aiSettings = useAISettingsStore((s) => s);
 
   const rowsByCriterion = useMemo(() => {
     const out: Record<string, DomainChecklistRow[]> = {};
@@ -157,6 +164,39 @@ export function DomainChecklistLibrary() {
   const onExport = () => {
     const rows = allRows.filter(matches);
     downloadCsv(buildDomainChecklistCsv(rows), `gd4-audit-checklist-${new Date().toISOString().slice(0, 10)}.csv`);
+  };
+
+  // The second, one-way export: the same checks turned into walkthrough
+  // questions with blank answer columns. Deliberately NOT importable — it
+  // carries no item_id or status, so it can never be fed back over the
+  // edit format above.
+  const onExportWorksheet = async () => {
+    const rows = allRows.filter(matches).filter((r) => r.status !== "removed");
+    if (rows.length === 0) { setWorksheet("Nothing to export — no checks match the current filters."); return; }
+    // Never fabricate the questions offline: a rule-based rewrite of these
+    // checks reads like the raw instruction with a stem bolted on, so the
+    // button says what is missing instead of producing a worse sheet.
+    const offline = aiOfflineReason(aiSettings);
+    if (offline) { setWorksheet(`The manual worksheet is written by AI, and ${offline}`); return; }
+
+    setWorksheetBusy(true);
+    setWorksheet(`Writing walkthrough questions for ${rows.length} checks…`);
+    try {
+      const { asksById, failed } = await runWorksheetConversion(rows, aiSettings, {
+        onProgress: (p) => setWorksheet(`Writing walkthrough questions… ${p.done} of ${p.total} checks`),
+      });
+      const out = assembleWorksheetRows(rows, asksById);
+      if (out.length === 0) { setWorksheet("The AI returned no usable questions — nothing was downloaded. Try again, or check Settings → OpenAI."); return; }
+      downloadCsv(buildWorksheetCsv(out), `gd4-manual-worksheet-${new Date().toISOString().slice(0, 10)}.csv`);
+      setWorksheet(
+        `Downloaded ${out.length} question rows from ${rows.length - failed.length} checks.` +
+        (failed.length > 0 ? ` ${failed.length} check(s) produced no questions and were left out.` : "")
+      );
+    } catch (e) {
+      setWorksheet(`Could not build the worksheet: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setWorksheetBusy(false);
+    }
   };
 
   const onImportFile = async (file: File) => {
@@ -236,6 +276,13 @@ export function DomainChecklistLibrary() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
           <button type="button" style={btnPrimary} onClick={onExport} title="Download the checks currently shown as a re-importable CSV">⬇ Export CSV{visibleCount !== stats.total ? " (filtered)" : ""}</button>
           <button type="button" style={btnPrimary} onClick={() => fileRef.current?.click()}>⬆ Import CSV</button>
+          <button
+            type="button" style={{ ...btnPrimary, ...(worksheetBusy ? { opacity: 0.6, cursor: "wait" } : {}) }}
+            disabled={worksheetBusy} onClick={() => void onExportWorksheet()}
+            title="Download the checks shown as a printable walkthrough worksheet: Describe / Show me questions with blank columns for the response, evidence seen and verdict. Written by AI at export time, and not re-importable."
+          >
+            {worksheetBusy ? "Writing worksheet…" : "⬇ Manual worksheet (CSV)"}
+          </button>
           <input
             ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: "none" }}
             onChange={(e) => { const f = e.target.files?.[0]; if (f) void onImportFile(f); }}
@@ -249,6 +296,13 @@ export function DomainChecklistLibrary() {
             </button>
           )}
         </div>
+
+        {worksheet && (
+          <div style={{ marginTop: 10, border: "1px solid #dbeafe", background: "#f8fbff", borderRadius: 8, padding: 10, fontSize: 12.5 }}>
+            <b>Manual worksheet: </b>{worksheet}
+            {!worksheetBusy && <button type="button" style={{ ...btn, marginLeft: 8 }} onClick={() => setWorksheet(null)}>Dismiss</button>}
+          </div>
+        )}
 
         {importReport && (
           <div style={{ marginTop: 10, border: `1px solid ${importReport.errors.length ? "#fde68a" : "#bbf7d0"}`, background: importReport.errors.length ? "#fffbeb" : "#f0fdf4", borderRadius: 8, padding: 10, fontSize: 12.5 }}>
