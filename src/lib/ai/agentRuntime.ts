@@ -1677,8 +1677,14 @@ type WindowedStagedAuditResult<Row> = {
 // truncationNote bookkeeping — was identical copy-paste three times before
 // this helper existed; a fix to one no longer risks silently missing the
 // other two.
-async function runWindowedStagedAudit<V, Row>(
-  auditPoints: FlatAuditPoint[],
+// P is generic over the assessed unit rather than fixed to FlatAuditPoint so
+// the Audit Checklist Library pass (runChecklistLibraryAudit) reuses this exact
+// loop. That reuse is the point: the stop handling, the failed-batch-never-
+// becomes-a-gap rule and the "no verdict in any window = Not assessed" rule are
+// then identical for the checklist pass by construction, on BOTH audit paths,
+// instead of being a second implementation that can drift looser.
+async function runWindowedStagedAudit<V, Row, P extends { ref: string } = FlatAuditPoint>(
+  auditPoints: P[],
   docText: string,
   settings: AISettings,
   opts: StagedAuditOpts,
@@ -1690,12 +1696,13 @@ async function runWindowedStagedAudit<V, Row>(
     funcName: string;   // "runStagedPolicyAudit" etc — per-call system-prompt label
     logTag: string;     // "[StagedPolicyAudit]" etc — console.error tag
     buildSystem: (label: string) => string;
-    buildUser: (batch: FlatAuditPoint[], win: DocWindow, windowLabel: string) => string;
+    buildUser: (batch: P[], win: DocWindow, windowLabel: string) => string;
     extractVerdict: (r: Record<string, unknown> | undefined) => V;
     isPositive: (v: V) => boolean;
     mergeVerdict: (prev: V, next: V) => V;
     fallbackNote: (windowsCompleted: number) => string;
-    buildRow: (p: FlatAuditPoint, verdict: V, note: string, chunkIds: string[], notAssessed?: boolean) => Row;
+    buildRow: (p: P, verdict: V, note: string, chunkIds: string[], notAssessed?: boolean) => Row;
+    batchSize?: number;
   }
 ): Promise<WindowedStagedAuditResult<Row>> {
   if (auditPoints.length === 0 || !docText.trim()) {
@@ -1718,9 +1725,10 @@ async function runWindowedStagedAudit<V, Row>(
   const stopRequested = () => !!opts.shouldStop?.() || !!opts.signal?.aborted;
   let stoppedEarly = false;
 
-  const batches: FlatAuditPoint[][] = [];
-  for (let i = 0; i < auditPoints.length; i += STAGED_BATCH_SIZE) {
-    batches.push(auditPoints.slice(i, i + STAGED_BATCH_SIZE));
+  const batchSize = cfg.batchSize ?? STAGED_BATCH_SIZE;
+  const batches: P[][] = [];
+  for (let i = 0; i < auditPoints.length; i += batchSize) {
+    batches.push(auditPoints.slice(i, i + batchSize));
   }
 
   for (const win of windows) {
@@ -1995,6 +2003,165 @@ Respond with JSON only:
         notAssessed
           ? { ref: p.ref, pointText: p.text, outcomeEvident: verdict.outcomeEvident, reviewEvident: verdict.reviewEvident, note, chunkIds, notAssessed: true }
           : { ref: p.ref, pointText: p.text, outcomeEvident: verdict.outcomeEvident, reviewEvident: verdict.reviewEvident, note, chunkIds },
+    }
+  );
+}
+
+// ─── Audit Checklist Library pass (shared by Option A and Option B) ─────────
+//
+// The 155 specialist checks in the Audit Checklist Library have always been
+// injected into every audit prompt for their criterion, but only ever as
+// one-way context: the response schemas are keyed on the GD4 flat-audit-point
+// ref, so the checks could shape the model's prose and nothing more. Nobody
+// could trace a conclusion back to "check X". This pass gives each check its
+// own verdict, additional to (never instead of) the GD4-line output.
+//
+// ONE function, two writers. Option A (runPPDReview / runEvidenceAssessment)
+// and Option B (auditFolderStaged) both call this, so the honesty gates below
+// cannot drift apart between the paths. It is built on runWindowedStagedAudit
+// for the same reason: the window sweep, the stop handling, the rule that a
+// failed AI call never becomes a gap, and "no verdict in any window = Not
+// assessed" are inherited, not reimplemented.
+//
+// The checks are NOT labelled inside the domain block. composeDomainMarkdown()
+// must return the .md file byte for byte when nobody has edited anything
+// (asserted in lib/__tests__/domainChecklist.test.ts), so ids cannot be
+// injected there. They are passed here as their own id-bearing list instead.
+export type ChecklistCheckVerdict = "Met" | "Partial" | "Not met" | "Not applicable" | "Not assessed";
+
+// Which documents a pass read. Both audit paths run this twice, once per
+// bucket, and the two verdicts are shown side by side rather than merged: a
+// check the policy documents but no record evidences is exactly the
+// "documented but not implemented" split the app already models per GD4 line,
+// and re-deriving it here would be a second copy of that rule.
+export type ChecklistAuditBucket = "policy" | "evidence";
+
+export type ChecklistAuditInput = {
+  ref: string;      // DomainChecklistItem.id (FNV-1a content hash, e.g. "6-1kx3p2")
+  text: string;
+  kind: string;     // section label shown to the model ("Red flag", "Expected evidence"…)
+};
+
+export type ChecklistAuditRow = {
+  checkId: string;
+  checkText: string;
+  verdict: ChecklistCheckVerdict;
+  rationale: string;
+  chunkIds: string[];
+  // Verbatim excerpt proving a Met/Partial, verified against the documents in
+  // code before it is kept. Absent on every other verdict.
+  quote?: string;
+};
+
+const CHECKLIST_AUDIT_SCHEMA: ChatSchema = { name: "checklist_library_audit", schema: sObj({
+  results: sArr(sObj({
+    ref: sStr,
+    verdict: sEnum("Met", "Partial", "Not met", "Not applicable", "Not assessed"),
+    note: sStr,
+    quote: sStr,
+    chunkIds: sArr(sStr),
+  })),
+}) };
+
+// Checks are short (median ~200 chars), so a whole sub-criterion's in-scope set
+// (9–22 checks) fits one call — this pass costs one AI call per window, not per
+// check. The 186-sequential-call shape that made the manual worksheet export
+// feel stuck is deliberately not repeated here.
+const CHECKLIST_BATCH_SIZE = 25;
+
+// A positive verdict must carry a real verbatim quote. quoteExistsInSource
+// auto-passes anything under QUOTE_MIN_CHARS (20) — fine for incidental short
+// quotes elsewhere, useless as proof here — so the length floor is applied
+// explicitly before the containment check.
+const CHECKLIST_QUOTE_MIN = 20;
+
+type ChecklistVerdictCarrier = { verdict: ChecklistCheckVerdict; quote?: string };
+
+// Best-found-wins across sliding windows, mirroring mergeCoverage: a window
+// that located evidence outranks one that did not, and any real assessment
+// outranks "Not applicable" (a window that judged the check unanswerable
+// cannot overrule a window that actually answered it).
+const CHECKLIST_RANK: Record<ChecklistCheckVerdict, number> = {
+  Met: 4, Partial: 3, "Not met": 2, "Not applicable": 1, "Not assessed": 0,
+};
+
+export async function runChecklistLibraryAudit(
+  items: ChecklistAuditInput[],
+  docText: string,
+  bucket: ChecklistAuditBucket,
+  settings: AISettings,
+  opts: StagedAuditOpts = {}
+): Promise<WindowedStagedAuditResult<ChecklistAuditRow>> {
+  const domainSkill = domainExpertiseFor(opts.criterionId);
+  const domainBlock = domainSkill ? `\n\n## Domain expertise for this criterion\n\n${domainSkill.trim()}` : "";
+  const bucketLabel = bucket === "policy" ? "POLICY & PROCEDURE documents" : "ACTUAL EVIDENCE documents (implementation records)";
+
+  const buildSystem = (label: string) => `You are working through an internal audit checklist against a PEI's ${bucketLabel} for one GD4 EduTrust sub-criterion. Each numbered check below is a specialist cross-check written for an assessor. Give each ONE verdict, judged ONLY from the documents shown in this message.
+
+VERDICTS
+- "Met" — the documents show what the check asks for. You MUST quote the passage that proves it.
+- "Partial" — the documents address the check but fall short of what it asks (missing scope, missing period, missing named role, missing record). You MUST quote the passage you are relying on.
+- "Not met" — the documents cover this subject area but what the check asks for is absent or contradicted. Say what is missing.
+- "Not applicable" — the check is not a Met/Not-met question at all. Use this for band-level guidance (text discussing what separates one band from another, or what "good" analysis looks like) and for checks about matters outside what these documents could ever show. This is the correct answer for a meaningful share of checks; it is not a failure.
+- "Not assessed" — nothing in the documents shown speaks to this check either way. Use this rather than guessing. A check you cannot answer from these documents is NOT "Not met": "Not met" is a claim that you looked at the relevant material and the thing was missing.
+
+HARD RULES
+1. NEVER INVENT A QUOTE. "quote" must be copied character-for-character from the documents above. A quote that is not really there is checked in code and will void your verdict.
+2. A "Met" or "Partial" with no quote is void. If you cannot quote it, the honest verdict is "Not assessed".
+3. Judge the check as written. Do not broaden it into a more easily satisfied question, and do not narrow it into an impossible one.
+4. "note" is ONE or TWO sentences saying why, naming the document/record or naming exactly what is missing. Never a restatement of the check.
+5. Cite the chunk ID(s) from the document headers (e.g. "C001") in chunkIds.
+
+This checklist runs ALONGSIDE the GD4 requirement-line assessment; it never replaces it, and nothing you return here sets a band or a score.${SSG_NOTE_REGISTER}${buildSystemPrompt("evidenceReview", opts.fileType ?? null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
+
+Respond with JSON only:
+{"results": [{"ref": string, "verdict": "Met"|"Partial"|"Not met"|"Not applicable"|"Not assessed", "note": string, "quote": string, "chunkIds": string[]}]}`;
+
+  return runWindowedStagedAudit<ChecklistVerdictCarrier, ChecklistAuditRow, ChecklistAuditInput>(
+    items, docText, settings, opts,
+    {
+      noDocsNote: bucket === "policy"
+        ? "No policy documents were provided, so this check was not assessed."
+        : "No evidence documents were provided, so this check was not assessed.",
+      emptyVerdict: { verdict: "Not assessed" },
+      schema: CHECKLIST_AUDIT_SCHEMA,
+      label: bucket === "policy" ? "Checklist library (policy)" : "Checklist library (evidence)",
+      funcName: `runChecklistLibraryAudit (${bucket})`,
+      logTag: "[ChecklistLibraryAudit]",
+      batchSize: CHECKLIST_BATCH_SIZE,
+      buildSystem,
+      buildUser: (batch, win, windowLabel) => {
+        const block = batch.map((it, i) => `[${it.ref}] (${i + 1}) [${it.kind}] ${it.text}`).join("\n");
+        return `${bucket === "policy" ? "Policy & Procedure" : "Actual Evidence"} documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nGive each audit checklist check one verdict:\n${block}`;
+      },
+      // The citation gate lives HERE, in code, not in the model's judgement:
+      // a positive verdict whose quote is missing, too short to prove anything,
+      // or not actually present in the documents is an extraction defect and
+      // becomes "Not assessed" — never "Not met". Presenting a failed
+      // extraction as a gap would manufacture findings, which is the one
+      // outcome this feature must not produce.
+      extractVerdict: (r): ChecklistVerdictCarrier => {
+        const raw = String(r?.verdict ?? "");
+        const v = (Object.keys(CHECKLIST_RANK) as ChecklistCheckVerdict[]).includes(raw as ChecklistCheckVerdict)
+          ? (raw as ChecklistCheckVerdict)
+          : "Not assessed";
+        if (v !== "Met" && v !== "Partial") return { verdict: v };
+        const quote = typeof r?.quote === "string" ? r.quote.trim() : "";
+        if (quote.length < CHECKLIST_QUOTE_MIN || !quoteExistsInSource(quote, docText)) return { verdict: "Not assessed" };
+        return { verdict: v, quote };
+      },
+      isPositive: (v) => v.verdict === "Met" || v.verdict === "Partial",
+      mergeVerdict: (prev, next) => (CHECKLIST_RANK[next.verdict] > CHECKLIST_RANK[prev.verdict] ? next : prev),
+      fallbackNote: (windowsCompleted) =>
+        `Nothing in the ${windowsCompleted} window(s) reviewed spoke to this check.`,
+      buildRow: (p, v, note, chunkIds) => ({
+        checkId: p.ref,
+        checkText: p.text,
+        verdict: v.verdict,
+        rationale: note,
+        chunkIds,
+        ...(v.quote ? { quote: v.quote } : {}),
+      }),
     }
   );
 }

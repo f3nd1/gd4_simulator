@@ -91,6 +91,7 @@ All persisted via `workspaceStorage` (Supabase-synced adapter in `src/store/supa
 | `usePreCheckChecklistStore` | Live editable pre-check checklist (seeded from `DEFAULT_CHECKLISTS`); Approve/Revert is the only way `verified` changes | `ucc-gd4-precheck-checklist:v1` | 0 |
 | `useDomainChecklistStore` | Edits/hides/additions to the criterion domain-expertise checklists — a DIFF only, never a copy of the markdown | `ucc-gd4-domain-checklist:v1` | 0 |
 | `useFindingDraftStore` | Grouped finding drafts; `generateFindingsFromChecklist()`, `confirmGroupedDraft()` | `ucc-gd4-finding-drafts:v1` | 0 |
+| `useChecklistVerdictStore` | Per-check verdicts from the Audit Checklist Library pass, keyed `checkId::subCriterionId::bucket`; written by BOTH audit paths, display-only | `ucc-gd4-checklist-verdicts:v1` | 0 |
 | `useRuleTuningStore` | Rule injections; champion-vs-active gate (`championInjection()`) | `ucc-gd4-rule-tuning:v1` | 0 |
 | `usePromptReviewStore` | Prompt Review prompts + connected review records | `ucc-gd4-prompt-review:v1` | 0 |
 | `useScoringConfigStore` | Award thresholds, AI strictness | `ucc-gd4-scoring-config:v1` | 0 |

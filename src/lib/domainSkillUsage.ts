@@ -18,6 +18,7 @@ export type DomainSkillConsumer = {
 };
 
 export const DOMAIN_SKILL_CONSUMERS: DomainSkillConsumer[] = [
+  { fn: "runChecklistLibraryAudit", file: "src/lib/ai/agentRuntime.ts", surface: "Audit Checklist Library → per-check verdicts, written by BOTH audit paths (Option A's PPD + Evidence runs, Option B's staged audit)" },
   { fn: "runPPDRequirementsReview", file: "src/lib/ai/agentRuntime.ts", surface: "PPD + Evidence Review → PPD Review tab (Option A policy pass)" },
   { fn: "runEvidenceAssessment", file: "src/lib/ai/agentRuntime.ts", surface: "PPD + Evidence Review → Evidence tab (Option A evidence pass)" },
   { fn: "runStagedPolicyAudit", file: "src/lib/ai/agentRuntime.ts", surface: "Evidence Folder → Run audit (Option B, policy pass)" },

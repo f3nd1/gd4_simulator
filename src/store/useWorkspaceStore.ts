@@ -40,6 +40,7 @@ import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders, reconcileFolders } from "../data/folders";
 import { itemIdsForScope, folderScopeId, runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
 import { isStaleRun } from "../lib/runGeneration";
+import { runChecklistLibraryPass } from "../lib/checklistLibraryRun";
 import { abortReason, skipReasonForAbort, skipReasonForCause, type AbortCause } from "../lib/abortCause";
 import { currentItemIds, currentSubIds, pruneRecordByKeys, reconcileEvidenceMap } from "../lib/structuralReconcile";
 import { AGENTS } from "../data/agents";
@@ -1760,6 +1761,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const liveError = result.windowErrors?.length
             ? `${result.windowErrors.length} AI call(s) failed during the review — results may be incomplete. First error: ${result.windowErrors[0]}`
             : undefined;
+          // Audit Checklist Library pass — the policy bucket. Additional to
+          // the GD4-line output above, never a replacement, and deliberately
+          // isolated in its own try: a failure in this extra layer must not
+          // cost the user the requirement review they actually ran.
+          try {
+            patchPpd({ detail: "Working through the audit checklist library…" });
+            const cl = await runChecklistLibraryPass({
+              subCriterionId, docText: policyDocText, bucket: "policy", path: "A",
+              settings: analysisSettings, runId, model: result.usage?.model,
+              memories: ppdMemories,
+              ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
+              onProgress: (detail) => patchPpd({ detail }),
+              shouldStop: () => get().busy !== "ppdreview" + subCriterionId,
+              signal: runAbort.signal,
+            });
+            logPpd(cl.skippedReason ? `Audit checklist library skipped — ${cl.skippedReason}.` : `Audit checklist library — ${cl.stored} check(s) assessed against the policy documents.`, cl.skippedReason ? "warn" : "info");
+          } catch (clErr) {
+            logPpd(`Audit checklist library pass failed — ${clErr instanceof Error ? clErr.message : String(clErr)}. The requirement review above is unaffected.`, "warn");
+          }
           finish(result.rows, true, liveError, result.promptSent, result.usage, chunkFileNames, result.overallNarrative, runWarnings.length > 0 ? runWarnings : undefined, result.contradictions, fileRecords);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
@@ -2383,6 +2403,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // the Run Log), not silently absent.
           if (autoIncludeManual && skippedHumanOnly.length) coverageParts.push(`${skippedHumanOnly.length} pre-check item(s) require human judgement and were not auto-evaluated in this hands-off run (review manually in Pre-check): ${skippedHumanOnly.join("; ")}.`);
           const coverageNote = coverageParts.length ? coverageParts.join(" ") : undefined;
+          // Audit Checklist Library pass — the evidence bucket, the sibling of
+          // the policy bucket run by runPPDReview. Same isolation: this extra
+          // layer must never cost the user the evidence assessment itself.
+          try {
+            setEvProgress("Working through the audit checklist library…", 98);
+            const cl = await runChecklistLibraryPass({
+              subCriterionId, docText: evidenceDocText, bucket: "evidence", path: "A",
+              settings: analysisSettings, runId, model: result.usage?.model,
+              memories: evMemories,
+              ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
+              onProgress: (detail) => setEvProgress(detail, 98),
+              shouldStop: () => get().busy !== "evidenceassess" + subCriterionId,
+              signal: runAbort.signal,
+            });
+            logEv(cl.skippedReason ? `Audit checklist library skipped — ${cl.skippedReason}.` : `Audit checklist library — ${cl.stored} check(s) assessed against the evidence documents.`, cl.skippedReason ? "warn" : "info");
+          } catch (clErr) {
+            logEv(`Audit checklist library pass failed — ${clErr instanceof Error ? clErr.message : String(clErr)}. The evidence assessment above is unaffected.`, "warn");
+          }
           finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames, coverageNote, fileLedger);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
@@ -6587,6 +6625,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // as a live AI audit — the summary/truncation notes explain which
           // stage(s) fell back.
           live = auditUsage != null && fallbackStages.length === 0;
+
+          // Audit Checklist Library pass — Option B's writer. Runs the SAME
+          // engine function as Option A over the same two buckets, so the
+          // "Not assessed / Not applicable" gates cannot be looser here just
+          // because the staged path is structured differently. Isolated in its
+          // own try: this layer is additional to the APSR verdicts below and
+          // must never cost the user the audit they ran.
+          for (const [bucket, docText] of [["policy", policyDocText], ["evidence", evidenceDocText]] as const) {
+            if (shouldStopStage()) break;
+            try {
+              setProgress("apsr_build", { stageDetail: `Working through the audit checklist library (${bucket} documents)…` });
+              await runChecklistLibraryPass({
+                subCriterionId: folderScopeId(folder), docText, bucket, path: "B",
+                settings: analysisSettings, runId, model: auditUsage?.model,
+                calibration: stagedCalibration, memories: stagedMemories,
+                ruleInjection: useRuleTuningStore.getState().championInjection(criterionId),
+                fileType: detectedFileType, resolveChunkFile,
+                onProgress: (detail) => setProgress("apsr_build", { stageDetail: detail }),
+                shouldStop: shouldStopStage,
+                signal: runAbort.signal,
+              });
+            } catch (clErr) {
+              console.error("[ChecklistLibraryAudit]", bucket, clErr);
+            }
+          }
         } else {
           // Offline fallback
           policyRows = simulateStagedPolicyAudit(allAuditPoints, policyDocText);

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { Card, inputStyle, filterSelectStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { PARSED_DOMAIN_FILES, DOMAIN_EXPERTISE_LABELS, domainExpertiseFor } from "../data/skills/domainExpertise";
+import { useChecklistVerdictStore, type StoredChecklistVerdict } from "../store/useChecklistVerdictStore";
 import { GD4_CRITERIA } from "../data/gd4Requirements";
 import { scopeTitle } from "../lib/evidenceScope";
 import { DOMAIN_SKILL_CONSUMERS } from "../lib/domainSkillUsage";
@@ -45,6 +46,14 @@ const QUESTION_LABEL: Record<QuestionState, string> = {
   stale: "Stale — check changed since",
   edited: "Your wording",
   "edited-stale": "Your wording · check changed since",
+};
+
+const VERDICT_TONE: Record<string, string> = {
+  Met: "good",
+  Partial: "medium",
+  "Not met": "critical",
+  "Not applicable": "neutral",
+  "Not assessed": "neutral",
 };
 
 const STATUS_TONE: Record<DomainChecklistRow["status"], string> = {
@@ -568,6 +577,8 @@ export function DomainChecklistLibrary() {
                           </details>
                         )}
 
+                        <ChecklistVerdicts checkId={r.id} checkText={r.text} />
+
                         {/* The walkthrough questions stored against this check.
                             Visible here so Felix can read the auditor-facing
                             form without exporting anything. Each is typed
@@ -678,6 +689,67 @@ export function DomainChecklistLibrary() {
 
       {visibleCount === 0 && (
         <Card><p style={{ fontSize: 12.5, color: "#64748b", margin: 0 }}>No checks match these filters.</p></Card>
+      )}
+    </div>
+  );
+}
+
+// The AI's own verdict on THIS check, from real audit runs.
+//
+// Until now the library shaped the model's prose and nothing more: the audit
+// response schemas are keyed on the GD4 requirement ref, so no conclusion could
+// be traced back to a specific check. Both audit paths now run the checks as
+// their own pass and file the results here (see lib/checklistLibraryRun.ts).
+//
+// Read-only and display-only. Nothing shown here is scored, and nothing here is
+// read by the banding engine — the page's promise that it "scores nothing by
+// itself" still holds.
+function ChecklistVerdicts({ checkId, checkText }: { checkId: string; checkText: string }) {
+  const entries = useChecklistVerdictStore((s) => s.entries);
+  const mine = Object.values(entries)
+    .filter((v) => v.checkId === checkId)
+    .sort((a, b) => (a.subCriterionId === b.subCriterionId ? a.bucket.localeCompare(b.bucket) : a.subCriterionId.localeCompare(b.subCriterionId)));
+  const currentHash = questionSourceHash(checkText);
+
+  return (
+    <div style={{ marginTop: 8, borderTop: "1px dashed #e2e8f0", paddingTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 5 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "#64748b" }}>
+          AI verdicts{mine.length > 0 ? ` (${mine.length})` : ""}
+        </span>
+      </div>
+      {mine.length === 0 ? (
+        <div style={{ fontSize: 11.5, color: "#94a3b8" }}>
+          No audit has assessed this check yet. Run an audit on a sub-criterion this check applies to, then come back.
+        </div>
+      ) : (
+        mine.map((v) => <VerdictRow key={`${v.subCriterionId}::${v.bucket}`} v={v} stale={v.sourceHash !== currentHash} />)
+      )}
+    </div>
+  );
+}
+
+function VerdictRow({ v, stale }: { v: StoredChecklistVerdict; stale: boolean }) {
+  return (
+    <div style={{ fontSize: 11.5, color: "#334155", padding: "5px 0", borderTop: "1px solid #f1f5f9", lineHeight: 1.5 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontFamily: "ui-monospace, monospace", color: "#0f766e" }}>{v.subCriterionId}</span>
+        <span style={{ color: "#94a3b8" }}>·</span>
+        <span style={{ color: "#64748b" }}>{v.bucket === "policy" ? "Policy documents" : "Evidence records"}</span>
+        <Pill s={VERDICT_TONE[v.verdict] ?? "neutral"}>{v.verdict}</Pill>
+        {stale && <Pill s="medium">Stale — check reworded since</Pill>}
+        <span style={{ marginLeft: "auto", color: "#94a3b8", fontSize: 10.5 }}>
+          Option {v.path} · {new Date(v.runAt).toLocaleDateString()}{v.runId ? ` · ${v.runId}` : ""}
+        </span>
+      </div>
+      {v.rationale && <div style={{ marginTop: 3, color: "#475569" }}>{v.rationale}</div>}
+      {v.quote && (
+        <div style={{ marginTop: 3, paddingLeft: 8, borderLeft: "2px solid #cbd5e1", color: "#64748b", fontStyle: "italic" }}>
+          “{v.quote}”
+        </div>
+      )}
+      {v.chunkIds.length > 0 && (
+        <div style={{ marginTop: 3, color: "#94a3b8", fontSize: 10.5, fontFamily: "ui-monospace, monospace" }}>{v.chunkIds.join(", ")}</div>
       )}
     </div>
   );

@@ -233,6 +233,22 @@ export function composeDomainMarkdown(parsed: ParsedDomainFile, ov: DomainCheckl
   return out.join("\n");
 }
 
+// Which checks an audit of `subCriterionId` actually assesses.
+//
+// A check with no reference tags is criterion-wide and applies to every
+// sub-criterion of its criterion; a tagged one applies where its tag resolves.
+// Drafts and hidden checks are excluded for the same reason they are excluded
+// from composeDomainMarkdown: a check that reaches no prompt must not appear
+// to have been assessed.
+export function checksInScopeForSub(rows: DomainChecklistRow[], subCriterionId: string): DomainChecklistRow[] {
+  return rows.filter((r) => {
+    if (r.status === "removed" || r.status === "custom-draft") return false;
+    if (r.criterionId !== subCriterionId.split(".")[0]) return false;
+    if (r.subCriterionIds.length === 0) return true;
+    return r.subCriterionIds.some((ref) => ref === subCriterionId || subCriterionOfRef(ref) === subCriterionId);
+  });
+}
+
 // ── View model for the editor page ──────────────────────────────────────────
 
 export type DomainRowStatus = "built-in" | "built-in-edited" | "custom-active" | "custom-draft" | "removed";
