@@ -16,16 +16,28 @@ import type {
 import { lineSufficiency, findingDimension, computeRiskCategory, lineApsr } from "./checklistBanding";
 import { findingTypeForStatus, ncSeverityFor } from "./findingClassification";
 import { normalizeAuditRef } from "./gd4Refs";
+import { isFindingClosed, resolveFindingType, type ClosureLike } from "./findingClassification";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 
 // Strip a terminal single-letter sub-item suffix from a sourceRef so that
 // sibling points (.a, .b, .c …) from the same parent bullet are grouped.
-// "6.2.1.DS1.a" → "6.2.1.DS1"
-// "6.2.1.DS2"   → "6.2.1.DS2"  (no suffix to strip)
-// undefined     → ""
+// "6.2.1.DS1.a"     → "6.2.1.DS1"
+// "DS: 6.2.1.DS1.A" → "6.2.1.DS1"  (normalised first)
+// "6.2.1.DS2"       → "6.2.1.DS2"  (no suffix to strip)
+// undefined         → ""
+//
+// The ref is normalised BEFORE the suffix is stripped. It previously was not,
+// and the pattern only matched lowercase, so "4.5.1.DS1.a" grouped under
+// "4.5.1.DS1" while "4.5.1.DS1.A" — or a label-prefixed "DS: 4.5.1.DS1.a", the
+// exact drift gd4Refs documents — kept its suffix and formed a second group
+// for the same parent bullet. This was the one ref-joining site that did not
+// route through normalizeAuditRef. Note the order matters: normalising
+// uppercases, so the strip has to be case-insensitive and must run second.
 export function sourceRefPrefix(ref: string | undefined): string {
   if (!ref) return "";
-  return ref.replace(/\.[a-z]$/, "");
+  const normalised = normalizeAuditRef(ref);
+  if (!normalised) return "";
+  return normalised.replace(/\.[a-z]$/i, "");
 }
 
 // Whether a line warrants inclusion in a finding group.
@@ -190,17 +202,39 @@ export function groupWeakLines(
   return groups;
 }
 
+// Does an existing finding SUPPRESS a new gap for the same requirement point?
+//
+// Only an open NC or OFI does. This is the same rule findOpenFindingForGap
+// applies, and the two matchers disagreeing is what made this a defect: an OBS
+// records a strength, so a recorded strength must never block a genuinely new
+// NC or OFI when the requirement later regresses; and a finding that has been
+// closed must not block a genuine recurrence, or the register's ability to
+// raise a repeat degrades as the cycle progresses and findings get closed.
+export function suppressesNewGap(f: Finding, closures?: Record<string, ClosureLike>): boolean {
+  return resolveFindingType(f) !== "OBS" && !isFindingClosed(f, closures);
+}
+
 // Whether a candidate group is already covered by an existing confirmed finding.
-// A group is considered covered when an existing finding shares the same gd4ItemId
-// AND (a) has at least 1 overlapping linkedChecklistLineId, OR (b) points at the
-// same GD4 source ref. (b) matters because auto-raised findings
-// (raiseAllUnmetFindings) stamp linkedSourceRefs but NOT linkedChecklistLineIds,
-// so a line-id-only join could not see them and the same gap got two findings.
-export function isCoveredByExistingFinding(group: ChecklistLineGroup, existingFindings: Finding[]): boolean {
+// A group is considered covered when an existing SUPPRESSING finding shares the
+// same gd4ItemId AND (a) has at least 1 overlapping linkedChecklistLineId, OR
+// (b) points at the same GD4 source ref. (b) matters because auto-raised
+// findings (raiseAllUnmetFindings) stamp linkedSourceRefs but NOT
+// linkedChecklistLineIds, so a line-id-only join could not see them and the
+// same gap got two findings.
+//
+// `closures` is optional so existing callers keep compiling, but passing it is
+// what lets an accepted closure stop suppressing — pass it wherever it is to
+// hand. Without it, only findings whose own status says "Closed" are excluded.
+export function isCoveredByExistingFinding(
+  group: ChecklistLineGroup,
+  existingFindings: Finding[],
+  closures?: Record<string, ClosureLike>,
+): boolean {
   const lineIds = new Set(group.lines.map((l) => l.id));
   const groupRefs = new Set(group.sourceRefs.map((r) => normalizeAuditRef(r)).filter(Boolean));
   return existingFindings.some(
     (f) =>
+      suppressesNewGap(f, closures) &&
       f.gd4ItemId === group.gd4ItemId &&
       ((Array.isArray(f.linkedChecklistLineIds) && f.linkedChecklistLineIds.some((id) => lineIds.has(id))) ||
         (Array.isArray(f.linkedSourceRefs) && f.linkedSourceRefs.some((r) => groupRefs.has(normalizeAuditRef(r)))))

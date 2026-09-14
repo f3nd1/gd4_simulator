@@ -152,7 +152,9 @@ export const useFindingDraftStore = create<FindingDraftState>()(
           const subId = req.subCriterionId;
           const existingDrafts = get().draftsBySubCriterion[subId] ?? [];
           for (const group of groups) {
-            if (isCoveredByExistingFinding(group, existingFindings)) { skipped++; continue; }
+            // Closures passed so an ACCEPTED closure stops suppressing: a closed
+            // finding must not block a genuine recurrence of the same gap.
+            if (isCoveredByExistingFinding(group, existingFindings, useWorkspaceStore.getState().closures)) { skipped++; continue; }
             const lineIds = new Set(group.lines.map((l) => l.id));
             const alreadyDrafted = existingDrafts.some(
               (d) => d.status !== "confirmed" && d.group.lines.some((l) => lineIds.has(l.id))
@@ -317,7 +319,7 @@ export const useFindingDraftStore = create<FindingDraftState>()(
           const existing =
             existingFindings.find((f) => stampedId && f.id === stampedId) ??
             existingFindings.find((f) => draftKey != null && findingKeyOf(f) === draftKey) ??
-            existingFindings.find((f) => isCoveredByExistingFinding(draft.group, [f])) ??
+            existingFindings.find((f) => isCoveredByExistingFinding(draft.group, [f], useWorkspaceStore.getState().closures)) ??
             // (d) type-blind same-gap match (R9 fix, 2026-07-16): a verdict-
             // class change flips the typed key (NC vs OFI), so without this a
             // re-generated draft could create a sibling finding for a gap the

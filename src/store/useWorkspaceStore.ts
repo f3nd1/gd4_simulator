@@ -4139,6 +4139,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const prev = st.closures[afiId] || {};
           const accepted = value === "Accepted";
           return {
+            // Keep Finding.status in step with the closure record. They used to
+            // disagree permanently: nothing ever wrote a status other than
+            // "Open", so scoring and the register treated an accepted closure
+            // as closed while the consistency checker and findOpenFindingForGap
+            // still saw it as open — which let a closed finding suppress a
+            // genuine recurrence of its own gap. Reopening reverses it.
+            customFindings: st.customFindings.map((f) =>
+              f.id === afiId ? { ...f, status: accepted ? "Closed" as const : "Open" as const } : f
+            ),
             closures: {
               ...st.closures,
               [afiId]: {
@@ -7501,7 +7510,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
       // to a surviving item id) is untouched. The reconcile is idempotent, so a
       // workspace at an earlier version is safely brought up to the latest.
-      version: 8,
+      version: 9,
       migrate: (persisted, fromVersion) => {
         let s = persisted as WorkspaceState;
         if (!s) return s;
@@ -7632,6 +7641,27 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           } as WorkspaceState;
           // Order the two new folders correctly / seed any missing scope.
           s = { ...s, folders: s.folders ? reconcileFolders(s.folders) : s.folders } as WorkspaceState;
+        }
+        if (fromVersion < 9) {
+          // Finding.status was pinned at "Open" for every finding ever created,
+          // while acceptance lived only in closures[id].human. Back-fill the
+          // status so the two records agree for findings closed before this
+          // version, otherwise historical workspaces keep the divergence.
+          //
+          // Consequence worth knowing: a closed finding stops suppressing a new
+          // raise for the same gap, so re-raising from the checklist can now
+          // produce a finding where it previously relinked to the closed one.
+          // That is the defect being fixed, not a regression.
+          const closeIfAccepted = (list: Finding[] | undefined, closures: Record<string, { human?: string }>) =>
+            (list ?? []).map((f) => (closures[f.id]?.human === "Accepted" ? { ...f, status: "Closed" as const } : f));
+          const closures = s.closures ?? {};
+          s = {
+            ...s,
+            customFindings: closeIfAccepted(s.customFindings, closures),
+            priorCycleFindings: s.priorCycleFindings
+              ? { ...s.priorCycleFindings, findings: closeIfAccepted(s.priorCycleFindings.findings, closures) }
+              : s.priorCycleFindings,
+          } as WorkspaceState;
         }
         return s;
       },

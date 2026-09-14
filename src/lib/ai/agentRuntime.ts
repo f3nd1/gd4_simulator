@@ -552,6 +552,47 @@ ${sourceBlock}${req.gateSensitive ? "\n\nNote: This item is gate-sensitive — a
   const rawLines = Array.isArray(parsed.lines) ? (parsed.lines as unknown[]) : [];
   const rawRejected = Array.isArray(parsed.rejectedIdeas) ? (parsed.rejectedIdeas as unknown[]) : [];
 
+  // The ONLY refs a generated line may cite, and the official text behind each.
+  // The prompt tells the model to use "the exact ref string from the source
+  // point" and verbatim sourceText, and the surrounding comments claimed lines
+  // without a traceable source were rejected — but validation only checked the
+  // fields were non-empty, so an invented ref with invented text passed and was
+  // then rendered to the auditor as the authoritative GD4 quote. A fabricated
+  // ref is also silently unjoinable downstream: the staged audit's ref lookup
+  // falls through to a folder-wide average for it.
+  //
+  // The verification helpers this uses are the same ones Option A already
+  // applies to policy-document quotes; this path simply never called them.
+  const allowedPoints = new Map<string, { text: string; sourceType: GeneratedChecklistLine["sourceType"] }>();
+  if (req.flatAuditPoints && req.flatAuditPoints.length > 0) {
+    for (const p of req.flatAuditPoints) {
+      allowedPoints.set(normalizeAuditRef(p.ref), {
+        text: p.parentText ? `${p.parentText} ${p.text}` : p.text,
+        sourceType: p.sourceType as GeneratedChecklistLine["sourceType"],
+      });
+    }
+  } else {
+    req.describeShow.forEach((d, i) => allowedPoints.set(normalizeAuditRef(`${req.id}.DS${i + 1}`), { text: d, sourceType: "describeShow" }));
+    req.expectedEvidence.forEach((e, i) => allowedPoints.set(normalizeAuditRef(`${req.id}.EE${i + 1}`), { text: e, sourceType: "expectedEvidence" }));
+    req.notes.forEach((n, i) => allowedPoints.set(normalizeAuditRef(`${req.id}.N${i + 1}`), { text: n, sourceType: "note" }));
+  }
+
+  // Why a line was dropped, so the count the user is shown is honest about
+  // what was actually checked rather than just "malformed JSON".
+  const rejectionReasons: string[] = [];
+
+  // quoteExistsInSource waves through anything under its 20-char floor, which
+  // is right where it came from (incidental quotes inside a document comment
+  // prove nothing either way) but wrong here: sourceText is supposed to
+  // REPRODUCE the cited point's official wording, so a short one must appear
+  // verbatim rather than be tolerated. Long quotes still go through the
+  // tolerant verifier so a legitimate elision is not rejected.
+  const collapse = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+  const sourceTextMatches = (quote: string, officialText: string) =>
+    quote.trim().length >= 20
+      ? quoteExistsInSource(quote, officialText)
+      : collapse(officialText).includes(collapse(quote));
+
   const lines: GeneratedChecklistLine[] = [];
   rawLines.forEach((x) => {
     if (!x || typeof x !== "object") return;
@@ -566,7 +607,28 @@ ${sourceBlock}${req.gateSensitive ? "\n\nNote: This item is gate-sensitive — a
       : null;
     const sourceRef = typeof r.sourceRef === "string" ? r.sourceRef.trim() : "";
     // Reject any line the model produced without a valid sourceText, sourceType, sourceRef or apsrDimension.
-    if (!text || !sourceText || !sourceType || !apsrDimension || !sourceRef) return;
+    if (!text || !sourceText || !sourceType || !apsrDimension || !sourceRef) {
+      rejectionReasons.push(`"${(text || "(no text)").slice(0, 60)}" — incomplete: a checklist line needs text, sourceRef, sourceText, source type and an APSR dimension.`);
+      return;
+    }
+    // The cited ref must be one the model was actually given.
+    const point = allowedPoints.get(normalizeAuditRef(sourceRef));
+    if (!point) {
+      rejectionReasons.push(`"${text.slice(0, 60)}" — cites ${sourceRef}, which is not an official GD4 source point for ${req.id}.`);
+      return;
+    }
+    // The quoted source text must really be that point's wording. Elisions and
+    // punctuation drift are tolerated by quoteExistsInSource; paraphrase is not.
+    if (!sourceTextMatches(sourceText, point.text)) {
+      rejectionReasons.push(`"${text.slice(0, 60)}" — its quoted source text is not the official wording of ${sourceRef}.`);
+      return;
+    }
+    // The source type must match the point it cites, so a Describe/Show bullet
+    // cannot be relabelled as expected evidence (they score different things).
+    if (sourceType !== point.sourceType) {
+      rejectionReasons.push(`"${text.slice(0, 60)}" — labelled ${sourceType} but ${sourceRef} is ${point.sourceType}.`);
+      return;
+    }
     // Derive originalIndex from sourceRef (e.g. "1.1.1.DS2" → index 1; sub-items "1.1.1.DS1.a" → null)
     const dsSimple = /\.DS(\d+)$/.exec(sourceRef);
     const eeSimple = /\.EE(\d+)$/.exec(sourceRef);
@@ -590,11 +652,19 @@ ${sourceBlock}${req.gateSensitive ? "\n\nNote: This item is gate-sensitive — a
   });
 
   const rejectedCount = rawLines.length - lines.length;
+  // The model's own rejected ideas, plus every line WE rejected and why. The
+  // count alone used to be presented to the user as lines that "lacked a
+  // traceable official GD4 source", which nothing had verified.
   const rejectedIdeas = rawRejected
     .filter((r): r is Record<string, string> => !!r && typeof r === "object" && typeof (r as Record<string, unknown>).text === "string")
     .map((r) => ({ text: r.text, reason: r.reason || "Not directly supported by official GD4 wording" }));
 
-  return { lines, rejectedCount, rejectedIdeas, promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}` };
+  return {
+    lines,
+    rejectedCount,
+    rejectedIdeas: [...rejectedIdeas, ...rejectionReasons.map((reason) => ({ text: "(rejected by source check)", reason }))],
+    promptSent: `SYSTEM:\n${system}\n\nUSER:\n${user}`,
+  };
 }
 
 export async function runLiveClosureReview(
