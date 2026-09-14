@@ -1,7 +1,7 @@
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GD4_CRITERIA, GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import { useScoringConfigStore, AWARD_PRESETS, type AiStrictness } from "../store/useScoringConfigStore";
+import { useScoringConfigStore, AWARD_PRESETS, MAX_PCT_PER_DIMENSION, type AiStrictness } from "../store/useScoringConfigStore";
 import { pctForScore, finalBandFromPct, DEFAULT_APSR_SCALE } from "../lib/checklistBanding";
 import { bandTitle } from "../data/edutrustRubric";
 import { INK } from "../lib/theme";
@@ -25,9 +25,12 @@ export function GD4ScoringSetup() {
   const exScores = [4, 4, 2, 0] as const;
   const exPcts = exScores.map((s) => pctForScore(s, apsrScale));
   const exTotal = exPcts.reduce((a, b) => a + b, 0);
+  // Raw input goes to the store, which owns the ladder invariant (see
+  // normaliseApsrScale). Clamping per field here could not see the ordering
+  // rule, which is how [80,20,60,40] became settable.
   const setThreshold = (i: number, v: number) => {
     const t = [...apsrScale.bandThresholds] as [number, number, number, number];
-    t[i] = Math.max(0, Math.min(100, v));
+    t[i] = v;
     setApsrScale({ ...apsrScale, bandThresholds: t });
   };
 
@@ -62,10 +65,10 @@ export function GD4ScoringSetup() {
               <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>{label}</span>
               <input
                 type="number"
-                min={0}
+                min={key === "provisional" ? 0 : key === "fourYear" ? awardThresholds.provisional : awardThresholds.fourYear}
                 max={1000}
                 value={awardThresholds[key]}
-                onChange={(e) => setAwardThresholds({ ...awardThresholds, [key]: Math.max(0, Math.min(1000, Number(e.target.value) || 0)) })}
+                onChange={(e) => setAwardThresholds({ ...awardThresholds, [key]: Number(e.target.value) || 0 })}
                 style={{ ...inputStyle, marginTop: 3 }}
               />
               <span style={{ fontSize: 11, color: "#94a3b8" }}>≈ average Band {avg(awardThresholds[key])} across all criteria</span>
@@ -132,12 +135,12 @@ export function GD4ScoringSetup() {
           <label style={{ display: "block" }}>
             <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Max % per dimension</span>
             <input
-              type="number" min={0} max={100} step={0.5}
+              type="number" min={0} max={MAX_PCT_PER_DIMENSION} step={0.5}
               value={apsrScale.maxPctPerDimension}
-              onChange={(e) => setApsrScale({ ...apsrScale, maxPctPerDimension: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })}
+              onChange={(e) => setApsrScale({ ...apsrScale, maxPctPerDimension: Number(e.target.value) || 0 })}
               style={{ ...inputStyle, marginTop: 3, width: 120 }}
             />
-            <span style={{ fontSize: 11, color: "#94a3b8" }}>÷ 5 = {(apsrScale.maxPctPerDimension / 5)}% per band step (100 ÷ 4 dimensions = 25 default)</span>
+            <span style={{ fontSize: 11, color: "#94a3b8" }}>÷ 5 = {(apsrScale.maxPctPerDimension / 5)}% per band step. Capped at {MAX_PCT_PER_DIMENSION}: four dimensions share one 100% total, so a higher value would let a mid-band workspace total over 100%.</span>
           </label>
           <div>
             <span style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase" }}>Band steps (derived)</span>
@@ -156,7 +159,7 @@ export function GD4ScoringSetup() {
               <label key={i} style={{ display: "block" }}>
                 <span style={{ fontSize: 10.5, color: "#94a3b8" }}>Band {i + 1} up to</span>
                 <input
-                  type="number" min={0} max={100}
+                  type="number" min={i === 0 ? 0 : apsrScale.bandThresholds[i - 1]} max={100}
                   value={apsrScale.bandThresholds[i]}
                   onChange={(e) => setThreshold(i, Number(e.target.value) || 0)}
                   style={{ ...inputStyle, marginTop: 2, width: 90 }}
