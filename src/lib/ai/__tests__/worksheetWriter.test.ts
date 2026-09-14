@@ -1,11 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { DomainChecklistRow } from "../../domainChecklist";
-import { worksheetCacheKey, type WorksheetAsk } from "../../manualWorksheet";
 
 const chatComplete = vi.fn();
 vi.mock("../aiClient", () => ({ chatComplete, effectiveSettings: (s: unknown) => s }));
 
-const { runWorksheetConversion, BATCH_SIZE, CONCURRENCY, PROMPT_VERSION } = await import("../worksheetWriter");
+const { runWorksheetConversion, BATCH_SIZE, CONCURRENCY } = await import("../worksheetWriter");
 
 const settings = { enabled: true, apiKey: "k", model: "m", utilityModel: "m" } as never;
 
@@ -61,55 +60,6 @@ describe("concurrency", () => {
     expect([...asksById.keys()].length).toBe(60);
     expect(asksById.get("id0")![0].describe).toBe("D id0");
     expect(asksById.get("id59")![0].describe).toBe("D id59");
-  });
-});
-
-describe("caching", () => {
-  it("reuses a cached check and never sends it", async () => {
-    echo();
-    const all = rows(40);
-    const cache: Record<string, WorksheetAsk[]> = {};
-    for (const r of all.slice(0, 39)) cache[worksheetCacheKey(PROMPT_VERSION, r.text)] = [{ describe: "cached", showMe: "" }];
-
-    const res = await runWorksheetConversion(all, settings, { cache });
-    expect(res.cached).toBe(39);
-    expect(chatComplete).toHaveBeenCalledTimes(1);
-    const sent = (chatComplete.mock.calls[0][0] as { content: string }[])[1].content;
-    expect(sent).toContain("id39");
-    expect(sent).not.toContain("--- id: id0\n");
-    expect(res.asksById.get("id0")![0].describe).toBe("cached");
-  });
-
-  it("misses when the check text changed, so an edit regenerates only that check", async () => {
-    echo();
-    const all = rows(40);
-    const cache: Record<string, WorksheetAsk[]> = {};
-    for (const r of all) cache[worksheetCacheKey(PROMPT_VERSION, r.text)] = [{ describe: "cached", showMe: "" }];
-    all[7] = { ...all[7], text: "check text 7 EDITED" };
-
-    const res = await runWorksheetConversion(all, settings, { cache });
-    expect(res.cached).toBe(39);
-    expect(chatComplete).toHaveBeenCalledTimes(1);
-    expect(res.asksById.get("id7")![0].describe).toBe("D id7");
-  });
-
-  it("hands back only newly written entries, keyed by source text", async () => {
-    echo();
-    const all = rows(3);
-    const onCache = vi.fn();
-    await runWorksheetConversion(all, settings, { onCache });
-    expect(onCache).toHaveBeenCalledTimes(1);
-    const written = onCache.mock.calls[0][0] as Record<string, WorksheetAsk[]>;
-    expect(Object.keys(written)).toHaveLength(3);
-    expect(written[worksheetCacheKey(PROMPT_VERSION, "check text 0")][0].describe).toBe("D id0");
-  });
-
-  it("a different prompt version invalidates the whole cache", async () => {
-    echo();
-    const all = rows(3);
-    const cache = { [worksheetCacheKey("vOLD", all[0].text)]: [{ describe: "stale", showMe: "" }] };
-    const res = await runWorksheetConversion(all, settings, { cache });
-    expect(res.cached).toBe(0);
   });
 });
 

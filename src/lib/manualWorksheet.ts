@@ -18,7 +18,7 @@
 
 import { toCsv } from "./auditCsvExport";
 import { GD4_CRITERIA } from "../data/gd4Requirements";
-import { fnv1a, type DomainChecklistRow } from "./domainChecklist";
+import type { DomainChecklistRow } from "./domainChecklist";
 
 export const WORKSHEET_HEADERS = [
   "Ref", "Criterion", "Type", "Describe", "Show me", "Response", "Evidence seen", "Verdict", "Follow-up",
@@ -86,19 +86,27 @@ export function worksheetCriterion(criterionId: string): string {
   return `C${criterionId} ${CRITERION_TITLE.get(criterionId) ?? ""}`.trim();
 }
 
-// Joins the AI's asks back onto their source check. A check the AI returned
-// nothing usable for is dropped rather than emitted as an empty question — a
-// blank row in a walkthrough sheet is worse than a missing one.
+// Joins each check's stored asks onto it.
+//
+// `keepEmpty` is what the worksheet export passes. Questions are generated
+// ahead of time now, so a check can legitimately have none yet, and dropping
+// those rows would hand a sheet that is quietly short of the scope it claims
+// to cover. With keepEmpty the check still gets its row, with the Describe and
+// Show me cells blank, and the caller reports the count. Without it (the
+// default) an ask with nothing in either half is dropped, which is still right
+// when the model simply returned nothing usable for a check.
 export function assembleWorksheetRows(
   rows: DomainChecklistRow[],
   asksById: Map<string, WorksheetAsk[]>,
+  opts: { keepEmpty?: boolean } = {},
 ): WorksheetRow[] {
   const out: WorksheetRow[] = [];
   for (const r of rows) {
-    for (const ask of asksById.get(r.id) ?? []) {
+    const asks = asksById.get(r.id) ?? (opts.keepEmpty ? [{ describe: "", showMe: "" }] : []);
+    for (const ask of asks) {
       const describe = ask.describe.trim();
       const showMe = ask.showMe.trim();
-      if (!describe && !showMe) continue;
+      if (!describe && !showMe && !opts.keepEmpty) continue;
       out.push({
         sourceId: r.id,
         ref: worksheetRef(r),
@@ -117,15 +125,4 @@ export function buildWorksheetCsv(rows: WorksheetRow[]): string {
     WORKSHEET_HEADERS,
     rows.map((r) => [r.ref, r.criterion, r.type, r.describe, r.showMe, "", "", VERDICT_OPTIONS, ""]),
   );
-}
-
-// ── Conversion cache key ────────────────────────────────────────────────────
-
-// Converted questions are cached against the EXACT source text they were made
-// from, so editing a check in the Library invalidates only that check and
-// every untouched one is reused. `promptVersion` is folded in so that changing
-// the conversion prompt invalidates the whole cache rather than leaving a
-// worksheet that is half old wording and half new.
-export function worksheetCacheKey(promptVersion: string, checkText: string): string {
-  return `${promptVersion}:${fnv1a(checkText)}`;
 }

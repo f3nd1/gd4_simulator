@@ -112,3 +112,27 @@ describe("buildWorksheetCsv", () => {
     expect(WORKSHEET_HEADERS).not.toContain("status");
   });
 });
+
+describe("assembleWorksheetRows keepEmpty", () => {
+  // The export passes keepEmpty because questions are generated ahead of time
+  // now, so a check can legitimately have none yet. Dropping those rows would
+  // hand over a sheet quietly short of the scope it claims to cover.
+  it("keeps a row, with both halves blank, for a check that has no question yet", () => {
+    const out = assembleWorksheetRows([row({ id: "a" })], new Map(), { keepEmpty: true });
+    expect(out).toHaveLength(1);
+    expect(out[0].describe).toBe("");
+    expect(out[0].showMe).toBe("");
+    expect(out[0].ref).toBe("4.1.1");
+  });
+
+  it("still drops empty asks when keepEmpty is not set", () => {
+    expect(assembleWorksheetRows([row({ id: "a" })], new Map())).toEqual([]);
+  });
+
+  it("a blank row still carries its Ref, Criterion, Type and seeded Verdict", () => {
+    const cells = parseCsv(buildWorksheetCsv(assembleWorksheetRows([row({ id: "a" })], new Map(), { keepEmpty: true })));
+    expect(cells[1]).toEqual([
+      "4.1.1", "C4 Student Protection and Support Services", "Core", "", "", "", "", VERDICT_OPTIONS, "",
+    ]);
+  });
+});

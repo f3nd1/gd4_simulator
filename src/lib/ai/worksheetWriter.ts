@@ -29,7 +29,7 @@ import { chatComplete, effectiveSettings, type ChatSchema } from "./aiClient";
 import { sArr, sObj, sStr } from "./schemaHelpers";
 import type { AISettings } from "../../types";
 import type { DomainChecklistRow } from "../domainChecklist";
-import { worksheetCacheKey, type WorksheetAsk } from "../manualWorksheet";
+import type { WorksheetAsk } from "../manualWorksheet";
 
 // Small enough that one malformed reply costs little and progress is visible,
 // large enough to keep a full 186-check worksheet to single-figure calls.
@@ -46,10 +46,10 @@ export const BATCH_SIZE = 20;
 // per-host connection limits, and aiClient already backs off on 429.
 export const CONCURRENCY = 4;
 
-// Bump when SYSTEM changes: it is folded into every cache key, so a reworded
-// prompt invalidates cached questions instead of leaving a worksheet that is
-// half old wording and half new.
-export const PROMPT_VERSION = "v1";
+// Which checks get converted is decided by the caller, not here: the Library
+// stores each question against its check and asks only for the ones that are
+// missing, stale, or explicitly picked for regeneration. This function does one
+// job — convert the rows it is handed.
 
 const WORKSHEET_SCHEMA: ChatSchema = { name: "worksheet_questions", schema: sObj({
   checks: sArr(sObj({
@@ -83,7 +83,7 @@ function userBlock(rows: DomainChecklistRow[]): string {
     .join("\n\n");
 }
 
-export type WorksheetProgress = { done: number; total: number; cached: number };
+export type WorksheetProgress = { done: number; total: number };
 
 // Returns asks keyed by source check id. A batch whose reply cannot be parsed
 // is reported in `failed` rather than silently yielding no questions, so the
@@ -92,35 +92,16 @@ export type WorksheetProgress = { done: number; total: number; cached: number };
 export async function runWorksheetConversion(
   rows: DomainChecklistRow[],
   settings: AISettings,
-  opts: {
-    onProgress?: (p: WorksheetProgress) => void;
-    signal?: AbortSignal;
-    cache?: Record<string, WorksheetAsk[]>;
-    onCache?: (next: Record<string, WorksheetAsk[]>) => void;
-  } = {},
-): Promise<{ asksById: Map<string, WorksheetAsk[]>; failed: string[]; generated: number; cached: number }> {
+  opts: { onProgress?: (p: WorksheetProgress) => void; signal?: AbortSignal } = {},
+): Promise<{ asksById: Map<string, WorksheetAsk[]>; failed: string[] }> {
   const asksById = new Map<string, WorksheetAsk[]>();
   const failed: string[] = [];
-  const cache = opts.cache ?? {};
-  const fresh: Record<string, WorksheetAsk[]> = {};
-
-  // Cache pass first: anything whose source text is byte-identical to a
-  // previous conversion is reused, so only genuinely changed or new checks
-  // reach the model.
-  const todo: DomainChecklistRow[] = [];
-  for (const r of rows) {
-    const hit = cache[worksheetCacheKey(PROMPT_VERSION, r.text)];
-    if (hit) asksById.set(r.id, hit);
-    else todo.push(r);
-  }
-  const cached = rows.length - todo.length;
 
   const batches: DomainChecklistRow[][] = [];
-  for (let i = 0; i < todo.length; i += BATCH_SIZE) batches.push(todo.slice(i, i + BATCH_SIZE));
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) batches.push(rows.slice(i, i + BATCH_SIZE));
 
   const call = effectiveSettings(settings, { purpose: "utility" });
-  let done = cached;
-  opts.onProgress?.({ done, total: rows.length, cached });
+  let done = 0;
 
   const runBatch = async (batch: DomainChecklistRow[]) => {
     // Cancel must stop batches still queued behind the in-flight ones, not
@@ -133,23 +114,21 @@ export async function runWorksheetConversion(
         { temperature: 0.2, schema: WORKSHEET_SCHEMA, signal: opts.signal },
       );
       const parsed = JSON.parse(reply) as { checks?: { id?: string; asks?: WorksheetAsk[] }[] };
-      const byId = new Map(batch.map((r) => [r.id, r]));
+      const inBatch = new Set(batch.map((r) => r.id));
       const seen = new Set<string>();
       for (const c of parsed.checks ?? []) {
-        if (!c?.id || !Array.isArray(c.asks)) continue;
-        const source = byId.get(c.id);
-        if (!source) continue;
+        // An id the model invented, or one belonging to another batch, is
+        // dropped rather than stored against a check it was not written for.
+        if (!c?.id || !Array.isArray(c.asks) || !inBatch.has(c.id)) continue;
         seen.add(c.id);
-        const asks = c.asks.map((a) => ({ describe: String(a?.describe ?? ""), showMe: String(a?.showMe ?? "") }));
-        asksById.set(c.id, asks);
-        fresh[worksheetCacheKey(PROMPT_VERSION, source.text)] = asks;
+        asksById.set(c.id, c.asks.map((a) => ({ describe: String(a?.describe ?? ""), showMe: String(a?.showMe ?? "") })));
       }
       for (const r of batch) if (!seen.has(r.id)) failed.push(r.id);
     } catch {
       for (const r of batch) failed.push(r.id);
     }
     done += batch.length;
-    opts.onProgress?.({ done, total: rows.length, cached });
+    opts.onProgress?.({ done, total: rows.length });
   };
 
   // Fixed-size worker pool: each worker pulls the next batch as it frees up,
@@ -161,6 +140,5 @@ export async function runWorksheetConversion(
     }),
   );
 
-  if (Object.keys(fresh).length > 0) opts.onCache?.(fresh);
-  return { asksById, failed, generated: todo.length - failed.length, cached };
+  return { asksById, failed };
 }

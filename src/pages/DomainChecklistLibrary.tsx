@@ -10,7 +10,7 @@ import { assembleWorksheetRows, buildWorksheetCsv } from "../lib/manualWorksheet
 import { runWorksheetConversion } from "../lib/ai/worksheetWriter";
 import { aiOfflineReason } from "../lib/ai/aiClient";
 import { useAISettingsStore } from "../store/useAISettingsStore";
-import { useWorksheetCacheStore } from "../store/useWorksheetCacheStore";
+import { useWorksheetQuestionStore, questionSourceHash, questionStateFor, type StoredQuestion, type QuestionState } from "../store/useWorksheetQuestionStore";
 import {
   domainRowsFor,
   buildDomainChecklistCsv,
@@ -33,6 +33,19 @@ import { useDomainChecklistStore } from "../store/useDomainChecklistStore";
 // composed output, so what you read here is what the model reads.
 
 const CRITERION_IDS = ["1", "2", "3", "4", "5", "6", "7"];
+
+// The walkthrough question's state against its check. "Stale" is shown rather
+// than silently serving text written from wording that has since changed.
+const QUESTION_TONE: Record<QuestionState, string> = {
+  missing: "neutral", current: "good", stale: "medium", edited: "progress", "edited-stale": "medium",
+};
+const QUESTION_LABEL: Record<QuestionState, string> = {
+  missing: "No question yet",
+  current: "Question ready",
+  stale: "Stale — check changed since",
+  edited: "Your wording",
+  "edited-stale": "Your wording · check changed since",
+};
 
 const STATUS_TONE: Record<DomainChecklistRow["status"], string> = {
   "built-in": "neutral",
@@ -105,8 +118,12 @@ export function DomainChecklistLibrary() {
   const [worksheetBusy, setWorksheetBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const aiSettings = useAISettingsStore((s) => s);
-  const worksheetCache = useWorksheetCacheStore((s) => s.entries);
-  const putWorksheetCache = useWorksheetCacheStore((s) => s.putMany);
+  const questions = useWorksheetQuestionStore((s) => s.entries);
+  const putQuestions = useWorksheetQuestionStore((s) => s.putMany);
+  const setQuestionEdited = useWorksheetQuestionStore((s) => s.setEdited);
+  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
+  const [qDescribe, setQDescribe] = useState("");
+  const [qShowMe, setQShowMe] = useState("");
   // Local to this component, never a module singleton — that is what kept the
   // audit runs' shared-abort bug from being reintroduced here.
   const worksheetAbort = useRef<AbortController | null>(null);
@@ -142,7 +159,16 @@ export function DomainChecklistLibrary() {
     if (critFilter !== "all" && r.criterionId !== critFilter) return false;
     if (kindFilter !== "all" && r.sectionKind !== kindFilter) return false;
     if (statusFilter !== "all" && r.status !== statusFilter) return false;
-    if (subFilter !== "all" && !r.subCriterionIds.some((ref) => subCriterionOfRef(ref) === subFilter)) return false;
+    // A check with no ref is criterion-wide, and MUST still show when a
+    // sub-criterion is selected: filtering 4.2 used to hide every C4 red flag,
+    // so the walkthrough sheet for 4.2 silently lost the FPS checks. It is
+    // labelled "applies across criterion N" on the row so it reads as scope,
+    // not as a mis-tag.
+    if (subFilter !== "all") {
+      const tagged = r.subCriterionIds.some((ref) => subCriterionOfRef(ref) === subFilter);
+      const criterionWide = r.subCriterionIds.length === 0 && r.criterionId === subCriterionOfRef(subFilter).split(".")[0];
+      if (!tagged && !criterionWide) return false;
+    }
     const q = search.trim().toLowerCase();
     if (q && !r.text.toLowerCase().includes(q) && !r.sectionKey.toLowerCase().includes(q)) return false;
     return true;
@@ -172,50 +198,83 @@ export function DomainChecklistLibrary() {
     downloadCsv(buildDomainChecklistCsv(rows), `gd4-audit-checklist-${new Date().toISOString().slice(0, 10)}.csv`);
   };
 
-  // The second, one-way export: the same checks turned into walkthrough
-  // questions with blank answer columns. Deliberately NOT importable — it
-  // carries no item_id or status, so it can never be fed back over the
-  // edit format above.
-  const onExportWorksheet = async () => {
-    const rows = allRows.filter(matches).filter((r) => r.status !== "removed");
-    if (rows.length === 0) { setWorksheet("Nothing to export — no checks match the current filters."); return; }
-    // Never fabricate the questions offline: a rule-based rewrite of these
-    // checks reads like the raw instruction with a stem bolted on, so the
-    // button says what is missing instead of producing a worse sheet.
+  // Walkthrough questions are a stored property of each check now, so the page
+  // can answer "which of these need writing?" without any AI call.
+  const stateOf = (r: DomainChecklistRow): QuestionState => questionStateFor(questions[r.id], r.text);
+  const needsWriting = (r: DomainChecklistRow) => {
+    const st = stateOf(r);
+    // "edited-stale" is deliberately excluded: the user reworded it by hand, so
+    // a bulk regeneration must warn about it, never overwrite it.
+    return st === "missing" || st === "stale";
+  };
+
+  const questionsToWrite = allRows.filter(matches).filter((r) => r.status !== "removed").filter(needsWriting).length;
+
+  // Regeneration is always explicit and always scoped — one check, or the
+  // missing/stale ones in view. Nothing regenerates on its own.
+  const generateQuestions = async (targets: DomainChecklistRow[], label: string) => {
+    if (targets.length === 0) { setWorksheet("Every check in view already has a question. Nothing to write."); return; }
     const offline = aiOfflineReason(aiSettings);
-    if (offline) { setWorksheet(`The manual worksheet is written by AI, and ${offline}`); return; }
+    if (offline) { setWorksheet(`Questions are written by AI, and ${offline}`); return; }
 
     const ctrl = new AbortController();
     worksheetAbort.current = ctrl;
     setWorksheetBusy(true);
-    setWorksheet(`Writing walkthrough questions for ${rows.length} checks…`);
+    setWorksheet(`Writing ${label}…`);
     try {
-      const { asksById, failed, generated, cached } = await runWorksheetConversion(rows, aiSettings, {
+      const { asksById, failed } = await runWorksheetConversion(targets, aiSettings, {
         signal: ctrl.signal,
-        cache: worksheetCache,
-        onCache: putWorksheetCache,
-        onProgress: (p) => setWorksheet(
-          p.done >= p.total
-            ? "Building the file…"
-            : `Writing walkthrough questions… ${p.done} of ${p.total} checks` +
-              (p.cached > 0 ? ` (${p.cached} reused, unchanged since the last export)` : "")
-        ),
+        onProgress: (p) => setWorksheet(`Writing ${label}… ${p.done} of ${p.total}`),
       });
-      if (ctrl.signal.aborted) { setWorksheet("Cancelled — nothing was downloaded. Questions already written are kept, so starting again resumes from there."); return; }
-      const out = assembleWorksheetRows(rows, asksById);
-      if (out.length === 0) { setWorksheet("The AI returned no usable questions — nothing was downloaded. Try again, or check Settings → OpenAI."); return; }
-      downloadCsv(buildWorksheetCsv(out), `gd4-manual-worksheet-${new Date().toISOString().slice(0, 10)}.csv`);
+      const next: Record<string, StoredQuestion> = {};
+      for (const r of targets) {
+        const a = asksById.get(r.id);
+        if (a) next[r.id] = { asks: a, sourceHash: questionSourceHash(r.text), generatedAt: new Date().toISOString() };
+      }
+      putQuestions(next);
+      const written = Object.keys(next).length;
       setWorksheet(
-        `Downloaded ${out.length} question rows from ${rows.length - failed.length} checks` +
-        (cached > 0 ? `, ${cached} reused and ${generated} newly written` : "") + "." +
-        (failed.length > 0 ? ` ${failed.length} check(s) produced no questions and were left out.` : "")
+        ctrl.signal.aborted
+          ? `Cancelled after writing ${written} question${written === 1 ? "" : "s"}. Those are saved, so starting again picks up where it stopped.`
+          : `Wrote ${written} question${written === 1 ? "" : "s"}.` + (failed.length > 0 ? ` ${failed.length} could not be written and stayed empty.` : "")
       );
     } catch (e) {
-      setWorksheet(`Could not build the worksheet: ${e instanceof Error ? e.message : String(e)}`);
+      setWorksheet(`Could not write the questions: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setWorksheetBusy(false);
       worksheetAbort.current = null;
     }
+  };
+
+  const saveQuestionEdit = (r: DomainChecklistRow) => {
+    setQuestionEdited(r.id, [{ describe: qDescribe.trim(), showMe: qShowMe.trim() }], questionSourceHash(r.text));
+    setEditingQuestionId(null);
+  };
+
+  // The second, one-way export: the same checks turned into walkthrough
+  // questions with blank answer columns. Deliberately NOT importable — it
+  // carries no item_id or status, so it can never be fed back over the
+  // edit format above.
+  // The second, one-way export. It now writes what is already stored and makes
+  // NO AI call at all: the questions live against their checks, so exporting is
+  // a local file write. A check with no question yet still gets its row, with
+  // the Describe and Show me cells blank and the count reported — silently
+  // dropping it would hand Felix a worksheet that is quietly short.
+  const onExportWorksheet = () => {
+    const rows = allRows.filter(matches).filter((r) => r.status !== "removed");
+    if (rows.length === 0) { setWorksheet("Nothing to export — no checks match the current filters."); return; }
+
+    const asksById = new Map(rows.map((r) => [r.id, questions[r.id]?.asks ?? [{ describe: "", showMe: "" }]]));
+    const out = assembleWorksheetRows(rows, asksById, { keepEmpty: true });
+    downloadCsv(buildWorksheetCsv(out), `gd4-manual-worksheet-${new Date().toISOString().slice(0, 10)}.csv`);
+
+    const missing = rows.filter((r) => stateOf(r) === "missing").length;
+    const stale = rows.filter((r) => stateOf(r) === "stale" || stateOf(r) === "edited-stale").length;
+    setWorksheet(
+      `Downloaded ${out.length} row${out.length === 1 ? "" : "s"} from ${rows.length} checks, with no AI call.` +
+      (missing > 0 ? ` ${missing} check${missing === 1 ? " has" : "s have"} no question yet — those rows are blank.` : "") +
+      (stale > 0 ? ` ${stale} question${stale === 1 ? " is" : "s are"} older than the check text.` : "")
+    );
   };
 
   const onImportFile = async (file: File) => {
@@ -296,11 +355,18 @@ export function DomainChecklistLibrary() {
           <button type="button" style={btnPrimary} onClick={onExport} title="Download the checks currently shown as a re-importable CSV">⬇ Export CSV{visibleCount !== stats.total ? " (filtered)" : ""}</button>
           <button type="button" style={btnPrimary} onClick={() => fileRef.current?.click()}>⬆ Import CSV</button>
           <button
-            type="button" style={{ ...btnPrimary, ...(worksheetBusy ? { opacity: 0.6, cursor: "wait" } : {}) }}
-            disabled={worksheetBusy} onClick={() => void onExportWorksheet()}
-            title="Download the checks shown as a printable walkthrough worksheet: Describe / Show me questions with blank columns for the response, evidence seen and verdict. Written by AI at export time, and not re-importable."
+            type="button" style={btnPrimary} onClick={onExportWorksheet}
+            title="Download the checks shown as a printable walkthrough worksheet. Writes the questions already stored against each check — no AI call, no waiting."
           >
-            {worksheetBusy ? "Writing worksheet…" : `⬇ Manual worksheet (CSV)${visibleCount !== stats.total ? ` — ${visibleCount} shown` : ""}`}
+            {`⬇ Manual worksheet (CSV)${visibleCount !== stats.total ? ` — ${visibleCount} shown` : ""}`}
+          </button>
+          <button
+            type="button" style={{ ...btn, ...(worksheetBusy ? { opacity: 0.6, cursor: "wait" } : {}) }}
+            disabled={worksheetBusy}
+            onClick={() => void generateQuestions(allRows.filter(matches).filter((r) => r.status !== "removed").filter(needsWriting), "the missing and stale questions")}
+            title="Write walkthrough questions for the checks in view that have none, or whose check text has changed since. Hand-edited questions are never overwritten."
+          >
+            {worksheetBusy ? "Writing…" : `✍ Generate missing/stale questions${questionsToWrite > 0 ? ` (${questionsToWrite})` : ""}`}
           </button>
           {worksheetBusy && (
             <button type="button" style={btnDanger} onClick={() => worksheetAbort.current?.abort()}>Cancel</button>
@@ -356,7 +422,13 @@ export function DomainChecklistLibrary() {
           <Card key={cid}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
               <h3 style={{ margin: 0 }}>Criterion {cid} · {crit?.title ?? ""}</h3>
+              {subFilter !== "all" && <Pill s="progress">Sub-criterion {subFilter}</Pill>}
               <Pill s="neutral">{rows.length} check{rows.length === 1 ? "" : "s"}</Pill>
+              {subFilter !== "all" && rows.some((r) => r.subCriterionIds.length === 0) && (
+                <span style={{ ...muted, fontSize: 10.5 }}>
+                  includes {rows.filter((r) => r.subCriterionIds.length === 0).length} that apply across the whole criterion
+                </span>
+              )}
               <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
                 <button type="button" style={btn} onClick={() => { setAddingFor(addingFor === cid ? null : cid); setAddSection(parsed.sections[0]?.key ?? ""); }}>
                   {addingFor === cid ? "Cancel" : "+ Add check"}
@@ -479,6 +551,73 @@ export function DomainChecklistLibrary() {
                             <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-wrap" }}><InlineMd text={r.originalText ?? ""} /></div>
                           </details>
                         )}
+
+                        {/* The walkthrough question, stored against this check.
+                            Visible here so Felix can read the auditor-facing
+                            form without exporting anything, and hand-editable —
+                            a hand edit is flagged and never overwritten by a
+                            later bulk regeneration. */}
+                        {(() => {
+                          const qs = stateOf(r);
+                          const stored = questions[r.id];
+                          const qEditing = editingQuestionId === r.id;
+                          return (
+                            <div style={{ marginTop: 8, borderTop: "1px dashed #e2e8f0", paddingTop: 8 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 5 }}>
+                                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "#64748b" }}>Walkthrough question</span>
+                                <Pill s={QUESTION_TONE[qs]}>{QUESTION_LABEL[qs]}</Pill>
+                                <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                                  {!qEditing && (
+                                    <button
+                                      type="button" style={btn} disabled={worksheetBusy}
+                                      onClick={() => void generateQuestions([r], "this question")}
+                                      title={stored?.edited ? "Rewrite this question with AI, replacing your own wording for this check only" : "Write this question with AI"}
+                                    >
+                                      {stored ? "Regenerate" : "Write question"}
+                                    </button>
+                                  )}
+                                  {!qEditing && (
+                                    <button
+                                      type="button" style={btn}
+                                      onClick={() => { setEditingQuestionId(r.id); setQDescribe(stored?.asks?.[0]?.describe ?? ""); setQShowMe(stored?.asks?.[0]?.showMe ?? ""); }}
+                                    >
+                                      Edit question
+                                    </button>
+                                  )}
+                                </span>
+                              </div>
+
+                              {qEditing ? (
+                                <div style={{ display: "grid", gap: 6 }}>
+                                  <label style={{ fontSize: 11, color: "#475569" }}>
+                                    Describe (the procedural ask — leave blank if this check is purely documentary)
+                                    <textarea style={{ ...inputStyle, marginTop: 3, minHeight: 52, resize: "vertical" }} value={qDescribe} onChange={(e) => setQDescribe(e.target.value)} />
+                                  </label>
+                                  <label style={{ fontSize: 11, color: "#475569" }}>
+                                    Show me (the documentary ask — leave blank if this check is purely procedural)
+                                    <textarea style={{ ...inputStyle, marginTop: 3, minHeight: 52, resize: "vertical" }} value={qShowMe} onChange={(e) => setQShowMe(e.target.value)} />
+                                  </label>
+                                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                    <button type="button" style={btnPrimary} onClick={() => saveQuestionEdit(r)} disabled={!qDescribe.trim() && !qShowMe.trim()}>Save question</button>
+                                    <button type="button" style={btn} onClick={() => setEditingQuestionId(null)}>Cancel</button>
+                                    <span style={muted}>Your wording is kept and never overwritten by a bulk regeneration.</span>
+                                  </div>
+                                </div>
+                              ) : stored ? (
+                                <div style={{ display: "grid", gap: 3, fontSize: 12, color: "#334155" }}>
+                                  {stored.asks.map((a, i) => (
+                                    <div key={i} style={{ display: "grid", gap: 2, padding: "4px 8px", background: "#f8fafc", borderRadius: 6 }}>
+                                      <div><b style={{ color: "#475569" }}>Describe: </b>{a.describe || <span style={muted}>not applicable to this check</span>}</div>
+                                      <div><b style={{ color: "#475569" }}>Show me: </b>{a.showMe || <span style={muted}>not applicable to this check</span>}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div style={muted}>No question written yet. This check will still appear in the worksheet, with its Describe and Show me cells blank.</div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}
