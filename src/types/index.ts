@@ -1434,7 +1434,8 @@ export type HumanDecisionModule =
   | "Prompt Review"
   | "Run mode gate"
   | "Holistic Band"
-  | "NC Severity";
+  | "NC Severity"
+  | "Cycle Lock";
 
 // "Automatic" is the one NON-human value: an AI write made with no human in
 // the loop (today only an "ai-auto" band save). It exists so an automatic

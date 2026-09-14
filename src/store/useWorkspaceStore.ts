@@ -39,6 +39,8 @@ import type {
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders, reconcileFolders } from "../data/folders";
 import { itemIdsForScope, folderScopeId, runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
+import { isStaleRun } from "../lib/runGeneration";
+import { abortReason, skipReasonForAbort, skipReasonForCause, type AbortCause } from "../lib/abortCause";
 import { currentItemIds, currentSubIds, pruneRecordByKeys, reconcileEvidenceMap } from "../lib/structuralReconcile";
 import { AGENTS } from "../data/agents";
 import { buildDemoDataset } from "../data/demoDataset";
@@ -124,7 +126,9 @@ import { apsrReason, apsrAuditNote } from "../lib/ai/simulateAI";
 // Drive download or AI call without waiting for the 30/45s timeout to fire.
 // Only one folder audit runs at a time (the busy flag prevents concurrency),
 // so a single module-level ref is sufficient.
-let _currentFileAbort: (() => void) | null = null;
+// The cause travels with the call so the file ledger can say WHY a read
+// stopped: a system timeout used to be recorded as "Skipped by user".
+let _currentFileAbort: ((cause: AbortCause) => void) | null = null;
 
 // Item 2b (2026-07-20): resolver for skipping the CURRENT in-flight AI
 // extract call (the "thinking" step that can hang on a slow model), set by
@@ -145,6 +149,13 @@ let _pendingVisionBudgetResolve: ((choice: "proceed" | "skip") => void) | null =
 // loop fire further paid calls in the meantime). One run at a time (busy
 // flag), so a single module-level ref is sufficient.
 let _currentRunAbort: AbortController | null = null;
+
+// Bumped by the full-audit sweep's per-item timeout (abortActiveRun). The sweep
+// deliberately does NOT bump auditRunToken — that is the user-cancel signal and
+// would end the whole sweep — so a timed-out run had no way to know it was dead
+// and kept going: clearing the NEXT run's busy flag, overwriting its progress
+// overlay and committing a run record marked "completed". See lib/runGeneration.
+let _runGeneration = 0;
 
 // Reads the sibling scoring store at snapshot time. Kept as a function rather
 // than an import-time value so a snapshot always records the settings in force
@@ -1134,6 +1145,10 @@ export type WorkspaceState = {
   // when a run starts successfully or the auditor selection changes. Pages
   // render it as a blocking banner next to their run buttons.
   auditBlockedReason: string | null;
+  // Set by the Locked-cycle write barrier (lib/cycleLock) when an action is
+  // refused, so the refusal is visible instead of the click doing nothing.
+  lockBlockedReason: string | null;
+  clearLockBlockedReason: () => void;
 
   // Why the last attempted run was refused for a Drive reason (no folder link,
   // or not connected to Google Drive). Set by the same pre-run guard; the
@@ -1320,6 +1335,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       restoreLog: [],
       activeAuditorId: null,
       auditBlockedReason: null,
+      lockBlockedReason: null,
       driveBlockedReason: null,
       setDriveBlockedReason: (reason) => set({ driveBlockedReason: reason }),
 
@@ -1328,12 +1344,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setActiveAuditor: (id) => set({ activeAuditorId: id, auditBlockedReason: null }),
       setAuditScope: (scope) => set({ auditScope: scope }),
 
+      clearLockBlockedReason: () => set({ lockBlockedReason: null }),
+
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
       cancelBusy: () => {
         // Abort the current file read immediately so the loop doesn't wait for
         // the per-file timeout to fire before releasing the busy state.
-        _currentFileAbort?.();
+        _currentFileAbort?.("run-cancel");
         _currentFileAbort = null;
         _currentAiCallAbort = null;
         // A cancel while the run is paused on the vision-budget prompt must not
@@ -1363,7 +1381,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }),
       skipCurrentFile: () => {
         // Abort only the current file — loop continues to the next one.
-        _currentFileAbort?.();
+        _currentFileAbort?.("user-skip");
         // Note: _currentFileAbort is cleared by the loop itself after the catch.
       },
       skipCurrentAiCall: () => {
@@ -1602,8 +1620,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // stays display/control-layer only.
             const FILE_SKIPPED = Symbol("file-skipped");
             const FILE_TIMED_OUT = Symbol("file-timed-out");
-            let resolveSkip!: () => void;
-            const skipSignal = new Promise<typeof FILE_SKIPPED>((resolve) => { resolveSkip = () => resolve(FILE_SKIPPED); });
+            let resolveSkip!: (cause: AbortCause) => void;
+            // The cause is recorded, not assumed: a cancel or the sweep's
+            // per-item timeout is not the user skipping this file.
+            let skipCause: AbortCause = "user-skip";
+            const skipSignal = new Promise<typeof FILE_SKIPPED>((resolve) => { resolveSkip = (cause) => { skipCause = cause; resolve(FILE_SKIPPED); }; });
             // Hard ceiling raced with the read — same reasoning as
             // runEvidenceAssessment's copy (pdfjs ignores the AbortSignal).
             let hardCapTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1625,7 +1646,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 _currentFileAbort = null;
                 if (raced === FILE_SKIPPED || raced === FILE_TIMED_OUT) {
                   body = null;
-                  skipNote = raced === FILE_SKIPPED ? "Skipped by user" : `Read hung and was auto-skipped after ${Math.round(DRIVE_FILE_HARD_CAP_MS / 60_000)} minutes (the file may be corrupt or too complex to parse) — not assessed.`;
+                  skipNote = raced === FILE_SKIPPED ? skipReasonForCause(skipCause, 0) : `Read hung and was auto-skipped after ${Math.round(DRIVE_FILE_HARD_CAP_MS / 60_000)} minutes (the file may be corrupt or too complex to parse) — not assessed.`;
                 } else {
                   body = raced.text;
                   readMethodUsed = raced.readMethod;
@@ -2081,8 +2102,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // forcibly aborted, so this stays display/control-layer only.
             const FILE_SKIPPED = Symbol("file-skipped");
             const FILE_TIMED_OUT = Symbol("file-timed-out");
-            let resolveSkip!: () => void;
-            const skipSignal = new Promise<typeof FILE_SKIPPED>((resolve) => { resolveSkip = () => resolve(FILE_SKIPPED); });
+            let resolveSkip!: (cause: AbortCause) => void;
+            // The cause is recorded, not assumed: a cancel or the sweep's
+            // per-item timeout is not the user skipping this file.
+            let skipCause: AbortCause = "user-skip";
+            const skipSignal = new Promise<typeof FILE_SKIPPED>((resolve) => { resolveSkip = (cause) => { skipCause = cause; resolve(FILE_SKIPPED); }; });
             // Hard ceiling raced with the read: pdfjs ignores the AbortSignal,
             // so DRIVE_FILE_TIMEOUT_MS alone can't stop a hung parse/render —
             // see DRIVE_FILE_HARD_CAP_MS.
@@ -2109,7 +2133,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 _currentFileAbort = null;
                 if (raced === FILE_SKIPPED || raced === FILE_TIMED_OUT) {
                   body = null;
-                  skipNote = raced === FILE_SKIPPED ? "Skipped by user" : `Read hung and was auto-skipped after ${Math.round(DRIVE_FILE_HARD_CAP_MS / 60_000)} minutes (the file may be corrupt or too complex to parse) — not assessed.`;
+                  skipNote = raced === FILE_SKIPPED ? skipReasonForCause(skipCause, 0) : `Read hung and was auto-skipped after ${Math.round(DRIVE_FILE_HARD_CAP_MS / 60_000)} minutes (the file may be corrupt or too complex to parse) — not assessed.`;
                 } else {
                   body = raced.text;
                   readMethod = raced.readMethod;
@@ -3091,8 +3115,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // and release its busy flag — WITHOUT bumping the token, so the
           // sweep itself continues to the next sub-criterion.
           abortActiveRun: () => {
+            // Bumping the generation (not auditRunToken) marks ONLY this run
+            // dead: the sweep must carry on to the next sub-criterion.
+            _runGeneration++;
             _currentRunAbort?.abort();
-            _currentFileAbort?.();
+            _currentFileAbort?.("sweep-timeout");
             set({ busy: null, evidenceAssessmentProgress: null, ppdReviewProgress: null });
           },
           onUpdate: (current, entry) =>
@@ -3429,7 +3456,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // cancelBusy(), so a bump means "user cancelled": stop the chain here
         // and return the progress so far. Nothing after a cancel is scored.
         const startToken = get().auditRunToken;
-        const cancelled = () => get().auditRunToken !== startToken;
+        // The full-audit sweep's per-item timeout bumps the generation instead
+        // of the token (bumping the token would end the whole sweep). Without
+        // this half of the gate a timed-out Option A chain carried straight on
+        // and started its NEXT pass — a brand-new busy flag, abort controller
+        // and AI calls — for a sub-criterion the sweep had already abandoned.
+        const startGeneration = _runGeneration;
+        const cancelled = () => get().auditRunToken !== startToken || _runGeneration !== startGeneration;
         // Step 1 — PPD review. Stop the chain if it failed or was stopped.
         onStep?.("ppd");
         await get().runPPDReview(subCriterionId);
@@ -3790,7 +3823,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return { cycle: snapshot.cycle, versions: [entry, ...s.versions].slice(0, 50) };
         }),
 
-      unlockCycle: () => set((s) => ({ cycle: { ...s.cycle, status: "Under Review" } })),
+      // Reopening a locked cycle is the one action that lifts the write
+      // barrier, so it leaves a trail of its own — the lock is otherwise the
+      // only evidence that the record was ever frozen.
+      unlockCycle: () => {
+        const wasLocked = get().cycle.status === "Locked";
+        set((s) => ({ cycle: { ...s.cycle, status: "Under Review" }, lockBlockedReason: null }));
+        if (wasLocked) {
+          get().logHumanDecision({
+            module: "Cycle Lock",
+            subjectId: get().cycle.version,
+            aiOutput: "Cycle was Locked — all audit-data writes blocked.",
+            humanDecision: "Unlocked (admin); cycle status set back to Under Review.",
+            changed: true,
+            decisionType: "Overridden",
+            reason: "",
+          });
+        }
+      },
 
       duplicateCycle: () =>
         set((s) => ({
@@ -4922,14 +4972,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // innocent file whose name was already on screen).
           setProgress("reading", { stageDetail: `Refreshing Google Drive access (before reading ${file.path.split("/").pop() || file.path})…`, lastHeartbeatAt: Date.now() });
           const TOKEN_WAIT_SKIPPED = Symbol("token-wait-skipped");
-          let skipTokenWait!: () => void;
-          const tokenWaitSkip = new Promise<typeof TOKEN_WAIT_SKIPPED>((resolve) => { skipTokenWait = () => resolve(TOKEN_WAIT_SKIPPED); });
+          let skipTokenWait!: (cause: AbortCause) => void;
+          // Why the wait ended is recorded verbatim — a sweep timeout or a
+          // cancel here is not a user skip (see lib/abortCause).
+          let tokenWaitCause: AbortCause = "user-skip";
+          const tokenWaitSkip = new Promise<typeof TOKEN_WAIT_SKIPPED>((resolve) => { skipTokenWait = (cause) => { tokenWaitCause = cause; resolve(TOKEN_WAIT_SKIPPED); }; });
           _currentFileAbort = skipTokenWait;
           const tokenResult = await Promise.race([useGoogleDriveStore.getState().getFreshToken(), tokenWaitSkip]);
           _currentFileAbort = null;
           if (tokenResult === TOKEN_WAIT_SKIPPED) {
             skipped.push(file.path);
-            fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: "Skipped by user" };
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: skipReasonForCause(tokenWaitCause, 0) };
             setProgress("reading", { filesFound: [...fileRecords], filesSkipped: skipped.length, lastHeartbeatAt: Date.now() });
             continue;
           }
@@ -4951,11 +5004,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           let fileTimeoutTimer: ReturnType<typeof setTimeout>;
           const timeoutPromise = new Promise<never>((_, reject) => {
             fileTimeoutTimer = setTimeout(() => {
-              fileAbort.abort();
+              fileAbort.abort(abortReason("timeout", "FILE_TIMEOUT"));
               reject(new Error("FILE_TIMEOUT"));
             }, fileTimeoutMs);
           });
-          _currentFileAbort = () => { clearTimeout(fileTimeoutTimer); fileAbort.abort(); };
+          _currentFileAbort = (cause) => { clearTimeout(fileTimeoutTimer); fileAbort.abort(abortReason(cause, "File read aborted")); };
 
           type FileReadResult =
             | { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality>; visionModel?: string }
@@ -5058,9 +5111,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             _currentFileAbort = null;
             const wasAborted = fileAbort.signal.aborted;
             if (wasAborted || (err instanceof Error && err.message === "FILE_TIMEOUT")) {
-              const skipReason = (err instanceof Error && err.message === "FILE_TIMEOUT")
-                ? `Timed out after ${fileTimeoutMs / 1000}s`
-                : "Skipped by user";
+              const skipReason = skipReasonForAbort(fileAbort.signal.reason, err, fileTimeoutMs / 1000);
               skipped.push(file.path);
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason };
               continue;
@@ -5902,10 +5953,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // leak into a fresh run and silently cut its first stage short.
         set({ busy: "folderaudit" + id, auditSkipStageFlag: false });
         const capturedToken = get().auditRunToken;
+        const capturedGeneration = _runGeneration;
         // Run-level abort: cancelBusy() aborts this controller, which kills
         // the in-flight AI call inside whichever stage is running.
         const runAbort = new AbortController();
         _currentRunAbort = runAbort;
+        // True once this run has lost its slot — either the user cancelled or
+        // the full-audit sweep timed it out and moved on. A stale run must
+        // never clear `busy` or repaint `auditProgress`: by the time it unwinds
+        // both belong to the NEXT sub-criterion's run. It used to do exactly
+        // that, and also filed a run record marked "completed".
+        const stale = () => isStaleRun(capturedGeneration, _runGeneration, runAbort.signal);
+        const releaseBusy = () => (stale() ? {} : { busy: null as string | null });
         const scope: AuditScope = mode === "policy" ? "policy" : mode === "evidence" ? "evidence" : "both";
 
         const setProgress = (stage: AuditProgressState["stage"], extra?: Partial<AuditProgressState>) => {
@@ -5970,11 +6029,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             totalTokens: (usage?.totalTokens || 0) + (auxUsage?.totalTokens || 0) || undefined,
           };
           const terminalStage = (auditHadError || liveError) ? "error" : "complete";
+          // A run that was aborted part-way must not report itself as a
+          // finished assessment — the folder card is what the user reads to
+          // decide whether a sub-criterion has been audited.
+          const wasStale = stale();
+          const recordedSummary = wasStale
+            ? `[Staged] Stopped before finishing — ${summary}`
+            : `[Staged] ${summary}`;
           set((st) => ({
-            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `[Staged] ${summary}`, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel, lastAuditScope: scope } : f)),
+            folders: st.folders.map((f) => (f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: recordedSummary, lastAuditLive: live, lastAuditError: liveError, lastAuditNewestModified: newestModified ?? f.lastAuditNewestModified, lastAuditRunId: runId, lastAuditAuditor: auditorLabel, lastAuditScope: scope } : f)),
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
-            busy: null,
-            auditProgress: st.auditProgress?.folderId === id
+            ...releaseBusy(),
+            auditProgress: !wasStale && st.auditProgress?.folderId === id
               ? { ...st.auditProgress, stage: terminalStage, stageDetail: undefined, errorMessage: liveError }
               : st.auditProgress,
           }));
@@ -6108,7 +6174,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const FILE_TEXT_TIMEOUT_MS = 30_000;
         const FILE_IMAGE_TIMEOUT_MS = 45_000;
         for (let fi = 0; fi < taggedFiles.length; fi++) {
-          if (get().auditRunToken !== capturedToken) break;
+          if (get().auditRunToken !== capturedToken || stale()) break;
           const file = taggedFiles[fi];
           const isImage = IMAGE_MIME_TYPES.has(file.mimeType);
           const isPolicy = file.bucket === "policy" || (file.bucket === "auto" && classifyFileBucket(file.path) === "policy");
@@ -6153,14 +6219,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // froze a real 155-file run for 98 minutes.
           setProgress("reading", { stageDetail: `Refreshing Google Drive access (before reading ${file.path.split("/").pop() || file.path})…`, lastHeartbeatAt: Date.now() });
           const TOKEN_WAIT_SKIPPED = Symbol("token-wait-skipped");
-          let skipTokenWait!: () => void;
-          const tokenWaitSkip = new Promise<typeof TOKEN_WAIT_SKIPPED>((resolve) => { skipTokenWait = () => resolve(TOKEN_WAIT_SKIPPED); });
+          let skipTokenWait!: (cause: AbortCause) => void;
+          // Why the wait ended is recorded verbatim — a sweep timeout or a
+          // cancel here is not a user skip (see lib/abortCause).
+          let tokenWaitCause: AbortCause = "user-skip";
+          const tokenWaitSkip = new Promise<typeof TOKEN_WAIT_SKIPPED>((resolve) => { skipTokenWait = (cause) => { tokenWaitCause = cause; resolve(TOKEN_WAIT_SKIPPED); }; });
           _currentFileAbort = skipTokenWait;
           const tokenResult = await Promise.race([useGoogleDriveStore.getState().getFreshToken(), tokenWaitSkip]);
           _currentFileAbort = null;
           if (tokenResult === TOKEN_WAIT_SKIPPED) {
             skipped.push(file.path);
-            fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: "Skipped by user" };
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: skipReasonForCause(tokenWaitCause, 0) };
             setProgress("reading", { filesFound: [...fileRecords], filesSkipped: skipped.length, lastHeartbeatAt: Date.now() });
             continue;
           }
@@ -6177,8 +6246,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const officeMayEmbed = file.mimeType.includes("presentationml") || file.mimeType.includes("wordprocessingml") || file.mimeType === XLSX_MIME;
           const fileTimeoutMs = isImage || officeMayEmbed ? FILE_IMAGE_TIMEOUT_MS : FILE_TEXT_TIMEOUT_MS;
           let fileTimeoutTimer: ReturnType<typeof setTimeout>;
-          const timeoutPromise = new Promise<never>((_, reject) => { fileTimeoutTimer = setTimeout(() => { fileAbort.abort(); reject(new Error("FILE_TIMEOUT")); }, fileTimeoutMs); });
-          _currentFileAbort = () => { clearTimeout(fileTimeoutTimer); fileAbort.abort(); };
+          const timeoutPromise = new Promise<never>((_, reject) => { fileTimeoutTimer = setTimeout(() => { fileAbort.abort(abortReason("timeout", "FILE_TIMEOUT")); reject(new Error("FILE_TIMEOUT")); }, fileTimeoutMs); });
+          _currentFileAbort = (cause) => { clearTimeout(fileTimeoutTimer); fileAbort.abort(abortReason(cause, "File read aborted")); };
 
           type FileReadResult = { kind: "text"; text: string; pdfQuality?: ReturnType<typeof classifyPdfTextQuality>; visionModel?: string } | { kind: "image"; description: string } | { kind: "pdfVision"; text: string } | { kind: "unreadable"; reason: string } | { kind: "capped"; reason: string } | { kind: "skip" };
           // Embedded-image vision hook for office files — see auditFolderContents.
@@ -6252,7 +6321,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const wasAborted = fileAbort.signal.aborted;
             if (wasAborted || (err instanceof Error && err.message === "FILE_TIMEOUT")) {
               skipped.push(file.path);
-              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: wasAborted ? "Skipped by user" : `Timed out after ${fileTimeoutMs / 1000}s` };
+              fileRecords[fi] = { ...fileRecords[fi], readStatus: "skipped", skipReason: skipReasonForAbort(fileAbort.signal.reason, err, fileTimeoutMs / 1000) };
               setProgress("reading", { filesFound: [...fileRecords], filesSkipped: skipped.length });
               continue;
             }
@@ -6343,8 +6412,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           setProgress("reading", { filesTotal, filesRead: fi + 1, filesSkipped: skipped.length, filesFound: [...fileRecords], lastHeartbeatAt: Date.now() });
         }
 
-        if (get().auditRunToken !== capturedToken) {
-          set((st) => ({ busy: null, folders: st.folders.map((f) => f.id === id ? { ...f, lastAuditSummary: "Audit was cancelled." } : f), auditProgress: st.auditProgress?.folderId === id ? { ...st.auditProgress, stage: "complete" } : st.auditProgress }));
+        if (get().auditRunToken !== capturedToken || stale()) {
+          const stopNote = get().auditRunToken !== capturedToken ? "Audit was cancelled." : "Audit stopped at the full-audit time limit — no results were saved.";
+          set((st) => ({ ...releaseBusy(), folders: st.folders.map((f) => f.id === id ? { ...f, lastAuditSummary: stopNote } : f), auditProgress: !stale() && st.auditProgress?.folderId === id ? { ...st.auditProgress, stage: "complete" as const } : st.auditProgress }));
           return;
         }
 
@@ -6524,8 +6594,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           outcomeRows = simulateStagedOutcomeReview(allAuditPoints, allDocText);
         }
 
-        if (get().auditRunToken !== capturedToken) {
-          set((st) => ({ busy: null, auditProgress: st.auditProgress?.folderId === id ? { ...st.auditProgress, stage: "complete" } : st.auditProgress }));
+        if (get().auditRunToken !== capturedToken || stale()) {
+          set((st) => ({ ...releaseBusy(), auditProgress: !stale() && st.auditProgress?.folderId === id ? { ...st.auditProgress, stage: "complete" as const } : st.auditProgress }));
           return;
         }
 
@@ -6862,7 +6932,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const runRecord: AuditRunRecord = {
           runId, folderId: id, subCriterionId: folderScopeId(folder), subCriterionTitle: folder.folderName,
-          scope, status: auditHadError ? "failed" : "completed",
+          scope, status: stale() ? "cancelled" : auditHadError ? "failed" : "completed",
           startedAt: new Date(auditStartedAt).toISOString(), endedAt: new Date().toISOString(),
           auditorName, auditLive: live, aiModel: auditUsage?.model,
           effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()),
@@ -6931,13 +7001,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           if (runAbort.signal.aborted || get().auditRunToken !== capturedToken) {
             set((st) => ({
               folders: st.folders.map((f) => f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: "Staged audit cancelled — no results were saved.", lastAuditLive: false } : f),
-              busy: null,
-              auditProgress: st.auditProgress?.folderId === id ? { ...st.auditProgress, stage: "complete", stageDetail: "Cancelled" } : st.auditProgress,
+              ...releaseBusy(),
+              auditProgress: !stale() && st.auditProgress?.folderId === id ? { ...st.auditProgress, stage: "complete" as const, stageDetail: "Cancelled" } : st.auditProgress,
             }));
             return;
           }
           const msg = outerErr instanceof Error ? outerErr.message : String(outerErr);
-          set((st) => ({ folders: st.folders.map((f) => f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `Staged audit failed — ${msg}`, lastAuditLive: false, lastAuditError: msg } : f), busy: null }));
+          set((st) => ({ folders: st.folders.map((f) => f.id === id ? { ...f, lastAuditAt: new Date().toISOString(), lastAuditSummary: `Staged audit failed — ${msg}`, lastAuditLive: false, lastAuditError: msg } : f), ...releaseBusy() }));
         } finally {
           // Same class of race as checkFolderAccess / runPPDReview (Option B's
           // equivalent): force the pending Supabase write durable so a fast

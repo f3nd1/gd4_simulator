@@ -42,6 +42,7 @@ export function Layout() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Header onMenuClick={() => setNavOpen((o) => !o)} />
         <SampleDataBanner />
+        <LockedCycleBanner />
         <LocalSaveErrorBanner />
         <main className="px-3 sm:px-6" style={{ flex: 1, paddingTop: 18, paddingBottom: 60, maxWidth: 1180, width: "100%", margin: "0 auto" }}>
           <Outlet />
@@ -90,6 +91,35 @@ function SampleDataBanner() {
       >
         ✕
       </button>
+    </div>
+  );
+}
+
+// A Locked cycle is the audit record, so every store write that would change
+// audit substance is refused (lib/cycleLock). This is where the refusal is
+// shown: without it the click would simply do nothing, which is how "locked"
+// silently became a label rather than a control.
+function LockedCycleBanner() {
+  const locked = useWorkspaceStore((s) => s.cycle.status === "Locked");
+  const reason = useWorkspaceStore((s) => s.lockBlockedReason);
+  const clear = useWorkspaceStore((s) => s.clearLockBlockedReason);
+  if (!locked) return null;
+  return (
+    <div style={{ background: reason ? "#fef2f2" : "#f8fafc", borderBottom: `1px solid ${reason ? "#fecaca" : "#e2e8f0"}`, color: reason ? "#991b1b" : "#475569", fontSize: 12.5, fontWeight: 600, padding: "7px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <span style={{ background: reason ? "#b91c1c" : "#64748b", color: "#fff", borderRadius: 4, padding: "1px 7px", fontSize: 11, letterSpacing: 0.5, flexShrink: 0 }}>LOCKED</span>
+      <span style={{ flex: 1, minWidth: 240 }}>
+        {reason ?? "This cycle is locked. Findings, checklist verdicts, evidence and audit runs are read-only; exports and version restores still work."}
+      </span>
+      {reason && (
+        <button
+          type="button"
+          onClick={clear}
+          aria-label="Dismiss the blocked-action notice"
+          style={{ flexShrink: 0, cursor: "pointer", border: "none", background: "transparent", color: "#991b1b", fontSize: 14, lineHeight: 1, padding: "0 2px", fontWeight: 700 }}
+        >
+          ✕
+        </button>
+      )}
     </div>
   );
 }
