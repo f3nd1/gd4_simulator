@@ -3,6 +3,7 @@ import { Card, inputStyle, filterSelectStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { PARSED_DOMAIN_FILES, DOMAIN_EXPERTISE_LABELS, domainExpertiseFor } from "../data/skills/domainExpertise";
 import { useChecklistVerdictStore, type StoredChecklistVerdict } from "../store/useChecklistVerdictStore";
+import { assembleVerdictRows, buildChecklistVerdictCsv, NOT_YET_ASSESSED } from "../lib/checklistVerdictExport";
 import { GD4_CRITERIA } from "../data/gd4Requirements";
 import { scopeTitle } from "../lib/evidenceScope";
 import { DOMAIN_SKILL_CONSUMERS } from "../lib/domainSkillUsage";
@@ -130,6 +131,10 @@ export function DomainChecklistLibrary() {
   const fileRef = useRef<HTMLInputElement>(null);
   const aiSettings = useAISettingsStore((s) => s);
   const questions = useWorksheetQuestionStore((s) => s.entries);
+  // Read here as well as inside ChecklistVerdicts: the export needs the whole
+  // map, and the count drives the button label.
+  const verdicts = useChecklistVerdictStore((s) => s.entries);
+  const verdictCount = Object.keys(verdicts).length;
   const putQuestions = useWorksheetQuestionStore((s) => s.putMany);
   const editQuestion = useWorksheetQuestionStore((s) => s.editQuestion);
   const addQuestion = useWorksheetQuestionStore((s) => s.addQuestion);
@@ -230,18 +235,18 @@ export function DomainChecklistLibrary() {
   // Regeneration is always explicit and always scoped — one check, or the
   // missing/stale ones in view. Nothing regenerates on its own.
   const generateQuestions = async (targets: DomainChecklistRow[], label: string) => {
-    if (targets.length === 0) { setWorksheet("Every check in view already has a question. Nothing to write."); return; }
+    if (targets.length === 0) { setWorksheet("Walkthrough questions: every check in view already has one. Nothing to write."); return; }
     const offline = aiOfflineReason(aiSettings);
-    if (offline) { setWorksheet(`Questions are written by AI, and ${offline}`); return; }
+    if (offline) { setWorksheet(`Walkthrough questions are written by AI, and ${offline}`); return; }
 
     const ctrl = new AbortController();
     worksheetAbort.current = ctrl;
     setWorksheetBusy(true);
-    setWorksheet(`Writing ${label}…`);
+    setWorksheet(`Walkthrough questions: writing ${label}…`);
     try {
       const { questionsById, failed } = await runWorksheetConversion(targets, aiSettings, {
         signal: ctrl.signal,
-        onProgress: (p) => setWorksheet(`Writing ${label}… ${p.done} of ${p.total}`),
+        onProgress: (p) => setWorksheet(`Walkthrough questions: writing ${label}… ${p.done} of ${p.total}`),
       });
       const next: Record<string, { questions: WorksheetQuestion[]; sourceHash: string }> = {};
       let questionCount = 0;
@@ -253,12 +258,12 @@ export function DomainChecklistLibrary() {
       const checksWritten = Object.keys(next).length;
       setWorksheet(
         ctrl.signal.aborted
-          ? `Cancelled after writing ${questionCount} question${questionCount === 1 ? "" : "s"} for ${checksWritten} check${checksWritten === 1 ? "" : "s"}. Those are saved, so starting again picks up where it stopped.`
-          : `Wrote ${questionCount} question${questionCount === 1 ? "" : "s"} across ${checksWritten} check${checksWritten === 1 ? "" : "s"}.` +
+          ? `Walkthrough questions: cancelled after writing ${questionCount} question${questionCount === 1 ? "" : "s"} for ${checksWritten} check${checksWritten === 1 ? "" : "s"}. Those are saved, so starting again picks up where it stopped.`
+          : `Walkthrough questions: wrote ${questionCount} question${questionCount === 1 ? "" : "s"} across ${checksWritten} check${checksWritten === 1 ? "" : "s"}.` +
             (failed.length > 0 ? ` ${failed.length} check${failed.length === 1 ? "" : "s"} could not be written and stayed empty.` : "")
       );
     } catch (e) {
-      setWorksheet(`Could not write the questions: ${e instanceof Error ? e.message : String(e)}`);
+      setWorksheet(`Walkthrough questions: could not write them — ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setWorksheetBusy(false);
       worksheetAbort.current = null;
@@ -287,7 +292,7 @@ export function DomainChecklistLibrary() {
   // dropping it would hand Felix a worksheet that is quietly short.
   const onExportWorksheet = () => {
     const rows = allRows.filter(matches).filter((r) => r.status !== "removed");
-    if (rows.length === 0) { setWorksheet("Nothing to export — no checks match the current filters."); return; }
+    if (rows.length === 0) { setWorksheet("Manual worksheet: nothing to export — no checks match the current filters."); return; }
 
     const byId = new Map(rows.map((r) => [r.id, questions[r.id]?.questions ?? []]));
     const out = assembleWorksheetRows(rows, byId, { keepEmpty: true });
@@ -296,9 +301,37 @@ export function DomainChecklistLibrary() {
     const missing = rows.filter((r) => (questions[r.id]?.questions ?? []).length === 0).length;
     const stale = rows.filter((r) => stateOf(r) === "stale" || stateOf(r) === "edited-stale").length;
     setWorksheet(
-      `Downloaded ${out.length} row${out.length === 1 ? "" : "s"} from ${rows.length} checks, with no AI call.` +
+      `Manual worksheet: downloaded ${out.length} row${out.length === 1 ? "" : "s"} from ${rows.length} checks, with no AI call.` +
       (missing > 0 ? ` ${missing} check${missing === 1 ? " has" : "s have"} no question yet — those rows are blank.` : "") +
       (stale > 0 ? ` ${stale} question${stale === 1 ? " is" : "s are"} older than the check text.` : "")
+    );
+  };
+
+  // Third export: the AI verdicts already stored against these checks. Purely a
+  // local file write — no AI call, nothing generated, and it never merges the
+  // policy and evidence buckets into one verdict (see checklistVerdictExport).
+  //
+  // Checks with no verdict yet are KEPT, marked "Not yet assessed". Measured on
+  // the real library: every one of the 155 checks is reachable by auditing a
+  // sub-criterion it applies to, so an empty row always means "no audit has
+  // covered this area yet", which is the actionable half of the file. Unfiltered
+  // after one sub-criterion that is 142 of 168 rows, so the count is reported
+  // and the page's own filters are the way to narrow it.
+  const onExportVerdicts = () => {
+    const rows = allRows.filter(matches).filter((r) => r.status !== "removed");
+    if (rows.length === 0) { setWorksheet("AI verdicts: nothing to export — no checks match the current filters."); return; }
+
+    const shown = new Set(rows.map((r) => r.id));
+    const mine = Object.values(verdicts).filter((v) => shown.has(v.checkId));
+    const out = assembleVerdictRows(rows, mine);
+    downloadCsv(buildChecklistVerdictCsv(out), `gd4-checklist-verdicts-${new Date().toISOString().slice(0, 10)}.csv`);
+
+    const unassessed = out.filter((r) => r.verdict === NOT_YET_ASSESSED).length;
+    const stale = out.filter((r) => r.stale === "Yes").length;
+    setWorksheet(
+      `AI verdicts: downloaded ${out.length} row${out.length === 1 ? "" : "s"} from ${rows.length} check${rows.length === 1 ? "" : "s"}, with no AI call.` +
+      (unassessed > 0 ? ` ${unassessed} check${unassessed === 1 ? " has" : "s have"} no verdict yet — no audit has covered ${unassessed === 1 ? "its" : "their"} area, and ${unassessed === 1 ? "it is" : "they are"} marked "${NOT_YET_ASSESSED}".` : "") +
+      (stale > 0 ? ` ${stale} verdict${stale === 1 ? " was" : "s were"} recorded against older wording of the check.` : "")
     );
   };
 
@@ -386,6 +419,12 @@ export function DomainChecklistLibrary() {
             {`⬇ Manual worksheet (CSV)${visibleCount !== stats.total ? ` — ${visibleCount} shown` : ""}`}
           </button>
           <button
+            type="button" style={btnPrimary} onClick={onExportVerdicts}
+            title="Download what the AI concluded about each check in view, one row per bucket per audited sub-criterion. Reads verdicts already stored — no AI call. Checks nothing has audited yet are listed as Not yet assessed."
+          >
+            {`⬇ AI verdicts (CSV)${verdictCount > 0 ? ` — ${verdictCount} recorded` : ""}`}
+          </button>
+          <button
             type="button" style={{ ...btn, ...(worksheetBusy ? { opacity: 0.6, cursor: "wait" } : {}) }}
             disabled={worksheetBusy}
             onClick={() => void generateQuestions(allRows.filter(matches).filter((r) => r.status !== "removed").filter(needsWriting), "the missing and stale questions")}
@@ -412,7 +451,7 @@ export function DomainChecklistLibrary() {
 
         {worksheet && (
           <div style={{ marginTop: 10, border: "1px solid #dbeafe", background: "#f8fbff", borderRadius: 8, padding: 10, fontSize: 12.5 }}>
-            <b>Manual worksheet: </b>{worksheet}
+            {worksheet}
             {!worksheetBusy && <button type="button" style={{ ...btn, marginLeft: 8 }} onClick={() => setWorksheet(null)}>Dismiss</button>}
           </div>
         )}
