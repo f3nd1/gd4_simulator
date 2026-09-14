@@ -29,11 +29,27 @@ import { chatComplete, effectiveSettings, type ChatSchema } from "./aiClient";
 import { sArr, sObj, sStr } from "./schemaHelpers";
 import type { AISettings } from "../../types";
 import type { DomainChecklistRow } from "../domainChecklist";
-import type { WorksheetAsk } from "../manualWorksheet";
+import { worksheetCacheKey, type WorksheetAsk } from "../manualWorksheet";
 
 // Small enough that one malformed reply costs little and progress is visible,
-// large enough to keep a full 155-check worksheet to single-figure calls.
+// large enough to keep a full 186-check worksheet to single-figure calls.
 export const BATCH_SIZE = 20;
+
+// Batches run concurrently. Safe to do here, and deliberately NOT the pattern
+// used by the audit runs: those funnel through useWorkspaceStore's
+// module-level singletons (_currentRunAbort, _currentFileAbort, the `busy`
+// flag), which are documented as one-run-at-a-time and would cancel each other
+// if run in parallel. This path touches no store and no module state at all —
+// it takes settings and a signal as arguments and returns a value — and
+// aiClient's fetchWithTimeout builds a FRESH AbortController per call, so
+// concurrent calls cannot abort one another. 4 keeps well inside browser
+// per-host connection limits, and aiClient already backs off on 429.
+export const CONCURRENCY = 4;
+
+// Bump when SYSTEM changes: it is folded into every cache key, so a reworded
+// prompt invalidates cached questions instead of leaving a worksheet that is
+// half old wording and half new.
+export const PROMPT_VERSION = "v1";
 
 const WORKSHEET_SCHEMA: ChatSchema = { name: "worksheet_questions", schema: sObj({
   checks: sArr(sObj({
@@ -67,7 +83,7 @@ function userBlock(rows: DomainChecklistRow[]): string {
     .join("\n\n");
 }
 
-export type WorksheetProgress = { done: number; total: number };
+export type WorksheetProgress = { done: number; total: number; cached: number };
 
 // Returns asks keyed by source check id. A batch whose reply cannot be parsed
 // is reported in `failed` rather than silently yielding no questions, so the
@@ -76,16 +92,40 @@ export type WorksheetProgress = { done: number; total: number };
 export async function runWorksheetConversion(
   rows: DomainChecklistRow[],
   settings: AISettings,
-  opts: { onProgress?: (p: WorksheetProgress) => void; signal?: AbortSignal } = {},
-): Promise<{ asksById: Map<string, WorksheetAsk[]>; failed: string[] }> {
+  opts: {
+    onProgress?: (p: WorksheetProgress) => void;
+    signal?: AbortSignal;
+    cache?: Record<string, WorksheetAsk[]>;
+    onCache?: (next: Record<string, WorksheetAsk[]>) => void;
+  } = {},
+): Promise<{ asksById: Map<string, WorksheetAsk[]>; failed: string[]; generated: number; cached: number }> {
   const asksById = new Map<string, WorksheetAsk[]>();
   const failed: string[] = [];
+  const cache = opts.cache ?? {};
+  const fresh: Record<string, WorksheetAsk[]> = {};
+
+  // Cache pass first: anything whose source text is byte-identical to a
+  // previous conversion is reused, so only genuinely changed or new checks
+  // reach the model.
+  const todo: DomainChecklistRow[] = [];
+  for (const r of rows) {
+    const hit = cache[worksheetCacheKey(PROMPT_VERSION, r.text)];
+    if (hit) asksById.set(r.id, hit);
+    else todo.push(r);
+  }
+  const cached = rows.length - todo.length;
+
   const batches: DomainChecklistRow[][] = [];
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) batches.push(rows.slice(i, i + BATCH_SIZE));
+  for (let i = 0; i < todo.length; i += BATCH_SIZE) batches.push(todo.slice(i, i + BATCH_SIZE));
 
   const call = effectiveSettings(settings, { purpose: "utility" });
-  let done = 0;
-  for (const batch of batches) {
+  let done = cached;
+  opts.onProgress?.({ done, total: rows.length, cached });
+
+  const runBatch = async (batch: DomainChecklistRow[]) => {
+    // Cancel must stop batches still queued behind the in-flight ones, not
+    // just abort the requests already open.
+    if (opts.signal?.aborted) { for (const r of batch) failed.push(r.id); return; }
     try {
       const reply = await chatComplete(
         [{ role: "system", content: SYSTEM }, { role: "user", content: userBlock(batch) }],
@@ -93,18 +133,34 @@ export async function runWorksheetConversion(
         { temperature: 0.2, schema: WORKSHEET_SCHEMA, signal: opts.signal },
       );
       const parsed = JSON.parse(reply) as { checks?: { id?: string; asks?: WorksheetAsk[] }[] };
+      const byId = new Map(batch.map((r) => [r.id, r]));
       const seen = new Set<string>();
       for (const c of parsed.checks ?? []) {
         if (!c?.id || !Array.isArray(c.asks)) continue;
+        const source = byId.get(c.id);
+        if (!source) continue;
         seen.add(c.id);
-        asksById.set(c.id, c.asks.map((a) => ({ describe: String(a?.describe ?? ""), showMe: String(a?.showMe ?? "") })));
+        const asks = c.asks.map((a) => ({ describe: String(a?.describe ?? ""), showMe: String(a?.showMe ?? "") }));
+        asksById.set(c.id, asks);
+        fresh[worksheetCacheKey(PROMPT_VERSION, source.text)] = asks;
       }
       for (const r of batch) if (!seen.has(r.id)) failed.push(r.id);
     } catch {
       for (const r of batch) failed.push(r.id);
     }
     done += batch.length;
-    opts.onProgress?.({ done, total: rows.length });
-  }
-  return { asksById, failed };
+    opts.onProgress?.({ done, total: rows.length, cached });
+  };
+
+  // Fixed-size worker pool: each worker pulls the next batch as it frees up,
+  // so a slow batch does not stall the others behind a wave boundary.
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, batches.length) }, async () => {
+      while (next < batches.length) await runBatch(batches[next++]);
+    }),
+  );
+
+  if (Object.keys(fresh).length > 0) opts.onCache?.(fresh);
+  return { asksById, failed, generated: todo.length - failed.length, cached };
 }

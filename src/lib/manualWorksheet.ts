@@ -18,7 +18,7 @@
 
 import { toCsv } from "./auditCsvExport";
 import { GD4_CRITERIA } from "../data/gd4Requirements";
-import type { DomainChecklistRow } from "./domainChecklist";
+import { fnv1a, type DomainChecklistRow } from "./domainChecklist";
 
 export const WORKSHEET_HEADERS = [
   "Ref", "Criterion", "Type", "Describe", "Show me", "Response", "Evidence seen", "Verdict", "Follow-up",
@@ -117,4 +117,15 @@ export function buildWorksheetCsv(rows: WorksheetRow[]): string {
     WORKSHEET_HEADERS,
     rows.map((r) => [r.ref, r.criterion, r.type, r.describe, r.showMe, "", "", VERDICT_OPTIONS, ""]),
   );
+}
+
+// ── Conversion cache key ────────────────────────────────────────────────────
+
+// Converted questions are cached against the EXACT source text they were made
+// from, so editing a check in the Library invalidates only that check and
+// every untouched one is reused. `promptVersion` is folded in so that changing
+// the conversion prompt invalidates the whole cache rather than leaving a
+// worksheet that is half old wording and half new.
+export function worksheetCacheKey(promptVersion: string, checkText: string): string {
+  return `${promptVersion}:${fnv1a(checkText)}`;
 }

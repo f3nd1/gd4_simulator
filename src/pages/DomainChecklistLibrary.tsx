@@ -10,6 +10,7 @@ import { assembleWorksheetRows, buildWorksheetCsv } from "../lib/manualWorksheet
 import { runWorksheetConversion } from "../lib/ai/worksheetWriter";
 import { aiOfflineReason } from "../lib/ai/aiClient";
 import { useAISettingsStore } from "../store/useAISettingsStore";
+import { useWorksheetCacheStore } from "../store/useWorksheetCacheStore";
 import {
   domainRowsFor,
   buildDomainChecklistCsv,
@@ -104,6 +105,11 @@ export function DomainChecklistLibrary() {
   const [worksheetBusy, setWorksheetBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const aiSettings = useAISettingsStore((s) => s);
+  const worksheetCache = useWorksheetCacheStore((s) => s.entries);
+  const putWorksheetCache = useWorksheetCacheStore((s) => s.putMany);
+  // Local to this component, never a module singleton — that is what kept the
+  // audit runs' shared-abort bug from being reintroduced here.
+  const worksheetAbort = useRef<AbortController | null>(null);
 
   const rowsByCriterion = useMemo(() => {
     const out: Record<string, DomainChecklistRow[]> = {};
@@ -179,23 +185,36 @@ export function DomainChecklistLibrary() {
     const offline = aiOfflineReason(aiSettings);
     if (offline) { setWorksheet(`The manual worksheet is written by AI, and ${offline}`); return; }
 
+    const ctrl = new AbortController();
+    worksheetAbort.current = ctrl;
     setWorksheetBusy(true);
     setWorksheet(`Writing walkthrough questions for ${rows.length} checks…`);
     try {
-      const { asksById, failed } = await runWorksheetConversion(rows, aiSettings, {
-        onProgress: (p) => setWorksheet(`Writing walkthrough questions… ${p.done} of ${p.total} checks`),
+      const { asksById, failed, generated, cached } = await runWorksheetConversion(rows, aiSettings, {
+        signal: ctrl.signal,
+        cache: worksheetCache,
+        onCache: putWorksheetCache,
+        onProgress: (p) => setWorksheet(
+          p.done >= p.total
+            ? "Building the file…"
+            : `Writing walkthrough questions… ${p.done} of ${p.total} checks` +
+              (p.cached > 0 ? ` (${p.cached} reused, unchanged since the last export)` : "")
+        ),
       });
+      if (ctrl.signal.aborted) { setWorksheet("Cancelled — nothing was downloaded. Questions already written are kept, so starting again resumes from there."); return; }
       const out = assembleWorksheetRows(rows, asksById);
       if (out.length === 0) { setWorksheet("The AI returned no usable questions — nothing was downloaded. Try again, or check Settings → OpenAI."); return; }
       downloadCsv(buildWorksheetCsv(out), `gd4-manual-worksheet-${new Date().toISOString().slice(0, 10)}.csv`);
       setWorksheet(
-        `Downloaded ${out.length} question rows from ${rows.length - failed.length} checks.` +
+        `Downloaded ${out.length} question rows from ${rows.length - failed.length} checks` +
+        (cached > 0 ? `, ${cached} reused and ${generated} newly written` : "") + "." +
         (failed.length > 0 ? ` ${failed.length} check(s) produced no questions and were left out.` : "")
       );
     } catch (e) {
       setWorksheet(`Could not build the worksheet: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setWorksheetBusy(false);
+      worksheetAbort.current = null;
     }
   };
 
@@ -281,8 +300,11 @@ export function DomainChecklistLibrary() {
             disabled={worksheetBusy} onClick={() => void onExportWorksheet()}
             title="Download the checks shown as a printable walkthrough worksheet: Describe / Show me questions with blank columns for the response, evidence seen and verdict. Written by AI at export time, and not re-importable."
           >
-            {worksheetBusy ? "Writing worksheet…" : "⬇ Manual worksheet (CSV)"}
+            {worksheetBusy ? "Writing worksheet…" : `⬇ Manual worksheet (CSV)${visibleCount !== stats.total ? ` — ${visibleCount} shown` : ""}`}
           </button>
+          {worksheetBusy && (
+            <button type="button" style={btnDanger} onClick={() => worksheetAbort.current?.abort()}>Cancel</button>
+          )}
           <input
             ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: "none" }}
             onChange={(e) => { const f = e.target.files?.[0]; if (f) void onImportFile(f); }}
