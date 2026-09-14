@@ -5,8 +5,12 @@ import {
   worksheetType,
   worksheetRef,
   worksheetCriterion,
+  worksheetSubCriterion,
   assembleWorksheetRows,
   buildWorksheetCsv,
+  newQuestionId,
+  type AskType,
+  type WorksheetQuestion,
 } from "../manualWorksheet";
 import { parseCsv, type DomainChecklistRow } from "../domainChecklist";
 
@@ -69,70 +73,87 @@ describe("worksheetCriterion", () => {
   });
 });
 
+const q = (text: string, askType: AskType = "Document", source: "ai" | "hand" = "ai"): WorksheetQuestion =>
+  ({ id: newQuestionId(), text, askType, source });
+
+describe("worksheetSubCriterion", () => {
+  it("normalises an item ref to the sub-criterion Felix audits at", () => {
+    expect(worksheetSubCriterion(row({ subCriterionIds: ["4.1.1"] }))).toBe("4.1");
+  });
+
+  it("says criterion-wide rather than leaving the cell blank", () => {
+    expect(worksheetSubCriterion(row({ subCriterionIds: [] }))).toBe("Criterion-wide");
+  });
+
+  it("keeps Ref precise while Sub-criterion groups, so the two columns differ", () => {
+    const r = row({ subCriterionIds: ["4.1.1"] });
+    expect(worksheetRef(r)).toBe("4.1.1");
+    expect(worksheetSubCriterion(r)).toBe("4.1");
+  });
+});
+
 describe("assembleWorksheetRows", () => {
-  it("expands one check into several rows when the AI found several asks", () => {
-    const r = row({ id: "a" });
+  it("gives every question its own row, sharing the parent check's tagging", () => {
+    const r = row({ id: "a", subCriterionIds: ["4.1.1"] });
     const out = assembleWorksheetRows([r], new Map([["a", [
-      { describe: "Describe how you keep fee records.", showMe: "" },
-      { describe: "", showMe: "Show me the signed auditor's report." },
+      q("Describe how you counsel.", "Process"),
+      q("Show me three counselling records.", "Document"),
+      q("Show me the training records.", "Document"),
     ]]]));
-    expect(out).toHaveLength(2);
-    expect(out[0].showMe).toBe("");
-    expect(out[1].describe).toBe("");
+    expect(out).toHaveLength(3);
+    expect(out.map((x) => x.askType)).toEqual(["Process", "Document", "Document"]);
+    // Every row inherits the check's identity.
+    expect(new Set(out.map((x) => x.ref))).toEqual(new Set(["4.1.1"]));
+    expect(new Set(out.map((x) => x.subCriterion))).toEqual(new Set(["4.1"]));
+    expect(new Set(out.map((x) => x.type))).toEqual(new Set(["Core"]));
   });
 
-  it("keeps a genuinely blank half blank rather than filling it", () => {
-    const out = assembleWorksheetRows([row({ id: "a" })], new Map([["a", [{ describe: "", showMe: "Show me the register." }]]]));
-    expect(out[0].describe).toBe("");
+  it("does not pad or truncate: one question in, one row out", () => {
+    const out = assembleWorksheetRows([row({ id: "a" })], new Map([["a", [q("Only one ask.")]]]));
+    expect(out).toHaveLength(1);
   });
 
-  it("drops an ask with both halves empty instead of emitting a blank question", () => {
-    const out = assembleWorksheetRows([row({ id: "a" })], new Map([["a", [{ describe: "  ", showMe: "" }]]]));
-    expect(out).toEqual([]);
+  it("drops a question whose text is empty", () => {
+    const out = assembleWorksheetRows([row({ id: "a" })], new Map([["a", [q("real"), q("   ")]]]));
+    expect(out).toHaveLength(1);
+    expect(out[0].question).toBe("real");
   });
 
-  it("skips a check the AI returned nothing for", () => {
+  it("skips a check with no questions unless keepEmpty is set", () => {
     expect(assembleWorksheetRows([row({ id: "a" })], new Map())).toEqual([]);
+  });
+
+  it("keeps one blank row per question-less check when keepEmpty is set, so the sheet is not quietly short", () => {
+    const out = assembleWorksheetRows([row({ id: "a" })], new Map(), { keepEmpty: true });
+    expect(out).toHaveLength(1);
+    expect(out[0].question).toBe("");
+    expect(out[0].askType).toBe("");
+    expect(out[0].ref).toBe("4.1.1");
   });
 });
 
 describe("buildWorksheetCsv", () => {
-  it("emits the agreed columns, blank answer cells and a seeded verdict", () => {
-    const out = assembleWorksheetRows([row({ id: "a" })], new Map([["a", [{ describe: "Describe how you counsel.", showMe: "Show me 3 records." }]]]));
+  it("emits the agreed columns with one Question column and an Ask type", () => {
+    const out = assembleWorksheetRows([row({ id: "a" })], new Map([["a", [q("Show me three counselling records.", "Document")]]]));
     const cells = parseCsv(buildWorksheetCsv(out));
     expect(cells[0]).toEqual(WORKSHEET_HEADERS);
+    expect(cells[0]).not.toContain("Describe");
+    expect(cells[0]).not.toContain("Show me");
     expect(cells[1]).toEqual([
-      "4.1.1", "C4 Student Protection and Support Services", "Core",
-      "Describe how you counsel.", "Show me 3 records.", "", "", VERDICT_OPTIONS, "",
+      "4.1.1", "C4 Student Protection and Support Services", "4.1", "Core",
+      "Document", "Show me three counselling records.", "", "", VERDICT_OPTIONS, "",
     ]);
+  });
+
+  it("leaves the answer columns blank and seeds every Verdict", () => {
+    const out = assembleWorksheetRows([row({ id: "a" })], new Map([["a", [q("x"), q("y", "Process")]]]));
+    const cells = parseCsv(buildWorksheetCsv(out)).slice(1);
+    expect(cells.every((c) => c[6] === "" && c[7] === "" && c[9] === "")).toBe(true);
+    expect(cells.every((c) => c[8] === VERDICT_OPTIONS)).toBe(true);
   });
 
   it("carries no item_id or status, so it can never be fed back to the edit importer", () => {
     expect(WORKSHEET_HEADERS).not.toContain("item_id");
     expect(WORKSHEET_HEADERS).not.toContain("status");
-  });
-});
-
-describe("assembleWorksheetRows keepEmpty", () => {
-  // The export passes keepEmpty because questions are generated ahead of time
-  // now, so a check can legitimately have none yet. Dropping those rows would
-  // hand over a sheet quietly short of the scope it claims to cover.
-  it("keeps a row, with both halves blank, for a check that has no question yet", () => {
-    const out = assembleWorksheetRows([row({ id: "a" })], new Map(), { keepEmpty: true });
-    expect(out).toHaveLength(1);
-    expect(out[0].describe).toBe("");
-    expect(out[0].showMe).toBe("");
-    expect(out[0].ref).toBe("4.1.1");
-  });
-
-  it("still drops empty asks when keepEmpty is not set", () => {
-    expect(assembleWorksheetRows([row({ id: "a" })], new Map())).toEqual([]);
-  });
-
-  it("a blank row still carries its Ref, Criterion, Type and seeded Verdict", () => {
-    const cells = parseCsv(buildWorksheetCsv(assembleWorksheetRows([row({ id: "a" })], new Map(), { keepEmpty: true })));
-    expect(cells[1]).toEqual([
-      "4.1.1", "C4 Student Protection and Support Services", "Core", "", "", "", "", VERDICT_OPTIONS, "",
-    ]);
   });
 });

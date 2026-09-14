@@ -18,10 +18,11 @@
 
 import { toCsv } from "./auditCsvExport";
 import { GD4_CRITERIA } from "../data/gd4Requirements";
-import type { DomainChecklistRow } from "./domainChecklist";
+import { subCriterionOfRef, type DomainChecklistRow } from "./domainChecklist";
 
 export const WORKSHEET_HEADERS = [
-  "Ref", "Criterion", "Type", "Describe", "Show me", "Response", "Evidence seen", "Verdict", "Follow-up",
+  "Ref", "Criterion", "Sub-criterion", "Type", "Ask type", "Question",
+  "Response", "Evidence seen", "Verdict", "Follow-up",
 ];
 
 // Printed into every Verdict cell rather than left blank, so the options are
@@ -30,18 +31,44 @@ export const VERDICT_OPTIONS = "Met / Partial / Not met / N/A";
 
 export type WorksheetType = "Core" | "Red flag" | "Zero-tolerance";
 
-// One walkthrough question. A check can yield several, and either half may be
-// empty when the check genuinely has only one — a documentary check has no
-// Describe, a purely procedural one has no Show me.
-export type WorksheetAsk = { describe: string; showMe: string };
+// Process = describe how you do it. Document = produce the record.
+// This is the distinction a walkthrough actually turns on, and it is now a
+// short tag on one question rather than two columns of prose.
+export type AskType = "Process" | "Document";
+
+// One walkthrough question. A check carries as many as its content warrants,
+// and each becomes its own worksheet row.
+//
+// This replaced a { describe, showMe } PAIR, which was the cause of the
+// duplication Felix saw: both halves hung off a single ask, so the model was
+// structurally invited to say the same audit point twice, once as "describe
+// how you…" and once as "show me…". A flat list with a type tag removes the
+// forced pairing, so two questions appear only when there are two real asks.
+//
+// `source` is per question, not per check: regeneration replaces the "ai" ones
+// and leaves every "hand" one alone, so a question Felix wrote or reworded
+// survives a regeneration of its neighbours.
+export type WorksheetQuestion = {
+  id: string;
+  text: string;
+  askType: AskType;
+  source: "ai" | "hand";
+};
+
+let qSeq = 0;
+export function newQuestionId(): string {
+  qSeq += 1;
+  return `q${Date.now().toString(36)}${qSeq.toString(36)}`;
+}
 
 export type WorksheetRow = {
   sourceId: string;
   ref: string;
   criterion: string;
+  subCriterion: string;
   type: WorksheetType;
-  describe: string;
-  showMe: string;
+  askType: AskType | "";
+  question: string;
 };
 
 // Regulatory-severity cues, taken from the wording the shipped checks actually
@@ -86,36 +113,45 @@ export function worksheetCriterion(criterionId: string): string {
   return `C${criterionId} ${CRITERION_TITLE.get(criterionId) ?? ""}`.trim();
 }
 
-// Joins each check's stored asks onto it.
+// The sub-criterion a check sits under, as a grouping key. Separate from Ref
+// on purpose: Ref stays precise (4.1.1 tells the auditor which requirement
+// they are in front of), while this normalises to the level Felix actually
+// audits at (4.1) so a sheet sorts and filters cleanly in Excel. A check with
+// no ref is criterion-wide and says so rather than leaving a blank cell.
+export function worksheetSubCriterion(row: Pick<DomainChecklistRow, "criterionId" | "subCriterionIds">): string {
+  const subs = [...new Set(row.subCriterionIds.map(subCriterionOfRef))].sort();
+  return subs.length > 0 ? subs.join(", ") : "Criterion-wide";
+}
+
+// Flattens each check's stored questions into one worksheet row per question,
+// every row inheriting its parent check's Ref, Criterion, Sub-criterion and
+// Type.
 //
-// `keepEmpty` is what the worksheet export passes. Questions are generated
-// ahead of time now, so a check can legitimately have none yet, and dropping
-// those rows would hand a sheet that is quietly short of the scope it claims
-// to cover. With keepEmpty the check still gets its row, with the Describe and
-// Show me cells blank, and the caller reports the count. Without it (the
-// default) an ask with nothing in either half is dropped, which is still right
-// when the model simply returned nothing usable for a check.
+// `keepEmpty` is what the export passes. Questions are generated ahead of time
+// now, so a check can legitimately have none yet, and dropping those rows would
+// hand over a sheet quietly short of the scope it claims to cover. With
+// keepEmpty the check still gets one row with the Question cell blank, and the
+// caller reports the count.
 export function assembleWorksheetRows(
   rows: DomainChecklistRow[],
-  asksById: Map<string, WorksheetAsk[]>,
+  questionsById: Map<string, WorksheetQuestion[]>,
   opts: { keepEmpty?: boolean } = {},
 ): WorksheetRow[] {
   const out: WorksheetRow[] = [];
   for (const r of rows) {
-    const asks = asksById.get(r.id) ?? (opts.keepEmpty ? [{ describe: "", showMe: "" }] : []);
-    for (const ask of asks) {
-      const describe = ask.describe.trim();
-      const showMe = ask.showMe.trim();
-      if (!describe && !showMe && !opts.keepEmpty) continue;
-      out.push({
-        sourceId: r.id,
-        ref: worksheetRef(r),
-        criterion: worksheetCriterion(r.criterionId),
-        type: worksheetType(r),
-        describe,
-        showMe,
-      });
+    const qs = (questionsById.get(r.id) ?? []).filter((q) => q.text.trim() !== "");
+    const base = {
+      sourceId: r.id,
+      ref: worksheetRef(r),
+      criterion: worksheetCriterion(r.criterionId),
+      subCriterion: worksheetSubCriterion(r),
+      type: worksheetType(r),
+    };
+    if (qs.length === 0) {
+      if (opts.keepEmpty) out.push({ ...base, askType: "", question: "" });
+      continue;
     }
+    for (const q of qs) out.push({ ...base, askType: q.askType, question: q.text.trim() });
   }
   return out;
 }
@@ -123,6 +159,6 @@ export function assembleWorksheetRows(
 export function buildWorksheetCsv(rows: WorksheetRow[]): string {
   return toCsv(
     WORKSHEET_HEADERS,
-    rows.map((r) => [r.ref, r.criterion, r.type, r.describe, r.showMe, "", "", VERDICT_OPTIONS, ""]),
+    rows.map((r) => [r.ref, r.criterion, r.subCriterion, r.type, r.askType, r.question, "", "", VERDICT_OPTIONS, ""]),
   );
 }

@@ -18,7 +18,7 @@ const rows = (n: number): DomainChecklistRow[] =>
 // the prompt.
 const echo = () => chatComplete.mockImplementation(async (messages: { content: string }[]) => {
   const ids = [...messages[1].content.matchAll(/^--- id: (\S+)$/gm)].map((m) => m[1]);
-  return JSON.stringify({ checks: ids.map((id) => ({ id, asks: [{ describe: `D ${id}`, showMe: `S ${id}` }] })) });
+  return JSON.stringify({ checks: ids.map((id) => ({ id, questions: [{ askType: "Document", text: `Q ${id}` }] })) });
 });
 
 // Block body, not an expression: mockReset() returns the mock, and Vitest
@@ -42,7 +42,7 @@ describe("concurrency", () => {
       await new Promise((r) => setTimeout(r, 20));
       inFlight -= 1;
       const ids = [...messages[1].content.matchAll(/^--- id: (\S+)$/gm)].map((m) => m[1]);
-      return JSON.stringify({ checks: ids.map((id) => ({ id, asks: [{ describe: "d", showMe: "s" }] })) });
+      return JSON.stringify({ checks: ids.map((id) => ({ id, questions: [{ askType: "Document", text: "d" }] })) });
     });
     await runWorksheetConversion(rows(186), settings);
     expect(peak).toBeGreaterThan(1);
@@ -54,12 +54,12 @@ describe("concurrency", () => {
       const ids = [...messages[1].content.matchAll(/^--- id: (\S+)$/gm)].map((m) => m[1]);
       // Later batches return sooner, so completion order is reversed.
       await new Promise((r) => setTimeout(r, 60 - Number(ids[0].replace("id", "")) / 2));
-      return JSON.stringify({ checks: ids.map((id) => ({ id, asks: [{ describe: `D ${id}`, showMe: "" }] })) });
+      return JSON.stringify({ checks: ids.map((id) => ({ id, questions: [{ askType: "Process", text: `D ${id}` }] })) });
     });
-    const { asksById } = await runWorksheetConversion(rows(60), settings);
-    expect([...asksById.keys()].length).toBe(60);
-    expect(asksById.get("id0")![0].describe).toBe("D id0");
-    expect(asksById.get("id59")![0].describe).toBe("D id59");
+    const { questionsById } = await runWorksheetConversion(rows(60), settings);
+    expect([...questionsById.keys()].length).toBe(60);
+    expect(questionsById.get("id0")![0].text).toBe("D id0");
+    expect(questionsById.get("id59")![0].text).toBe("D id59");
   });
 });
 
@@ -81,10 +81,10 @@ describe("cancel", () => {
 describe("grounding", () => {
   it("ignores an id the model returned that was not in the batch", async () => {
     chatComplete.mockResolvedValue(JSON.stringify({
-      checks: [{ id: "id0", asks: [{ describe: "real", showMe: "" }] }, { id: "GHOST", asks: [{ describe: "invented", showMe: "" }] }],
+      checks: [{ id: "id0", questions: [{ askType: "Document", text: "real" }] }, { id: "GHOST", questions: [{ askType: "Document", text: "invented" }] }],
     }));
     const res = await runWorksheetConversion(rows(2), settings);
-    expect(res.asksById.has("GHOST")).toBe(false);
+    expect(res.questionsById.has("GHOST")).toBe(false);
     expect(res.failed).toContain("id1");
   });
 
@@ -92,6 +92,39 @@ describe("grounding", () => {
     chatComplete.mockRejectedValue(new Error("boom"));
     const res = await runWorksheetConversion(rows(3), settings);
     expect(res.failed).toHaveLength(3);
-    expect(res.asksById.size).toBe(0);
+    expect(res.questionsById.size).toBe(0);
+  });
+});
+
+describe("variable question count", () => {
+  it("stores as many questions as the model returned, without padding or truncating", async () => {
+    chatComplete.mockResolvedValue(JSON.stringify({ checks: [
+      { id: "id0", questions: [{ askType: "Document", text: "one" }] },
+      { id: "id1", questions: [
+        { askType: "Process", text: "a" }, { askType: "Document", text: "b" },
+        { askType: "Document", text: "c" }, { askType: "Process", text: "d" },
+      ] },
+    ] }));
+    const res = await runWorksheetConversion(rows(2), settings);
+    expect(res.questionsById.get("id0")).toHaveLength(1);
+    expect(res.questionsById.get("id1")).toHaveLength(4);
+  });
+
+  it("marks everything it writes as AI-sourced, so regeneration may replace it", async () => {
+    echo();
+    const res = await runWorksheetConversion(rows(1), settings);
+    expect(res.questionsById.get("id0")![0].source).toBe("ai");
+  });
+
+  it("coerces an askType outside the two allowed values rather than storing a junk tag", async () => {
+    chatComplete.mockResolvedValue(JSON.stringify({ checks: [{ id: "id0", questions: [{ askType: "Nonsense", text: "t" }] }] }));
+    const res = await runWorksheetConversion(rows(1), settings);
+    expect(res.questionsById.get("id0")![0].askType).toBe("Document");
+  });
+
+  it("drops an empty question rather than emitting a blank row", async () => {
+    chatComplete.mockResolvedValue(JSON.stringify({ checks: [{ id: "id0", questions: [{ askType: "Document", text: "  " }, { askType: "Process", text: "real" }] }] }));
+    const res = await runWorksheetConversion(rows(1), settings);
+    expect(res.questionsById.get("id0")).toHaveLength(1);
   });
 });

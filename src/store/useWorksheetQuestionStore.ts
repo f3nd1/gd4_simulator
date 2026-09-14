@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import { fnv1a } from "../lib/domainChecklist";
-import type { WorksheetAsk } from "../lib/manualWorksheet";
+import { newQuestionId, type AskType, type WorksheetQuestion } from "../lib/manualWorksheet";
 
 // The walkthrough questions (Describe / Show me) belonging to each check.
 //
@@ -28,20 +28,26 @@ import type { WorksheetAsk } from "../lib/manualWorksheet";
 const MAX_ENTRIES = 600;
 
 export type StoredQuestion = {
-  asks: WorksheetAsk[];
+  questions: WorksheetQuestion[];
   // The check text these questions were written from. Staleness is a mismatch
   // against the check's current text, never a guess.
   sourceHash: string;
   generatedAt: string;
-  // Hand-written by the user. Bulk regeneration skips these, so a reworded
-  // question is never silently overwritten by a later "generate missing/stale".
+  // True once any question on this check was written or reworded by hand.
+  // Kept for the "Your wording" badge; what actually protects a question from
+  // regeneration is its own `source: "hand"`, per question.
   edited?: boolean;
 };
 
 export type WorksheetQuestionState = {
   entries: Record<string, StoredQuestion>;
-  putMany: (next: Record<string, StoredQuestion>) => void;
-  setEdited: (checkId: string, asks: WorksheetAsk[], sourceHash: string) => void;
+  // Generation result: replaces the AI-written questions on each check and
+  // leaves every hand-written one in place.
+  putMany: (next: Record<string, { questions: WorksheetQuestion[]; sourceHash: string }>) => void;
+  editQuestion: (checkId: string, questionId: string, text: string, askType: AskType) => void;
+  addQuestion: (checkId: string, text: string, askType: AskType, sourceHash: string) => void;
+  removeQuestion: (checkId: string, questionId: string) => void;
+  moveQuestion: (checkId: string, questionId: string, delta: -1 | 1) => void;
   remove: (checkId: string) => void;
   clear: () => void;
 };
@@ -55,29 +61,106 @@ const trim = (merged: Record<string, StoredQuestion>): Record<string, StoredQues
   return out;
 };
 
+const stamp = () => new Date().toISOString();
+
+// Exported so the one-way v1 -> v2 conversion can be tested directly rather
+// than only through a browser reload.
+//
+// v0 was a hash-keyed export cache with no check id to re-attach entries to.
+// v1 stored a { describe, showMe } PAIR per ask; each half becomes its own
+// question, which is lossless for the text.
+//
+// AI-written entries are deliberately given an EMPTY sourceHash so they read
+// as stale and the bulk action rewrites them under the new single-question
+// prompt. That duplication is exactly what this change exists to remove, and
+// deriving a merged question from the two halves cannot remove it, because the
+// redundancy is in the content rather than the layout. Hand-written entries
+// keep their hash, so they stay "Your wording" and are never touched.
+export function migrateWorksheetQuestions(persisted: unknown, from: number): { entries: Record<string, StoredQuestion> } {
+  if (from < 1) return { entries: {} };
+  const old = persisted as { entries?: Record<string, { asks?: { describe?: string; showMe?: string }[]; sourceHash?: string; generatedAt?: string; edited?: boolean }> };
+  const entries: Record<string, StoredQuestion> = {};
+  for (const [id, e] of Object.entries(old?.entries ?? {})) {
+    const hand = e.edited === true;
+    const questions: WorksheetQuestion[] = [];
+    for (const a of e.asks ?? []) {
+      if (a.describe?.trim()) questions.push({ id: newQuestionId(), text: a.describe.trim(), askType: "Process", source: hand ? "hand" : "ai" });
+      if (a.showMe?.trim()) questions.push({ id: newQuestionId(), text: a.showMe.trim(), askType: "Document", source: hand ? "hand" : "ai" });
+    }
+    if (questions.length === 0) continue;
+    entries[id] = { questions, sourceHash: hand ? (e.sourceHash ?? "") : "", generatedAt: e.generatedAt ?? stamp(), edited: hand };
+  }
+  return { entries };
+}
+
+
+
+// Applies a change to one check's question list, creating the entry if the
+// check had none (which is how a hand-added question works on a check nobody
+// has generated for yet).
+const edit = (
+  s: WorksheetQuestionState,
+  checkId: string,
+  fn: (qs: WorksheetQuestion[]) => WorksheetQuestion[],
+  sourceHash?: string,
+): { entries: Record<string, StoredQuestion> } => {
+  const prev = s.entries[checkId];
+  const questions = fn(prev?.questions ?? []);
+  return {
+    entries: {
+      ...s.entries,
+      [checkId]: {
+        questions,
+        sourceHash: sourceHash ?? prev?.sourceHash ?? "",
+        generatedAt: prev?.generatedAt ?? stamp(),
+        edited: true,
+      },
+    },
+  };
+};
+
 export const useWorksheetQuestionStore = create<WorksheetQuestionState>()(
   persist(
     (set) => ({
       entries: {},
 
-      // Generation result. A hand-edited question is preserved: regeneration
-      // may only replace what the AI itself last wrote.
+      // Regeneration replaces only what the AI itself last wrote. Every
+      // question Felix wrote or reworded is kept, and kept in front, so a
+      // bulk regeneration can never silently undo his work.
       putMany: (next) =>
         set((s) => {
           const merged = { ...s.entries };
-          for (const [id, q] of Object.entries(next)) {
-            if (merged[id]?.edited) continue;
-            merged[id] = q;
+          for (const [id, { questions, sourceHash }] of Object.entries(next)) {
+            const kept = (merged[id]?.questions ?? []).filter((q) => q.source === "hand");
+            merged[id] = {
+              questions: [...kept, ...questions],
+              sourceHash,
+              generatedAt: stamp(),
+              edited: kept.length > 0,
+            };
           }
           return { entries: trim(merged) };
         }),
 
-      // A hand edit. Marked `edited` so it survives every later regeneration,
-      // and re-stamped with the current source hash so saving a question
-      // against the check as it reads now clears the stale flag.
-      setEdited: (checkId, asks, sourceHash) =>
-        set((s) => ({
-          entries: { ...s.entries, [checkId]: { asks, sourceHash, generatedAt: new Date().toISOString(), edited: true } },
+      // Reworded by hand: it becomes a hand question, so later regenerations
+      // leave it alone.
+      editQuestion: (checkId, questionId, text, askType) =>
+        set((s) => edit(s, checkId, (qs) => qs.map((q) => (q.id === questionId ? { ...q, text, askType, source: "hand" } : q)))),
+
+      addQuestion: (checkId, text, askType, sourceHash) =>
+        set((s) => edit(s, checkId, (qs) => [...qs, { id: newQuestionId(), text, askType, source: "hand" }], s.entries[checkId]?.sourceHash ?? sourceHash)),
+
+      removeQuestion: (checkId, questionId) =>
+        set((s) => edit(s, checkId, (qs) => qs.filter((q) => q.id !== questionId))),
+
+      moveQuestion: (checkId, questionId, delta) =>
+        set((s) => edit(s, checkId, (qs) => {
+          const i = qs.findIndex((q) => q.id === questionId);
+          const j = i + delta;
+          if (i < 0 || j < 0 || j >= qs.length) return qs;
+          const out = [...qs];
+          [out[i], out[j]] = [out[j], out[i]];
+          return out;
         })),
 
       remove: (checkId) =>
@@ -91,9 +174,9 @@ export const useWorksheetQuestionStore = create<WorksheetQuestionState>()(
     }),
     {
       name: "ucc-gd4-worksheet-cache:v1",
-      version: 1,
+      version: 2,
       storage: workspaceStorage,
-      migrate: () => ({ entries: {} }),
+      migrate: (persisted, from) => migrateWorksheetQuestions(persisted, from),
     }
   )
 );

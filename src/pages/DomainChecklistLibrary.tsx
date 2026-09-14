@@ -6,11 +6,11 @@ import { GD4_CRITERIA } from "../data/gd4Requirements";
 import { scopeTitle } from "../lib/evidenceScope";
 import { DOMAIN_SKILL_CONSUMERS } from "../lib/domainSkillUsage";
 import { downloadCsv } from "../lib/auditCsvExport";
-import { assembleWorksheetRows, buildWorksheetCsv } from "../lib/manualWorksheet";
+import { assembleWorksheetRows, buildWorksheetCsv, type AskType, type WorksheetQuestion } from "../lib/manualWorksheet";
 import { runWorksheetConversion } from "../lib/ai/worksheetWriter";
 import { aiOfflineReason } from "../lib/ai/aiClient";
 import { useAISettingsStore } from "../store/useAISettingsStore";
-import { useWorksheetQuestionStore, questionSourceHash, questionStateFor, type StoredQuestion, type QuestionState } from "../store/useWorksheetQuestionStore";
+import { useWorksheetQuestionStore, questionSourceHash, questionStateFor, type QuestionState } from "../store/useWorksheetQuestionStore";
 import {
   domainRowsFor,
   buildDomainChecklistCsv,
@@ -87,6 +87,8 @@ const btn: React.CSSProperties = {
 };
 const btnPrimary: React.CSSProperties = { ...btn, border: "1px solid #99f6e4", background: "#f0fdfa", color: "#0f766e" };
 const btnDanger: React.CSSProperties = { ...btn, border: "1px solid #fecaca", color: "#b91c1c" };
+// Compact control for the per-question row, where four sit side by side.
+const iconBtn: React.CSSProperties = { ...btn, padding: "1px 6px", fontSize: 11, lineHeight: 1.5 };
 
 export function DomainChecklistLibrary() {
   const overrides = useDomainChecklistStore((s) => s.overrides);
@@ -120,10 +122,16 @@ export function DomainChecklistLibrary() {
   const aiSettings = useAISettingsStore((s) => s);
   const questions = useWorksheetQuestionStore((s) => s.entries);
   const putQuestions = useWorksheetQuestionStore((s) => s.putMany);
-  const setQuestionEdited = useWorksheetQuestionStore((s) => s.setEdited);
+  const editQuestion = useWorksheetQuestionStore((s) => s.editQuestion);
+  const addQuestion = useWorksheetQuestionStore((s) => s.addQuestion);
+  const removeQuestion = useWorksheetQuestionStore((s) => s.removeQuestion);
+  const moveQuestion = useWorksheetQuestionStore((s) => s.moveQuestion);
+  // Which single question is open for editing, as "<checkId>|<questionId>".
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
-  const [qDescribe, setQDescribe] = useState("");
-  const [qShowMe, setQShowMe] = useState("");
+  const [qText, setQText] = useState("");
+  const [qType, setQType] = useState<AskType>("Document");
+  // Which check has its "add a question" form open.
+  const [addingQuestionFor, setAddingQuestionFor] = useState<string | null>(null);
   // Local to this component, never a module singleton — that is what kept the
   // audit runs' shared-abort bug from being reintroduced here.
   const worksheetAbort = useRef<AbortController | null>(null);
@@ -222,21 +230,23 @@ export function DomainChecklistLibrary() {
     setWorksheetBusy(true);
     setWorksheet(`Writing ${label}…`);
     try {
-      const { asksById, failed } = await runWorksheetConversion(targets, aiSettings, {
+      const { questionsById, failed } = await runWorksheetConversion(targets, aiSettings, {
         signal: ctrl.signal,
         onProgress: (p) => setWorksheet(`Writing ${label}… ${p.done} of ${p.total}`),
       });
-      const next: Record<string, StoredQuestion> = {};
+      const next: Record<string, { questions: WorksheetQuestion[]; sourceHash: string }> = {};
+      let questionCount = 0;
       for (const r of targets) {
-        const a = asksById.get(r.id);
-        if (a) next[r.id] = { asks: a, sourceHash: questionSourceHash(r.text), generatedAt: new Date().toISOString() };
+        const qs = questionsById.get(r.id);
+        if (qs && qs.length > 0) { next[r.id] = { questions: qs, sourceHash: questionSourceHash(r.text) }; questionCount += qs.length; }
       }
       putQuestions(next);
-      const written = Object.keys(next).length;
+      const checksWritten = Object.keys(next).length;
       setWorksheet(
         ctrl.signal.aborted
-          ? `Cancelled after writing ${written} question${written === 1 ? "" : "s"}. Those are saved, so starting again picks up where it stopped.`
-          : `Wrote ${written} question${written === 1 ? "" : "s"}.` + (failed.length > 0 ? ` ${failed.length} could not be written and stayed empty.` : "")
+          ? `Cancelled after writing ${questionCount} question${questionCount === 1 ? "" : "s"} for ${checksWritten} check${checksWritten === 1 ? "" : "s"}. Those are saved, so starting again picks up where it stopped.`
+          : `Wrote ${questionCount} question${questionCount === 1 ? "" : "s"} across ${checksWritten} check${checksWritten === 1 ? "" : "s"}.` +
+            (failed.length > 0 ? ` ${failed.length} check${failed.length === 1 ? "" : "s"} could not be written and stayed empty.` : "")
       );
     } catch (e) {
       setWorksheet(`Could not write the questions: ${e instanceof Error ? e.message : String(e)}`);
@@ -246,9 +256,15 @@ export function DomainChecklistLibrary() {
     }
   };
 
-  const saveQuestionEdit = (r: DomainChecklistRow) => {
-    setQuestionEdited(r.id, [{ describe: qDescribe.trim(), showMe: qShowMe.trim() }], questionSourceHash(r.text));
+  const saveQuestionEdit = (checkId: string, questionId: string) => {
+    editQuestion(checkId, questionId, qText.trim(), qType);
     setEditingQuestionId(null);
+  };
+
+  const saveQuestionAdd = (r: DomainChecklistRow) => {
+    addQuestion(r.id, qText.trim(), qType, questionSourceHash(r.text));
+    setAddingQuestionFor(null);
+    setQText("");
   };
 
   // The second, one-way export: the same checks turned into walkthrough
@@ -264,11 +280,11 @@ export function DomainChecklistLibrary() {
     const rows = allRows.filter(matches).filter((r) => r.status !== "removed");
     if (rows.length === 0) { setWorksheet("Nothing to export — no checks match the current filters."); return; }
 
-    const asksById = new Map(rows.map((r) => [r.id, questions[r.id]?.asks ?? [{ describe: "", showMe: "" }]]));
-    const out = assembleWorksheetRows(rows, asksById, { keepEmpty: true });
+    const byId = new Map(rows.map((r) => [r.id, questions[r.id]?.questions ?? []]));
+    const out = assembleWorksheetRows(rows, byId, { keepEmpty: true });
     downloadCsv(buildWorksheetCsv(out), `gd4-manual-worksheet-${new Date().toISOString().slice(0, 10)}.csv`);
 
-    const missing = rows.filter((r) => stateOf(r) === "missing").length;
+    const missing = rows.filter((r) => (questions[r.id]?.questions ?? []).length === 0).length;
     const stale = rows.filter((r) => stateOf(r) === "stale" || stateOf(r) === "edited-stale").length;
     setWorksheet(
       `Downloaded ${out.length} row${out.length === 1 ? "" : "s"} from ${rows.length} checks, with no AI call.` +
@@ -552,68 +568,100 @@ export function DomainChecklistLibrary() {
                           </details>
                         )}
 
-                        {/* The walkthrough question, stored against this check.
+                        {/* The walkthrough questions stored against this check.
                             Visible here so Felix can read the auditor-facing
-                            form without exporting anything, and hand-editable —
-                            a hand edit is flagged and never overwritten by a
-                            later bulk regeneration. */}
+                            form without exporting anything. Each is typed
+                            Process or Document, can be reworded, reordered or
+                            removed, and he can add his own — a hand question
+                            survives every later regeneration. */}
                         {(() => {
                           const qs = stateOf(r);
                           const stored = questions[r.id];
-                          const qEditing = editingQuestionId === r.id;
+                          const list = stored?.questions ?? [];
+                          const adding = addingQuestionFor === r.id;
                           return (
                             <div style={{ marginTop: 8, borderTop: "1px dashed #e2e8f0", paddingTop: 8 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 5 }}>
-                                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "#64748b" }}>Walkthrough question</span>
+                                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "#64748b" }}>
+                                  Walkthrough question{list.length === 1 ? "" : "s"}{list.length > 0 ? ` (${list.length})` : ""}
+                                </span>
                                 <Pill s={QUESTION_TONE[qs]}>{QUESTION_LABEL[qs]}</Pill>
                                 <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                                  {!qEditing && (
-                                    <button
-                                      type="button" style={btn} disabled={worksheetBusy}
-                                      onClick={() => void generateQuestions([r], "this question")}
-                                      title={stored?.edited ? "Rewrite this question with AI, replacing your own wording for this check only" : "Write this question with AI"}
-                                    >
-                                      {stored ? "Regenerate" : "Write question"}
-                                    </button>
-                                  )}
-                                  {!qEditing && (
-                                    <button
-                                      type="button" style={btn}
-                                      onClick={() => { setEditingQuestionId(r.id); setQDescribe(stored?.asks?.[0]?.describe ?? ""); setQShowMe(stored?.asks?.[0]?.showMe ?? ""); }}
-                                    >
-                                      Edit question
-                                    </button>
-                                  )}
+                                  <button
+                                    type="button" style={btn} disabled={worksheetBusy}
+                                    onClick={() => void generateQuestions([r], "this check's questions")}
+                                    title={list.some((q) => q.source === "hand")
+                                      ? "Rewrite the AI-written questions on this check. Your own questions are kept."
+                                      : "Write the walkthrough questions for this check with AI"}
+                                  >
+                                    {list.length > 0 ? "Regenerate" : "Write questions"}
+                                  </button>
+                                  <button type="button" style={btn} onClick={() => { setAddingQuestionFor(adding ? null : r.id); setEditingQuestionId(null); setQText(""); setQType("Document"); }}>
+                                    {adding ? "Cancel" : "+ Add question"}
+                                  </button>
                                 </span>
                               </div>
 
-                              {qEditing ? (
-                                <div style={{ display: "grid", gap: 6 }}>
-                                  <label style={{ fontSize: 11, color: "#475569" }}>
-                                    Describe (the procedural ask — leave blank if this check is purely documentary)
-                                    <textarea style={{ ...inputStyle, marginTop: 3, minHeight: 52, resize: "vertical" }} value={qDescribe} onChange={(e) => setQDescribe(e.target.value)} />
-                                  </label>
-                                  <label style={{ fontSize: 11, color: "#475569" }}>
-                                    Show me (the documentary ask — leave blank if this check is purely procedural)
-                                    <textarea style={{ ...inputStyle, marginTop: 3, minHeight: 52, resize: "vertical" }} value={qShowMe} onChange={(e) => setQShowMe(e.target.value)} />
-                                  </label>
+                              {list.length === 0 && !adding && (
+                                <div style={muted}>No questions yet. This check still appears in the worksheet, with its Question cell blank.</div>
+                              )}
+
+                              <div style={{ display: "grid", gap: 4 }}>
+                                {list.map((q, qi) => {
+                                  const key = `${r.id}|${q.id}`;
+                                  const qEditing = editingQuestionId === key;
+                                  if (qEditing) {
+                                    return (
+                                      <div key={q.id} style={{ display: "grid", gap: 6, padding: 8, background: "#f8fafc", borderRadius: 6 }}>
+                                        <select style={inputStyle} value={qType} onChange={(e) => setQType(e.target.value as AskType)}>
+                                          <option value="Process">Process — describe how you do it</option>
+                                          <option value="Document">Document — produce the record</option>
+                                        </select>
+                                        <textarea style={{ ...inputStyle, minHeight: 56, resize: "vertical" }} value={qText} onChange={(e) => setQText(e.target.value)} />
+                                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                          <button type="button" style={btnPrimary} onClick={() => saveQuestionEdit(r.id, q.id)} disabled={!qText.trim()}>Save question</button>
+                                          <button type="button" style={btn} onClick={() => setEditingQuestionId(null)}>Cancel</button>
+                                          <span style={muted}>Saving makes it yours, and a regeneration will leave it alone.</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                  return (
+                                    <div key={q.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "5px 8px", background: "#f8fafc", borderRadius: 6 }}>
+                                      <span style={{
+                                        fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, whiteSpace: "nowrap", marginTop: 2,
+                                        borderRadius: 4, padding: "1px 5px",
+                                        color: q.askType === "Process" ? "#7c3aed" : "#0369a1",
+                                        background: q.askType === "Process" ? "#f5f3ff" : "#f0f9ff",
+                                        border: `1px solid ${q.askType === "Process" ? "#ddd6fe" : "#bae6fd"}`,
+                                      }}>{q.askType}</span>
+                                      <span style={{ fontSize: 12, color: "#334155", flex: 1 }}>
+                                        {q.text}
+                                        {q.source === "hand" && <span style={{ ...muted, fontSize: 10, marginLeft: 6 }}>· yours</span>}
+                                      </span>
+                                      <span style={{ display: "flex", gap: 4 }}>
+                                        <button type="button" style={iconBtn} title="Move up" disabled={qi === 0} onClick={() => moveQuestion(r.id, q.id, -1)}>↑</button>
+                                        <button type="button" style={iconBtn} title="Move down" disabled={qi === list.length - 1} onClick={() => moveQuestion(r.id, q.id, 1)}>↓</button>
+                                        <button type="button" style={iconBtn} title="Reword this question" onClick={() => { setEditingQuestionId(key); setAddingQuestionFor(null); setQText(q.text); setQType(q.askType); }}>Edit</button>
+                                        <button type="button" style={{ ...iconBtn, color: "#b23121" }} title="Remove this question" onClick={() => removeQuestion(r.id, q.id)}>✕</button>
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {adding && (
+                                <div style={{ display: "grid", gap: 6, marginTop: 6, padding: 8, border: "1px dashed #bae6fd", background: "#f8fbff", borderRadius: 6 }}>
+                                  <select style={inputStyle} value={qType} onChange={(e) => setQType(e.target.value as AskType)}>
+                                    <option value="Process">Process — describe how you do it</option>
+                                    <option value="Document">Document — produce the record</option>
+                                  </select>
+                                  <textarea style={{ ...inputStyle, minHeight: 56, resize: "vertical" }} placeholder="e.g. Show me the Academic Board minutes approving this lecturer before the module started." value={qText} onChange={(e) => setQText(e.target.value)} />
                                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                                    <button type="button" style={btnPrimary} onClick={() => saveQuestionEdit(r)} disabled={!qDescribe.trim() && !qShowMe.trim()}>Save question</button>
-                                    <button type="button" style={btn} onClick={() => setEditingQuestionId(null)}>Cancel</button>
-                                    <span style={muted}>Your wording is kept and never overwritten by a bulk regeneration.</span>
+                                    <button type="button" style={btnPrimary} onClick={() => saveQuestionAdd(r)} disabled={!qText.trim()}>Add question</button>
+                                    <span style={muted}>Your own questions are kept when this check is regenerated.</span>
                                   </div>
                                 </div>
-                              ) : stored ? (
-                                <div style={{ display: "grid", gap: 3, fontSize: 12, color: "#334155" }}>
-                                  {stored.asks.map((a, i) => (
-                                    <div key={i} style={{ display: "grid", gap: 2, padding: "4px 8px", background: "#f8fafc", borderRadius: 6 }}>
-                                      <div><b style={{ color: "#475569" }}>Describe: </b>{a.describe || <span style={muted}>not applicable to this check</span>}</div>
-                                      <div><b style={{ color: "#475569" }}>Show me: </b>{a.showMe || <span style={muted}>not applicable to this check</span>}</div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div style={muted}>No question written yet. This check will still appear in the worksheet, with its Describe and Show me cells blank.</div>
                               )}
                             </div>
                           );

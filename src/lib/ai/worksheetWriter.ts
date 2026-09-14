@@ -26,10 +26,10 @@
 // prompt, a verdict or a score.
 
 import { chatComplete, effectiveSettings, type ChatSchema } from "./aiClient";
-import { sArr, sObj, sStr } from "./schemaHelpers";
+import { sArr, sEnum, sObj, sStr } from "./schemaHelpers";
 import type { AISettings } from "../../types";
 import type { DomainChecklistRow } from "../domainChecklist";
-import type { WorksheetAsk } from "../manualWorksheet";
+import { newQuestionId, type AskType, type WorksheetQuestion } from "../manualWorksheet";
 
 // Small enough that one malformed reply costs little and progress is visible,
 // large enough to keep a full 186-check worksheet to single-figure calls.
@@ -51,29 +51,34 @@ export const CONCURRENCY = 4;
 // missing, stale, or explicitly picked for regeneration. This function does one
 // job — convert the rows it is handed.
 
+// A FLAT list of questions per check, each with its own type — not a
+// {describe, showMe} pair. The pair was the cause of the duplication: both
+// halves hung off one ask, so the model was structurally invited to state the
+// same audit point twice. Here it emits as many questions as the check
+// warrants and types each one.
 const WORKSHEET_SCHEMA: ChatSchema = { name: "worksheet_questions", schema: sObj({
   checks: sArr(sObj({
     id: sStr,
-    asks: sArr(sObj({ describe: sStr, showMe: sStr })),
+    questions: sArr(sObj({ askType: sEnum("Process", "Document"), text: sStr })),
   })),
 }) };
 
 const SYSTEM = `You convert an internal audit checklist into a printable walkthrough worksheet.
 
-Each input check is an instruction written AT an AI assessor. Your job is to turn it into the question a human auditor would ask a member of staff, face to face, during a site visit.
+Each input check is an instruction written AT an AI assessor. Your job is to turn it into the questions a human auditor would ask a member of staff, face to face, during a site visit.
 
-For each check return one or more "asks". Each ask has two halves:
-- "describe": the procedural question, phrased as an ask to the person — "Describe how you…", "Walk me through…", "Who approves…".
-- "showMe": the documentary question — "Show me…" followed by the specific records, naming them.
+Return a list of questions for each check. Every question has:
+- "text": the question itself, addressed to the person.
+- "askType": "Process" if you are asking them to describe how something is done, "Document" if you are asking them to produce a record.
 
 HARD RULES
-1. REPHRASE ONLY. Never add a requirement, threshold, document type, date or authority that is not in the check you were given. Never soften or drop one either.
-2. KEEP THE SPECIFICS. The question must still name the exact thing that would constitute a finding: the named document, the number ("at least 7 working days"), the sequencing ("dated before the contract"), the separation ("evidencing role separation"), the authority ("approved by the Academic Board"). A question that reads as a generic prompt has failed.
-3. LEAVE A HALF GENUINELY BLANK. If a check is purely documentary, return "" for describe. If purely procedural, return "" for showMe. Do NOT invent filler to fill a cell.
-4. SPLIT ONLY REAL SPLITS. If a check contains two genuinely distinct asks (for example a record-keeping PROCESS and a certified STATEMENT), return two asks. If it is one ask, return one. Do not pad.
-5. GUIDANCE PARAGRAPHS. Some checks are band-level guidance rather than a single ask (they discuss what separates a Band 3 from a Band 4). For these, return the 1-2 most concrete questions the paragraph implies — usually "show me the analysis" and "show me what changed as a result". Drop the band commentary itself; the auditor does not read banding theory aloud.
-6. Address the person, not the file. "Describe how you verify…", not "The PEI must verify…".
-7. British spelling. No em dashes. Keep each half under about 45 words.
+1. NEVER SAY THE SAME THING TWICE. Do not pair a "describe how you do X" question with a "show me the record of X" question about the same point. Pick the ONE that actually tests it: if the control is proved by a record, ask for the record; if it is proved by how people behave, ask them to describe it. Two questions may only cover the same subject when they test genuinely different things.
+2. AS MANY QUESTIONS AS THE CHECK WARRANTS, no more. A narrow check gets one question. A rich check covering several distinct obligations gets one per obligation, typically up to four. Never pad a simple check to hit a number, and never compress a rich one into a single question.
+3. REPHRASE ONLY. Never add a requirement, threshold, document type, date or authority that is not in the check you were given. Never soften or drop one either.
+4. KEEP THE SPECIFICS. The question must still name the exact thing that would constitute a finding: the named document, the number ("at least 7 working days"), the sequencing ("dated before the contract"), the separation ("evidencing role separation"), the authority ("approved by the Academic Board"). A question that reads as a generic prompt has failed.
+5. GUIDANCE PARAGRAPHS. Some checks are band-level guidance rather than an ask (they discuss what separates a Band 3 from a Band 4). For these, return the concrete questions the paragraph implies, usually asking for the analysis itself and for what changed as a result. Drop the band commentary; the auditor does not read banding theory aloud.
+6. Address the person, not the file. "Describe how you verify…" or "Show me…", not "The PEI must verify…".
+7. British spelling. No em dashes. Keep each question under about 45 words.
 
 Return every input id exactly once, in the order given.`;
 
@@ -93,8 +98,8 @@ export async function runWorksheetConversion(
   rows: DomainChecklistRow[],
   settings: AISettings,
   opts: { onProgress?: (p: WorksheetProgress) => void; signal?: AbortSignal } = {},
-): Promise<{ asksById: Map<string, WorksheetAsk[]>; failed: string[] }> {
-  const asksById = new Map<string, WorksheetAsk[]>();
+): Promise<{ questionsById: Map<string, WorksheetQuestion[]>; failed: string[] }> {
+  const questionsById = new Map<string, WorksheetQuestion[]>();
   const failed: string[] = [];
 
   const batches: DomainChecklistRow[][] = [];
@@ -113,15 +118,24 @@ export async function runWorksheetConversion(
         call,
         { temperature: 0.2, schema: WORKSHEET_SCHEMA, signal: opts.signal },
       );
-      const parsed = JSON.parse(reply) as { checks?: { id?: string; asks?: WorksheetAsk[] }[] };
+      const parsed = JSON.parse(reply) as { checks?: { id?: string; questions?: { text?: string; askType?: string }[] }[] };
       const inBatch = new Set(batch.map((r) => r.id));
       const seen = new Set<string>();
       for (const c of parsed.checks ?? []) {
         // An id the model invented, or one belonging to another batch, is
         // dropped rather than stored against a check it was not written for.
-        if (!c?.id || !Array.isArray(c.asks) || !inBatch.has(c.id)) continue;
+        if (!c?.id || !Array.isArray(c.questions) || !inBatch.has(c.id)) continue;
         seen.add(c.id);
-        asksById.set(c.id, c.asks.map((a) => ({ describe: String(a?.describe ?? ""), showMe: String(a?.showMe ?? "") })));
+        questionsById.set(c.id, c.questions
+          .map((q) => ({
+            id: newQuestionId(),
+            text: String(q?.text ?? "").trim(),
+            // Anything the model returns outside the two allowed values is
+            // read as a documentary ask rather than stored as a junk tag.
+            askType: (q?.askType === "Process" ? "Process" : "Document") as AskType,
+            source: "ai" as const,
+          }))
+          .filter((q) => q.text !== ""));
       }
       for (const r of batch) if (!seen.has(r.id)) failed.push(r.id);
     } catch {
@@ -140,5 +154,5 @@ export async function runWorksheetConversion(
     }),
   );
 
-  return { asksById, failed };
+  return { questionsById, failed };
 }
