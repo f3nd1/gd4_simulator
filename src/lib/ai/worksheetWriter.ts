@@ -29,7 +29,18 @@ import { chatComplete, effectiveSettings, type ChatSchema } from "./aiClient";
 import { sArr, sEnum, sObj, sStr } from "./schemaHelpers";
 import type { AISettings } from "../../types";
 import type { DomainChecklistRow } from "../domainChecklist";
-import { newQuestionId, type AskType, type WorksheetQuestion } from "../manualWorksheet";
+import { ensureAskStem, newQuestionId, type AskType, type WorksheetQuestion } from "../manualWorksheet";
+
+// Bumped whenever the SYSTEM prompt below changes in a way that should make
+// existing questions re-generatable. Stored against each check so a question
+// written by an older prompt shows a badge instead of passing as current —
+// the staleness hash only tracks the CHECK text, so without this a weak or
+// outdated write was invisible until someone read the CSV.
+//
+// v2: the two failures found in a real export — questions returned as bare
+// noun phrases with no ask stem, and the forbidden "describe X" + "show me the
+// record of X" pairing appearing on almost every check.
+export const WORKSHEET_PROMPT_VERSION = 2;
 
 // Small enough that one malformed reply costs little and progress is visible,
 // large enough to keep a full 186-check worksheet to single-figure calls.
@@ -80,7 +91,13 @@ HARD RULES
 6. Address the person, not the file. "Describe how you verify…" or "Show me…", not "The PEI must verify…".
 7. British spelling. No em dashes. Keep each question under about 45 words.
 
-Return every input id exactly once, in the order given.`;
+8. EVERY question is a COMPLETE SENTENCE that starts with the ask. Several checks are expected-evidence lists written as "**3.1.1 Selection & Appointment:** agent selection records, signed agreements, an up-to-date agent list". Drop the bold label and ASK for the list: "Show me the agent selection records, the signed agreements and the up-to-date agent list." Never return the list on its own — a question that starts "the agent agreements." is not a question.
+
+Return every input id exactly once, in the order given.
+
+## Before you answer, re-read these two (they are the ones most often broken)
+- ONE question per audit point. If a record proves it, ask for the record and do NOT also ask them to describe it. "Describe how the risk register has named owners and review dates" followed by "Show me the risk register showing named owners and review dates" is ONE point asked twice, and is wrong.
+- Every question starts with the ask ("Show me…", "Describe how you…"), never with the object of the ask.`;
 
 function userBlock(rows: DomainChecklistRow[]): string {
   return rows
@@ -105,7 +122,12 @@ export async function runWorksheetConversion(
   const batches: DomainChecklistRow[][] = [];
   for (let i = 0; i < rows.length; i += BATCH_SIZE) batches.push(rows.slice(i, i + BATCH_SIZE));
 
-  const call = effectiveSettings(settings, { purpose: "utility" });
+  // ANALYSIS, not utility. This ran on the utility model, which defaults to
+  // the smallest one available, and it showed: seven hard rules across a
+  // 20-check batch is more instruction-following than that model sustains, and
+  // the rules at the bottom of the prompt were the ones dropped. It is a
+  // rewriting task with real constraints, not a formatting chore.
+  const call = effectiveSettings(settings, { purpose: "analysis" });
   let done = 0;
 
   const runBatch = async (batch: DomainChecklistRow[]) => {
@@ -129,7 +151,8 @@ export async function runWorksheetConversion(
         questionsById.set(c.id, c.questions
           .map((q) => ({
             id: newQuestionId(),
-            text: String(q?.text ?? "").trim(),
+            // Deterministic backstop for HARD RULES 6/8 — see ensureAskStem.
+            text: ensureAskStem(String(q?.text ?? ""), (q?.askType === "Process" ? "Process" : "Document")),
             // Anything the model returns outside the two allowed values is
             // read as a documentary ask rather than stored as a junk tag.
             askType: (q?.askType === "Process" ? "Process" : "Document") as AskType,

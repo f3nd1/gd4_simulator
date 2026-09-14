@@ -2,7 +2,8 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import { fnv1a } from "../lib/domainChecklist";
-import { newQuestionId, type AskType, type WorksheetQuestion } from "../lib/manualWorksheet";
+import { ensureAskStem, newQuestionId, type AskType, type WorksheetQuestion } from "../lib/manualWorksheet";
+import { WORKSHEET_PROMPT_VERSION } from "../lib/ai/worksheetWriter";
 
 // The walkthrough questions (Describe / Show me) belonging to each check.
 //
@@ -37,6 +38,11 @@ export type StoredQuestion = {
   // Kept for the "Your wording" badge; what actually protects a question from
   // regeneration is its own `source: "hand"`, per question.
   edited?: boolean;
+  // Which version of the writer prompt produced these. sourceHash only tracks
+  // the CHECK text, so without this a question written by an older or weaker
+  // prompt read as current and stayed hidden until someone read the CSV.
+  // Absent on anything written before this field existed.
+  promptVersion?: number;
 };
 
 export type WorksheetQuestionState = {
@@ -77,6 +83,25 @@ const stamp = () => new Date().toISOString();
 // redundancy is in the content rather than the layout. Hand-written entries
 // keep their hash, so they stay "Your wording" and are never touched.
 export function migrateWorksheetQuestions(persisted: unknown, from: number): { entries: Record<string, StoredQuestion> } {
+  // v2 -> v3 is a REPAIR, not a reshape: the stored questions are kept exactly
+  // as they are except that an AI-written one returned as a bare noun phrase
+  // gets its missing ask stem back (ensureAskStem). It runs here so the 13
+  // broken rows in an existing workbook are fixed immediately, for free, with
+  // no regeneration and no AI call. Hand-written questions are passed through
+  // untouched — the wording is the user's, whatever they chose.
+  if (from === 2) {
+    const old2 = persisted as { entries?: Record<string, StoredQuestion> };
+    const entries: Record<string, StoredQuestion> = {};
+    for (const [id, e] of Object.entries(old2?.entries ?? {})) {
+      entries[id] = {
+        ...e,
+        questions: (e.questions ?? []).map((q) =>
+          q.source === "hand" ? q : { ...q, text: ensureAskStem(q.text, q.askType) }
+        ),
+      };
+    }
+    return { entries };
+  }
   if (from < 1) return { entries: {} };
   const old = persisted as { entries?: Record<string, { asks?: { describe?: string; showMe?: string }[]; sourceHash?: string; generatedAt?: string; edited?: boolean }> };
   const entries: Record<string, StoredQuestion> = {};
@@ -137,6 +162,7 @@ export const useWorksheetQuestionStore = create<WorksheetQuestionState>()(
               sourceHash,
               generatedAt: stamp(),
               edited: kept.length > 0,
+              promptVersion: WORKSHEET_PROMPT_VERSION,
             };
           }
           return { entries: trim(merged) };
@@ -174,7 +200,7 @@ export const useWorksheetQuestionStore = create<WorksheetQuestionState>()(
     }),
     {
       name: "ucc-gd4-worksheet-cache:v1",
-      version: 2,
+      version: 3,
       storage: workspaceStorage,
       migrate: (persisted, from) => migrateWorksheetQuestions(persisted, from),
     }
@@ -191,7 +217,7 @@ export function questionSourceHash(checkText: string): string {
   return fnv1a(checkText);
 }
 
-export type QuestionState = "missing" | "current" | "stale" | "edited" | "edited-stale";
+export type QuestionState = "missing" | "current" | "stale" | "old-prompt" | "edited" | "edited-stale";
 
 // What to show against a check, and what "generate missing/stale" should pick
 // up. An edited question that is also stale stays distinguishable, because
@@ -200,5 +226,9 @@ export function questionStateFor(stored: StoredQuestion | undefined, checkText: 
   if (!stored) return "missing";
   const fresh = stored.sourceHash === questionSourceHash(checkText);
   if (stored.edited) return fresh ? "edited" : "edited-stale";
-  return fresh ? "current" : "stale";
+  if (!fresh) return "stale";
+  // Text still matches the check, but an older prompt wrote it. Surfaced as
+  // its own state rather than folded into "stale": the check has not changed,
+  // the writer has, and bulk regeneration should pick it up.
+  return (stored.promptVersion ?? 0) < WORKSHEET_PROMPT_VERSION ? "old-prompt" : "current";
 }

@@ -55,6 +55,35 @@ export type WorksheetQuestion = {
   source: "ai" | "hand";
 };
 
+// Repairs a question the model returned as a bare noun phrase.
+//
+// Measured on a real export: 13 questions began mid-sentence — "the agent
+// agreements.", "the Standard PEI-Student Contract and the signed copies for
+// sampled students." Every one was a Document ask derived from an Expected
+// evidence bullet, which the library writes as
+// "**3.1.1 Selection & Appointment:** agent selection/due-diligence records…".
+// The model stripped the bold label and handed back the list, dropping the ask.
+//
+// The prompt has forbidden this since the feature's first commit (HARD RULE 6,
+// "Address the person, not the file"), so a prompt alone clearly does not hold
+// it. This is the deterministic backstop: cosmetic only, it adds the missing
+// stem and never changes the audit content. Nothing here reaches a prompt, a
+// verdict or a score.
+//
+// A question the human wrote is NEVER passed through this — their wording is
+// theirs, however they chose to phrase it.
+const ASK_STEMS = /^(show me|describe|confirm|walk me|talk me|tell me|explain|for |give me|take me|which|what|who|when|where|how|why|are |is |do |does |did |can |could |have |has )/i;
+
+export function ensureAskStem(text: string, askType: AskType): string {
+  const t = text.trim();
+  if (!t || ASK_STEMS.test(t)) return t;
+  // Only a fragment needs rescuing. A sentence that already opens with a
+  // capital is left alone: it is a real sentence the stem list simply does not
+  // enumerate, and prefixing it would produce nonsense.
+  if (!/^[a-z]/.test(t)) return t;
+  return askType === "Process" ? `Describe how you handle ${t}` : `Show me ${t}`;
+}
+
 let qSeq = 0;
 export function newQuestionId(): string {
   qSeq += 1;

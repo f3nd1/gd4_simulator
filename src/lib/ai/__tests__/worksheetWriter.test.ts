@@ -2,9 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { DomainChecklistRow } from "../../domainChecklist";
 
 const chatComplete = vi.fn();
-vi.mock("../aiClient", () => ({ chatComplete, effectiveSettings: (s: unknown) => s }));
+// Records which model bucket the writer asked for. This call used to run on
+// the UTILITY model (the smallest available), which is why seven hard rules
+// across a 20-check batch were not being followed.
+const effectiveArgs: { purpose?: string }[] = [];
+vi.mock("../aiClient", () => ({
+  chatComplete,
+  effectiveSettings: (s: unknown, opts: { purpose?: string }) => { effectiveArgs.push(opts); return s; },
+}));
 
-const { runWorksheetConversion, BATCH_SIZE, CONCURRENCY } = await import("../worksheetWriter");
+const { runWorksheetConversion, BATCH_SIZE, CONCURRENCY, WORKSHEET_PROMPT_VERSION } = await import("../worksheetWriter");
 
 const settings = { enabled: true, apiKey: "k", model: "m", utilityModel: "m" } as never;
 
@@ -126,5 +133,56 @@ describe("variable question count", () => {
     chatComplete.mockResolvedValue(JSON.stringify({ checks: [{ id: "id0", questions: [{ askType: "Document", text: "  " }, { askType: "Process", text: "real" }] }] }));
     const res = await runWorksheetConversion(rows(1), settings);
     expect(res.questionsById.get("id0")).toHaveLength(1);
+  });
+});
+
+describe("the writer runs on the analysis model, not the utility one", () => {
+  it("asks for the analysis bucket", async () => {
+    effectiveArgs.length = 0;
+    echo();
+    await runWorksheetConversion(rows(1), settings);
+    expect(effectiveArgs[0]?.purpose).toBe("analysis");
+    expect(effectiveArgs[0]?.purpose).not.toBe("utility");
+  });
+});
+
+describe("the prompt states the two rules that were being broken, last", () => {
+  it("repeats the no-duplication and ask-stem rules after the main body", async () => {
+    echo();
+    await runWorksheetConversion(rows(1), settings);
+    const system = chatComplete.mock.calls[0][0][0].content as string;
+    const recap = system.slice(system.indexOf("Before you answer"));
+    expect(recap).toMatch(/ONE question per audit point/);
+    expect(recap).toMatch(/starts with the ask/);
+    // Recency: the recap really is at the end, not buried mid-prompt.
+    expect(system.indexOf("Before you answer")).toBeGreaterThan(system.length * 0.6);
+  });
+  it("tells the model how to turn an expected-evidence list into an ask", async () => {
+    echo();
+    await runWorksheetConversion(rows(1), settings);
+    const system = chatComplete.mock.calls[0][0][0].content as string;
+    expect(system).toMatch(/is not a question/);
+  });
+  it("carries a version, so a question written by an older prompt can be spotted", () => {
+    expect(WORKSHEET_PROMPT_VERSION).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// The prompt has forbidden stemless questions since the feature's first
+// commit and the model does it anyway, so the guard has to be in code.
+describe("stemless model output is repaired on the way in", () => {
+  it("puts the ask back on a bare noun phrase", async () => {
+    chatComplete.mockImplementation(async () => JSON.stringify({
+      checks: [{ id: "id0", questions: [{ askType: "Document", text: "the agent agreements." }] }],
+    }));
+    const { questionsById } = await runWorksheetConversion(rows(1), settings);
+    expect(questionsById.get("id0")![0].text).toBe("Show me the agent agreements.");
+  });
+  it("leaves a well-formed question exactly as written", async () => {
+    chatComplete.mockImplementation(async () => JSON.stringify({
+      checks: [{ id: "id0", questions: [{ askType: "Document", text: "Show me the signed agreements." }] }],
+    }));
+    const { questionsById } = await runWorksheetConversion(rows(1), settings);
+    expect(questionsById.get("id0")![0].text).toBe("Show me the signed agreements.");
   });
 });

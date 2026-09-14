@@ -6,14 +6,17 @@ import {
   type StoredQuestion,
 } from "../useWorksheetQuestionStore";
 import { newQuestionId, type AskType, type WorksheetQuestion } from "../../lib/manualWorksheet";
+import { WORKSHEET_PROMPT_VERSION } from "../../lib/ai/worksheetWriter";
 
 afterEach(() => { useWorksheetQuestionStore.setState({ entries: {} }); });
 
 const st = () => useWorksheetQuestionStore.getState();
 const q = (text: string, source: "ai" | "hand" = "ai", askType: AskType = "Document"): WorksheetQuestion =>
   ({ id: newQuestionId(), text, askType, source });
+// Written by the CURRENT prompt unless a test says otherwise, so the
+// prompt-version badge only fires where a test is exercising it.
 const entry = (text: string, questions: WorksheetQuestion[], over: Partial<StoredQuestion> = {}): StoredQuestion =>
-  ({ questions, sourceHash: questionSourceHash(text), generatedAt: "2026-09-14T00:00:00.000Z", ...over });
+  ({ questions, sourceHash: questionSourceHash(text), generatedAt: "2026-09-14T00:00:00.000Z", promptVersion: WORKSHEET_PROMPT_VERSION, ...over });
 
 describe("questionStateFor", () => {
   it("reports missing, current and stale from the source hash", () => {
@@ -134,5 +137,66 @@ describe("v1 → v2 migration", () => {
   it("drops the v0 hash-keyed cache, which has no check id to re-attach to", async () => {
     const { migrateWorksheetQuestions } = await import("../useWorksheetQuestionStore");
     expect(migrateWorksheetQuestions({ entries: { someHash: [] } }, 0)).toEqual({ entries: {} });
+  });
+});
+
+// The staleness hash only tracks the CHECK text. Without a prompt version, a
+// question written by an older or weaker writer read as "current" and stayed
+// hidden until someone read the exported CSV — which is exactly how a sheet
+// full of stemless questions and duplicated asks survived unnoticed.
+describe("prompt-version badge", () => {
+  const cur = WORKSHEET_PROMPT_VERSION;
+  it("flags a question written by an older prompt, even though the check is unchanged", () => {
+    expect(questionStateFor(entry("c", [q("Show me x")], { promptVersion: cur - 1 }), "c")).toBe("old-prompt");
+  });
+  it("treats a question from before the field existed as older, not current", () => {
+    expect(questionStateFor(entry("c", [q("Show me x")], { promptVersion: undefined }), "c")).toBe("old-prompt");
+  });
+  it("stays current when the prompt version matches", () => {
+    expect(questionStateFor(entry("c", [q("Show me x")]), "c")).toBe("current");
+  });
+  // A changed check is the more urgent signal and must not be masked.
+  it("a changed check still reports stale, not old-prompt", () => {
+    expect(questionStateFor(entry("c", [q("Show me x")], { promptVersion: cur - 1 }), "c CHANGED")).toBe("stale");
+  });
+  it("a hand-edited question is never downgraded by the prompt version", () => {
+    expect(questionStateFor(entry("c", [q("mine", "hand")], { edited: true, promptVersion: cur - 1 }), "c")).toBe("edited");
+  });
+  it("putMany stamps the current prompt version", () => {
+    st().putMany({ c1: { questions: [q("Show me x")], sourceHash: questionSourceHash("c") } });
+    expect(st().entries.c1.promptVersion).toBe(cur);
+  });
+});
+
+describe("v2 -> v3 migration repairs stemless AI questions in place", () => {
+  const v2 = (questions: WorksheetQuestion[]) => ({
+    entries: { c1: { questions, sourceHash: "h", generatedAt: "2026-09-14T00:00:00.000Z" } },
+  });
+  it("puts the missing ask back on an AI question that starts mid-sentence", async () => {
+    const { migrateWorksheetQuestions } = await import("../useWorksheetQuestionStore");
+    const { entries } = migrateWorksheetQuestions(v2([q("the agent agreements.")]), 2);
+    expect(entries.c1.questions[0].text).toBe("Show me the agent agreements.");
+  });
+  it("uses the Process stem for a Process ask", async () => {
+    const { migrateWorksheetQuestions } = await import("../useWorksheetQuestionStore");
+    const { entries } = migrateWorksheetQuestions(v2([q("the reconciliation routine.", "ai", "Process")]), 2);
+    expect(entries.c1.questions[0].text).toBe("Describe how you handle the reconciliation routine.");
+  });
+  it("leaves a question that already has an ask completely alone", async () => {
+    const { migrateWorksheetQuestions } = await import("../useWorksheetQuestionStore");
+    const { entries } = migrateWorksheetQuestions(v2([q("Show me the agent agreements.")]), 2);
+    expect(entries.c1.questions[0].text).toBe("Show me the agent agreements.");
+  });
+  // The user's wording is theirs, however they phrased it.
+  it("never rewrites a hand-written question", async () => {
+    const { migrateWorksheetQuestions } = await import("../useWorksheetQuestionStore");
+    const { entries } = migrateWorksheetQuestions(v2([q("the agent agreements.", "hand")]), 2);
+    expect(entries.c1.questions[0].text).toBe("the agent agreements.");
+  });
+  it("keeps everything else about the entry untouched", async () => {
+    const { migrateWorksheetQuestions } = await import("../useWorksheetQuestionStore");
+    const { entries } = migrateWorksheetQuestions(v2([q("the agent agreements.")]), 2);
+    expect(entries.c1.sourceHash).toBe("h");
+    expect(entries.c1.generatedAt).toBe("2026-09-14T00:00:00.000Z");
   });
 });

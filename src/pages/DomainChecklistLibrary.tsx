@@ -39,12 +39,13 @@ const CRITERION_IDS = ["1", "2", "3", "4", "5", "6", "7"];
 // The walkthrough question's state against its check. "Stale" is shown rather
 // than silently serving text written from wording that has since changed.
 const QUESTION_TONE: Record<QuestionState, string> = {
-  missing: "neutral", current: "good", stale: "medium", edited: "progress", "edited-stale": "medium",
+  missing: "neutral", current: "good", stale: "medium", "old-prompt": "medium", edited: "progress", "edited-stale": "medium",
 };
 const QUESTION_LABEL: Record<QuestionState, string> = {
   missing: "No question yet",
   current: "Question ready",
   stale: "Stale — check changed since",
+  "old-prompt": "Written by an older question writer",
   edited: "Your wording",
   "edited-stale": "Your wording · check changed since",
 };
@@ -227,7 +228,9 @@ export function DomainChecklistLibrary() {
     const st = stateOf(r);
     // "edited-stale" is deliberately excluded: the user reworded it by hand, so
     // a bulk regeneration must warn about it, never overwrite it.
-    return st === "missing" || st === "stale";
+    // "old-prompt" IS included: the check is unchanged but an older writer
+    // produced the question, and rewriting it is the whole point of the badge.
+    return st === "missing" || st === "stale" || st === "old-prompt";
   };
 
   const questionsToWrite = allRows.filter(matches).filter((r) => r.status !== "removed").filter(needsWriting).length;
@@ -427,10 +430,10 @@ export function DomainChecklistLibrary() {
           <button
             type="button" style={{ ...btn, ...(worksheetBusy ? { opacity: 0.6, cursor: "wait" } : {}) }}
             disabled={worksheetBusy}
-            onClick={() => void generateQuestions(allRows.filter(matches).filter((r) => r.status !== "removed").filter(needsWriting), "the missing and stale questions")}
-            title="Write walkthrough questions for the checks in view that have none, or whose check text has changed since. Hand-edited questions are never overwritten."
+            onClick={() => void generateQuestions(allRows.filter(matches).filter((r) => r.status !== "removed").filter(needsWriting), "the missing and outdated questions")}
+            title="Write walkthrough questions for the checks in view that have none, whose check text has changed since, or that an older question writer produced. Hand-edited questions are never overwritten."
           >
-            {worksheetBusy ? "Writing…" : `✍ Generate missing/stale questions${questionsToWrite > 0 ? ` (${questionsToWrite})` : ""}`}
+            {worksheetBusy ? "Writing…" : `✍ Generate missing/outdated questions${questionsToWrite > 0 ? ` (${questionsToWrite})` : ""}`}
           </button>
           {worksheetBusy && (
             <button type="button" style={btnDanger} onClick={() => worksheetAbort.current?.abort()}>Cancel</button>

@@ -6,6 +6,7 @@ import {
   worksheetRef,
   worksheetCriterion,
   worksheetSubCriterion,
+  ensureAskStem,
   assembleWorksheetRows,
   buildWorksheetCsv,
   newQuestionId,
@@ -155,5 +156,57 @@ describe("buildWorksheetCsv", () => {
   it("carries no item_id or status, so it can never be fed back to the edit importer", () => {
     expect(WORKSHEET_HEADERS).not.toContain("item_id");
     expect(WORKSHEET_HEADERS).not.toContain("status");
+  });
+});
+
+// The 13 broken rows in the real export were all Document asks derived from
+// Expected-evidence bullets, which the library writes as
+// "**3.1.1 Selection & Appointment:** agent selection records, signed
+// agreements…". The model dropped the bold label AND the ask with it.
+describe("ensureAskStem", () => {
+  it("rescues the real fragments from the export, verbatim", () => {
+    for (const [broken, fixed] of [
+      ["the agent agreements.", "Show me the agent agreements."],
+      ["agent briefing records.", "Show me agent briefing records."],
+      ["the Standard PEI-Student Contract and the signed copies for sampled students.",
+       "Show me the Standard PEI-Student Contract and the signed copies for sampled students."],
+    ] as const) {
+      expect(ensureAskStem(broken, "Document")).toBe(fixed);
+    }
+  });
+
+  it("uses the Process stem for a Process ask", () => {
+    expect(ensureAskStem("the reconciliation routine.", "Process")).toBe("Describe how you handle the reconciliation routine.");
+  });
+
+  it("leaves every real ask stem alone", () => {
+    for (const ok of [
+      "Show me the agent agreements.",
+      "show me the agent agreements.",
+      "Describe how you verify the qualifications.",
+      "Confirm the cooling-off period is at least 7 working days.",
+      "For sampled students, show me the counselling forms.",
+      "Walk me through the refund calculation.",
+      "Which staff approve payments?",
+    ]) {
+      expect(ensureAskStem(ok, "Document")).toBe(ok);
+    }
+  });
+
+  // A capitalised sentence is a real sentence the stem list simply does not
+  // enumerate; prefixing it would produce nonsense like
+  // "Show me The board reviews this quarterly."
+  it("does not prefix a sentence that already starts with a capital", () => {
+    expect(ensureAskStem("The board reviews this quarterly.", "Document")).toBe("The board reviews this quarterly.");
+  });
+
+  it("trims, and returns empty for empty", () => {
+    expect(ensureAskStem("   the agent agreements.  ", "Document")).toBe("Show me the agent agreements.");
+    expect(ensureAskStem("   ", "Document")).toBe("");
+  });
+
+  it("is idempotent, so a repaired question is never double-stemmed", () => {
+    const once = ensureAskStem("the agent agreements.", "Document");
+    expect(ensureAskStem(once, "Document")).toBe(once);
   });
 });
