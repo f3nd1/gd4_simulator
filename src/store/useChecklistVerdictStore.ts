@@ -51,14 +51,40 @@ export const verdictKey = (checkId: string, subCriterionId: string, bucket: Chec
   `${checkId}::${subCriterionId}::${bucket}`;
 
 // 155 checks x 29 sub-criteria x 2 buckets is ~9k entries at the theoretical
-// maximum, which would be a localStorage problem on its own. Capped like
-// useWorksheetQuestionStore, with the text fields bounded on write, so the
-// worst case stays a few hundred KB.
-const MAX_ENTRIES = 500;
-const MAX_RATIONALE = 400;
-const MAX_QUOTE = 300;
+// maximum, which would be a localStorage problem on its own, so the entry count
+// and the free-text fields are both bounded.
+//
+// 800 rather than 500: a COMPLETE workspace sweep is 29 sub-criteria x 2 buckets
+// x a median 13 in-scope checks = 754 entries, so the old cap silently evicted
+// roughly 254 of the oldest verdicts on a full audit, with nothing on screen
+// saying so. 800 covers a full sweep with headroom.
+const MAX_ENTRIES = 800;
 
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+// 2000/1000 rather than 400/300. The old caps cut real rationales mid-word
+// ("…agenda headings withou…"), and the full text is recoverable nowhere: the
+// checklist pass writes no AI Run Log entry, and the Prompt Inspector stores
+// system prompts only, never responses. So whatever is clipped here is gone.
+//
+// The ceiling is bounded, not arbitrary: the prompt asks for one or two
+// sentences per contributing sliding window, and renderWindowNotes joins one
+// "#N [file · chunk]:" block per window, so a five-window run lands near 1,250
+// characters. 2000 clears that with headroom.
+const MAX_RATIONALE = 2000;
+const MAX_QUOTE = 1000;
+
+// Cut at a word boundary. A cap that does bite should still end on a whole
+// word: the mid-word cut was what made a clipped rationale unreadable rather
+// than merely shortened. The boundary is only honoured when it falls in the
+// last fifth of the allowance, so a passage with no whitespace near the end
+// (a long URL, a run-on table row) is cut hard rather than losing a large tail
+// hunting for a space.
+export function clipAtWord(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const head = s.slice(0, max - 1);
+  const lastBreak = head.search(/\s\S*$/);
+  const cut = lastBreak > max * 0.8 ? lastBreak : head.length;
+  return `${head.slice(0, cut).trimEnd()}…`;
+}
 
 export type ChecklistVerdictState = {
   entries: Record<string, StoredChecklistVerdict>;
@@ -92,8 +118,8 @@ export const useChecklistVerdictStore = create<ChecklistVerdictState>()(
             delete next[key];
             next[key] = {
               ...v,
-              rationale: clip(v.rationale, MAX_RATIONALE),
-              ...(v.quote ? { quote: clip(v.quote, MAX_QUOTE) } : {}),
+              rationale: clipAtWord(v.rationale, MAX_RATIONALE),
+              ...(v.quote ? { quote: clipAtWord(v.quote, MAX_QUOTE) } : {}),
             };
           }
           return { entries: trim(next) };
