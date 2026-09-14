@@ -31,9 +31,12 @@ import {
   extractPptxEmbeddedImages,
   extractDocxEmbeddedImages,
   extractXlsxEmbeddedImages,
+  listingTruncationMarker,
+  resolveDriveEntry,
+  type DriveEntryLike,
   type EmbeddedImageRef,
 } from "./textUtils";
-export { classifyPdfTextQuality, extractSpreadsheetText, extractPptxText } from "./textUtils";
+export { classifyPdfTextQuality, extractSpreadsheetText, extractPptxText, LISTING_TRUNCATED_MIME, isListingTruncationMarker } from "./textUtils";
 const extractSpreadsheetText = _extractSpreadsheetText;
 const extractPptxText = _extractPptxText;
 
@@ -243,14 +246,25 @@ async function driveFetch(url: string, accessToken: string, signal?: AbortSignal
 // excludes Shared/Team Drive items — a folder living in a Shared Drive then
 // looks "denied" (403) or simply not found, even though the connected
 // account genuinely has viewer access to it.
+// Marks a folder level whose listing was CUT SHORT. A truncated listing used
+// to be indistinguishable from a complete one: the return type carried no flag
+// and the leftover pageToken was discarded, so files beyond the cap simply did
+// not exist as far as the audit was concerned, and the requirement they
+// evidenced came back as a confidently-worded gap. This sentinel rides back in
+// the normal file array so it surfaces through the File Ledger, the pre-flight
+// probe's unreadable-files warning and the ledger CSV export with no caller
+// change — all three already render failReason.
+const MAX_PAGES = 10;
+const PAGE_SIZE = 200;
+
 export async function listFolderFiles(folderId: string, accessToken: string, signal?: AbortSignal): Promise<DriveFile[]> {
   const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
-  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+  // shortcutDetails: a Drive shortcut is not a folder MIME, so a shortcut to
+  // the real evidence folder used to be treated as an unreadable leaf file and
+  // contributed nothing. Requesting the target lets it be followed.
+  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size,shortcutDetails(targetId,targetMimeType))&pageSize=${PAGE_SIZE}&supportsAllDrives=true&includeItemsFromAllDrives=true`;
   const all: DriveFile[] = [];
   let pageToken: string | undefined;
-  // Guard: cap at 5 pages (500 files) per folder level to prevent runaway
-  // loops on very large or looping Shared Drive structures.
-  const MAX_PAGES = 5;
   let pages = 0;
   do {
     const url = pageToken ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}` : baseUrl;
@@ -260,34 +274,51 @@ export async function listFolderFiles(folderId: string, accessToken: string, sig
     pageToken = data.nextPageToken as string | undefined;
     pages++;
   } while (pageToken && pages < MAX_PAGES);
+  // Still more to fetch when the cap was hit: say so rather than returning a
+  // short list that looks complete.
+  if (pageToken) all.push(listingTruncationMarker(folderId, `more than ${MAX_PAGES * PAGE_SIZE} items at this level were not listed`));
   return all;
 }
 
-const FOLDER_MIME = "application/vnd.google-apps.folder";
+
 
 export type DriveFileWithPath = DriveFile & { path: string };
 
 // Evidence owners commonly organize a sub-criterion's folder into nested
 // subfolders (e.g. "2024/Q1", "Signed copies") — without recursing, anything
-// not directly inside the top-level folder silently looked empty to the
-// audit. Depth-capped rather than unbounded, since a Shared Drive can
-// contain folder shortcuts that would otherwise let this recurse forever.
-const MAX_FOLDER_DEPTH = 6;
+// not directly inside the top-level folder silently looked empty to the audit.
+//
+// Depth-capped, and the cap's stated justification used to be wrong: it blamed
+// folder shortcuts recursing forever, but shortcuts were never followed at all.
+// The real unbounded case is a folder reachable by two paths, which a `visited`
+// set now handles — and that set is what makes following shortcuts safe.
+const MAX_FOLDER_DEPTH = 8;
 
 export async function listFolderFilesRecursive(
   folderId: string,
   accessToken: string,
   path = "",
   depth = 0,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  visited: Set<string> = new Set(),
 ): Promise<DriveFileWithPath[]> {
-  if (depth > MAX_FOLDER_DEPTH) return [];
+  // Returning [] past the cap reads as "this folder is empty" downstream, which
+  // is the same silent-gap failure as a truncated page. Say why instead.
+  if (depth > MAX_FOLDER_DEPTH) {
+    return [{ ...listingTruncationMarker(path, `nested deeper than ${MAX_FOLDER_DEPTH} folder levels and was not read`), path }];
+  }
+  if (visited.has(folderId)) return [];
+  visited.add(folderId);
+
   const entries = await listFolderFiles(folderId, accessToken, signal);
   const nested = await Promise.all(
     entries.map((entry) => {
       const entryPath = path ? `${path}/${entry.name}` : entry.name;
-      if (entry.mimeType === FOLDER_MIME) return listFolderFilesRecursive(entry.id, accessToken, entryPath, depth + 1, signal);
-      return Promise.resolve<DriveFileWithPath[]>([{ ...entry, path: entryPath }]);
+      // Follow a shortcut to its target: to a folder, recurse into it; to a
+      // file, read the real file rather than the unreadable shortcut stub.
+      const resolved = resolveDriveEntry(entry as DriveEntryLike);
+      if (resolved.kind === "folder") return listFolderFilesRecursive(resolved.id, accessToken, entryPath, depth + 1, signal, visited);
+      return Promise.resolve<DriveFileWithPath[]>([{ ...entry, id: resolved.id, mimeType: resolved.mimeType, path: entryPath }]);
     })
   );
   return nested.flat();
@@ -298,11 +329,22 @@ export async function listFolderFilesRecursive(
 // exists for it). Anything else (images, video, etc.) is reported as
 // unsupported rather than silently skipped, so the audit can disclose
 // exactly what it did and did not read.
+// Google's export formats for native Docs/Sheets/Slides.
+//
+// A native Sheet is deliberately exported as XLSX rather than CSV: Drive's CSV
+// export is documented as FIRST SHEET ONLY, so a multi-tab evidence workbook
+// was audited on its cover tab alone, with the ledger showing readStatus
+// "read" and a plausible char count. Exporting the workbook lets it run
+// through the same extractSpreadsheetText used for uploaded .xlsx, which
+// labels every sheet and notes any row cap, and picks up embedded-image vision
+// for free.
 const GOOGLE_EXPORT_MIME: Record<string, string> = {
   "application/vnd.google-apps.document": "text/plain",
-  "application/vnd.google-apps.spreadsheet": "text/csv",
+  "application/vnd.google-apps.spreadsheet": XLSX_MIME,
   "application/vnd.google-apps.presentation": "text/plain",
 };
+
+export const GOOGLE_SHEET_MIME = "application/vnd.google-apps.spreadsheet";
 
 // PDF has no Drive /export conversion (that's only for Google-native
 // formats) — read the raw bytes via alt=media instead and extract text
@@ -387,8 +429,16 @@ export async function exportFileText(
   embeddedImageHook?: EmbeddedImageHook,
 ): Promise<string | null> {
   if (file.mimeType in GOOGLE_EXPORT_MIME) {
-    const mime = encodeURIComponent(GOOGLE_EXPORT_MIME[file.mimeType]);
-    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${mime}&supportsAllDrives=true`, accessToken, signal);
+    const target = GOOGLE_EXPORT_MIME[file.mimeType];
+    const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${encodeURIComponent(target)}&supportsAllDrives=true`, accessToken, signal);
+    // A native Sheet comes back as a real workbook, so read every tab through
+    // the shared extractor instead of taking a first-sheet-only CSV blob.
+    if (target === XLSX_MIME) {
+      const buffer = await res.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: "array" });
+      const text = extractSpreadsheetText(wb, file.name);
+      return mergeEmbeddedImages(await extractXlsxEmbeddedImages(buffer), text, embeddedImageHook);
+    }
     return res.text();
   }
   if (file.mimeType === "text/plain" || file.mimeType === "text/csv") {

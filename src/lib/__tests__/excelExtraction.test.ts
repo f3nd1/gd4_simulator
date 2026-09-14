@@ -155,3 +155,19 @@ describe("extractSpreadsheetText file name labelling", () => {
     expect(count).toBe(3);
   });
 });
+
+// Issue 9: Drive's CSV export is documented first-sheet-only, so a multi-tab
+// native Google Sheet was audited on its cover tab alone with the ledger
+// showing a clean "read". Exporting the workbook routes it through the same
+// multi-sheet extractor uploaded .xlsx already uses. Asserted as a constant so
+// the regression is caught without importing driveClient.
+describe("issue 9 — native Google Sheets export as a workbook, not first-sheet CSV", () => {
+  it("the export MIME for a native Sheet is XLSX", async () => {
+    const src = await import("node:fs").then((fs) =>
+      fs.readFileSync(new URL("../drive/driveClient.ts", import.meta.url), "utf8")
+    );
+    const block = src.slice(src.indexOf("const GOOGLE_EXPORT_MIME"), src.indexOf("export const GOOGLE_SHEET_MIME"));
+    expect(block).toContain('"application/vnd.google-apps.spreadsheet": XLSX_MIME');
+    expect(block).not.toContain('"application/vnd.google-apps.spreadsheet": "text/csv"');
+  });
+});

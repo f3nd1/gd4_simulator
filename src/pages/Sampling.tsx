@@ -3,36 +3,17 @@ import { useScored } from "../hooks/useScored";
 import { Card, inputStyle } from "../components/ui/Card";
 import { Pill } from "../components/ui/Pill";
 import { GOLD, INK } from "../lib/theme";
-import type { SampleRecord, SampleRecordType } from "../types";
+import { generateSamples } from "../lib/sampling";
+import type { SampleRecord } from "../types";
 
-const TYPE_BY_CRITERION: Record<string, SampleRecordType> = {
-  "1": "Academic",
-  "2": "Staff",
-  "3": "Academic",
-  "4": "Student",
-  "5": "Academic",
-  "6": "QA",
-  "7": "Financial",
-};
 
-function generateSamples(items: { id: string; crit: string; title: string; ais: number; band: number; gate: boolean }[]): SampleRecord[] {
-  const risky = items.filter((i) => i.band < 3 || i.gate).slice(0, 12);
-  return risky.map((it, idx) => ({
-    id: `SMP-${it.id}-${idx}`,
-    auditCycleId: "cycle-1",
-    gd4ItemId: it.id,
-    recordType: TYPE_BY_CRITERION[it.crit] || "QA",
-    reference: `${it.id} record set ${idx + 1}`,
-    riskReason: it.gate ? "Gate-sensitive item" : `Evidence score ${it.ais}, below Band 3`,
-    selected: true,
-  }));
-}
 
 export function Sampling() {
   const samples = useWorkspaceStore((s) => s.samples);
   const setSamples = useWorkspaceStore((s) => s.setSamples);
   const toggleSample = useWorkspaceStore((s) => s.toggleSample);
   const setSampleOutcome = useWorkspaceStore((s) => s.setSampleOutcome);
+  const cycleId = useWorkspaceStore((s) => s.cycle.id);
   const scored = useScored();
 
   return (
@@ -44,7 +25,7 @@ export function Sampling() {
             // Regenerating replaces the whole array — including any tested
             // outcomes/notes already recorded against the current sample.
             if (samples.length > 0 && !confirm("This will replace your recorded sampling outcomes. Continue?")) return;
-            setSamples(generateSamples(scored.items));
+            setSamples(generateSamples(scored.items, cycleId));
           }}
           style={{ marginLeft: "auto", cursor: "pointer", border: "none", background: GOLD, color: INK, fontWeight: 700, padding: "7px 12px", borderRadius: 8 }}
         >

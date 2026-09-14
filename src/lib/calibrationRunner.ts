@@ -20,7 +20,7 @@ import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { useRuleTuningStore } from "../store/useRuleTuningStore";
 import { selectLineStatusMemories, selectLineStatusCalibration } from "./labParity";
-import { parseFolderId, listFolderFilesRecursive, exportFileText, IMAGE_MIME_TYPES, XLSX_MIME, XLS_MIME, classifyPdfTextQuality } from "./drive/driveClient";
+import { parseFolderId, listFolderFilesRecursive, exportFileText, IMAGE_MIME_TYPES, XLSX_MIME, XLS_MIME, GOOGLE_SHEET_MIME, classifyPdfTextQuality } from "./drive/driveClient";
 import { sObj, sArr, sStr, sEnum } from "./ai/schemaHelpers";
 import {
   runPPDRequirementsReview, runEvidenceAssessment,
@@ -180,7 +180,7 @@ async function gatherText(folderLink: string | undefined, label: string, signal:
     if (!body) continue;
     fileRecords[idx] = { ...fileRecords[idx], readStatus: "read", charCount: body.length };
     onLive?.({ type: "file-progress", phase, files: [...fileRecords] });
-    if (file.mimeType === XLSX_MIME || file.mimeType === XLS_MIME || file.mimeType === "text/csv") hasSpreadsheet = true;
+    if (file.mimeType === XLSX_MIME || file.mimeType === XLS_MIME || file.mimeType === "text/csv" || file.mimeType === GOOGLE_SHEET_MIME) hasSpreadsheet = true;
     if (file.mimeType === "application/pdf" && classifyPdfTextQuality(body).suspectedScannedPdf) hasScanned = true;
     const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
     for (let pi = 0; pi < totalParts; pi++) {

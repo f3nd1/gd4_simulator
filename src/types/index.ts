@@ -589,6 +589,11 @@ export type SubCriterionChecklistEntry = {
   // (the "your own working / not official" framing is retired).
   apsrMatrix?: ApsrMatrixScores;
   pendingGenerated?: SpecificChecklistLine[];
+  // The AI's ORIGINAL proposal, captured at generation and never edited.
+  // pendingGenerated is mutated in place by removePendingLine/updatePendingLine,
+  // so it is not a record of what the AI actually proposed; without this the
+  // decision log could not tell an accepted batch from an edited one.
+  generatedSnapshot?: { id: string; text: string }[];
   generatedAt?: string;
   generatedLive?: boolean;
 };
@@ -1609,9 +1614,28 @@ export type CalibrationMemory = {
   tokenCount: number;
 };
 
+// Scoring settings that were IN FORCE when a version was saved.
+//
+// These live in a sibling store and were not captured, so restoring a version
+// recomputed historical evidence under whatever thresholds are current: the
+// same evidence could show a different band and a different award tier than
+// when it was saved, with no warning. They are the only omitted state that
+// retroactively changes numbers already computed, which is why they are
+// captured and the rest is disclosed instead (see restoreVersion).
+export type SnapshotScoringConfig = {
+  awardThresholds: { provisional: number; fourYear: number; star: number };
+  apsrScale: { maxPctPerDimension: number; bandThresholds: [number, number, number, number] };
+  aiStrictness: string;
+  autoScoreBands: boolean;
+};
+
 // Snapshot+restore versioning: each saved version carries a full copy of the
 // working state so it can be restored later, not just a status label.
 export type WorkspaceSnapshot = {
+  // Optional: snapshots saved before this existed have none, and restore must
+  // say so rather than silently reusing today's settings.
+  scoringConfig?: SnapshotScoringConfig;
+  activeAuditorId?: string | null;
   cycle: AuditCycle;
   evidence: Record<string, ItemEvidence>;
   reviewer: Record<string, number>;

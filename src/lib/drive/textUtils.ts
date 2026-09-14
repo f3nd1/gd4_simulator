@@ -29,6 +29,24 @@ export function classifyPdfTextQuality(text: string): {
   return { suspectedScannedPdf, extractedTextQuality };
 }
 
+// Should this PDF be transcribed by vision?
+//
+// Detection and action used to disagree: suspectedScannedPdf covered "none"
+// AND "low", but all three read paths triggered vision only on "none". A
+// scanned document whose typed layer leaks a header, a stamp or a page number
+// lands in the 50-199 char window, so it was recorded readStatus "read",
+// readMethod "text", with a plausible char count, while its actual content was
+// never transcribed. The few leaked characters then went into the evidence
+// pool as if they were the document, produced no requirement-relevant match,
+// and the requirement came back as a confidently-worded gap.
+//
+// Exported and named so the three read paths share ONE predicate rather than
+// three copies of a literal that already drifted once, and so it can be tested
+// without importing driveClient (which builds a pdfjs Worker at module load).
+export function needsVisionFallback(quality: "none" | "low" | "medium" | "high"): boolean {
+  return quality === "none" || quality === "low";
+}
+
 // Extracts structured text from an Excel workbook, preserving sheet names,
 // column headers, and row data. Caps at 200 rows per sheet so very large
 // spreadsheets don't dominate the audit context budget.
@@ -283,4 +301,55 @@ export async function extractXlsxEmbeddedImages(buffer: ArrayBuffer): Promise<Em
 // listing order. Pure copy, no mutation of the input array.
 export function orderBySizeForVisionBudget<T extends { size?: string }>(files: T[]): T[] {
   return [...files].sort((a, b) => (Number(a.size ?? 0) || 0) - (Number(b.size ?? 0) || 0));
+}
+
+
+// ─── Folder listing: truncation + shortcut resolution ───────────────────────
+//
+// These live here, not in driveClient, because driveClient builds a pdfjs
+// Worker at module load and cannot be imported by a test. Keeping the decisions
+// pure means the shipped code is what the tests actually exercise.
+
+// A folder level whose listing was cut short. A truncated listing used to be
+// indistinguishable from a complete one, so files beyond the cap did not exist
+// as far as the audit was concerned and the requirement they evidenced came
+// back as a confidently-worded gap. This rides back in the normal file array so
+// it surfaces through the File Ledger, the pre-flight probe and the ledger CSV
+// with no caller change, since all three already render an unreadable entry.
+export const LISTING_TRUNCATED_MIME = "application/x-ucc-listing-truncated";
+
+export function listingTruncationMarker(folderPath: string, reason: string): {
+  id: string; name: string; mimeType: string; modifiedTime: string;
+} {
+  return {
+    id: `truncated:${folderPath}:${reason}`,
+    name: `⚠ Folder listing incomplete — ${reason}`,
+    mimeType: LISTING_TRUNCATED_MIME,
+    modifiedTime: new Date().toISOString(),
+  };
+}
+
+export function isListingTruncationMarker(mimeType: string | undefined): boolean {
+  return mimeType === LISTING_TRUNCATED_MIME;
+}
+
+export const FOLDER_MIME = "application/vnd.google-apps.folder";
+
+export type DriveEntryLike = {
+  id: string;
+  mimeType: string;
+  shortcutDetails?: { targetId?: string; targetMimeType?: string };
+};
+
+// What a listed entry actually is, once a Drive shortcut is followed.
+// Shortcuts were never resolved: a shortcut's MIME is not the folder MIME, so
+// a shortcut pointing at the real evidence folder was treated as an unreadable
+// leaf file and contributed nothing, with one benign-looking skip line.
+export function resolveDriveEntry(entry: DriveEntryLike): { kind: "folder" | "file"; id: string; mimeType: string } {
+  const sc = entry.shortcutDetails;
+  if (sc?.targetId) {
+    const mimeType = sc.targetMimeType ?? entry.mimeType;
+    return { kind: mimeType === FOLDER_MIME ? "folder" : "file", id: sc.targetId, mimeType };
+  }
+  return { kind: entry.mimeType === FOLDER_MIME ? "folder" : "file", id: entry.id, mimeType: entry.mimeType };
 }

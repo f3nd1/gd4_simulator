@@ -349,7 +349,7 @@ export const useFindingDraftStore = create<FindingDraftState>()(
 
         const finding: Finding = {
           id: `GF-${Date.now()}`,
-          auditCycleId: "cycle-1",
+          auditCycleId: useWorkspaceStore.getState().cycle.id,
           gd4ItemId: draft.gd4ItemId,
           issue: draft.title ?? `GD4 ${draft.gd4ItemId} — ${draft.group.gapType} gap`,
           type: "Improvement Action",

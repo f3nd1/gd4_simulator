@@ -62,7 +62,17 @@ import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, OutcomeReviewPassResult, ReportAiSuggestion, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt, ClarificationRound, ClarificationProgress } from "../types";
-import { orderBySizeForVisionBudget } from "../lib/drive/textUtils";
+import { orderBySizeForVisionBudget, needsVisionFallback } from "../lib/drive/textUtils";
+
+// A suspected-scanned PDF can still carry a little real typed text (a header,
+// a stamp, a footer). Vision transcribes the page images; this keeps that typed
+// layer too, clearly separated, so nothing that WAS extracted is thrown away by
+// switching to vision.
+function mergeTypedTextWithVision(typed: string, transcribed: string): string {
+  const t = typed.trim();
+  if (!t) return transcribed;
+  return `${transcribed}\n\n--- Text layer extracted directly from the PDF ---\n${t}`;
+}
 import { buildOutcomeReviewLegUpdates } from "../lib/outcomeReviewApply";
 import { aiRateFor } from "../lib/aiCost";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
@@ -135,6 +145,19 @@ let _pendingVisionBudgetResolve: ((choice: "proceed" | "skip") => void) | null =
 // loop fire further paid calls in the meantime). One run at a time (busy
 // flag), so a single module-level ref is sufficient.
 let _currentRunAbort: AbortController | null = null;
+
+// Reads the sibling scoring store at snapshot time. Kept as a function rather
+// than an import-time value so a snapshot always records the settings in force
+// at the moment it was taken.
+function snapshotScoringConfig(): import("../types").SnapshotScoringConfig {
+  const c = useScoringConfigStore.getState();
+  return {
+    awardThresholds: { ...c.awardThresholds },
+    apsrScale: { ...c.apsrScale, bandThresholds: [...c.apsrScale.bandThresholds] as [number, number, number, number] },
+    aiStrictness: c.aiStrictness,
+    autoScoreBands: c.autoScoreBands,
+  };
+}
 
 // Persisted-prompt cap (see partialize): what is WRITTEN to storage is
 // truncated; in-memory state keeps full text for the current session.
@@ -442,9 +465,14 @@ async function readDriveFileWithVision(
   if (text !== null) {
     if (file.mimeType === "application/pdf") {
       const pdfQuality = classifyPdfTextQuality(text);
-      // Vision fallback ONLY when text extraction genuinely failed (near-zero
-      // chars = scanned/image-only PDF). A normal text PDF keeps the fast path.
-      if (pdfQuality.extractedTextQuality === "none") return await readScannedPdfViaVision();
+      // Vision whenever the PDF is SUSPECTED scanned, not only when extraction
+      // returned nothing (see needsVisionFallback). A normal text PDF keeps the
+      // fast path. Any typed text that was extracted is kept alongside the
+      // transcription rather than discarded.
+      if (needsVisionFallback(pdfQuality.extractedTextQuality)) {
+        const v = await readScannedPdfViaVision();
+        return v.text ? { ...v, text: mergeTypedTextWithVision(text, v.text), pdfQuality } : { ...v, pdfQuality };
+      }
       return { text, readMethod: "text", pdfQuality };
     }
     // Office file whose embedded pictures were transcribed via vision counts as
@@ -3524,9 +3552,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }));
       },
 
-      // Snapshot+restore versioning: every save captures a full copy of the
-      // working state, so a version in the list can be restored exactly, not
-      // just relabelled.
+      // Snapshot+restore versioning: every save captures a copy of the working
+      // state so a version can be restored, not just relabelled. NOTE: it is an
+      // allow-list, and __tests__/snapshotCoverage.test.ts fails if a new state
+      // field is neither captured here nor explicitly listed as excluded.
       saveAsNewVersion: (name, note) =>
         set((s) => {
           const m = s.cycle.version.match(/v0\.(\d+)/);
@@ -3567,6 +3596,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             reviewPanelAuditorIds: s.reviewPanelAuditorIds,
             reviewPanelMode: s.reviewPanelMode,
             auditRunHistory: s.auditRunHistory,
+            // The scoring settings in force right now. Without these a restore
+            // recomputed historical evidence under today's thresholds, so the
+            // same evidence could show a different band and award than when it
+            // was saved. ~180 bytes per snapshot, so quota-safe even at the
+            // 50-version cap (unlike aiReviewLog, which was removed for that).
+            scoringConfig: snapshotScoringConfig(),
+            activeAuditorId: s.activeAuditorId,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -3596,13 +3632,30 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // restored bands match. Older snapshots may not carry it, in which
           // case the current checklist is left untouched.
           if (snap.checklistEntries) useChecklistModuleStore.getState().replaceAllEntries(snap.checklistEntries);
+          // Restore the scoring settings the version was saved under, so the
+          // restored evidence bands and the award tier are the ones that were
+          // on screen when it was saved. A snapshot taken before this was
+          // captured has none: the restore then runs under CURRENT settings,
+          // which is the old behaviour, and the restore log says so rather than
+          // letting the numbers change silently.
+          const cfg = snap.scoringConfig;
+          if (cfg) {
+            useScoringConfigStore.setState({
+              awardThresholds: cfg.awardThresholds,
+              apsrScale: cfg.apsrScale,
+              aiStrictness: cfg.aiStrictness as ReturnType<typeof useScoringConfigStore.getState>["aiStrictness"],
+              autoScoreBands: cfg.autoScoreBands,
+            });
+          }
           // Grouped drafts point at findings/lines that are about to roll back —
           // reset them (same as createNewCycle) so no draft dangles.
           useFindingDraftStore.getState().resetAllDrafts();
           const logEntry = {
             restoredAt: new Date().toLocaleString(),
             fromVersion: entry.version,
-            fromNote: entry.note || entry.name,
+            fromNote: (entry.note || entry.name) + (snap.scoringConfig
+              ? ""
+              : " — saved before scoring settings were captured, so bands and the award tier are shown under the CURRENT settings, not the ones in force then"),
           };
           // Reconcile the snapshot to the CURRENT GD4 structure before writing
           // it back. A snapshot saved before a sub-criterion split / 7.2 fold /
@@ -3673,6 +3726,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // lines that were just rolled back.
             pendingCommits: {},
             evidenceAuditReport: null,
+            ...(snap.activeAuditorId !== undefined ? { activeAuditorId: snap.activeAuditorId } : {}),
             // Append to the immutable restore audit trail
             restoreLog: [...s.restoreLog, logEntry],
           };
@@ -3716,6 +3770,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             reviewPanelAuditorIds: s.reviewPanelAuditorIds,
             reviewPanelMode: s.reviewPanelMode,
             auditRunHistory: s.auditRunHistory,
+            // The scoring settings in force right now. Without these a restore
+            // recomputed historical evidence under today's thresholds, so the
+            // same evidence could show a different band and award than when it
+            // was saved. ~180 bytes per snapshot, so quota-safe even at the
+            // 50-version cap (unlike aiReviewLog, which was removed for that).
+            scoringConfig: snapshotScoringConfig(),
+            activeAuditorId: s.activeAuditorId,
           };
           const entry: VersionEntry = {
             id: `VER-${Date.now()}`,
@@ -4193,8 +4254,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       loadPresetAuditors: (mode) => {
         const s = get();
+        // Stamp the ACTIVE cycle: DEFAULT_AUDITORS carries "cycle-1" as a
+        // literal, so loading presets in a later cycle recorded five auditors
+        // against the first one.
+        const stamp = (a: AuditorProfile): AuditorProfile => ({ ...a, auditCycleId: s.cycle.id });
         if (mode === "replace") {
-          set({ auditors: [...DEFAULT_AUDITORS], reviewPanelAuditorIds: DEFAULT_AUDITORS.map((a) => a.id).slice(0, MAX_PANEL) });
+          set({ auditors: DEFAULT_AUDITORS.map(stamp), reviewPanelAuditorIds: DEFAULT_AUDITORS.map((a) => a.id).slice(0, MAX_PANEL) });
           return DEFAULT_AUDITORS.length;
         }
         // add: skip any preset whose name already exists (case-insensitive) so
@@ -4205,7 +4270,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         for (const p of toAdd) {
           if (panelIds.length < MAX_PANEL && !panelIds.includes(p.id)) panelIds.push(p.id);
         }
-        set({ auditors: [...s.auditors, ...toAdd], reviewPanelAuditorIds: panelIds });
+        set({ auditors: [...s.auditors, ...toAdd.map(stamp)], reviewPanelAuditorIds: panelIds });
         return toAdd.length;
       },
 
@@ -4352,7 +4417,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   // readable-via-vision when a vision model is available — only
                   // genuinely unreadable when it is not. (Same trigger the audit
                   // uses: classifyPdfTextQuality === "none".)
-                  const isImagePdf = f.mimeType === "application/pdf" && classifyPdfTextQuality(body ?? "").extractedTextQuality === "none";
+                  const isImagePdf = f.mimeType === "application/pdf" && needsVisionFallback(classifyPdfTextQuality(body ?? "").extractedTextQuality);
                   if (isImagePdf) {
                     if (canVision) { readable = true; readVia = "vision"; }
                     else { readable = false; readError = "Image-based/scanned PDF — enable AI + an API key in Settings so the audit can read it via vision."; }
@@ -4927,11 +4992,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (text !== null) {
               if (file.mimeType === "application/pdf") {
                 const pdfQuality = classifyPdfTextQuality(text);
-                // Vision fallback ONLY when text extraction genuinely failed
-                // (near-zero chars = scanned/image-only PDF). A normal text PDF
-                // keeps the fast, cheap text path.
-                if (pdfQuality.extractedTextQuality === "none") {
-                  return await readScannedPdfViaVision(readToken);
+                // Vision whenever the PDF is SUSPECTED scanned — see
+                // needsVisionFallback. Keeps any typed text alongside.
+                if (needsVisionFallback(pdfQuality.extractedTextQuality)) {
+                  const v = await readScannedPdfViaVision(readToken);
+                  // Keep the typed layer alongside the transcription, and carry
+                  // the quality metadata so the ledger still shows the Scan? flag.
+                  if (v.kind === "text") return { ...v, text: mergeTypedTextWithVision(text, v.text), pdfQuality };
+                  return v;
                 }
                 return { kind: "text", text, pdfQuality };
               }
@@ -6153,7 +6221,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (text !== null) {
               if (file.mimeType === "application/pdf") {
                 const pdfQuality = classifyPdfTextQuality(text);
-                if (pdfQuality.extractedTextQuality === "none") return await readScannedPdfViaVision(readToken);
+                if (needsVisionFallback(pdfQuality.extractedTextQuality)) {
+                  const v = await readScannedPdfViaVision(readToken);
+                  // Keep the typed layer alongside the transcription, and carry
+                  // the quality metadata so the ledger still shows the Scan? flag.
+                  if (v.kind === "text") return { ...v, text: mergeTypedTextWithVision(text, v.text), pdfQuality };
+                  return v;
+                }
                 return { kind: "text", text, pdfQuality };
               }
               return { kind: "text", text, visionModel: embeddedVisionModel };
@@ -6285,7 +6359,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
 
         // Detect dominant file type from chunks for skill injection
-        const hasSpreadsheet = evidenceChunks.some((c) => c.fileKind === "Excel" || c.fileKind === "CSV");
+        // "Google Sheet" is its own fileKind, and omitting it meant the spreadsheet
+        // skill was skipped for the most common spreadsheet type in a Drive workflow.
+        const hasSpreadsheet = evidenceChunks.some((c) => c.fileKind === "Excel" || c.fileKind === "CSV" || c.fileKind === "Google Sheet");
         const hasScanned = evidenceChunks.some((c) => (c as { suspectedScannedPdf?: boolean }).suspectedScannedPdf === true);
         const detectedFileType: "spreadsheet" | "scanned" | null = hasSpreadsheet ? "spreadsheet" : hasScanned ? "scanned" : null;
 
@@ -7510,7 +7586,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
       // to a surviving item id) is untouched. The reconcile is idempotent, so a
       // workspace at an earlier version is safely brought up to the latest.
-      version: 9,
+      version: 10,
       migrate: (persisted, fromVersion) => {
         let s = persisted as WorkspaceState;
         if (!s) return s;
@@ -7662,6 +7738,30 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ? { ...s.priorCycleFindings, findings: closeIfAccepted(s.priorCycleFindings.findings, closures) }
               : s.priorCycleFindings,
           } as WorkspaceState;
+        }
+        if (fromVersion < 10) {
+          // Findings raised from a checklist line were stamped with the literal
+          // "cycle-1" instead of the active cycle. Re-stamp ONLY records that
+          // can be PROVEN mis-stamped, never a blanket rewrite: a genuinely
+          // first-cycle finding also reads "cycle-1" and must be left alone.
+          //
+          // The proof is a date one: if this workspace is no longer on cycle-1,
+          // then any finding created at or after the CURRENT cycle began cannot
+          // belong to cycle-1. Anything older is ambiguous and keeps its value.
+          // Recurring-finding detection is forward-looking anyway, so correctly
+          // stamping new findings is what actually restores it.
+          const cycleId = s.cycle?.id;
+          const cycleStart = s.cycle?.createdAt;
+          if (cycleId && cycleId !== "cycle-1" && cycleStart) {
+            s = {
+              ...s,
+              customFindings: (s.customFindings ?? []).map((f) =>
+                f.auditCycleId === "cycle-1" && f.createdAt && f.createdAt >= cycleStart
+                  ? { ...f, auditCycleId: cycleId }
+                  : f
+              ),
+            } as WorkspaceState;
+          }
         }
         return s;
       },

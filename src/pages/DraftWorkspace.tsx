@@ -47,8 +47,9 @@ export function DraftWorkspace() {
       <Card>
         <h3 style={{ marginTop: 0, fontSize: 14 }}>Draft workspace</h3>
         <p style={{ fontSize: 12.5, color: "#6b7280" }}>
-          This is a long-running workspace, not a one-time checklist. Each "Save as new version" captures a full snapshot of the
-          workspace that can be restored later — it is not just a label change.
+          This is a long-running workspace, not a one-time checklist. Each "Save as new version" captures the audit work
+          together with the scoring settings in force at the time, so restoring gives back the same bands and award tier, not
+          just a label change. The AI-written report narrative and the cross-cycle finding archive are deliberately not rolled back.
         </p>
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
           <Pill s={locked ? "critical" : "progress"}>{cycle.status}</Pill>

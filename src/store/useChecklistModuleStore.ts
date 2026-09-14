@@ -408,7 +408,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           usage: genUsage,
         });
         set((s) => ({
-          ...mapEntry(s, itemId, (e) => ({ ...e, pendingGenerated: lines, generatedLive: live, generatedAt: new Date().toLocaleString() })),
+          ...mapEntry(s, itemId, (e) => ({ ...e, pendingGenerated: lines, generatedSnapshot: lines.map((l) => ({ id: l.id, text: l.text })), generatedLive: live, generatedAt: new Date().toLocaleString() })),
           busy: null,
         }));
       },
@@ -428,29 +428,68 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         ),
 
       confirmGenerated: (itemId) => {
-        const pending = get().entries[itemId]?.pendingGenerated || [];
-        const existing = get().entries[itemId]?.specific || [];
+        const entry = get().entries[itemId];
+        const pending = entry?.pendingGenerated || [];
+        const existing = entry?.specific || [];
+        // Diff against the AI's ORIGINAL proposal. The previous version built
+        // both sides from `pending` — aiLines was a filtered subset of it and
+        // confirmedIds was its full id set — so the "removed" filter was
+        // provably always empty, and the `changed` check compared each edited
+        // object's text with its own. Every confirm logged "Accepted, not
+        // changed", including one where the auditor had deleted or reworded AI
+        // lines, in a record the exported QA Appendix presents as evidence of
+        // human oversight.
+        const snapshot = entry?.generatedSnapshot;
         const aiLines = pending.filter((l) => l.generatedBy === "ai");
-        if (aiLines.length > 0) {
-          const confirmedIds = new Set(pending.map((l) => l.id));
-          const removedCount = aiLines.filter((l) => !confirmedIds.has(l.id)).length;
+        if (snapshot ? snapshot.length > 0 : aiLines.length > 0) {
+          const proposed = snapshot ?? aiLines.map((l) => ({ id: l.id, text: l.text }));
+          const pendingById = new Map(pending.map((l) => [l.id, l]));
+          const removed = proposed.filter((p) => !pendingById.has(p.id));
+          const reworded = proposed.filter((p) => { const cur = pendingById.get(p.id); return cur && cur.text !== p.text; });
+          const added = pending.filter((l) => !proposed.some((p) => p.id === l.id));
+          const changed = removed.length > 0 || reworded.length > 0 || added.length > 0;
+          const parts = [
+            `Confirmed ${pending.length} line(s)`,
+            removed.length > 0 ? `removed ${removed.length} AI line(s)` : "",
+            reworded.length > 0 ? `reworded ${reworded.length}` : "",
+            added.length > 0 ? `added ${added.length} of their own` : "",
+          ].filter(Boolean);
           useWorkspaceStore.getState().logHumanDecision({
             module: "Checklist Line Edit",
             subjectId: itemId,
-            aiOutput: `AI generated ${aiLines.length} line(s): ${aiLines.map((l) => l.text.slice(0, 60)).join("; ")}`,
-            humanDecision: `Confirmed ${pending.length} line(s)${removedCount > 0 ? `, removed ${removedCount} AI line(s)` : ""}`,
-            changed: removedCount > 0 || pending.some((l, i) => l.text !== aiLines[i]?.text),
-            decisionType: removedCount > 0 ? "Edited" : "Accepted",
+            aiOutput: `AI generated ${proposed.length} line(s): ${proposed.map((l) => l.text.slice(0, 60)).join("; ")}`,
+            humanDecision: parts.join(", "),
+            changed,
+            decisionType: changed ? "Edited" : "Accepted",
             reason: "",
             field: itemId,
           });
         }
         const allIds = new Set(existing.map((l) => l.id));
         const deduped = pending.filter((l) => !allIds.has(l.id));
-        set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: [...e.specific, ...deduped], pendingGenerated: [] })));
+        set((s) => mapEntry(s, itemId, (e) => ({ ...e, specific: [...e.specific, ...deduped], pendingGenerated: [], generatedSnapshot: undefined })));
       },
 
-      discardGenerated: (itemId) => set((s) => mapEntry(s, itemId, (e) => ({ ...e, pendingGenerated: [] }))),
+      // Discarding a whole AI batch is the strongest possible human rejection
+      // of AI output and used to leave no trace at all in the decision log or
+      // the QA Appendix that claims to record every acceptance and override.
+      discardGenerated: (itemId) => {
+        const entry = get().entries[itemId];
+        const proposed = entry?.generatedSnapshot ?? (entry?.pendingGenerated || []).filter((l) => l.generatedBy === "ai").map((l) => ({ id: l.id, text: l.text }));
+        if (proposed.length > 0) {
+          useWorkspaceStore.getState().logHumanDecision({
+            module: "Checklist Line Edit",
+            subjectId: itemId,
+            aiOutput: `AI generated ${proposed.length} line(s): ${proposed.map((l) => l.text.slice(0, 60)).join("; ")}`,
+            humanDecision: `Discarded all ${proposed.length} AI line(s)`,
+            changed: true,
+            decisionType: "Overridden",
+            reason: "",
+            field: itemId,
+          });
+        }
+        set((s) => mapEntry(s, itemId, (e) => ({ ...e, pendingGenerated: [], generatedSnapshot: undefined })));
+      },
 
       addSpecificLine: (itemId, text, clause) => {
         const trimmed = text.trim();
@@ -751,7 +790,13 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         }
         const finding: Finding = {
           id: newFindingId(),
-          auditCycleId: "cycle-1",
+          // The ACTIVE cycle, not a literal. Hardcoding "cycle-1" here gave
+          // checklist-raised findings different provenance from manually
+          // created ones, and because occurrenceIdentity falls back to
+          // auditCycleId when no run id is present, every such finding shared
+          // one identity and recurring-finding detection could never see the
+          // same gap in two cycles.
+          auditCycleId: useWorkspaceStore.getState().cycle.id,
           gd4ItemId: draft.gd4ItemId,
           issue: draft.issue,
           type: "AFI",
