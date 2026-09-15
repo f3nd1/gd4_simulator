@@ -305,6 +305,15 @@ export function SelfCheck() {
           <div style={{ ...card, background: "#fff7ed", borderColor: "#fdba74" }}>
             <h2 style={{ ...h2, fontSize: 15, color: "#9a3412" }}>{block.title}</h2>
             <p style={{ ...muted, marginBottom: 0 }}>{block.detail}</p>
+            {/* The detail above tells a process owner to ask their audit lead.
+                The audit lead hits the same banner, and had nothing to click.
+                Plain anchor, not a router Link: this page renders outside the
+                Layout, and the target is inside it. */}
+            {block.fixPath && (
+              <a href={block.fixPath} style={{ display: "inline-block", marginTop: 10, fontSize: 13, fontWeight: 700, color: "#1d4ed8" }}>
+                {block.fixLabel} →
+              </a>
+            )}
             {!driveToken && cycleStatus !== "Locked" && auditors.length > 0 && !aiOfflineReason(aiSettings) && driveClientId && (
               <button type="button" style={{ ...bigBtn, background: "#2563eb", fontSize: 13, padding: "9px 16px", marginTop: 10 }}
                 onClick={() => { void useGoogleDriveStore.getState().connect().catch(() => {}); }}>

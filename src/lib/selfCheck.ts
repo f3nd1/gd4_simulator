@@ -311,7 +311,18 @@ export function buildSelfCheckHtml(opts: {
 // Plain-English translation of the blockers a process owner can actually hit.
 // Each maps to a real state the engine or the workspace is already in; none is
 // invented, and none sends this person to a page written for an auditor.
-export type SelfCheckBlock = { title: string; detail: string; canRun: false } | { canRun: true };
+export type SelfCheckBlock =
+  | {
+      title: string;
+      detail: string;
+      canRun: false;
+      // Where whoever CAN clear this blocker has to go. The detail text is
+      // written for a process owner and tells them to ask their audit lead, but
+      // the audit lead hits the same wall themselves, with nothing to click.
+      fixPath?: string;
+      fixLabel?: string;
+    }
+  | { canRun: true };
 
 export function describeBlock(opts: {
   cycleLocked: boolean;
@@ -324,6 +335,8 @@ export function describeBlock(opts: {
       canRun: false,
       title: "Checks are paused right now",
       detail: "Your audit lead has locked this audit while it is being submitted, so nothing can be run or changed until they reopen it. Ask them when it will be unlocked.",
+      fixPath: "#/audit-cycle",
+      fixLabel: "If you are the audit lead: open the audit cycle",
     };
   }
   if (!opts.hasAuditor) {
@@ -331,6 +344,8 @@ export function describeBlock(opts: {
       canRun: false,
       title: "The workspace is not set up yet",
       detail: "Your audit lead needs to finish setting this workspace up before checks can run. Send them this page and ask them to add the audit team.",
+      fixPath: "#/auditors",
+      fixLabel: "If you are the audit lead: add an auditor",
     };
   }
   if (opts.aiOffline) {
@@ -338,6 +353,8 @@ export function describeBlock(opts: {
       canRun: false,
       title: "The checking service is not switched on",
       detail: "Your audit lead needs to switch on the AI checking service before this can run. Ask them to do that, then come back.",
+      fixPath: "#/settings",
+      fixLabel: "If you are the audit lead: open Settings",
     };
   }
   if (!opts.driveConnected) {

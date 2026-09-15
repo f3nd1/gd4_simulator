@@ -5,6 +5,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import { safeLocalStorage } from "./supabaseStorage";
 import type {
   ChecklistLineGroup,
   GroupedFindingDraft,
@@ -486,7 +487,7 @@ export const useFindingDraftStore = create<FindingDraftState>()(
     }),
     {
       name: "ucc-gd4-finding-drafts:v1",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => safeLocalStorage),
     }
   )
 );

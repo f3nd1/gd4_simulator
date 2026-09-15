@@ -5,6 +5,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import { safeLocalStorage } from "./supabaseStorage";
 
 type GuidanceState = {
   // Master switch: banners, tooltips added by the guidance layer, and
@@ -38,6 +39,6 @@ export const useGuidanceStore = create<GuidanceState>()(
       dismissedTips: {},
       dismissTip: (key) => set((s) => ({ dismissedTips: { ...s.dismissedTips, [key]: true } })),
     }),
-    { name: "ucc-gd4-guidance:v1", storage: createJSONStorage(() => localStorage) }
+    { name: "ucc-gd4-guidance:v1", storage: createJSONStorage(() => safeLocalStorage) }
   )
 );
