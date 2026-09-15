@@ -6,6 +6,7 @@ import { parseFolderId } from "../lib/drive/driveClient";
 import { aiOfflineReason } from "../lib/ai/aiClient";
 import { apsrMatrixResult } from "../lib/checklistBanding";
 import { downloadCsv } from "../lib/auditCsvExport";
+import { buildWordingCapture, captureFilename } from "../lib/wordingCapture";
 import { printHtmlInNewTab, PRINTABLE_DOC_CSS, POPUP_BLOCKED_MESSAGE } from "../lib/printableDoc";
 import {
   formatElapsed, activityLine, countedFor, stallState, fileStageSummary, SLOW_TITLE,
@@ -126,6 +127,41 @@ export function SelfCheck() {
     setConnecting(true);
     void useGoogleDriveStore.getState().connectSilently().finally(() => setConnecting(false));
   }, [driveClientId, driveToken]);
+
+  // Wording-rule instrumentation, for measuring a REAL run rather than a mocked
+  // one. Attached to window only: nothing is rendered, so the page a process
+  // owner sees is unchanged. Reads the completed run already in the store,
+  // writes a JSON file, and changes no stored state.
+  useEffect(() => {
+    const w = window as unknown as { __gd4Capture?: () => string };
+    w.__gd4Capture = () => {
+      const ws = useWorkspaceStore.getState();
+      const sc = scope;
+      const ev = sc ? ws.evidenceAssessments[sc] : undefined;
+      const ppd = sc ? ws.ppdReviewResults[sc] : undefined;
+      if (!sc || (!ev && !ppd)) return "No completed check found. Run a check on this page first, then run this again.";
+      // Corpus the names are checked against: the text this run actually read.
+      const cache = Object.values(ws.fileTextCache ?? {});
+      const sourceText = cache.map((f) => f.text ?? "").join("\n");
+      const sourceFiles = cache.map((f) => f.fileName || f.filePath || "(unnamed)");
+      const report = buildWordingCapture({
+        area: `${sc} ${area?.title ?? ""}`.trim(),
+        pass: ev ? "evidence" : "procedure",
+        evidenceRows: ev?.rows,
+        procedureRows: ppd?.rows,
+        sourceFiles,
+        sourceText,
+      });
+      const blob = new Blob([JSON.stringify(report, null, 1)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = captureFilename(area?.title ?? sc);
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      return `Saved ${a.download} — ${report.totals.rows} rows, ${report.sourceChars} characters of source text checked.`;
+    };
+    return () => { delete w.__gd4Capture; };
+  }, [scope, area]);
 
   useEffect(() => {
     if (!running) return;

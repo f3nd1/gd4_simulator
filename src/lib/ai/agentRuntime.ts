@@ -128,7 +128,7 @@ const EVIDENCE_ASSESSMENT_SCHEMA: ChatSchema = { name: "evidence_assessment", sc
 // Wording only. Nothing here touches the decision procedure, the verdict
 // vocabulary, the evidence rules or the named-example requirement above.
 const NARRATIVE_STYLE_RULES = `
-WRITING STYLE for "comment" and "suggestedAction" (wording only — it never changes a verdict):
+WRITING STYLE for "comment" and "suggestedAction" (wording only; it never changes a verdict):
 
 comment ("Why"): normally 2-3 short sentences, about 35-75 words.
 1. State the main gap FIRST, in its own sentence. No scene-setting clause before it.
@@ -140,17 +140,20 @@ comment ("Why"): normally 2-3 short sentences, about 35-75 words.
 - Where a documentation rule decides it, say so plainly, e.g. "The practice is evident in the records, but it is not defined in the PPD. Because the documented approach is missing, the requirement is not met."
 - Do not overstate what is missing. Say exactly what could not be verified.
 - End with the conclusion in plain words, e.g. "Therefore, the requirement is not met." / "Therefore, implementation is only partially evidenced."
-GOOD: "The PPD does not define the competence and independence requirements for internal assessors. The available records also do not show assessor qualifications, training or confirmation that assessors did not assess their own areas. Therefore, the requirement is not met."
-BAD: "With the PPD assessed as not documenting the deployment of independent, qualified internal assessors, and no records specifying auditor qualifications or demonstrating independence from the areas audited, it was not evident that..."
+GOOD (nothing documented, 39 words): "The PPD does not define the competence and independence requirements for internal assessors. The available records also do not show assessor qualifications, training or confirmation that assessors did not assess their own areas. Therefore, the requirement is not met."
+GOOD (documented, partly evidenced, 38 words): "The evidence does not show that every improvement action has a corresponding corrective action plan. The PPD requires a plan for each one, and the records show plans being raised and closed. Therefore, implementation is only partially evidenced."
+GOOD (documented and evidenced, 44 words): "The intervention log records progress reporting with named tutors and dates for each entry. This matches the reporting described in the PPD, and the entries cover the whole period under review. The documented approach is both defined and evidenced, so the requirement is met."
+BAD (buries the gap behind a clause, and never lands a conclusion): "With the PPD assessed as not documenting the deployment of independent, qualified internal assessors, and no records specifying auditor qualifications or demonstrating independence from the areas audited, it was not evident that..."
 
 suggestedAction ("What to fix"): normally 1-3 short sentences, about 20-55 words. Action + where + what content or evidence is needed.
 - Open with a verb: Update, Add, Document, Create, Maintain, Record, Retain, Ensure, Demonstrate.
 - Say exactly what must change, and name the document, record, field or system ONLY where it was actually given to you.
 - NEVER invent a document code, system name, role, register or approval step that does not appear in the passages. If you do not have a real name, describe the record generically ("the internal audit records").
 - Do not re-explain the assessment. No background. Do not ask for evidence this requirement does not call for.
-- Where nothing is needed: "No further action required. Continue retaining evidence of implementation."
-GOOD: "Update the PPD to define assessor competence, training and independence requirements. Retain evidence such as the audit assignment list, training records and declarations of independence."
-BAD: "Update PPD-SGL-SQ-6.1.1 to define requirements for internal assessors' competence and independence, and provide internal audit records showing that auditors deployed in 2024-2025 were trained and not auditing their own areas, in accordance with..."
+- Where nothing is needed, write exactly: "No further action required. Continue retaining evidence of implementation."
+GOOD (25 words): "Update the PPD to define assessor competence, training and independence requirements. Retain evidence such as the audit assignment list, training records and declarations of independence."
+GOOD (24 words): "Maintain a register linking every improvement action to a specific corrective action. Each one should be traceable from identification through corrective action and closure."
+BAD (invents a document code and a date range that were never supplied, then re-explains the assessment): "Update PPD-[invented code] to define requirements for internal assessors' competence and independence, and provide internal audit records showing that auditors deployed in [invented period] were trained and not auditing their own areas, in accordance with..."
 
 No em dashes. No long legalistic sentences, no strings of semicolons, no repeated references to "the promises". Never write vague advice such as "improve this", "strengthen this" or "ensure compliance" without saying how.`;
 
