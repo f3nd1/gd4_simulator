@@ -22,6 +22,9 @@ export const NAV: NavGroup[] = [
     ],
     tools: [
       { path: "/analytics", label: "Data Dashboard", hint: "Charts across scores, bands, gates, findings and progress" },
+      // Listed so the audit lead can find the link to send out. The page itself
+      // renders outside this workspace shell — see App.tsx.
+      { path: "/self-check", label: "Process owner self-check", hint: "A one-page practice check a process owner runs on their own area, with no audit workspace around it" },
       { path: "/help", label: "Help & Guide", hint: "What every page is and how to use it" },
     ],
   },

@@ -35,11 +35,17 @@ import { ProfileOfPei } from "./pages/ProfileOfPei";
 import { FinalReport } from "./pages/FinalReport";
 import { DataDashboard } from "./pages/DataDashboard";
 import { Help } from "./pages/Help";
+import { SelfCheck } from "./pages/SelfCheck";
 
 export default function App() {
   return (
     <HashRouter>
       <Routes>
+        {/* Deliberately OUTSIDE the Layout: a process owner checking their own
+            area must not meet the audit workspace chrome (four stages, ~30
+            pages, cycles, calibration) or the locked-cycle banner, which is
+            written for the audit lead. Additive — no existing route changes. */}
+        <Route path="/self-check" element={<SelfCheck />} />
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/analytics" element={<DataDashboard />} />
