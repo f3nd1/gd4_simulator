@@ -7,6 +7,10 @@ import { aiOfflineReason } from "../lib/ai/aiClient";
 import { apsrMatrixResult } from "../lib/checklistBanding";
 import { downloadCsv } from "../lib/auditCsvExport";
 import { printHtmlInNewTab, PRINTABLE_DOC_CSS, POPUP_BLOCKED_MESSAGE } from "../lib/printableDoc";
+import {
+  formatElapsed, activityLine, countedFor, stallState, fileStageSummary, SLOW_TITLE,
+  type RunProgress, type StageKey,
+} from "../lib/selfCheckProgress";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
@@ -49,7 +53,7 @@ const TONE_BG: Record<string, { bg: string; fg: string }> = {
 
 type Phase = "idle" | "folder" | "policy" | "records" | "band" | "done" | "stopped" | "failed";
 
-const STEPS: { key: Phase; label: string }[] = [
+const STEPS: { key: StageKey; label: string }[] = [
   { key: "folder", label: "Opening your folder" },
   { key: "policy", label: "Reading what your written procedure says" },
   { key: "records", label: "Checking your records against it" },
@@ -97,6 +101,11 @@ export function SelfCheck() {
   // the browser, not theorised). Each run captures the generation; a stop
   // bumps it, and every step after an await bails if it no longer matches.
   const generation = useRef(0);
+  // Elapsed time and stall detection both need the clock to move independently
+  // of the engine: a run that has stopped emitting is precisely the case that
+  // must still update on screen. Ticks only while a run is in flight.
+  const [runStartedAt, setRunStartedAt] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
 
   // Every runnable scope, grouped by criterion, labelled by its own name. 4.2
   // genuinely splits into two separately-run areas, and scopeTitle already
@@ -117,6 +126,12 @@ export function SelfCheck() {
     setConnecting(true);
     void useGoogleDriveStore.getState().connectSilently().finally(() => setConnecting(false));
   }, [driveClientId, driveToken]);
+
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [running]);
 
   const block = describeBlock({
     cycleLocked: cycleStatus === "Locked",
@@ -172,6 +187,9 @@ export function SelfCheck() {
     setConfirmOverwrite(false);
     const myGen = ++generation.current;
     const stale = () => generation.current !== myGen;
+    setRunStartedAt(Date.now());
+    setNow(Date.now());
+    setDoneSummaries({});
     setError(null); setNote(null); setBand({ kind: "none" });
     const procedureOnly = plan.kind === "procedure-only";
     setMode(procedureOnly ? "procedure-only" : "full");
@@ -318,11 +336,32 @@ export function SelfCheck() {
   }
 
   const liveDetail = plainDetail(evProgress?.detail || ppdProgress?.detail || "");
+  // Which pass is live right now. The two passes each keep their own progress
+  // object, and only one is running at a time.
+  const liveProgress: RunProgress | undefined =
+    phase === "policy" ? (ppdProgress ?? undefined) : (phase === "records" || phase === "band") ? (evProgress ?? undefined) : undefined;
+  const stall = stallState(now, liveProgress, runStartedAt || now);
+  // A completed stage keeps its one-line result. Snapshotted in an effect as
+  // each stage ends, because the engine's progress object moves on to the next
+  // pass and the previous pass's file ledger would otherwise be unreachable.
+  const [doneSummaries, setDoneSummaries] = useState<Partial<Record<StageKey, string>>>({});
+  useEffect(() => {
+    // Snapshotted WHILE each pass is live, not after it ends: the store drops
+    // its progress object when a pass finishes, so waiting until the stage was
+    // marked done left nothing to read and the summary never appeared.
+    const policy = fileStageSummary(ppdProgress?.filesFound);
+    if (policy) setDoneSummaries((d) => (d.policy === policy ? d : { ...d, policy }));
+    const records = fileStageSummary(evProgress?.filesFound);
+    if (records) setDoneSummaries((d) => (d.records === records ? d : { ...d, records }));
+  }, [ppdProgress, evProgress]);
   const visibleSteps = procedureOnlyResult ? STEPS.filter((s) => s.key !== "records" && s.key !== "band") : STEPS;
   const activeIdx = visibleSteps.findIndex((s) => s.key === phase);
 
   return (
     <div style={{ minHeight: "100vh", background: "#f4f6fa", padding: "26px 16px 70px" }}>
+      {/* Indeterminate bar for the two stages that count nothing. Movement here
+          means "still alive", never "N% done". */}
+      <style>{"@keyframes scSlide{0%{margin-left:0}50%{margin-left:62%}100%{margin-left:0}}"}</style>
       <div style={{ maxWidth: 880, margin: "0 auto" }}>
         <header style={{ marginBottom: 18 }}>
           <h1 style={{ fontSize: 25, margin: "0 0 6px", color: INK }}>Check your area before the audit</h1>
@@ -472,18 +511,83 @@ export function SelfCheck() {
 
           {running && (
             <div>
+              {/* Elapsed time runs for the whole check, from the first stage to
+                  the last, so a long run is never indistinguishable from a hang. */}
+              <div style={{ ...muted, marginTop: 0, marginBottom: 10 }}>
+                Running for {formatElapsed(now - (runStartedAt || now))}
+              </div>
+
               <ol style={{ listStyle: "none", padding: 0, margin: "0 0 12px" }}>
                 {visibleSteps.map((s, i) => {
                   const state = i < activeIdx ? "done" : i === activeIdx ? "now" : "todo";
+                  const activity = state === "now" ? activityLine(s.key, liveProgress) : "";
+                  const count = state === "now" ? countedFor(s.key, liveProgress) : null;
+                  const summary = state === "done" ? doneSummaries[s.key] : "";
                   return (
-                    <li key={s.key} style={{ display: "flex", gap: 9, alignItems: "center", padding: "5px 0", color: state === "todo" ? "#94a3b8" : INK, fontSize: 14 }}>
-                      <span style={{ width: 18 }}>{state === "done" ? "✓" : state === "now" ? "◐" : "○"}</span>
-                      <span style={{ fontWeight: state === "now" ? 700 : 400 }}>{s.label}</span>
+                    <li key={s.key} style={{ padding: "6px 0", color: state === "todo" ? "#94a3b8" : INK, fontSize: 14 }}>
+                      <div style={{ display: "flex", gap: 9, alignItems: "center" }}>
+                        <span style={{ width: 18 }}>{state === "done" ? "✓" : state === "now" ? "◐" : "○"}</span>
+                        <span style={{ fontWeight: state === "now" ? 700 : 400 }}>{s.label}</span>
+                        {count && <span style={{ ...muted, marginLeft: 4 }}>{count.pct}%</span>}
+                      </div>
+
+                      {/* A completed stage keeps its result on screen, naming any
+                          file that was skipped rather than implying it was read. */}
+                      {summary && <div style={{ ...muted, marginLeft: 27 }}>{summary}</div>}
+
+                      {state === "now" && (
+                        <div style={{ marginLeft: 27, marginTop: 4 }}>
+                          {count ? (
+                            <div style={{ height: 6, background: "#e2e8f0", borderRadius: 99, overflow: "hidden", maxWidth: 320 }}>
+                              <div style={{ width: `${count.pct}%`, height: "100%", background: "#7c3aed", transition: "width .3s" }} />
+                            </div>
+                          ) : (
+                            // No counted denominator for this stage, so an
+                            // indeterminate bar rather than an invented number.
+                            <div style={{ height: 6, background: "#e2e8f0", borderRadius: 99, overflow: "hidden", maxWidth: 320 }}>
+                              <div style={{ height: "100%", width: "38%", background: "#c4b5fd", borderRadius: 99, animation: "scSlide 1.4s ease-in-out infinite" }} />
+                            </div>
+                          )}
+                          <div style={{ ...muted, marginTop: 5 }}>
+                            {activity || liveDetail || "Still working"}
+                            {/* Only when the activity line has not already said
+                                it, so it does not read "1 of 4 (0 of 4)". */}
+                            {count && !activity && ` (${count.done} of ${count.total})`}
+                          </div>
+                        </div>
+                      )}
                     </li>
                   );
                 })}
               </ol>
-              {liveDetail && <p style={{ ...muted, marginTop: 0 }}>{liveDetail}</p>}
+
+              {/* Stall: the engine bumps a heartbeat on every event, so silence
+                  is measurable rather than guessed. */}
+              {stall.level !== "none" && (
+                <div style={{
+                  background: stall.level === "stuck" ? "#fef2f2" : "#fffbeb",
+                  border: `1px solid ${stall.level === "stuck" ? "#fecaca" : "#fde68a"}`,
+                  borderRadius: 9, padding: 11, marginBottom: 12,
+                }}>
+                  <b style={{ fontSize: 13.5, color: stall.level === "stuck" ? "#991b1b" : "#92400e" }}>{SLOW_TITLE}</b>
+                  <p style={{ ...muted, margin: "5px 0 0", color: stall.level === "stuck" ? "#7f1d1d" : "#92400e" }}>
+                    {stall.waitingOn} Nothing has happened for {formatElapsed(now - (liveProgress?.heartbeatAt ?? runStartedAt))}.
+                  </p>
+                  {stall.level === "stuck" && (
+                    <div style={{ marginTop: 9 }}>
+                      <button
+                        type="button"
+                        onClick={() => { if (stall.control === "skip") useWorkspaceStore.getState().skipCurrentFile(); else stop(); }}
+                        style={{ fontSize: 13, fontWeight: 700, padding: "7px 14px", borderRadius: 9, border: "1px solid #cbd5e1", background: "#fff", cursor: "pointer", color: "#991b1b" }}
+                      >
+                        {stall.controlLabel}
+                      </button>
+                      <p style={{ ...muted, margin: "6px 0 0" }}>{stall.controlNote}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <button type="button" onClick={stop}
                 style={{ fontSize: 13.5, padding: "9px 16px", borderRadius: 10, border: "1px solid #cbd5e1", background: "#fff", cursor: "pointer", color: "#991b1b", fontWeight: 700 }}>
                 Stop
