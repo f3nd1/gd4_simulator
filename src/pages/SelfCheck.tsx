@@ -14,7 +14,8 @@ import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import {
   toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv, buildSelfCheckHtml,
-  selfCheckFilename, describeBlock, plainRunError, plainDetail, SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE,
+  selfCheckFilename, describeBlock, plainRunError, plainDetail, planFor, toProcedureRows, PROCEDURE_ONLY_NOTE,
+  SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE,
   type SelfCheckBand,
 } from "../lib/selfCheck";
 
@@ -71,7 +72,11 @@ export function SelfCheck() {
   const apsrScale = useScoringConfigStore((s) => s.apsrScale);
 
   const [scope, setScope] = useState("");
-  const [link, setLink] = useState("");
+  const [procLink, setProcLink] = useState("");
+  const [evLink, setEvLink] = useState("");
+  // Which half the result on screen came from. A procedure-only result answers
+  // a different question and must never be dressed as a full one.
+  const [mode, setMode] = useState<"full" | "procedure-only">("full");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -120,20 +125,42 @@ export function SelfCheck() {
     driveConnected: !!driveToken,
   });
 
-  const linkId = parseFolderId(link);
-  const linkState: "empty" | "bad" | "ok" = !link.trim() ? "empty" : linkId ? "ok" : "bad";
-  const ready = !!area && linkState === "ok" && block.canRun && !running;
+  const stateOf = (v: string): "empty" | "bad" | "ok" => (!v.trim() ? "empty" : parseFolderId(v) ? "ok" : "bad");
+  const procState = stateOf(procLink);
+  const evState = stateOf(evLink);
+  const plan = planFor(procState === "ok", evState === "ok");
+  // A half-typed or mistyped link is not "they left it out" — never offer a
+  // procedure-only run while a link they clearly meant to paste is still wrong.
+  const ready = !!area && plan.canRun && procState !== "bad" && evState !== "bad" && block.canRun && !running;
+
+  const ppdExisting = scope ? ppdResults[scope] : undefined;
+  // What this particular run would actually overwrite. A procedure-only run
+  // rewrites the procedure result and leaves the full result alone, so warning
+  // about the full one would be a claim about something that will not happen.
+  const resultAtRisk = plan.kind === "procedure-only" ? !!ppdExisting : !!existing;
 
   // The audit lead links this area's folders on the Evidence Folder page, often
   // as two separate subfolder links. One pasted link here replaces both. That
   // is fine when nothing was set, and destructive when something was — so it is
   // asked about, even on an area that has never been run.
-  const linkClash =
-    !!folder && !!(folder.policyLink || folder.folderLink) &&
-    (folder.policyLink !== link.trim() || folder.folderLink !== link.trim());
+  // Per field now: replacing the lead's procedure folder and replacing their
+  // records folder are separate losses, and a procedure-only run only touches
+  // the first.
+  const clashes = [
+    folder?.policyLink && folder.policyLink !== procLink.trim() ? "written procedure" : null,
+    // A procedure-only run leaves folderLink alone, so it cannot clash.
+    plan.kind === "full" && folder?.folderLink && folder.folderLink !== evLink.trim() ? "records" : null,
+  ].filter(Boolean) as string[];
+  const linkClash = clashes.length > 0;
 
-  const rows = useMemo(() => (existing ? toSelfCheckRows(existing.rows) : []), [existing]);
+  const rows = useMemo(
+    () => (mode === "procedure-only"
+      ? (ppdExisting ? toProcedureRows(ppdExisting.rows) : [])
+      : (existing ? toSelfCheckRows(existing.rows) : [])),
+    [mode, existing, ppdExisting],
+  );
   const counts = useMemo(() => countSelfCheck(rows), [rows]);
+  const procedureOnlyResult = mode === "procedure-only";
   const showResult = phase === "done" && rows.length > 0;
 
   async function run() {
@@ -141,21 +168,26 @@ export function SelfCheck() {
     // Never silently replace a result someone else may be relying on. Asked
     // BEFORE the generation is bumped, so a question that ends in "Cancel"
     // cannot mark anything stale.
-    if ((existing || linkClash) && !confirmOverwrite) { setConfirmOverwrite(true); return; }
+    if ((resultAtRisk || linkClash) && !confirmOverwrite) { setConfirmOverwrite(true); return; }
     setConfirmOverwrite(false);
     const myGen = ++generation.current;
     const stale = () => generation.current !== myGen;
     setError(null); setNote(null); setBand({ kind: "none" });
+    const procedureOnly = plan.kind === "procedure-only";
+    setMode(procedureOnly ? "procedure-only" : "full");
     setPhase("folder");
 
-    // One pasted link, set as BOTH buckets on the folder record the workspace
-    // already holds for this area. The engine treats a dedicated policyLink or
-    // folderLink as "every listed file is this bucket", so setting both is what
-    // makes a single folder readable as procedure AND as records. Setting only
-    // folderLink would leave the procedure pass filtering for a
-    // "1. Policy & Procedure" subfolder and finding nothing in a flat folder.
-    setFolderField(folder.id, "policyLink", link.trim());
-    setFolderField(folder.id, "folderLink", link.trim());
+    // Two explicit links, one per bucket. Each pass keeps EVERY file in its own
+    // folder only when its own link parses; otherwise it falls back to guessing
+    // the bucket from the first path segment, which in a flat folder is just
+    // the filename (driveGuard.ts:89-92). Setting both fields removes that
+    // guess entirely. Pasting the same folder into both is still fine and is
+    // exactly what the old single field did.
+    setFolderField(folder.id, "policyLink", procLink.trim());
+    // Left untouched on a procedure-only run: the evidence pass is not called,
+    // so blanking the lead's records folder would destroy their link for
+    // nothing.
+    if (!procedureOnly) setFolderField(folder.id, "folderLink", evLink.trim());
 
     try {
       setPhase("policy");
@@ -167,6 +199,18 @@ export function SelfCheck() {
         setError(plainRunError(ppd?.runWarnings?.[0]) ?? "I could not read anything from that folder. Check the link opens the folder for you, and that it has documents in it.");
         return;
       }
+      // No records folder: stop here. Calling the evidence pass anyway would
+      // make it fall back to the PROCEDURE folder (useWorkspaceStore.ts:2025)
+      // and read the procedure as if it were the records; and with genuinely
+      // no evidence it returns a deterministic "Not met" on every line
+      // (agentRuntime.ts:3468-3475). Either way a process owner would be told
+      // something about their records that was never checked.
+      if (procedureOnly) {
+        setRanAt(new Date().toLocaleString("en-SG"));
+        setPhase("done");
+        return;
+      }
+
       setPhase("records");
       await useWorkspaceStore.getState().runEvidenceAssessment(area.scope);
       if (stale()) return;
@@ -219,14 +263,14 @@ export function SelfCheck() {
 
   function onCsv() {
     if (!area) return;
-    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band), selfCheckFilename(area.title, "csv"));
+    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, procedureOnlyResult), selfCheckFilename(area.title, "csv"));
   }
   function onPdf() {
     if (!area) return;
     const ok = printHtmlInNewTab(
       `<style>${PRINTABLE_DOC_CSS}</style>${buildSelfCheckHtml({
         areaLabel: `${area.scope} ${area.title}`, areaDescription: area.description,
-        counts, band, rows, ranAt,
+        counts, band, rows, ranAt, procedureOnly: procedureOnlyResult,
       })}`,
       `Self-check ${area.title}`,
     );
@@ -234,7 +278,8 @@ export function SelfCheck() {
   }
 
   const liveDetail = plainDetail(evProgress?.detail || ppdProgress?.detail || "");
-  const activeIdx = STEPS.findIndex((s) => s.key === phase);
+  const visibleSteps = procedureOnlyResult ? STEPS.filter((s) => s.key !== "records" && s.key !== "band") : STEPS;
+  const activeIdx = visibleSteps.findIndex((s) => s.key === phase);
 
   return (
     <div style={{ minHeight: "100vh", background: "#f4f6fa", padding: "26px 16px 70px" }}>
@@ -288,28 +333,49 @@ export function SelfCheck() {
           {area && <p style={{ ...muted, marginTop: 10, marginBottom: 0 }}>{area.description}</p>}
         </section>
 
-        {/* 2 — one link */}
+        {/* 2 — two links, because the engine reads the two folders differently */}
         <section style={{ ...card, opacity: area ? 1 : 0.55 }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
             <span style={stepNum}>2</span><h2 style={h2}>Where are your documents?</h2>
           </div>
           <p style={{ ...muted, marginTop: 0 }}>
-            Paste the link to the Google Drive folder that holds this area's documents. Put your written procedure
-            and your records in the same folder. I read everything in it.
+            Two folders, because they answer two different questions. If you keep everything in one folder,
+            paste the same link into both.
           </p>
-          <input value={link} onChange={(e) => { setLink(e.target.value); setError(null); setConfirmOverwrite(false); }}
-            placeholder="https://drive.google.com/drive/folders/..." style={input} disabled={!area || running} spellCheck={false} />
-          {linkState === "bad" && (
-            <p style={{ ...muted, color: "#991b1b", marginBottom: 0, marginTop: 8 }}>
-              That does not look like a Google Drive folder link. Open the folder in Drive, copy the address from the
-              top of the browser, and paste the whole thing here. It should contain "/folders/".
+          <div style={{ height: 6 }} />
+
+          <LinkField
+            label="Where is your written procedure?"
+            help="The folder holding the document that says how this area is meant to work: your policy, your procedure, your handbook or your terms of reference."
+            value={procLink} onChange={setProcLink} state={procState} disabled={!area || running}
+            onEdit={() => { setError(null); setConfirmOverwrite(false); }}
+          />
+
+          <div style={{ height: 18 }} />
+
+          <LinkField
+            label="Where is your evidence?"
+            help="The folder holding the records that show it actually happens: minutes, forms, logs, registers, signed copies, reports and emails."
+            value={evLink} onChange={setEvLink} state={evState} disabled={!area || running}
+            onEdit={() => { setError(null); setConfirmOverwrite(false); }}
+          />
+
+          {/* What will and will not be checked, said before the button rather
+              than discovered afterwards. */}
+          {plan.note && (
+            <p style={{
+              ...muted, marginBottom: 0, marginTop: 14, padding: "9px 11px", borderRadius: 8,
+              background: plan.canRun ? (plan.kind === "full" ? "#f0fdf4" : "#fffbeb") : "#fef2f2",
+              border: `1px solid ${plan.canRun ? (plan.kind === "full" ? "#bbf7d0" : "#fde68a") : "#fecaca"}`,
+              color: plan.canRun ? (plan.kind === "full" ? "#166534" : "#92400e") : "#991b1b",
+            }}>
+              {plan.note}
             </p>
           )}
-          {linkState === "ok" && <p style={{ ...muted, color: "#166534", marginBottom: 0, marginTop: 8 }}>That looks right.</p>}
         </section>
 
         {/* 3 — one button */}
-        <section style={{ ...card, opacity: area && linkState === "ok" ? 1 : 0.55 }}>
+        <section style={{ ...card, opacity: ready || running ? 1 : 0.55 }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
             <span style={stepNum}>3</span><h2 style={h2}>Run the check</h2>
           </div>
@@ -317,11 +383,11 @@ export function SelfCheck() {
           {confirmOverwrite && (
             <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 9, padding: 12, marginBottom: 12 }}>
               <b style={{ fontSize: 13.5, color: "#92400e" }}>
-                {existing ? "This area has already been checked." : "Your audit lead has already set up this area."}
+                {resultAtRisk ? "This area has already been checked." : "Your audit lead has already set up this area."}
               </b>
               <p style={{ ...muted, margin: "6px 0 10px" }}>
-                {existing && "Running again replaces the previous result for this area, including anything your audit lead has seen. The earlier one is kept in the audit history. "}
-                {linkClash && "It also replaces the document folder your audit lead recorded for this area with the one you pasted above. If you are not sure that is right, check with them first."}
+                {resultAtRisk && `Running again replaces the previous ${plan.kind === "procedure-only" ? "written procedure check" : "result"} for this area, including anything your audit lead has seen. The earlier one is kept in the audit history. `}
+                {linkClash && `It also replaces the ${clashes.length === 2 ? "written procedure and records folders" : `${clashes[0]} folder`} your audit lead recorded for this area with what you pasted above. If you are not sure that is right, check with them first.`}
               </p>
               <button type="button" style={{ ...bigBtn, fontSize: 13.5, padding: "9px 16px" }} onClick={() => void run()}>Yes, check it again</button>
               <button type="button" onClick={() => setConfirmOverwrite(false)}
@@ -332,14 +398,14 @@ export function SelfCheck() {
           {!running && !confirmOverwrite && (
             <button type="button" style={{ ...bigBtn, opacity: ready ? 1 : 0.45, cursor: ready ? "pointer" : "not-allowed" }}
               disabled={!ready} onClick={() => void run()}>
-              Check my area
+              {plan.canRun ? plan.button : "Check my area"}
             </button>
           )}
 
           {running && (
             <div>
               <ol style={{ listStyle: "none", padding: 0, margin: "0 0 12px" }}>
-                {STEPS.map((s, i) => {
+                {visibleSteps.map((s, i) => {
                   const state = i < activeIdx ? "done" : i === activeIdx ? "now" : "todo";
                   return (
                     <li key={s.key} style={{ display: "flex", gap: 9, alignItems: "center", padding: "5px 0", color: state === "todo" ? "#94a3b8" : INK, fontSize: 14 }}>
@@ -376,14 +442,25 @@ export function SelfCheck() {
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 4 }}>
               <span style={stepNum}>4</span><h2 style={h2}>Your result</h2>
             </div>
-            <p style={{ ...muted, marginTop: 0 }}>{area.scope} {area.title} · checked {ranAt}</p>
+            <p style={{ ...muted, marginTop: 0 }}>
+              {area.scope} {area.title} · {procedureOnlyResult ? "written procedure only" : "procedure and records"} · checked {ranAt}
+            </p>
 
+            {/* A procedure-only result answers "is it written down?", so it is
+                counted in those words. "Complies" on a run that never opened a
+                record would be a claim nobody made. */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0" }}>
-              <Tally n={counts.complies} label="complies" tone="good" />
-              <Tally n={counts.partly} label="partly complies" tone="medium" />
-              <Tally n={counts.doesNot} label="does not comply" tone="critical" />
+              <Tally n={counts.complies} label={procedureOnlyResult ? "written down" : "complies"} tone="good" />
+              <Tally n={counts.partly} label={procedureOnlyResult ? "partly written down" : "partly complies"} tone="medium" />
+              <Tally n={counts.doesNot} label={procedureOnlyResult ? "not written down" : "does not comply"} tone="critical" />
               <Tally n={counts.couldNotCheck} label="could not check" tone="neutral" />
             </div>
+
+            {procedureOnlyResult && (
+              <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
+                {PROCEDURE_ONLY_NOTE}
+              </p>
+            )}
 
             {counts.couldNotCheck > 0 && !mostlyUnchecked(counts) && (
               <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px" }}>
@@ -397,6 +474,7 @@ export function SelfCheck() {
               </p>
             )}
 
+            {!procedureOnlyResult && (
             <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fbfcfe" }}>
               {band.kind === "none" ? (
                 <>
@@ -419,6 +497,7 @@ export function SelfCheck() {
                 </>
               )}
             </div>
+            )}
 
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -468,6 +547,36 @@ function Tally({ n, label, tone }: { n: number; label: string; tone: string }) {
     <div style={{ background: t.bg, color: t.fg, borderRadius: 10, padding: "9px 14px", minWidth: 96 }}>
       <div style={{ fontSize: 21, fontWeight: 800, lineHeight: 1 }}>{n}</div>
       <div style={{ fontSize: 12, fontWeight: 600, marginTop: 3 }}>{label}</div>
+    </div>
+  );
+}
+
+// One Drive-link field: its plain-language question, the one line that says
+// which folder it means, and per-field validation. Two of these rather than one
+// shared field, because the two folders are read by different passes.
+function LinkField(props: {
+  label: string; help: string; value: string; state: "empty" | "bad" | "ok";
+  disabled: boolean; onChange: (v: string) => void; onEdit: () => void;
+}) {
+  return (
+    <div>
+      <label style={{ display: "block", fontSize: 14, fontWeight: 700, color: "#0f172a", margin: "0 0 3px" }}>{props.label}</label>
+      <p style={{ ...muted, margin: "0 0 7px" }}>{props.help}</p>
+      <input
+        value={props.value}
+        onChange={(e) => { props.onChange(e.target.value); props.onEdit(); }}
+        placeholder="https://drive.google.com/drive/folders/..."
+        style={{ ...input, borderColor: props.state === "bad" ? "#f87171" : "#cbd5e1" }}
+        disabled={props.disabled}
+        spellCheck={false}
+      />
+      {props.state === "bad" && (
+        <p style={{ ...muted, color: "#991b1b", margin: "7px 0 0" }}>
+          That does not look like a Google Drive folder link. Open the folder in Drive, copy the address from the
+          top of the browser, and paste the whole thing here. It should contain "/folders/".
+        </p>
+      )}
+      {props.state === "ok" && <p style={{ ...muted, color: "#166534", margin: "7px 0 0" }}>That looks right.</p>}
     </div>
   );
 }

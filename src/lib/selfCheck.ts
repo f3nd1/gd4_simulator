@@ -11,7 +11,7 @@
 
 import { toCsv } from "./auditCsvExport";
 import { escapeHtml } from "./printableDoc";
-import type { EvidenceAssessmentRow, EvidenceVerdict, Band } from "../types";
+import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
 
 // The disclaimer the rest of the app carries, repeated verbatim in every
 // surface this page produces, including both downloads.
@@ -89,6 +89,73 @@ export function plainDetail(raw: string): string {
   return /^(Reading|Re-reading) /.test(t) ? t : "";
 }
 
+// ── Procedure-only checks ────────────────────────────────────────────────
+//
+// Two separate folders are asked for because the engine treats them very
+// differently, and the difference is invisible from outside:
+//
+//   * The procedure pass lists folder.policyLink and keeps EVERY file in it
+//     only when policyLink itself parses; otherwise it filters by the FIRST
+//     path segment against /polic|procedure/ (driveGuard.ts:89-92). In a flat
+//     folder that segment is the filename, so bucketing silently becomes a
+//     filename guess.
+//   * Each pass also falls back to the OTHER field's link when its own is
+//     empty (useWorkspaceStore.ts:1525 and 2025). So leaving the evidence
+//     field blank does not mean "no evidence" — it means "read the procedure
+//     folder as if it were the records", which produces confident, wrong
+//     verdicts.
+//   * And with genuinely no evidence documents, the evidence pass returns a
+//     deterministic "Not met" on EVERY line (agentRuntime.ts:3468-3475). A
+//     process owner who supplied only a procedure would be told their whole
+//     area fails.
+//
+// So a procedure-only check runs the procedure pass ALONE and answers a
+// different question, in different words, with no band. "Written down" can
+// never be misread as "Complies".
+export const PPD_PLAIN_VERDICT: Record<PPDVerdict, PlainVerdict> = {
+  Adequate: { label: "Written down", tone: "good", isGap: false },
+  Partial: { label: "Partly written down", tone: "medium", isGap: true },
+  "Not documented": { label: "Not written down", tone: "critical", isGap: true },
+  "Not assessed": { label: "Could not check", tone: "neutral", isGap: false },
+};
+
+// What each combination of the two fields will and will not check. Shown
+// BEFORE the run, so nobody presses the button expecting the other half.
+export type CheckPlan =
+  | { kind: "none"; canRun: false; note: "" }
+  | { kind: "evidence-only"; canRun: false; note: string }
+  | { kind: "procedure-only"; canRun: true; button: string; note: string }
+  | { kind: "full"; canRun: true; button: string; note: string };
+
+export function planFor(hasProcedure: boolean, hasEvidence: boolean): CheckPlan {
+  if (hasProcedure && hasEvidence) {
+    return {
+      kind: "full", canRun: true, button: "Check my area",
+      note: "I will read your written procedure, then check your records against it.",
+    };
+  }
+  if (hasProcedure) {
+    return {
+      kind: "procedure-only", canRun: true, button: "Check my written procedure",
+      note: "I will check whether your written procedure covers what it has to. I will NOT check whether it actually happens, because that needs your records. Add your records folder above for the full check.",
+    };
+  }
+  if (hasEvidence) {
+    // Not a policy choice: without a procedure the engine has nothing to check
+    // the records against and stops with "No Policy & Procedure files found"
+    // (useWorkspaceStore.ts:1551). Better to say that than to start and fail.
+    return {
+      kind: "evidence-only", canRun: false,
+      note: "I need your written procedure as well. Everything is checked against what your procedure says it will do, so on its own there is nothing to check your records against.",
+    };
+  }
+  return { kind: "none", canRun: false, note: "" };
+}
+
+// Shown above a procedure-only result, so the missing half is never a silence.
+export const PROCEDURE_ONLY_NOTE =
+  "This checked your written procedure only. It does not say whether any of it actually happens, and it is not a band. Add your records folder and run it again for the full check.";
+
 export type SelfCheckRow = {
   ref: string;
   requirement: string;
@@ -118,6 +185,27 @@ export function toSelfCheckRows(rows: EvidenceAssessmentRow[]): SelfCheckRow[] {
       // OFI, taken only from the engine's suggestedAction. Never written here,
       // and only ever present on a row the engine judged short.
       fix: (r.suggestedAction || "").trim(),
+    };
+  });
+}
+
+// The procedure pass's own rows, in the same shape, so the table, the CSV and
+// the printable page are the existing ones rather than a second set.
+export function toProcedureRows(rows: PPDReviewRow[]): SelfCheckRow[] {
+  return rows.map((r) => {
+    const plain = PPD_PLAIN_VERDICT[r.verdict] ?? PPD_PLAIN_VERDICT["Not assessed"];
+    return {
+      ref: r.ref,
+      requirement: r.requirementText,
+      // Kept on the EvidenceVerdict axis only so the counts and the existing
+      // table read it; the LABEL is what a process owner sees, and that stays
+      // the procedure vocabulary above.
+      verdict: r.verdict === "Adequate" ? "Met" : r.verdict === "Partial" ? "Partial" : r.verdict === "Not documented" ? "Not met" : "Not assessed",
+      label: plain.label,
+      tone: plain.tone,
+      why: plainWhy(r.fullComment || r.shortComment || ""),
+      // The procedure pass's OFI is its suggested rewrite. Copied, never written.
+      fix: (r.suggestedRewrite || "").trim(),
     };
   });
 }
@@ -162,12 +250,15 @@ export function bandLineOf(band: SelfCheckBand): string {
 // The band and the disclaimer ride in the CSV too. A spreadsheet gets
 // forwarded and printed on its own; without them it reads like a bare verdict
 // list that somebody could mistake for an official outcome.
-export function buildSelfCheckCsv(areaLabel: string, rows: SelfCheckRow[], band: SelfCheckBand): string {
+export function buildSelfCheckCsv(
+  areaLabel: string, rows: SelfCheckRow[], band: SelfCheckBand, procedureOnly = false,
+): string {
   const blank = ["", "", "", "", "", ""];
+  const trailer = procedureOnly ? [PROCEDURE_ONLY_NOTE] : [bandLineOf(band)];
   return toCsv(SELF_CHECK_HEADERS, [
     ...rows.map((r) => [areaLabel, r.ref, r.requirement, r.label, r.why, r.fix]),
     blank,
-    [bandLineOf(band), "", "", "", "", ""],
+    ...trailer.map((t) => [t, "", "", "", "", ""]),
     [SELF_CHECK_DISCLAIMER, "", "", "", "", ""],
   ]);
 }
@@ -187,18 +278,19 @@ export function buildSelfCheckHtml(opts: {
   band: SelfCheckBand;
   rows: SelfCheckRow[];
   ranAt: string;
+  procedureOnly?: boolean;
 }): string {
-  const { areaLabel, areaDescription, counts, band, rows, ranAt } = opts;
-  const bandLine = bandLineOf(band);
+  const { areaLabel, areaDescription, counts, band, rows, ranAt, procedureOnly } = opts;
+  const bandLine = procedureOnly ? PROCEDURE_ONLY_NOTE : bandLineOf(band);
   // Same condition as the screen: a run with nothing unjudged must not carry a
   // paragraph explaining "Could not check", which reads as a warning about a
   // result that is not there.
   const unjudgedNote = counts.couldNotCheck === 0 ? "" : mostlyUnchecked(counts) ? MOSTLY_UNCHECKED_NOTE : COULD_NOT_CHECK_NOTE;
   return `
-    <h1>Self-check: ${escapeHtml(areaLabel)}</h1>
+    <h1>Self-check: ${escapeHtml(areaLabel)}${procedureOnly ? " (written procedure only)" : ""}</h1>
     <p class="muted">${escapeHtml(areaDescription)}</p>
     <p class="muted">Checked on ${escapeHtml(ranAt)}</p>
-    <p><b>${counts.complies} complies · ${counts.partly} partly complies · ${counts.doesNot} does not comply · ${counts.couldNotCheck} could not check</b></p>
+    <p><b>${counts.complies} ${procedureOnly ? "written down" : "complies"} · ${counts.partly} ${procedureOnly ? "partly written down" : "partly complies"} · ${counts.doesNot} ${procedureOnly ? "not written down" : "does not comply"} · ${counts.couldNotCheck} could not check</b></p>
     <p>${escapeHtml(bandLine)}</p>
     ${unjudgedNote ? `<p class="muted">${escapeHtml(unjudgedNote)}</p>` : ""}
     <table>

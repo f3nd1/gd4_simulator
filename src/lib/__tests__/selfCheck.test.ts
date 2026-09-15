@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   PLAIN_VERDICT, toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv,
   buildSelfCheckHtml, selfCheckFilename, describeBlock, plainRunError, plainWhy, plainDetail, COULD_NOT_CHECK_NOTE,
+  planFor, toProcedureRows, PPD_PLAIN_VERDICT, PROCEDURE_ONLY_NOTE,
   SELF_CHECK_DISCLAIMER, SELF_CHECK_HEADERS,
 } from "../selfCheck";
-import type { EvidenceAssessmentRow, EvidenceVerdict } from "../../types";
+import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow } from "../../types";
 
 const row = (over: Partial<EvidenceAssessmentRow> = {}): EvidenceAssessmentRow => ({
   gdRef: "5.4.1.DS1", gd4ItemId: "5.4.1", requirementText: "Describe how you monitor student learning.",
@@ -249,5 +250,112 @@ describe("progress detail keeps document names and drops engine phases", () => {
       "Assessing evidence against each requirement line…",
       "Starting PPD requirements review…",
     ]) expect(plainDetail(raw)).toBe("");
+  });
+});
+
+const ppdRow = (over: Partial<PPDReviewRow> = {}): PPDReviewRow => ({
+  ref: "5.4.1.DS1", gd4ItemId: "5.4.1", requirementText: "Implement a learning support process.",
+  verdict: "Adequate", shortComment: "Section 3 sets this out.", fullComment: "Section 3 sets this out.",
+  chunkIds: [], ...over,
+});
+
+describe("two folders: what will and will not be checked", () => {
+  it("runs the full check only when both are given", () => {
+    const p = planFor(true, true);
+    expect(p.canRun).toBe(true);
+    expect(p.kind).toBe("full");
+    if (p.kind === "full") expect(p.button).toBe("Check my area");
+  });
+
+  // The engine falls back to the OTHER folder when one link is blank
+  // (useWorkspaceStore.ts:1525, 2025), so "nothing there" is never what a blank
+  // field means. Both half-filled cases are therefore handled explicitly.
+  it("offers a procedure-only check, and says the records are not checked", () => {
+    const p = planFor(true, false);
+    expect(p.canRun).toBe(true);
+    expect(p.kind).toBe("procedure-only");
+    if (p.kind === "procedure-only") {
+      expect(p.button).toBe("Check my written procedure");
+      expect(p.note).toMatch(/NOT check whether it actually happens/);
+      expect(p.note).toMatch(/records/i);
+    }
+  });
+
+  it("refuses evidence on its own, and says why rather than failing mid-run", () => {
+    const p = planFor(false, true);
+    expect(p.canRun).toBe(false);
+    expect(p.note).toMatch(/need your written procedure/i);
+    // The reason is the engine's, not a preference: the procedure is what
+    // everything is measured against.
+    expect(p.note).toMatch(/nothing to check your records against/i);
+  });
+
+  it("says nothing at all when both are empty", () => {
+    const p = planFor(false, false);
+    expect(p.canRun).toBe(false);
+    expect(p.note).toBe("");
+  });
+
+  it("never promises a band on a procedure-only check", () => {
+    expect(PROCEDURE_ONLY_NOTE).toMatch(/not a band/i);
+    expect(PROCEDURE_ONLY_NOTE).toMatch(/does not say whether any of it actually happens/i);
+  });
+});
+
+describe("a procedure check answers a different question, in different words", () => {
+  it("never says Complies about a run that read no records", () => {
+    for (const v of Object.values(PPD_PLAIN_VERDICT)) {
+      expect(v.label).not.toMatch(/complies|comply/i);
+    }
+    expect(PPD_PLAIN_VERDICT.Adequate.label).toBe("Written down");
+    expect(PPD_PLAIN_VERDICT.Partial.label).toBe("Partly written down");
+    expect(PPD_PLAIN_VERDICT["Not documented"].label).toBe("Not written down");
+  });
+
+  it("keeps Could not check neutral here too", () => {
+    expect(PPD_PLAIN_VERDICT["Not assessed"].label).toBe("Could not check");
+    expect(PPD_PLAIN_VERDICT["Not assessed"].tone).toBe("neutral");
+    expect(PPD_PLAIN_VERDICT["Not assessed"].isGap).toBe(false);
+  });
+
+  it("copies the procedure pass's rows rather than inventing any", () => {
+    const [r] = toProcedureRows([ppdRow({ requirementText: "Do the thing.", shortComment: "Clause 4." })]);
+    expect(r.requirement).toBe("Do the thing.");
+    expect(r.ref).toBe("5.4.1.DS1");
+    expect(r.label).toBe("Written down");
+  });
+
+  it("takes the fix from the suggested rewrite only, never writing one", () => {
+    expect(toProcedureRows([ppdRow({ verdict: "Not documented", suggestedRewrite: "Add a clause naming the reviewer." })])[0].fix)
+      .toBe("Add a clause naming the reviewer.");
+    expect(toProcedureRows([ppdRow({ verdict: "Not documented" })])[0].fix).toBe("");
+  });
+
+  it("translates an unjudged procedure line the same way as the evidence one", () => {
+    const [r] = toProcedureRows([ppdRow({
+      verdict: "Not assessed",
+      fullComment: "Not assessed — the run was stopped before this requirement line was reviewed. Re-run the PPD review to assess it.",
+    })]);
+    expect(r.why).toMatch(/stopped before/i);
+    expect(r.why).not.toMatch(/PPD/);
+  });
+});
+
+describe("a procedure-only download says so", () => {
+  const rows = toProcedureRows([ppdRow({ verdict: "Not documented" })]);
+  it("puts the procedure-only note in the CSV where the band would be", () => {
+    const csv = buildSelfCheckCsv("5.4 Student Learning", rows, { kind: "none" }, true);
+    expect(csv).toContain("not a band");
+    expect(csv).not.toContain("No band yet for this area.");
+    expect(csv).toContain(SELF_CHECK_DISCLAIMER);
+  });
+  it("marks the printable copy in its own title", () => {
+    const html = buildSelfCheckHtml({
+      areaLabel: "5.4 Student Learning", areaDescription: "d", counts: countSelfCheck(rows),
+      band: { kind: "none" }, rows, ranAt: "x", procedureOnly: true,
+    });
+    expect(html).toContain("written procedure only");
+    expect(html).toContain("not written down");
+    expect(html).not.toContain("does not comply");
   });
 });
