@@ -450,6 +450,33 @@ export function Dashboard() {
         </div>
       </Card>
 
+      {/* Process owners land on this Dashboard too, and the self-check lives in
+          the sidebar's Tools tail where a first-time visitor will not find it.
+          Deliberately tinted and unnumbered so it does not read as a fifth step
+          of the auditor workflow above. */}
+      <Card style={{ gridColumn: "1 / -1", background: "#f5f3ff", borderColor: "#ddd6fe" }}>
+        <h3 style={{ marginTop: 0, fontSize: 14, color: "#5b21b6" }}>Checking your own area? Start here</h3>
+        <div style={{ fontSize: 12.5, color: "#4c1d95", marginBottom: 12, lineHeight: 1.55 }}>
+          If you look after one area and you are not running the audit, you can check your own documents
+          against what the requirements ask, and get a plain-English result you can act on.
+        </div>
+        <Link
+          to="/self-check"
+          style={{
+            display: "inline-block",
+            fontSize: 13,
+            fontWeight: 700,
+            color: "#fff",
+            background: "#7c3aed",
+            textDecoration: "none",
+            padding: "9px 16px",
+            borderRadius: 9,
+          }}
+        >
+          Start my self-check →
+        </Link>
+      </Card>
+
       <Card>
         <div style={{ fontSize: 12, color: "#6b7280" }}>Draft status</div>
         <div style={{ marginTop: 6 }}>
