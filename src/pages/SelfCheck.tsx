@@ -261,6 +261,46 @@ export function SelfCheck() {
     setPhase("stopped");
   }
 
+  // The previous result, exactly as stored, for the two download controls in
+  // the replace dialog. Deliberately NOT the component's `rows`/`band`/`ranAt`:
+  // those are session state, and the stored result carries its own runAt. Its
+  // band is another matter — see SCORE_NOT_RECORDED in selfCheck.ts.
+  const previous = useMemo(() => {
+    const src = plan.kind === "procedure-only" ? ppdExisting : existing;
+    if (!src || src.rows.length === 0 || !area) return null;
+    const prevRows = plan.kind === "procedure-only"
+      ? toProcedureRows((src as { rows: Parameters<typeof toProcedureRows>[0] }).rows)
+      : toSelfCheckRows((src as { rows: Parameters<typeof toSelfCheckRows>[0] }).rows);
+    // The auditor's committed band is a stored fact and survives; the
+    // indicative one was never saved with the result, so say so on the file.
+    const committed = itemIdsForScope(area.scope).map((id) => checklistEntries[id]?.holisticBand).find((bd) => !!bd);
+    const prevBand: SelfCheckBand = committed
+      ? { kind: "auditor", band: committed.band, name: bandName(committed.band), totalPct: committed.totalPct }
+      : { kind: "not-recorded" };
+    const ranAtPrev = new Date(src.runAt).toLocaleString("en-SG");
+    return { rows: prevRows, counts: countSelfCheck(prevRows), band: prevBand, ranAt: ranAtPrev };
+  }, [plan.kind, existing, ppdExisting, area, checklistEntries]);
+
+  function onPreviousCsv() {
+    if (!area || !previous) return;
+    downloadCsv(
+      buildSelfCheckCsv(`${area.scope} ${area.title}`, previous.rows, previous.band, plan.kind === "procedure-only"),
+      selfCheckFilename(`${area.title} previous`, "csv"),
+    );
+  }
+  function onPreviousPdf() {
+    if (!area || !previous) return;
+    const ok = printHtmlInNewTab(
+      `<style>${PRINTABLE_DOC_CSS}</style>${buildSelfCheckHtml({
+        areaLabel: `${area.scope} ${area.title}`, areaDescription: area.description,
+        counts: previous.counts, band: previous.band, rows: previous.rows,
+        ranAt: previous.ranAt, procedureOnly: plan.kind === "procedure-only",
+      })}`,
+      `Self-check ${area.title} (earlier check)`,
+    );
+    if (!ok) setNote(POPUP_BLOCKED_MESSAGE);
+  }
+
   function onCsv() {
     if (!area) return;
     downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, procedureOnlyResult), selfCheckFilename(area.title, "csv"));
@@ -395,12 +435,31 @@ export function SelfCheck() {
                 {resultAtRisk ? "This area has already been checked." : "Your audit lead has already set up this area."}
               </b>
               <p style={{ ...muted, margin: "6px 0 10px" }}>
-                {resultAtRisk && `Running again replaces the previous ${plan.kind === "procedure-only" ? "written procedure check" : "result"} for this area, including anything your audit lead has seen. The earlier one is kept in the audit history. `}
+                {resultAtRisk && `Running again replaces the previous ${plan.kind === "procedure-only" ? "written procedure check" : "result"} for this area, including anything your audit lead has seen. Nothing is deleted. Download a copy below if you want one. `}
                 {linkClash && `It also replaces the ${clashes.length === 2 ? "written procedure and records folders" : `${clashes[0]} folder`} your audit lead recorded for this area with what you pasted above. If you are not sure that is right, check with them first.`}
               </p>
               <button type="button" style={{ ...bigBtn, fontSize: 13.5, padding: "9px 16px" }} onClick={() => void run()}>Yes, check it again</button>
               <button type="button" onClick={() => setConfirmOverwrite(false)}
                 style={{ marginLeft: 8, fontSize: 13.5, padding: "9px 16px", borderRadius: 10, border: "1px solid #cbd5e1", background: "#fff", cursor: "pointer" }}>Cancel</button>
+
+              {/* Deliberately smaller, plainer and on their own row, so they read
+                  as "take a copy first" rather than as the decision. Neither
+                  dismisses the dialog: the choice above is still open after a
+                  download. Hidden entirely when no previous result can be
+                  retrieved, rather than offering a control that would fail. */}
+              {previous && (
+                <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #fde68a" }}>
+                  <span style={{ ...muted, color: "#92400e", marginRight: 8 }}>Keep a copy of the earlier check:</span>
+                  <button type="button" onClick={onPreviousPdf}
+                    style={{ fontSize: 12.5, padding: "5px 11px", borderRadius: 8, border: "1px solid #d6bc8a", background: "#fff", color: "#92400e", cursor: "pointer", marginRight: 6 }}>
+                    ⬇ Download PDF
+                  </button>
+                  <button type="button" onClick={onPreviousCsv}
+                    style={{ fontSize: 12.5, padding: "5px 11px", borderRadius: 8, border: "1px solid #d6bc8a", background: "#fff", color: "#92400e", cursor: "pointer" }}>
+                    ⬇ Download CSV
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -485,7 +544,7 @@ export function SelfCheck() {
 
             {!procedureOnlyResult && (
             <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fbfcfe" }}>
-              {band.kind === "none" ? (
+              {band.kind === "none" || band.kind === "not-recorded" ? (
                 <>
                   <b style={{ fontSize: 14 }}>No band yet for this area</b>
                   <p style={{ ...muted, margin: "5px 0 0" }}>

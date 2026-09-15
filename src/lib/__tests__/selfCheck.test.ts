@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   PLAIN_VERDICT, toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv,
   buildSelfCheckHtml, selfCheckFilename, describeBlock, plainRunError, plainWhy, plainDetail, COULD_NOT_CHECK_NOTE,
-  planFor, toProcedureRows, PPD_PLAIN_VERDICT, PROCEDURE_ONLY_NOTE,
+  planFor, toProcedureRows, PPD_PLAIN_VERDICT, PROCEDURE_ONLY_NOTE, bandLineOf,
   SELF_CHECK_DISCLAIMER, SELF_CHECK_HEADERS,
 } from "../selfCheck";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow } from "../../types";
@@ -357,5 +357,40 @@ describe("a procedure-only download says so", () => {
     expect(html).toContain("written procedure only");
     expect(html).toContain("not written down");
     expect(html).not.toContain("does not comply");
+  });
+});
+
+// The band a PREVIOUS result was shown with was never saved: suggestBand()
+// commits nothing and EvidenceAssessmentResult has no band field. Recomputing
+// it would need a live AI call and would produce a DIFFERENT band from the one
+// the user saw, so the download says so on the face of the document. A blank
+// band field would be worse than the defect this fixes.
+describe("downloading an earlier check that has no saved score", () => {
+  const rows = toSelfCheckRows([row({ verdict: "Met" })]);
+
+  it("states it on the band line rather than leaving it empty", () => {
+    const line = bandLineOf({ kind: "not-recorded" });
+    expect(line).toContain("Score not recorded for this earlier check");
+    expect(line).not.toBe("");
+  });
+
+  it("puts that sentence in the CSV where the band would be", () => {
+    const csv = buildSelfCheckCsv("5.4 Student Learning", rows, { kind: "not-recorded" });
+    expect(csv).toContain("Score not recorded for this earlier check");
+    expect(csv).not.toContain("No band yet for this area.");
+    expect(csv).toContain(SELF_CHECK_DISCLAIMER);
+  });
+
+  it("puts it in the printable copy too", () => {
+    const html = buildSelfCheckHtml({
+      areaLabel: "5.4 Student Learning", areaDescription: "d", counts: countSelfCheck(rows),
+      band: { kind: "not-recorded" }, rows, ranAt: "x",
+    });
+    expect(html).toContain("Score not recorded for this earlier check");
+  });
+
+  it("still reports a band that WAS saved, because the auditor's one survives", () => {
+    expect(bandLineOf({ kind: "auditor", band: 3, name: "Meeting Expectation", totalPct: 60 }))
+      .toContain("Band set by your auditor");
   });
 });

@@ -233,7 +233,13 @@ export function mostlyUnchecked(c: SelfCheckCounts): boolean {
 export type SelfCheckBand =
   | { kind: "none" }
   | { kind: "auditor"; band: Band; name: string; totalPct: number }
-  | { kind: "indicative"; band: Band; name: string; totalPct: number };
+  | { kind: "indicative"; band: Band; name: string; totalPct: number }
+  // An earlier check being downloaded before it is replaced. The band it was
+  // shown with came from suggestBand(), which never commits and stores nothing
+  // with the result, so it is genuinely gone. Recomputing it would need a live
+  // AI call and would produce a DIFFERENT band from the one the user saw, so
+  // the document says so outright rather than leaving the field blank.
+  | { kind: "not-recorded" };
 
 export const SELF_CHECK_HEADERS = [
   "Area", "GD4 reference", "What the requirement asks", "Result", "Why", "What to fix",
@@ -241,10 +247,13 @@ export const SELF_CHECK_HEADERS = [
 
 // One wording for the band, used by BOTH downloads so a CSV and a PDF of the
 // same run can never describe the result differently.
+export const SCORE_NOT_RECORDED =
+  "Score not recorded for this earlier check. The band shown at the time was worked out live and was not saved with the result. Run the check again to get a current one.";
+
 export function bandLineOf(band: SelfCheckBand): string {
-  return band.kind === "none"
-    ? "No band yet for this area."
-    : `${band.kind === "auditor" ? "Band set by your auditor" : "Indicative band, not yet confirmed by your auditor"}: Band ${band.band} of 5 — ${band.name} (${band.totalPct}%)`;
+  if (band.kind === "none") return "No band yet for this area.";
+  if (band.kind === "not-recorded") return SCORE_NOT_RECORDED;
+  return `${band.kind === "auditor" ? "Band set by your auditor" : "Indicative band, not yet confirmed by your auditor"}: Band ${band.band} of 5 — ${band.name} (${band.totalPct}%)`;
 }
 
 // The band and the disclaimer ride in the CSV too. A spreadsheet gets
