@@ -117,6 +117,43 @@ const EVIDENCE_ASSESSMENT_SCHEMA: ChatSchema = { name: "evidence_assessment", sc
 // B's top-level verdict is derived deterministically from structured dimension
 // data (see buildStagedApsr/apsrAuditNote below), so this class of
 // contradiction cannot occur there by construction; do not wire this in there.
+// House style for the two narrative fields a reader actually reads: the
+// evidence judge's `comment` ("Why") and `suggestedAction` ("What to fix"), and
+// the PPD judge's `suggestedRewrite`. Deliberately NOT applied to
+// evidenceSummary or the PPD shortComment: those feed the band digest's
+// 160-character note (optionAChecklistWrite.ts:34/39 →
+// buildBandEvidenceDigest), and changing what the band sees is a scoring
+// change, which this is not.
+//
+// Wording only. Nothing here touches the decision procedure, the verdict
+// vocabulary, the evidence rules or the named-example requirement above.
+const NARRATIVE_STYLE_RULES = `
+WRITING STYLE for "comment" and "suggestedAction" (wording only — it never changes a verdict):
+
+comment ("Why"): normally 2-3 short sentences, about 35-75 words.
+1. State the main gap FIRST, in its own sentence. No scene-setting clause before it.
+2. Then what evidence WAS found, if it matters.
+3. Then, briefly, why that evidence is not enough for this verdict.
+- Short sentences. British English. Do not repeat the requirement text back. Do not state the same evidence twice.
+- Avoid opening with "Although", "While", "Despite", "With the PPD assessed as", or "under the decision rules".
+- Distinguish plainly: not documented / documented but not evidenced / partially evidenced / documented and evidenced.
+- Where a documentation rule decides it, say so plainly, e.g. "The practice is evident in the records, but it is not defined in the PPD. Because the documented approach is missing, the requirement is not met."
+- Do not overstate what is missing. Say exactly what could not be verified.
+- End with the conclusion in plain words, e.g. "Therefore, the requirement is not met." / "Therefore, implementation is only partially evidenced."
+GOOD: "The PPD does not define the competence and independence requirements for internal assessors. The available records also do not show assessor qualifications, training or confirmation that assessors did not assess their own areas. Therefore, the requirement is not met."
+BAD: "With the PPD assessed as not documenting the deployment of independent, qualified internal assessors, and no records specifying auditor qualifications or demonstrating independence from the areas audited, it was not evident that..."
+
+suggestedAction ("What to fix"): normally 1-3 short sentences, about 20-55 words. Action + where + what content or evidence is needed.
+- Open with a verb: Update, Add, Document, Create, Maintain, Record, Retain, Ensure, Demonstrate.
+- Say exactly what must change, and name the document, record, field or system ONLY where it was actually given to you.
+- NEVER invent a document code, system name, role, register or approval step that does not appear in the passages. If you do not have a real name, describe the record generically ("the internal audit records").
+- Do not re-explain the assessment. No background. Do not ask for evidence this requirement does not call for.
+- Where nothing is needed: "No further action required. Continue retaining evidence of implementation."
+GOOD: "Update the PPD to define assessor competence, training and independence requirements. Retain evidence such as the audit assignment list, training records and declarations of independence."
+BAD: "Update PPD-SGL-SQ-6.1.1 to define requirements for internal assessors' competence and independence, and provide internal audit records showing that auditors deployed in 2024-2025 were trained and not auditing their own areas, in accordance with..."
+
+No em dashes. No long legalistic sentences, no strings of semicolons, no repeated references to "the promises". Never write vague advice such as "improve this", "strengthen this" or "ensure compliance" without saying how.`;
+
 const POSITIVE_CONCLUSION_PATTERNS = ["assessed as met", "assessed as adequate", "fully satisfies", "fully meets", "fully evidenced"];
 const NEGATIVE_CONCLUSION_PATTERNS = ["assessed as not met", "assessed as partial", "assessed as not documented", "not evidenced", "does not satisfy", "does not meet"];
 // Three-way verdict class, so "Partial" and "Not met" are distinguishable: the
@@ -126,7 +163,14 @@ const NEGATIVE_CONCLUSION_PATTERNS = ["assessed as not met", "assessed as partia
 // longest alternative first, so "rated not met" never half-matches as "met"
 // and "incorporated methods" never matches "rated met".
 type VerdictClass = "positive" | "partial" | "negative";
-const EXPLICIT_CONCLUSION_RE = /\b(?:assessed as|rated(?: as)?)\s+"?(not met|not documented|partially met|partial|met|adequate)\b/g;
+// The concise wording rules end a narrative "Therefore, the requirement is not
+// met." rather than "...assessed as not met". That matched NEITHER the explicit
+// pattern nor the loose fallback ("is not met" is not "does not meet"), so the
+// guard would have gone blind on exactly the sentence the new rules mandate.
+// The lead-in is widened instead of the wording being bent back: this detects
+// strictly more than before and the phrasings it already caught still match.
+const EXPLICIT_CONCLUSION_RE =
+  /\b(?:assessed as|rated(?: as)?|(?:requirement|line|item|it) is(?: therefore)?|therefore(?: the requirement is)?)\s+"?(not met|not documented|partially met|partial|met|adequate)\b/g;
 const CONCLUSION_CLASS: Record<string, VerdictClass> = {
   met: "positive", adequate: "positive",
   partial: "partial", "partially met": "partial",
@@ -2512,6 +2556,9 @@ For each line return:
 - chunkIds: the chunk IDs of the passages the verdict relies on. Empty if none — never invent a chunk ID.
 - supportQuote: for Adequate/Partial ONLY — the single given passage that most directly documents the line, copied exactly, or "" when none/spread.
 
+${NARRATIVE_STYLE_RULES.replace(/"comment" and "suggestedAction"/, '"fullComment" and "suggestedRewrite"')}
+NOTE for this pass: the rules above apply to fullComment and suggestedRewrite. shortComment keeps its existing one-sentence form unchanged. fullComment still ends with its verbatim quoted excerpt and chunk ID as specified above; the style rules govern the justification before it.
+
 Respond with JSON only:
 {"results": [{"ref": string, "subClauses": [{"text": string, "verdict": "documented"|"not documented", "quote": string, "spreadQuotes": [{"quote": string, "chunkId": string}], "clause": string, "rationale": string, "chunkId": string}], "verdict": "Adequate"|"Partial"|"Not documented", "shortComment": string, "fullComment": string, "suggestedRewrite": string, "chunkIds": string[], "supportQuote": string}]}${buildSystemPrompt("ppdReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
 
@@ -3109,6 +3156,8 @@ For each line return:
 - chunkIds: the chunk IDs of the passages the line verdict relies on. Empty if none.
 - evidenceQuote: for Met/Partial ONLY — the single given passage that most directly proves implementation for this line, copied exactly, or "".
 - suggestedAction: for Partial or Not met ONLY — one or two sentences on the SPECIFIC evidence or action that would move this line to Met, grounded in the SAME gap you identified in comment/promiseChecks (name the specific record, how many items, which document/register — e.g. "Add owner and timeline fields to the remaining 17 unassigned actions in the Management Review Meeting minutes"), never generic advice like "add more evidence". If you cannot state something concrete, return "" — do not pad. "" for Met.
+
+${NARRATIVE_STYLE_RULES}
 
 Respond with JSON only:
 {"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[], "quote": string, "rationale": string, "chunkId": string}], "chunkIds": string[], "evidenceQuote": string, "suggestedAction": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}

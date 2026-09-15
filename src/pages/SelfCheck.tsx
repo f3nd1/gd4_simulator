@@ -610,7 +610,16 @@ export function SelfCheck() {
 
         {/* 4 — the result */}
         {showResult && area && (
-          <section style={card} ref={resultRef}>
+          // Step 4 alone widens: "Why" and "What to fix" were wrapping to about
+          // 25 characters at the page's reading width. The negative margins pull
+          // it out of the 880px column without moving steps 1 to 3, and the
+          // clamp keeps it from sprawling on a very wide screen. min() rather
+          // than a media query so it simply collapses back to the column width
+          // on a narrow screen.
+          <section
+            style={{ ...card, width: "max(100%, min(80vw, 1400px))", marginLeft: "min(0px, calc(440px - min(40vw, 700px)))", marginRight: "min(0px, calc(440px - min(40vw, 700px)))" }}
+            ref={resultRef}
+          >
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 4 }}>
               <span style={stepNum}>4</span><h2 style={h2}>Your result</h2>
             </div>
@@ -675,10 +684,10 @@ export function SelfCheck() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ textAlign: "left", background: "#f8fafc" }}>
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0" }}>What the requirement asks</th>
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: 130 }}>Result</th>
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0" }}>Why</th>
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0" }}>What to fix</th>
+                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "24%" }}>What the requirement asks</th>
+                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "9%", minWidth: 84 }}>Result</th>
+                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "37%" }}>Why</th>
+                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "30%" }}>What to fix</th>
                   </tr>
                 </thead>
                 <tbody>
