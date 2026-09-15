@@ -6,7 +6,7 @@
 // useFindingDraftStore's raw adapter threw on load and the page rendered empty,
 // which is what hid Felix's auditor even after the row was saved correctly.
 import { describe, it, expect, afterEach } from "vitest";
-import { safeLocalStorage } from "../supabaseStorage";
+import { safeLocalStorage } from "../safeLocalStorage";
 
 // Node environment: there is no DOM Storage, so localStorage is stubbed
 // directly. The behaviour under test is the try/catch, not the browser.
@@ -59,18 +59,5 @@ describe("safeLocalStorage", () => {
     } as Partial<Storage>);
     expect(safeLocalStorage.getItem("k")).toBeNull();
     expect(() => safeLocalStorage.removeItem("k")).not.toThrow();
-  });
-});
-
-// The stores that do NOT sync to Supabase must use it, or they reintroduce the
-// crash. Asserted against the real source so a new raw adapter is caught.
-describe("no store persists through a raw, throwing localStorage", () => {
-  it("useFindingDraftStore, useCalibrationStore and useGuidanceStore use the safe adapter", async () => {
-    const fs = await import("node:fs/promises");
-    for (const f of ["useFindingDraftStore", "useCalibrationStore", "useGuidanceStore"]) {
-      const src = await fs.readFile(new URL(`../${f}.ts`, import.meta.url), "utf8");
-      expect(src, `${f} still uses a raw localStorage adapter`).not.toMatch(/createJSONStorage\(\(\)\s*=>\s*localStorage\)/);
-      expect(src, `${f} does not use safeLocalStorage`).toMatch(/safeLocalStorage/);
-    }
   });
 });

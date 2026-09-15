@@ -4,8 +4,8 @@
 // working state that does not need cross-device sync.
 
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
-import { safeLocalStorage } from "./supabaseStorage";
+import {persist } from "zustand/middleware";
+import { workspaceStorage } from "./supabaseStorage";
 import type {
   ChecklistLineGroup,
   GroupedFindingDraft,
@@ -487,7 +487,7 @@ export const useFindingDraftStore = create<FindingDraftState>()(
     }),
     {
       name: "ucc-gd4-finding-drafts:v1",
-      storage: createJSONStorage(() => safeLocalStorage),
+      storage: workspaceStorage,
     }
   )
 );

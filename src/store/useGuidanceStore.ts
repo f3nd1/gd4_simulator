@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { safeLocalStorage } from "./supabaseStorage";
+import { safeLocalStorage } from "./safeLocalStorage";
 
 type GuidanceState = {
   // Master switch: banners, tooltips added by the guidance layer, and

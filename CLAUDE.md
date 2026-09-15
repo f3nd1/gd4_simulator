@@ -79,24 +79,37 @@ Two views sit on the Option A tabs. They look similar and mean opposite things �
 
 ### Stores (Zustand). Persist key ≠ version number — see table
 
-All persisted via `workspaceStorage` (Supabase-synced adapter in `src/store/supabaseStorage.ts`, localStorage fallback + offline cache; writes debounced ~600ms, `beforeunload` flush) unless noted.
+Adapter and version below are derived from the real source by
+`store/__tests__/storeAdapters.test.ts`, which fails if this table drifts. It
+has been wrong twice, and both times the error hid real data loss, so trust the
+test rather than this prose. Three adapters exist:
 
-| Store | Purpose | Persist key | `version` |
-|---|---|---|---|
-| `useWorkspaceStore` | Main store: cycle, auditors, folders, audit runs (`auditRunHistory`), Option A results, findings (`customFindings`), closures, calibration memories, human-decision log, `fileTextCache`, snapshots | `ucc-gd4-workspace:v3` | **6** |
-| `useChecklistModuleStore` | Per-item checklist lines/evidence/drafts; `raiseAllUnmetFindings()`, `confirmDraftFinding()`, `replaceAuditEvidence()` | `ucc-gd4-checklist:v2` | **2** |
-| `useAISettingsStore` | OpenAI key + model selection (the key DOES sync via Supabase) | `ucc-gd4-ai-settings:v1` | 1 |
-| `useBenchmarkAfiStore` | Full benchmark AFI list (59 seeded + uploads); scoped `resetToDefaults` preserves `CUST-*` uploads | `ucc-gd4-custom-benchmark:v1` | 1 |
-| `useCalibrationStore` | Benchmark match assessments (human-override-wins) | `ucc-gd4-calibration:v1` | 1 |
-| `usePreCheckChecklistStore` | Live editable pre-check checklist (seeded from `DEFAULT_CHECKLISTS`); Approve/Revert is the only way `verified` changes | `ucc-gd4-precheck-checklist:v1` | 0 |
-| `useDomainChecklistStore` | Edits/hides/additions to the criterion domain-expertise checklists — a DIFF only, never a copy of the markdown | `ucc-gd4-domain-checklist:v1` | 0 |
-| `useFindingDraftStore` | Grouped finding drafts; `generateFindingsFromChecklist()`, `confirmGroupedDraft()` | `ucc-gd4-finding-drafts:v1` | 0 |
-| `useChecklistVerdictStore` | Per-check verdicts from the Audit Checklist Library pass, keyed `checkId::subCriterionId::bucket`; written by BOTH audit paths, display-only | `ucc-gd4-checklist-verdicts:v1` | 0 |
-| `useRuleTuningStore` | Rule injections; champion-vs-active gate (`championInjection()`) | `ucc-gd4-rule-tuning:v1` | 0 |
-| `usePromptReviewStore` | Prompt Review prompts + connected review records | `ucc-gd4-prompt-review:v1` | 0 |
-| `useScoringConfigStore` | Award thresholds, AI strictness | `ucc-gd4-scoring-config:v1` | 0 |
-| `useGoogleDriveStore` | Drive Client ID persisted; the access token itself is **excluded by `partialize`, never persisted** — the long-lived refresh token lives server-side instead, see Persistence & security below | `ucc-gd4-google-drive:v1` | 0 |
-| `useProfileOfPeiStore` / `useSupabaseSettingsStore` / `useChangeLogStore` / `useGuidanceStore` | PEI profile / Supabase creds / change-log cache / guidance dismissals | own `ucc-gd4-*` keys | 0–1 |
+- **`workspaceStorage`** (`src/store/supabaseStorage.ts`) — Supabase-synced, with localStorage as offline cache and fallback; writes debounced ~600ms, `beforeunload` flush. Survives reload, another browser, a cleared cache and a full quota.
+- **`appendOnlyStorage`** (`src/store/useChangeLogStore.ts`) — same, plus a read-modify-write union so a push can never shrink the remote log.
+- **`safeLocalStorage`** (`src/store/safeLocalStorage.ts`) — browser-local, non-throwing. A leaf module on purpose: importing it from `supabaseStorage` created the cycle settings → supabaseStorage → supabaseClient → settings and left the credentials unpersisted. Only two stores may use it (the test pins the list).
+
+Never give a store zustand's default storage: `localStorage.setItem` throws inside `setState` on a full disk, which propagates through render and blanks the app.
+
+| Store | Purpose | Persist key | `version` | Adapter |
+|---|---|---|---|---|
+| `useWorkspaceStore` | Main store: cycle, auditors, folders, audit runs (`auditRunHistory`), Option A results, findings (`customFindings`), closures, calibration memories, human-decision log, `fileTextCache`, snapshots | `ucc-gd4-workspace:v3` | **10** | workspaceStorage |
+| `useChecklistModuleStore` | Per-item checklist lines/evidence/drafts; `raiseAllUnmetFindings()`, `confirmDraftFinding()`, `replaceAuditEvidence()` | `ucc-gd4-checklist:v2` | **2** | workspaceStorage |
+| `useAISettingsStore` | OpenAI key + model selection (the key DOES sync via Supabase) | `ucc-gd4-ai-settings:v1` | 1 | workspaceStorage |
+| `useBenchmarkAfiStore` | Full benchmark AFI list (59 seeded + uploads); scoped `resetToDefaults` preserves `CUST-*` uploads | `ucc-gd4-custom-benchmark:v1` | 1 | workspaceStorage |
+| `useCalibrationStore` | Benchmark match assessments (human-override-wins) | `ucc-gd4-calibration:v1` | 2 | workspaceStorage |
+| `usePreCheckChecklistStore` | Live editable pre-check checklist (seeded from `DEFAULT_CHECKLISTS`); Approve/Revert is the only way `verified` changes | `ucc-gd4-precheck-checklist:v1` | 0 | workspaceStorage |
+| `useDomainChecklistStore` | Edits/hides/additions to the criterion domain-expertise checklists — a DIFF only, never a copy of the markdown | `ucc-gd4-domain-checklist:v1` | 0 | workspaceStorage |
+| `useFindingDraftStore` | Grouped finding drafts; `generateFindingsFromChecklist()`, `confirmGroupedDraft()` | `ucc-gd4-finding-drafts:v1` | 0 | workspaceStorage |
+| `useChecklistVerdictStore` | Per-check verdicts from the Audit Checklist Library pass, keyed `checkId::subCriterionId::bucket`; written by BOTH audit paths, display-only. **The largest growth risk:** 800 entries x (2000-char rationale + 1000-char quote) is up to ~4.8 MB of UTF-16 on its own | `ucc-gd4-checklist-verdicts:v1` | 0 | workspaceStorage |
+| `useRuleTuningStore` | Rule injections; champion-vs-active gate (`championInjection()`) | `ucc-gd4-rule-tuning:v1` | 0 | workspaceStorage |
+| `usePromptReviewStore` | Prompt Review prompts + connected review records | `ucc-gd4-prompt-review:v1` | 0 | workspaceStorage |
+| `useScoringConfigStore` | Award thresholds, AI strictness | `ucc-gd4-scoring-config:v1` | 1 | workspaceStorage |
+| `useGoogleDriveStore` | Drive Client ID persisted; the access token itself is **excluded by `partialize`, never persisted** — the long-lived refresh token lives server-side instead, see Persistence & security below | `ucc-gd4-google-drive:v1` | 0 | workspaceStorage |
+| `useProfileOfPeiStore` | PEI profile | `profile-of-pei-v2` | 0 | workspaceStorage |
+| `useWorksheetQuestionStore` | Manual-worksheet questions + prompt version | `ucc-gd4-worksheet-cache:v1` | 3 | workspaceStorage |
+| `useChangeLogStore` | Change-log cache | `ucc-gd4-changelog:v1` | 1 | appendOnlyStorage |
+| `useGuidanceStore` | Guidance dismissals and seen walkthroughs — deliberately per-device, so dismissing a tip on one machine does not hide it everywhere | `ucc-gd4-guidance:v1` | 0 | safeLocalStorage |
+| `useSupabaseSettingsStore` | Supabase URL + publishable key. **Cannot sync** — it holds the credentials every other store needs to reach Supabase | `ucc-gd4-supabase-settings:v1` | 0 | safeLocalStorage |
 | `useAIDebugLogStore` | System prompt per `buildSystemPrompt()` call — in-memory only, 100-cap, cleared on reload | — | — |
 | `useSaveStatusStore` | "saving…/saved" indicator — not persisted | — | — |
 

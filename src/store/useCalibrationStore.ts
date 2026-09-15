@@ -3,8 +3,8 @@
 // is a measurement tool's working state, not audit data.
 
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
-import { safeLocalStorage } from "./supabaseStorage";
+import {persist } from "zustand/middleware";
+import { workspaceStorage } from "./supabaseStorage";
 import type { ConsistencyTestResult, ABTestResult } from "../lib/calibrationTesting";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 
@@ -152,7 +152,7 @@ export const useCalibrationStore = create<CalibrationState>()(
     }),
     {
       name: "ucc-gd4-calibration:v1",
-      storage: createJSONStorage(() => safeLocalStorage),
+      storage: workspaceStorage,
       // v1: consistencyTests / abTests are keyed by sub-criterion id, which the
       // GD4 re-align changed (2.1 → 2.1.1/2.1.2, 7.2 removed, …). Drop entries
       // for sub-criteria that no longer exist so this scratch store doesn't
