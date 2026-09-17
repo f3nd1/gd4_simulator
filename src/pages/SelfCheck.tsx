@@ -22,12 +22,12 @@ import {
   selfCheckFilename, describeBlock, plainRunError, plainDetail, planFor, toProcedureRows, toRecordsRows,
   SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE, NO_BAND_LINE,
   VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
-  citedText, missingText, expectedEvidenceGroups, VERDICT_LEGEND,
+  citedText, missingText, expectedEvidenceGroups, VERDICT_LEGEND, tallySlices, feedsFor, SUMMARY_LABEL,
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking, type BandGraphic } from "../lib/selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -426,7 +426,10 @@ export function SelfCheck() {
     if (!area) return;
     // The tab you are looking at is the tab you get, named on the file so two
     // downloads of the same run can never be confused for each other.
-    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, fileRows, view === "overview" ? bandWorking ?? undefined : undefined, view === "overview" ? bandCoverage : undefined, itemIdsForScope(area.scope)), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
+    // bandWorking rides on EVERY view now: the two half-tabs use it to draw
+    // which dimension their own verdicts feed. Only the overall view prints the
+    // full dimension panel and the coverage note.
+    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, fileRows, bandWorking ?? undefined, view === "overview" ? bandCoverage : undefined, itemIdsForScope(area.scope)), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
   }
   function onPdf() {
     if (!area) return;
@@ -434,8 +437,7 @@ export function SelfCheck() {
       `<style>${PRINTABLE_DOC_CSS}</style>${buildSelfCheckHtml({
         areaLabel: `${area.scope} ${area.title}`, areaDescription: area.description,
         counts, band, rows, ranAt, view, files: fileRows,
-        // The band belongs to the whole area, so it prints on the overall view only.
-        bandWorking: view === "overview" ? bandWorking ?? undefined : undefined,
+        bandWorking: bandWorking ?? undefined,
         bandCoverage: view === "overview" ? bandCoverage : undefined,
         itemIds: itemIdsForScope(area.scope),
       })}`,
@@ -924,6 +926,20 @@ export function SelfCheck() {
               </details>
             )}
 
+            {/* The shape of the tab before a single row is read, and which
+                dimension this tab's own verdicts feed. Both were on the overall
+                tab only, and the procedure and records tabs are where the
+                reading time actually goes. */}
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fff" }}>
+              <Svg html={tallyBarSvg(tallySlices(counts, view), SCREEN_BAND_PALETTE)} />
+              {feedsFor(view) && bandWorking && (
+                <>
+                  <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, { minWidth: 500, feeds: feedsFor(view) })} />
+                  <p style={{ ...muted, margin: "6px 0 0" }}>{feedsFor(view)!.caption}</p>
+                </>
+              )}
+            </div>
+
             {/* Read BEFORE the table. An auditor could not tell whether
                 "Written down" meant compliant, and the honest answer is that
                 each tab settles half the question. */}
@@ -940,32 +956,37 @@ export function SelfCheck() {
             </div>
 
             <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              {/* minWidth, not just width:100%: on a phone the four columns
+                  squeezed instead of scrolling and the Why column became a
+                  two-word-wide strip. The container already scrolls. */}
+              <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ textAlign: "left", background: "#f8fafc" }}>
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "24%" }}>What the requirement asks</th>
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "9%", minWidth: 84 }}>Result</th>
+                    {/* Result FIRST. A four-word verdict in a narrow column to
+                        the right of four hundred words of prose is the last
+                        thing the eye reaches; in a fixed left column with a
+                        colour rail it is the first, and the tab can be scanned
+                        at scrolling speed without stopping. */}
+                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "14%", minWidth: 132 }}>Result</th>
+                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "22%" }}>What the requirement asks</th>
                     <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "37%" }}>Why</th>
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "30%" }}>What to fix</th>
+                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "27%" }}>What to fix</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={r.ref} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top" }}>
-                      <td style={{ padding: "10px" }}>{r.requirement}<div style={{ ...muted, fontSize: 11 }}>{r.ref}</div></td>
-                      <td style={{ padding: "10px" }}>
+                    <tr key={`${view}-${r.ref}`} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top" }}>
+                      <td style={{ padding: "12px 10px", borderLeft: `6px solid ${TONE_BG[r.tone].fg}` }}>
                         <span
-                          style={{ ...TONE_BG[r.tone], padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 6 }}
+                          style={{ ...TONE_BG[r.tone], border: `2px solid ${TONE_BG[r.tone].fg}`, padding: "5px 10px", borderRadius: 8, fontSize: 13.5, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7, lineHeight: 1.25 }}
                           title={r.label}
                         >
-                          <span aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>{r.icon}</span>{r.label}
+                          <span aria-hidden style={{ fontSize: 17, lineHeight: 1 }}>{r.icon}</span>{r.label}
                         </span>
                       </td>
-                      <td style={{ padding: "10px", color: "#334155" }}>
-                        {r.why || <span style={muted}>No reason recorded.</span>}
-                        <Working row={r} />
-                      </td>
-                      <td style={{ padding: "10px", color: "#334155" }}>
+                      <td style={{ padding: "12px 10px" }}>{r.requirement}<div style={{ ...muted, fontSize: 11 }}>{r.ref}</div></td>
+                      <td style={{ padding: "12px 10px", color: "#334155" }}><WhyCell key={`${view}-${r.ref}`} row={r} /></td>
+                      <td style={{ padding: "12px 10px", color: "#334155" }}>
                         {r.fix || <span style={muted}>{r.tone === "good" || r.tone === "neutral" ? "—" : "The check did not suggest anything specific here. Ask your audit lead what would close it."}</span>}
                       </td>
                     </tr>
@@ -984,7 +1005,7 @@ export function SelfCheck() {
             {view === "overview" && bandWorking && (
               <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "13px 15px", margin: "14px 0 0", background: "#fff" }}>
                 <b style={{ fontSize: 14 }}>What this check assessed</b>
-                <BandGraphicView g={bandGraphic(bandWorking)} />
+                <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, { minWidth: 430 })} />
                 {dimensionCoverage && <p style={{ ...muted, margin: "8px 0 2px" }}>{dimensionCoverage}</p>}
                 <div style={{ overflowX: "auto", marginTop: 10 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
@@ -1144,65 +1165,117 @@ const LEGEND_TONE: Record<string, string> = { "✓": "good", "!": "medium", "✗
 // decided. All of it is read off the row the engine already produced; none of
 // it is written here, which is why a row with no breakdown says exactly that
 // instead of filling the space.
-function Working({ row }: { row: SelfCheckRow }) {
-  const cited = citedText(row.working);
-  const missing = missingText(row.working);
-  const unchecked = row.verdict === "Not assessed";
-  if (!cited && !missing) return null;
+// The Why cell, as four separable things rather than one block.
+//
+// It held the reasoning paragraph, a quote embedded mid-sentence, a "Quoted:"
+// line repeating that same quote, and a run-on "Missing:" paragraph that on
+// some lines concatenated fifteen elements. Single cells were taller than the
+// viewport and nothing in them could be skipped.
+//
+// Each part is now its own block, the long ones open on demand, and NOTHING is
+// clipped: every disclosure opens to the full text, and both exports print all
+// of it regardless. An auditor may have to defend any word of it.
+const MISSING_SHOWN = 3;
+const LONG_REASONING = 320;
+
+function Disclosure({ summary, children, open }: { summary: string; children: React.ReactNode; open?: boolean }) {
   return (
-    <div style={{ marginTop: 7, paddingTop: 7, borderTop: "1px dashed #e2e8f0", fontSize: 12.5, lineHeight: 1.5 }}>
-      {cited && (
-        <div style={{ marginBottom: missing ? 5 : 0 }}>
-          <span style={{ fontWeight: 700, color: "#166534" }}>Quoted: </span>
-          <span style={{ color: "#475569" }}>{cited}</span>
+    <details open={open} style={{ marginTop: 6 }}>
+      <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#475569" }}>{summary}</summary>
+      <div style={{ marginTop: 5 }}>{children}</div>
+    </details>
+  );
+}
+
+function WhyCell({ row }: { row: SelfCheckRow }) {
+  const w = row.working;
+  const quotes = w?.citations ?? [];
+  // A weaker citation: files named with no verified excerpt. Still real, so
+  // still shown, just not as a quotation.
+  const citedOnly = quotes.length === 0 ? citedText(w) : "";
+  const missing = w?.missing ?? [];
+  const otherMissing = missing.length === 0 ? missingText(w) : "";
+  const unchecked = row.verdict === "Not assessed";
+  const missingLabel = unchecked ? "Why not" : "What is missing";
+  const [allMissing, setAllMissing] = useState(false);
+  const shown = allMissing ? missing : missing.slice(0, MISSING_SHOWN);
+  const reasoning = row.why || "";
+  return (
+    <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+      {row.summary && (
+        <div style={{ marginBottom: 5 }}>
+          <span style={{ fontWeight: 700, color: "#0f172a" }}>{SUMMARY_LABEL[row.summaryKind]}: </span>
+          <span style={{ color: "#1f2937" }}>{row.summary}</span>
         </div>
       )}
-      {missing && (
-        <div>
+      {!reasoning && !row.summary && <span style={muted}>No reason recorded.</span>}
+      {reasoning && (row.summary && reasoning.length > LONG_REASONING
+        // Only collapsed where a one-line summary already stands in for it.
+        // With no summary the reasoning IS the answer and stays open.
+        ? <Disclosure summary="Why this verdict"><span style={{ color: "#334155" }}>{reasoning}</span></Disclosure>
+        : <div style={{ color: "#334155" }}>{reasoning}</div>)}
+      {row.cappedNote && (
+        // Verbatim, never trimmed: on a line with fifteen unmet promises it
+        // re-lists all fifteen, and those same fifteen are the list below. It
+        // is folded rather than shortened, because an auditor defending the
+        // verdict may need the engine's exact words.
+        <Disclosure summary="Why this could not be higher">
+          <span style={{ color: "#475569" }}>{row.cappedNote}</span>
+        </Disclosure>
+      )}
+      {quotes.length > 0 && (
+        <Disclosure summary={`Quoted from your documents (${quotes.length})`}>
+          {quotes.map((c, i) => (
+            <blockquote key={`${c.file}-${i}`} style={{ margin: "0 0 6px", paddingLeft: 9, borderLeft: "3px solid #bbf7d0", color: "#475569", fontStyle: "italic" }}>
+              {c.quote}
+              <div style={{ ...muted, fontStyle: "normal", marginTop: 2 }}>{c.file}</div>
+            </blockquote>
+          ))}
+        </Disclosure>
+      )}
+      {citedOnly && <div style={{ ...muted, marginTop: 5 }}>{citedOnly}</div>}
+      {missing.length > 0 && (
+        <div style={{ marginTop: 6 }}>
           {/* A line nothing could be decided for has no missing ELEMENT — it
               has a reason, and colouring it as a gap would be the same error
               as counting it as one. */}
-          <span style={{ fontWeight: 700, color: unchecked ? "#475569" : "#991b1b" }}>{unchecked ? "Why not: " : "Missing: "}</span>
-          <span style={{ color: "#475569" }}>{missing}</span>
+          <div style={{ fontWeight: 700, color: unchecked ? "#475569" : "#991b1b" }}>{missingLabel} ({missing.length})</div>
+          <ul style={{ margin: "3px 0 0", paddingLeft: 17, color: "#475569" }}>
+            {shown.map((m, i) => (
+              <li key={`${m.text}-${i}`} style={{ marginBottom: 3 }}>
+                <span style={{ color: "#1f2937" }}>{m.text}</span>{m.why ? ` — ${m.why}` : ""}
+              </li>
+            ))}
+          </ul>
+          {missing.length > MISSING_SHOWN && (
+            <button
+              type="button" onClick={() => setAllMissing((v) => !v)}
+              style={{ marginTop: 4, background: "none", border: "none", padding: 0, color: "#1d4ed8", fontSize: 12, fontWeight: 700, cursor: "pointer", textDecoration: "underline" }}
+            >
+              {allMissing ? "Show fewer" : `Show all ${missing.length}`}
+            </button>
+          )}
+        </div>
+      )}
+      {otherMissing && (
+        <div style={{ marginTop: 6 }}>
+          <span style={{ fontWeight: 700, color: unchecked ? "#475569" : "#991b1b" }}>{missingLabel}: </span>
+          <span style={{ color: "#475569" }}>{otherMissing}</span>
         </div>
       )}
     </div>
   );
 }
 
-// The band, drawn rather than described.
-//
-// The drawing itself lives in selfCheckBanding.ts and is shared with the
-// printed document, because the print-out is what gets filed as working paper
-// and two drawings of one result is exactly the drift this repo has been bitten
-// by before. This wrapper supplies the screen palette (CSS custom properties,
-// so the dark-mode media query still applies) and the scroll container.
-//
-// Three honest pictures, no more:
-//   1. The 0-100 axis with the four dimension contributions stacked. That IS a
-//      sum, so it is the one thing drawn as adding up, with the unreachable
-//      part of the axis hatched and the ceiling marked.
-//   2. The five-band scale with the result marked and out-of-reach bands
-//      hatched and labelled.
-//   3. Each dimension against its own 25% track, so the SHAPE reads at a
-//      glance: which dimensions carry the score and which are flat because
-//      nothing here looked at them.
-//
-// Nothing draws the requirement rows as feeding a total, because they do not:
-// the four dimension bands are a judgement, and only the dimension-to-
-// percentage step is arithmetic. Hatching, not colour, carries "not assessed
-// here" and "out of reach", so both read in greyscale and on paper.
-function BandGraphicView({ g }: { g: BandGraphic }) {
-  // An SVG scaled to a 420px screen renders its 10.5px labels at about 5px,
-  // which is not legible. It keeps a minimum width and the container scrolls
-  // instead, which is what the result tables on this page already do.
-  return (
-    <div
-      className="sc-band-graphic"
-      style={{ marginTop: 10, overflowX: "auto" }}
-      dangerouslySetInnerHTML={{ __html: bandGraphicSvg(g, SCREEN_BAND_PALETTE, { minWidth: 430 }) }}
-    />
-  );
+// One scroll container for every SVG this page renders, so the screen palette
+// (CSS custom properties, so the dark-mode media query applies) and the
+// narrow-viewport behaviour are wired up in exactly one place. An SVG scaled
+// down to a 420px screen renders its 10.5px labels at about 5px, which is not
+// legible, so the drawings keep a minimum width and this scrolls instead —
+// the same thing the result tables on this page already do.
+function Svg({ html }: { html: string }) {
+  if (!html) return null;
+  return <div className="sc-band-graphic" style={{ marginTop: 6, overflowX: "auto" }} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function Tally({ n, label, tone }: { n: number; label: string; tone: string }) {

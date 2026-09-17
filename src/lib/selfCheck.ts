@@ -12,9 +12,9 @@
 import { toCsv } from "./auditCsvExport";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, PRINT_BAND_PALETTE, type BandWorking } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, tallyBarSvg, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "./selfCheckImprove";
-import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
+import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
 
 // The disclaimer the rest of the app carries, repeated verbatim in every
@@ -212,7 +212,33 @@ export type SelfCheckRow = {
   // Never colour alone: the glyph travels with the row into the table and the
   // printable page.
   icon: string;
+  // One sentence, ENGINE-PRODUCED, never a truncation of `why`. Present only
+  // where the engine genuinely writes a short form of its own:
+  //
+  //   procedure tab — PPDReviewRow.shortComment, which the prompt makes
+  //     "MANDATORY for every verdict, never blank — one sentence stating WHY"
+  //     (agentRuntime.ts:2557). It was being used only as a fallback for
+  //     fullComment and otherwise thrown away.
+  //   overall / records tabs — EvidenceAssessmentRow.evidenceSummary, "1-2
+  //     sentences on what implementation evidence the passages show"
+  //     (agentRuntime.ts:3157). That is a summary of the EVIDENCE, not of the
+  //     verdict, so it is labelled "What was found" and never "why".
+  //
+  // Empty where no such field exists. Nothing is ever cut mid-thought to make
+  // one: a half sentence an auditor has to defend is worse than no sentence.
+  summary: string;
+  // What `summary` actually summarises, so the label above it can be honest
+  // rather than one word covering two different things.
+  summaryKind: "verdictReason" | "whatWasFound" | "none";
+  // The reasoning prose, with any TRAILING verbatim excerpt lifted out into
+  // `working.citations`. The judge prompts require that excerpt in the prose
+  // AND as its own field, so it used to print twice.
   why: string;
+  // The engine's own "[Capped at …]" block, verbatim. Its own content type: it
+  // says why the verdict could not be higher, which nothing else on the row
+  // does, and it is machine-written rather than model prose. Empty when the
+  // line was not capped.
+  cappedNote: string;
   fix: string;
   // The working an auditor has to show to defend the verdict: what was looked
   // for, what was quoted, which named element is missing, and why nothing could
@@ -263,6 +289,21 @@ export function fixFor(r: EvidenceAssessmentRow, isGap: boolean): string {
   return "";
 }
 
+// The trailing verbatim excerpt the judge prompts require inside the reasoning
+// field is lifted out here, once, for all three row builders, and merged with
+// the pass's own quote field when it is the same passage. Both halves of the
+// row come back together so a builder cannot wire up one and forget the other.
+function splitWhy(rawWhy: string, working: SelfCheckWorking, fallbackFile: string): Pick<SelfCheckRow, "why" | "working" | "cappedNote"> {
+  const { prose, quotes, cap } = splitTrailingQuotes(rawWhy);
+  return { why: prose, cappedNote: cap, working: { ...working, citations: mergeQuotes(working.citations, quotes, fallbackFile) } };
+}
+
+// Never a truncation. An absent engine field yields no summary at all.
+function summaryOf(raw: string | undefined, kind: SelfCheckRow["summaryKind"]): Pick<SelfCheckRow, "summary" | "summaryKind"> {
+  const t = (raw || "").trim();
+  return t ? { summary: t, summaryKind: kind } : { summary: "", summaryKind: "none" };
+}
+
 // Read BEFORE the table, never after: the point of a legend is to tell you how
 // to read the column you are about to scan.
 export const VERDICT_LEGEND: Record<SelfCheckView, VerdictLegendLine[]> = {
@@ -291,7 +332,37 @@ export const VERDICT_LEGEND: Record<SelfCheckView, VerdictLegendLine[]> = {
   ],
 };
 
+// Two different things a one-line summary can be, named apart, because calling
+// an evidence summary "why" would attribute a judgement to a sentence that
+// only reports what was found.
+export const SUMMARY_LABEL: Record<SelfCheckRow["summaryKind"], string> = {
+  verdictReason: "In one line",
+  whatWasFound: "What was found",
+  none: "",
+};
+
 export type SelfCheckCounts = { complies: number; partly: number; doesNot: number; couldNotCheck: number; total: number };
+
+// The tally, in the tab's own vocabulary, as data. One definition behind the
+// words above the table, the drawn bar and both exports, so they cannot
+// disagree about what this tab found.
+export function tallySlices(counts: SelfCheckCounts, view: SelfCheckView): TallySlice[] {
+  const w = VIEW_TALLY[view];
+  return [
+    { label: w.complies, n: counts.complies, tone: "good" as const },
+    ...(w.partly ? [{ label: w.partly, n: counts.partly, tone: "medium" as const }] : []),
+    { label: w.doesNot, n: counts.doesNot, tone: "critical" as const },
+    { label: "could not check", n: counts.couldNotCheck, tone: "neutral" as const },
+  ];
+}
+
+// Which dimension this tab's verdicts feed. The overall tab feeds two and is
+// already shown in full below the table, so it takes no marker.
+export function feedsFor(view: SelfCheckView): TabFeeds | undefined {
+  if (view === "procedure" || view === "procedure-only") return PROCEDURE_FEEDS;
+  if (view === "records") return RECORDS_FEEDS;
+  return undefined;
+}
 
 export function toSelfCheckRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckContext = {}): SelfCheckRow[] {
   const ppdByRef = new Map((ctx.ppdRows ?? []).map((p) => [p.ref, p]));
@@ -311,20 +382,25 @@ export function toSelfCheckRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckCon
       icon: plain.icon,
       // The engine's own justification. A row whose AI call failed says so
       // rather than showing an empty cell that reads like "nothing to say".
-      why: r.assessmentFailed
-        ? "The checking service did not answer for this one, so nothing was judged. Run the check again."
-        : unjudgedBothSides(r)
-          ? UNJUDGED_BOTH_SIDES_WHY
-          // Applied to every row, not only the gaps: a "Could not check" row
-          // carried the same "every document was read" claim, and it is just
-          // as wrong there.
-          : qualifyForUnreadable(plainWhy(r.comment || r.evidenceSummary || ""), ctx.unreadableFiles ?? 0),
+      ...splitWhy(
+        r.assessmentFailed
+          ? "The checking service did not answer for this one, so nothing was judged. Run the check again."
+          : unjudgedBothSides(r)
+            ? UNJUDGED_BOTH_SIDES_WHY
+            // Applied to every row, not only the gaps: a "Could not check" row
+            // carried the same "every document was read" claim, and it is just
+            // as wrong there.
+            : qualifyForUnreadable(plainWhy(r.comment || r.evidenceSummary || ""), ctx.unreadableFiles ?? 0),
+        buildWorking(r, ppdByRef.get(r.gdRef), ctx.evidenceChunkFileNames),
+        "a document in your records",
+      ),
+      // Only when it is genuinely a DIFFERENT, shorter field. Where the engine
+      // gave no comment, evidenceSummary already IS the why above, and showing
+      // it twice is the defect this change exists to remove.
+      ...summaryOf(r.comment ? r.evidenceSummary : "", "whatWasFound"),
       // OFI, taken only from the engine's suggestedAction. Never written here,
       // and only ever present on a row the engine judged short.
       fix: fixFor(r, plain.isGap),
-      // The evidence map: every chunk id on an EvidenceAssessmentRow, including
-      // its promise checks, was minted by the evidence pass.
-      working: buildWorking(r, ppdByRef.get(r.gdRef), ctx.evidenceChunkFileNames),
       expected: expectedEvidenceFor(r.gd4ItemId),
     };
   });
@@ -348,10 +424,7 @@ export function toProcedureRows(rows: PPDReviewRow[], ctx: SelfCheckContext = {}
       label: plain.label,
       tone: plain.tone,
       icon: plain.icon,
-      why: plainWhy(r.fullComment || r.shortComment || ""),
-      // The procedure pass's OFI is its suggested rewrite. Copied, never written.
-      fix: (r.suggestedRewrite || "").trim(),
-      working: {
+      ...splitWhy(plainWhy(r.fullComment || r.shortComment || ""), {
         lookedFor: r.requirementText,
         // Only a quote the pass verified as a real substring of the document.
         citations: r.supportQuote ? [{ file: fileOf(r.chunkIds?.[0] ?? "") || "your written procedure", quote: r.supportQuote }] : [],
@@ -361,7 +434,12 @@ export function toProcedureRows(rows: PPDReviewRow[], ctx: SelfCheckContext = {}
           ? "The tool found passages that may be relevant but could not match them word for word against your procedure, so it did not judge this line. That is a tool limit, not a finding about your area."
           : "",
         noBreakdown: (r.verdict === "Partial" || r.verdict === "Not documented") && (r.subClauses ?? []).filter((sc) => sc.verdict === "not documented").length === 0,
-      },
+      }, "your written procedure"),
+      // The one-sentence reason the prompt makes mandatory. Suppressed when
+      // fullComment is absent, because shortComment is then the why itself.
+      ...summaryOf(r.fullComment ? r.shortComment : "", "verdictReason"),
+      // The procedure pass's OFI is its suggested rewrite. Copied, never written.
+      fix: (r.suggestedRewrite || "").trim(),
       expected: expectedEvidenceFor(r.gd4ItemId),
     };
   });
@@ -402,13 +480,19 @@ export function toRecordsRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckConte
       label: plain.label,
       tone: plain.tone,
       icon: plain.icon,
-      why: r.assessmentFailed
-        ? "The checking service did not answer for this one, so your records were not checked. Run the check again."
-        : cited
-          ? (r.evidenceSummary || "").trim() || "A record covering this was found in your folder."
-          : qualifyForUnreadable("Every document in your records folder was read, and none of them mentioned this requirement.", ctx.unreadableFiles ?? 0),
+      ...splitWhy(
+        r.assessmentFailed
+          ? "The checking service did not answer for this one, so your records were not checked. Run the check again."
+          : cited
+            ? (r.evidenceSummary || "").trim() || "A record covering this was found in your folder."
+            : qualifyForUnreadable("Every document in your records folder was read, and none of them mentioned this requirement.", ctx.unreadableFiles ?? 0),
+        buildWorking(r, ppdByRef.get(r.gdRef), ctx.evidenceChunkFileNames),
+        "a document in your records",
+      ),
+      // evidenceSummary IS the why on this tab, so there is no second, shorter
+      // field left to summarise it with.
+      ...summaryOf("", "none"),
       fix: fixFor(r, plain.isGap),
-      working: buildWorking(r, ppdByRef.get(r.gdRef), ctx.evidenceChunkFileNames),
       expected: expectedEvidenceFor(r.gd4ItemId),
     };
   });
@@ -512,7 +596,10 @@ export type SelfCheckBand =
   | { kind: "auditor"; band: Band; name: string; totalPct: number };
 
 export const SELF_CHECK_HEADERS = [
-  "Area", "GD4 reference", "What the requirement asks", "Result", "Why", "What to fix",
+  // "In one line" sits beside Result so a spreadsheet can be read down two
+  // columns without opening Why. It holds an engine field verbatim and is
+  // blank where the engine wrote no short form — never a cut-down Why.
+  "Area", "GD4 reference", "What the requirement asks", "Result", "In one line", "Why", "What to fix",
   // The working an auditor files alongside the verdict. Three more columns
   // rather than a prose blob, so a spreadsheet can be sorted and filtered on
   // them the way working paper actually gets used.
@@ -582,6 +669,15 @@ export function buildSelfCheckCsv(
   // and printing the area's band on top of half the answer would read as though
   // that half produced it.
   const trailer = view === "overview" ? [bandLineOf(band)] : [VIEW_NOTE[view]];
+  // The drawn shape, as rows. A spreadsheet cannot carry the picture, so it
+  // carries the same four numbers the picture is drawn from.
+  const tally = countSelfCheck(rows);
+  const shapeBlock = [
+    blank,
+    pad([`The shape of this tab, ${tally.total} requirement line${tally.total === 1 ? "" : "s"}`]),
+    ...tallySlices(tally, view).map((sl) => pad([sl.label, String(sl.n)])),
+    ...(feedsFor(view) ? [pad([feedsFor(view)!.caption])] : []),
+  ];
   const counts = countFileRows(files);
   const warning = unreadableWarning(counts);
   const gaps = runNamedGaps(rows);
@@ -605,7 +701,7 @@ export function buildSelfCheckCsv(
   // The graphic cannot travel into a spreadsheet, so the numbers it is drawn
   // from do instead, as rows: what each dimension earned out of what it could,
   // and which two were never assessed. No total row, because there is no total.
-  const bandBlock = !bandWorking ? [] : [
+  const bandBlock = !bandWorking || view !== "overview" ? [] : [
     blank,
     pad(["What this check assessed"]),
     ...(bandCoverage ? [pad([bandCoverage])] : []),
@@ -640,11 +736,12 @@ export function buildSelfCheckCsv(
     ]),
   ];
   return toCsv(SELF_CHECK_HEADERS, [
-    ...rows.map((r) => pad([areaLabel, r.ref, r.requirement, r.label, r.why, r.fix, citedText(r.working), missingText(r.working), (r.expected ?? []).join("; ")])),
+    ...rows.map((r) => pad([areaLabel, r.ref, r.requirement, r.label, r.summary, [r.why, r.cappedNote].filter(Boolean).join("\n\n"), r.fix, citedText(r.working), missingText(r.working), (r.expected ?? []).join("; ")])),
     blank,
     ...trailer.map((t) => pad([t])),
     pad([SELF_CHECK_DISCLAIMER]),
     ...legendBlock,
+    ...shapeBlock,
     ...bandBlock,
     ...fileBlock,
   ]);
@@ -684,7 +781,7 @@ export function buildSelfCheckHtml(opts: {
   // paper and shown to people, so the graphic matters here more than on screen,
   // not less. Print palette, so a dark-mode browser can never send a dark chart
   // to a printer.
-  const bandHtml = !bandWorking ? "" : `
+  const bandHtml = !bandWorking || view !== "overview" ? "" : `
     <h2>What this check assessed</h2>
     <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), PRINT_BAND_PALETTE, { idSuffix: "Print" })}</div>
     ${bandCoverage ? `<p class="muted">${escapeHtml(bandCoverage)}</p>` : ""}
@@ -749,12 +846,28 @@ export function buildSelfCheckHtml(opts: {
     </table>`;
   // The working, rendered inside the existing cells rather than as extra
   // columns: a printed page at A4 cannot carry nine columns and stay readable.
+  //
+  // Four content types, four blocks. Nothing is collapsed and nothing is cut:
+  // this document is the filed working paper, so every element the screen
+  // hides behind a disclosure triangle is printed in full. The missing list is
+  // a real <ul>, because on some lines it runs to fifteen elements and as one
+  // run-on paragraph it was unreadable.
   const workingHtml = (r: SelfCheckRow) => {
-    const cited = citedText(r.working);
-    const missing = missingText(r.working);
+    const w = r.working;
+    const quotes = w?.citations ?? [];
+    const citedOnly = quotes.length === 0 && (w?.citedFiles.length ?? 0) > 0 ? citedText(w) : "";
+    const missing = w?.missing ?? [];
     // A line nothing could be decided for has a reason, not a missing element.
-    const label = r.verdict === "Not assessed" ? "Why not:" : "Missing:";
-    return `${cited ? `<div class="muted"><b>Quoted:</b> ${escapeHtml(cited)}</div>` : ""}${missing ? `<div class="muted"><b>${label}</b> ${escapeHtml(missing)}</div>` : ""}`;
+    const label = r.verdict === "Not assessed" ? "Why not" : "What is missing";
+    const other = missing.length === 0 ? missingText(w) : "";
+    return [
+      quotes.length > 0
+        ? `<div class="sc-quotes"><b>Quoted from your documents (${quotes.length})</b>${quotes.map((c) => `<blockquote>${escapeHtml(c.quote)}<span class="muted"> — ${escapeHtml(c.file)}</span></blockquote>`).join("")}</div>`
+        : citedOnly ? `<div class="muted"><b>Quoted:</b> ${escapeHtml(citedOnly)}</div>` : "",
+      missing.length > 0
+        ? `<div><b>${label} (${missing.length})</b><ul class="sc-missing">${missing.map((m) => `<li>${escapeHtml(m.text)}<span class="muted"> — ${escapeHtml(m.why)}</span></li>`).join("")}</ul></div>`
+        : other ? `<div class="muted"><b>${label}:</b> ${escapeHtml(other)}</div>` : "",
+    ].join("");
   };
   const groups = expectedEvidenceGroups(rows);
   const expectedSection = groups.length === 0 ? "" : `
@@ -762,6 +875,13 @@ export function buildSelfCheckHtml(opts: {
     <p class="muted">The official EduTrust GD4 expected-evidence list, quoted as published. It is not a judgement on anything you hold.</p>
     ${groups.map((g) => `<p><b>Requirement ${escapeHtml(g.itemId)}</b><br>${g.items.map((i) => escapeHtml(i)).join("<br>")}</p>`).join("")}`;
   const words = VIEW_TALLY[view];
+  // Which dimension THIS tab's verdicts feed, drawn on the two tabs that feed
+  // one. The overall tab shows all four in full further down instead.
+  const feeds = feedsFor(view);
+  const tabFeedsHtml = !feeds || !bandWorking ? "" : `
+    <h3>What this tab feeds</h3>
+    <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), PRINT_BAND_PALETTE, { idSuffix: "Feeds", feeds })}</div>
+    <p class="muted">${escapeHtml(feeds.caption)}</p>`;
   const bandLine = view === "overview" ? bandLineOf(band) : VIEW_NOTE[view];
   // Same condition as the screen: a run with nothing unjudged must not carry a
   // paragraph explaining "Could not check", which reads as a warning about a
@@ -774,14 +894,19 @@ export function buildSelfCheckHtml(opts: {
     <p><b>${counts.complies} ${words.complies}${words.partly ? ` · ${counts.partly} ${words.partly}` : ""} · ${counts.doesNot} ${words.doesNot} · ${counts.couldNotCheck} could not check</b></p>
     <p>${escapeHtml(bandLine)}</p>
     ${unjudgedNote ? `<p class="muted">${escapeHtml(unjudgedNote)}</p>` : ""}
+    ${/* The shape of the tab, before any row is read. Present on EVERY view,
+         because the procedure and records tabs are where the reading time
+         goes and they used to carry no picture at all. */ ""}
+    <div class="band-graphic">${tallyBarSvg(tallySlices(counts, view), PRINT_BAND_PALETTE)}</div>
+    ${tabFeedsHtml}
     ${legendHtml}
     <table>
-      <thead><tr><th>What the requirement asks</th><th>Result</th><th>Why</th><th>What to fix</th></tr></thead>
+      <thead><tr><th>Result</th><th>What the requirement asks</th><th>Why</th><th>What to fix</th></tr></thead>
       <tbody>
         ${rows.map((r) => `<tr>
+          <td class="sc-verdict"><b>${escapeHtml(`${r.icon} ${r.label}`)}</b></td>
           <td>${escapeHtml(r.requirement)}<br><span class="muted">${escapeHtml(r.ref)}</span></td>
-          <td>${escapeHtml(`${r.icon} ${r.label}`)}</td>
-          <td>${escapeHtml(r.why)}${workingHtml(r)}</td>
+          <td>${r.summary ? `<div class="sc-summary"><b>${escapeHtml(SUMMARY_LABEL[r.summaryKind])}:</b> ${escapeHtml(r.summary)}</div>` : ""}<div>${escapeHtml(r.why)}</div>${r.cappedNote ? `<div class="sc-capped">${escapeHtml(r.cappedNote)}</div>` : ""}${workingHtml(r)}</td>
           <td>${escapeHtml(r.fix)}</td>
         </tr>`).join("")}
       </tbody>

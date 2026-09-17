@@ -280,3 +280,103 @@ export function expectedEvidenceFor(gd4ItemId: string): string[] {
   const points = (req.flatAuditPoints ?? []).filter((p) => p.sourceType === "expectedEvidence").map((p) => p.text);
   return points.length > 0 ? points : (req.expectedEvidence ?? []);
 }
+
+// ── 4. The quote that arrives twice ──────────────────────────────────────
+//
+// Both judge prompts require the reasoning field to END with a verbatim quoted
+// excerpt and its chunk id, AND to return that same passage separately:
+//
+//   procedure pass (agentRuntime.ts:2560-2561): fullComment is "(1) the
+//     justification … then (2) a verbatim quoted excerpt in double quotes with
+//     its chunk ID", and supportQuote is "the single given passage that most
+//     directly documents the line, copied exactly".
+//   records pass (agentRuntime.ts:3152, :3160): every negative MUST cite "a
+//     given passage (quoted, with its chunk ID)" inside comment, and
+//     evidenceQuote is "the single given passage that most directly proves
+//     implementation for this line, copied exactly".
+//
+// So the duplication is real and structural, not an accident of one run. The
+// page printed the prose with its trailing quote and then printed the quote
+// again under "Quoted:". The engine is not being changed, so the fix is here:
+// lift the TRAILING excerpt out of the prose and merge it with the explicit
+// quote when they are the same passage.
+//
+// Only the trailing excerpt is lifted. A quote in the middle of a sentence
+// ("Example: the sheet says "four attended" but the roster names six") is
+// load-bearing prose, and pulling it out would leave a gap in the reasoning.
+
+// A quoted excerpt at the very end, optionally followed by its chunk ids.
+// 15 characters minimum so a two-word phrase in quotes is left in the prose.
+const TRAILING_EXCERPT = /[“"]([^”"]{15,}?)[”"]\s*(?:\(\s*(C\d+(?:\s*,\s*C\d+)*)\s*\))?\s*[.;]?\s*$/;
+
+export type SplitProse = { prose: string; quotes: { quote: string; chunkId: string }[]; cap: string };
+
+// The engine appends its OWN deterministic block to the comment when a line is
+// held below Met by a hard gate (agentRuntime.ts:3441 and :3472), separated by
+// a blank line and wrapped in square brackets. It is not model prose: it is a
+// different content type, it states the one thing nothing else on the row does
+// (why the verdict could not be higher), and on a line with fifteen unmet
+// promises it re-lists all fifteen inline — the run-on paragraph again, in a
+// second place. Split off so it can be labelled and folded away.
+//
+// It also sat AFTER the verbatim excerpt, so the excerpt was no longer at the
+// end of the string and the trailing-quote lift missed it. That is why one row
+// still showed its quote twice after the first fix.
+const ENGINE_CAP = /\n*\s*(\[Capped at [\s\S]*\])\s*$/;
+
+export function splitTrailingQuotes(raw: string): SplitProse {
+  let prose = (raw || "").trim();
+  const capMatch = ENGINE_CAP.exec(prose);
+  const cap = capMatch ? capMatch[1].trim() : "";
+  if (capMatch) prose = prose.slice(0, capMatch.index).trim();
+  const quotes: { quote: string; chunkId: string }[] = [];
+  // A loop, because a line can end with more than one excerpt.
+  for (let i = 0; i < 4; i++) {
+    const m = TRAILING_EXCERPT.exec(prose);
+    if (!m) break;
+    quotes.unshift({ quote: m[1].trim(), chunkId: (m[2] || "").split(",")[0]?.trim() || "" });
+    prose = prose.slice(0, m.index).trim();
+  }
+  // Never leave the cell empty: prose that is NOTHING but a quote is the whole
+  // reason for the row, so it stays where it was.
+  if (!prose && quotes.length > 0) return { prose: capMatch ? raw.trim().slice(0, capMatch.index).trim() : raw.trim(), quotes: [], cap };
+  return { prose, quotes, cap };
+}
+
+// Same passage, decided by exact containment after normalising the things that
+// legitimately differ between the two fields: curly quotes, the elision marks
+// the prose excerpt uses ("…independent of the area…") and trailing
+// punctuation. Deliberately NOT fuzzy similarity: a false "same passage" would
+// silently drop a second, genuinely different citation, and a missed match
+// only costs a repeated line an auditor can see for themselves.
+const MIN_CONTAINMENT = 24;
+
+export function normalisePassage(s: string): string {
+  return (s || "")
+    .replace(/[“”„]/g, '"').replace(/[‘’]/g, "'")
+    .replace(/\.{3}|…/g, " ")
+    .replace(/[\s]+/g, " ")
+    .replace(/^[\s"'.,;:-]+|[\s"'.,;:-]+$/g, "")
+    .toLowerCase();
+}
+
+export function samePassage(a: string, b: string): boolean {
+  const x = normalisePassage(a), y = normalisePassage(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const shorter = x.length <= y.length ? x : y;
+  const longer = x.length <= y.length ? y : x;
+  return shorter.length >= MIN_CONTAINMENT && longer.includes(shorter);
+}
+
+// The quotes a row should show, once each. The explicit citation wins on a
+// duplicate because it carries the file name and is the verified-verbatim one;
+// the prose excerpt is elided by the model.
+export function mergeQuotes(citations: Citation[], fromProse: { quote: string; chunkId: string }[], fallbackFile: string): Citation[] {
+  const out = [...citations];
+  for (const p of fromProse) {
+    if (out.some((c) => samePassage(c.quote, p.quote))) continue;
+    out.push({ file: fallbackFile, quote: p.quote });
+  }
+  return out;
+}

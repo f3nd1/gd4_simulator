@@ -389,8 +389,9 @@ describe("one drawing, two surfaces", () => {
     expect(svg).not.toMatch(/Band 1/);
   });
 
-  // Exactly one SVG in the printed document. Two drawings of one result is the
-  // drift this file exists to prevent.
+  // Two pictures on the overall tab and no more: the shape of the tab at the
+  // top, and the dimension panel below the rows. One drawing each, both from
+  // the shared builders, so neither can drift from its screen copy.
   it("puts the picture in the printable document, above the table of the same numbers", () => {
     const rows = toSelfCheckRows([row({})]);
     const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
@@ -399,8 +400,9 @@ describe("one drawing, two surfaces", () => {
       band: { kind: "none" }, rows, ranAt: "x", view: "overview", bandWorking: w, itemIds: ["4.1.1"],
     });
     expect(html).toContain('<div class="band-graphic">');
-    expect(html.match(/<svg/g)).toHaveLength(1);
-    expect(html.indexOf("<svg")).toBeLessThan(html.indexOf("<th>Dimension</th>"));
+    expect(html.match(/<svg/g)).toHaveLength(2);
+    expect(html.indexOf("The shape of this tab")).toBeLessThan(html.indexOf("<th>Result</th>"));
+    expect(html.lastIndexOf("<svg")).toBeLessThan(html.indexOf("<th>Dimension</th>"));
     expect(html).not.toContain("var(--");
   });
 });

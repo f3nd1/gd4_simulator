@@ -166,8 +166,12 @@ describe("the working is filed with the result, in both exports", () => {
       areaLabel: "6.1 Internal Assessment", areaDescription: "d", counts: countSelfCheck(rows),
       band: { kind: "none" }, rows, ranAt: "x", view: "overview", files,
     });
-    expect(html).toContain("Quoted:");
-    expect(html).toContain("Missing:");
+    // Four content types, four blocks: the quote is a quotation with a count,
+    // and the missing elements are a counted list, not a run-on paragraph.
+    expect(html).toContain("Quoted from your documents (1)");
+    expect(html).toContain("<blockquote>");
+    expect(html).toContain("What is missing (1)");
+    expect(html).toContain('<ul class="sc-missing">');
     expect(html).toContain("What a passing record contains");
     expect(html).toContain("Internal assessment reports");
     expect(html).toContain("What was read");

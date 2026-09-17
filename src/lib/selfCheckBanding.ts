@@ -191,13 +191,31 @@ function segmentText(seg: BandGraphic["segments"][number]): string {
   return `Band ${seg.band} of 5 · ${seg.pct}% of ${seg.max}%`;
 }
 
-export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?: string; minWidth?: number } = {}): string {
+// Which dimension a tab's own verdicts feed, per optionAChecklistWrite.ts:31-41:
+// Approach is written from the PROCEDURE verdict (row.ppdVerdict) and Processes
+// from the COMBINED verdict (row.verdict). So the procedure tab feeds Approach
+// outright, while the records tab is one HALF of what becomes Processes — the
+// other half is the procedure verdict. The captions say which, because a tab
+// that claimed to produce a dimension on its own would be overstating itself.
+export type TabFeeds = { key: BandDimensionRow["key"]; caption: string };
+
+export const PROCEDURE_FEEDS: TabFeeds = {
+  key: "approach",
+  caption: "This tab's verdicts are what Approach is judged on. The other three dimensions are not this tab's to answer.",
+};
+
+export const RECORDS_FEEDS: TabFeeds = {
+  key: "processes",
+  caption: "Processes is judged on the combined verdict shown on the Overall tab. This tab is one half of that: the other half is what your written procedure says.",
+};
+
+export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?: string; minWidth?: number; feeds?: TabFeeds } = {}): string {
   // Name, then words, then bar. The words ARE the content and the bar only
   // pictures them, so on a phone the part that scrolls off the right edge is
   // the decoration rather than the meaning. With the bar last the drawing was
   // also unreadable at a phone's width when the words sat beyond it.
   const VX = 144, AX = 302, TW = 170, ROW = 24, TOP = 48, BARH = 13;
-  const W = AX + TW + 10;
+  const W = AX + TW + (opts.feeds ? 74 : 10);
   const H = TOP + g.segments.length * ROW + 6;
   const hatchId = `scHatch${opts.idSuffix ?? ""}`;
   const t = (xx: number, yy: number, cls: string, txt: string) => `<text x="${xx}" y="${yy}" style="${cls}">${esc(txt)}</text>`;
@@ -207,7 +225,7 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
   const max = g.segments[0]?.max ?? 25;
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;${opts.minWidth ? `min-width:${opts.minWidth}px;` : ""}height:auto;font-family:inherit"
-  aria-label="What this check assessed, by dimension. ${esc(g.segments.map((s) => `${s.label}: ${segmentText(s)}`).join(". "))}. No overall band is given.">
+  aria-label="${opts.feeds ? `Which dimension this tab feeds: ${esc(g.segments.find((s) => s.key === opts.feeds!.key)?.label ?? "")}. ${esc(opts.feeds.caption)} ` : "What this check assessed, by dimension. "}${esc(g.segments.map((s) => `${s.label}: ${segmentText(s)}`).join(". "))}. No overall band is given.">
   <rect x="0" y="0" width="${W}" height="${H}" rx="8" style="fill:${p.surface};stroke:${p.edge}"/>
   <defs>
     <pattern id="${hatchId}" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -215,7 +233,7 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
       <line x1="0" y1="0" x2="0" y2="7" style="stroke:${p.hatchLine}" stroke-width="3"/>
     </pattern>
   </defs>
-  ${t(12, 19, TITLE, "Each dimension on its own")}
+  ${t(12, 19, TITLE, opts.feeds ? `Each dimension on its own, and which one this tab feeds` : "Each dimension on its own")}
   ${t(12, 34, SMALL, `out of the ${max}% it can earn · they are not added up into a band here`)}
   ${g.segments.map((seg, i) => {
     const y = TOP + i * ROW;
@@ -224,10 +242,57 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
     const fill = seg.assessedHere
       ? `<rect x="${AX}" y="${y}" width="${(seg.pct / seg.max) * TW}" height="${BARH}" rx="2" style="fill:${p.on}"/>`
       : `<rect x="${AX}" y="${y}" width="${TW}" height="${BARH}" rx="2" fill="url(#${hatchId})"/>`;
-    return `${t(12, y + 10, NAME, seg.label)}
+    // The marker is a word as well as a position, so which dimension the tab
+    // feeds survives greyscale and a screen reader.
+    const fed = opts.feeds?.key === seg.key;
+    return `${t(12, y + 10, fed ? `${NAME};font-weight:700` : NAME, seg.label)}
       ${t(VX, y + 10, SMALL, segmentText(seg))}
       <rect x="${AX}" y="${y}" width="${TW}" height="${BARH}" rx="2" style="fill:${p.track}"/>
-      ${fill}`;
+      ${fill}
+      ${fed ? t(AX + TW + 7, y + 10, `font-size:10.5px;font-weight:700;fill:${p.ink}`, "\u2190 this tab") : ""}`;
+  }).join("")}
+</svg>`;
+}
+
+// ── The shape of the verdicts on one tab, drawn ──────────────────────────
+//
+// The counts are already printed in words above the table. This draws the SAME
+// four numbers as one proportional bar so the shape of the result is legible
+// before a single row is read. It is a picture of the tally and nothing more:
+// no weighting, no score, no inference. Each band carries its own count and
+// its own label in the tab's vocabulary, so it reads in greyscale.
+export type TallySlice = { label: string; n: number; tone: "good" | "medium" | "critical" | "neutral" };
+
+// The SAME four tones the verdict badges under the bar use, so the bar reads
+// as those badges counted up rather than as a second colour language. Literal
+// hexes, not theme variables: they have to be legible on white paper and on a
+// dark card, and they must never invert between the bar and the badges.
+// Colour never carries the meaning on its own — each slice has a swatch, a
+// count and its label in words underneath.
+const TALLY_FILL: Record<TallySlice["tone"], string> = {
+  good: "#16a34a", medium: "#d97706", critical: "#dc2626", neutral: "#94a3b8",
+};
+
+export function tallyBarSvg(slices: TallySlice[], p: BandPalette): string {
+  const shown = slices.filter((s) => s.n > 0);
+  const total = shown.reduce((n, s) => n + s.n, 0);
+  if (total === 0) return "";
+  const W = 470, BX = 12, BW = W - 24, BARY = 22, BARH = 18, ROW = 15;
+  const H = BARY + BARH + 10 + shown.length * ROW;
+  let run = 0;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;min-width:300px;height:auto;font-family:inherit"
+  aria-label="${esc(shown.map((s) => `${s.n} ${s.label}`).join(", "))}, out of ${total}.">
+  <rect x="0" y="0" width="${W}" height="${H}" rx="8" style="fill:${p.surface};stroke:${p.edge}"/>
+  ${`<text x="${BX}" y="16" style="font-size:11.5px;font-weight:700;fill:${p.ink}">The shape of this tab, ${total} requirement line${total === 1 ? "" : "s"}</text>`}
+  ${shown.map((s) => {
+    const x = BX + (run / total) * BW, w = (s.n / total) * BW;
+    run += s.n;
+    return `<rect x="${x}" y="${BARY}" width="${Math.max(1, w - 1)}" height="${BARH}" style="fill:${TALLY_FILL[s.tone]}"/>`;
+  }).join("")}
+  ${shown.map((s, i) => {
+    const y = BARY + BARH + 10 + i * ROW;
+    return `<rect x="${BX}" y="${y}" width="9" height="9" rx="2" style="fill:${TALLY_FILL[s.tone]}"/>
+      <text x="${BX + 15}" y="${y + 9}" style="font-size:11px;fill:${p.mute}"><tspan style="font-weight:700;fill:${p.ink}">${s.n}</tspan> ${esc(s.label)}</text>`;
   }).join("")}
 </svg>`;
 }

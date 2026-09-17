@@ -41,6 +41,16 @@ export const PRINTABLE_DOC_CSS = `
   td.mono { font-family: ui-monospace, monospace; white-space: nowrap; }
   /* The band graphic: keep it whole on one page, and never let it print dark. */
   .band-graphic { margin: 8px 0 14px; max-width: 720px; page-break-inside: avoid; break-inside: avoid; }
+  /* The four content types in a result row, kept visually apart on paper the
+     same way they are on screen. Nothing is collapsed here: the printed copy
+     is the filed working paper and must carry every element in full. */
+  .sc-verdict { font-size: 12px; white-space: nowrap; }
+  .sc-summary { margin-bottom: 4px; }
+  .sc-quotes { margin-top: 5px; }
+  .sc-quotes blockquote { margin: 3px 0 3px 8px; padding-left: 7px; border-left: 2px solid #cbd5e1; font-style: italic; color: #475569; }
+  .sc-capped { margin-top: 5px; color: #475569; font-size: 10.5px; }
+  ul.sc-missing { margin: 3px 0 0; padding-left: 16px; }
+  ul.sc-missing li { margin-bottom: 2px; }
   @media print { body { margin: 12px; } }
 `;
 
