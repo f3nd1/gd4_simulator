@@ -27,7 +27,8 @@ import {
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
-import { buildBandWorking, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking } from "../lib/selfCheckBanding";
+import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "../lib/selfCheckImprove";
+import { buildBandWorking, bandCoverageNote, bandGraphic, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking, type BandGraphic } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -89,6 +90,7 @@ export function SelfCheck() {
   const [mode, setMode] = useState<"full" | "procedure-only">("full");
   const [tab, setTab] = useState<SelfCheckView>("overview");
   const [bandWorking, setBandWorking] = useState<BandWorking | null>(null);
+  const [bandCoverage, setBandCoverage] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -248,6 +250,9 @@ export function SelfCheck() {
   );
   const fileCounts = useMemo(() => countFileRows(fileRows), [fileRows]);
   const expectedGroups = useMemo(() => expectedEvidenceGroups(rows), [rows]);
+  // The run's own reported gaps, gathered for the improvement section. Nothing
+  // new is written: these are the strings already on the rows.
+  const runGaps = useMemo(() => runNamedGaps(rows), [rows]);
   const counts = useMemo(() => countSelfCheck(rows), [rows]);
   const combos = useMemo(() => (existing ? countCombinations(existing.rows) : null), [existing]);
   // Off the stored result, not off `rows`: switching to a tab that happens to
@@ -267,7 +272,7 @@ export function SelfCheck() {
     setNow(Date.now());
     setStageStartedAt(Date.now());
     setDoneSummaries({});
-    setError(null); setNote(null); setBand({ kind: "none" }); setBandWorking(null);
+    setError(null); setNote(null); setBand({ kind: "none" }); setBandWorking(null); setBandCoverage("");
     const procedureOnly = plan.kind === "procedure-only";
     setMode(procedureOnly ? "procedure-only" : "full");
     setTab("overview");
@@ -323,7 +328,12 @@ export function SelfCheck() {
       // suggestion engine they use produces an indicative one. Neither is
       // committed here: this page never writes a band.
       const itemIds = itemIdsForScope(area.scope);
-      const committed = itemIds.map((id) => checklistEntries[id]?.holisticBand).find((b) => !!b);
+      // WHICH item the band belongs to, not just the band. Two sub-criteria
+      // (2.2 and 4.2) hold more than one requirement item, and both the
+      // committed band and the suggestion describe ONE of them while the table
+      // covers them all. Unlabelled, that is misreporting an auditor cannot see.
+      const committedEntry = itemIds.map((id) => ({ id, band: checklistEntries[id]?.holisticBand })).find((e) => !!e.band);
+      const committed = committedEntry?.band;
       // A run where nothing could be judged has nothing to band. Asking for a
       // suggestion anyway produced "Band 3 — Meeting Expectation" on a result
       // whose every line read "Could not check", which is the most misleading
@@ -335,6 +345,7 @@ export function SelfCheck() {
       const judged = ev.rows.some((r) => r.verdict !== "Not assessed" && !unjudgedBothSides(r));
       if (committed) {
         setBand({ kind: "auditor", band: committed.band, name: bandName(committed.band), totalPct: committed.totalPct });
+        setBandCoverage(bandCoverageNote(committedEntry!.id, itemIds));
       } else if (judged) {
         const s = await useChecklistModuleStore.getState().suggestBand(itemIds[0]);
         if (stale()) return;
@@ -351,6 +362,7 @@ export function SelfCheck() {
             systemsOutcomes: s.dimensions.systemsOutcomes.reason,
             review: s.dimensions.review.reason,
           }, apsrScale));
+          setBandCoverage(bandCoverageNote(itemIds[0], itemIds));
         }
       }
       setRanAt(new Date().toLocaleString("en-SG"));
@@ -412,7 +424,7 @@ export function SelfCheck() {
     if (!area) return;
     // The tab you are looking at is the tab you get, named on the file so two
     // downloads of the same run can never be confused for each other.
-    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, fileRows, view === "overview" ? bandWorking ?? undefined : undefined), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
+    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, fileRows, view === "overview" ? bandWorking ?? undefined : undefined, view === "overview" ? bandCoverage : undefined, itemIdsForScope(area.scope)), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
   }
   function onPdf() {
     if (!area) return;
@@ -422,6 +434,8 @@ export function SelfCheck() {
         counts, band, rows, ranAt, view, files: fileRows,
         // The band belongs to the whole area, so it prints on the overall view only.
         bandWorking: view === "overview" ? bandWorking ?? undefined : undefined,
+        bandCoverage: view === "overview" ? bandCoverage : undefined,
+        itemIds: itemIdsForScope(area.scope),
       })}`,
       view === "overview" ? `Self-check ${area.title}` : `Self-check ${area.title} — ${VIEW_LABEL[view]}`,
     );
@@ -483,6 +497,30 @@ export function SelfCheck() {
         // still cat. The rotating copy and the elapsed timer still change, so
         // the card is still demonstrably alive without any animation at all.
         "@media (prefers-reduced-motion: reduce){.sc-cat-body,.sc-cat-tail,.sc-cat-eyes{animation:none}.sc-bar,.sc-indet{animation:none!important;transition:none!important}}",
+        // The band graphic's palette, as custom properties so the SAME markup
+        // renders on a light card and on a dark one. The rest of this page is
+        // light-only today; the graphic is written so it does not become
+        // unreadable if the browser renders dark, rather than pretending the
+        // app has a theme it does not have.
+        ".sc-band-graphic{--g-ink:#1f2733;--g-mute:#64748b;--g-track:#e2e8f0;--g-on:#7c3aed;--g-off:#94a3b8;--g-here:#1d4ed8;--g-hatch-bg:#f1f5f9;--g-hatch-line:#cbd5e1;--g-line:#0f172a;--g-surface:#fff;--g-edge:#e2e8f0}",
+        "@media (prefers-color-scheme: dark){.sc-band-graphic{--g-ink:#e2e8f0;--g-mute:#94a3b8;--g-track:#334155;--g-on:#a78bfa;--g-off:#64748b;--g-here:#93c5fd;--g-hatch-bg:#1e293b;--g-hatch-line:#475569;--g-line:#e2e8f0;--g-surface:#0f172a;--g-edge:#334155}}",
+        ".sc-band-graphic .sc-surface{fill:var(--g-surface);stroke:var(--g-edge)}",
+        ".sc-band-graphic .sc-track{fill:var(--g-track)}",
+        ".sc-band-graphic .sc-seg-on{fill:var(--g-on)}",
+        ".sc-band-graphic .sc-seg-off{fill:var(--g-off)}",
+        ".sc-band-graphic .sc-hatch-bg{fill:var(--g-hatch-bg)}",
+        ".sc-band-graphic .sc-hatch-line{stroke:var(--g-hatch-line)}",
+        ".sc-band-graphic .sc-stop{fill:var(--g-track)}",
+        ".sc-band-graphic .sc-stop-off{fill:var(--g-hatch-bg)}",
+        ".sc-band-graphic .sc-stop-here{fill:var(--g-here)}",
+        ".sc-band-graphic .sc-ceiling{stroke:var(--g-line);stroke-width:2;stroke-dasharray:3 3}",
+        ".sc-band-graphic text{font-family:inherit}",
+        ".sc-band-graphic .sc-g-title{font-size:12px;font-weight:700;fill:var(--g-ink)}",
+        ".sc-band-graphic .sc-g-note{font-size:11px;fill:var(--g-mute)}",
+        ".sc-band-graphic .sc-g-small{font-size:10.5px;fill:var(--g-mute)}",
+        ".sc-band-graphic .sc-g-seg{font-size:11px;font-weight:700;fill:#fff}",
+        ".sc-band-graphic .sc-g-stop{font-size:12px;font-weight:700;fill:var(--g-ink)}",
+        ".sc-band-graphic .sc-g-stop-here{font-size:12px;font-weight:800;fill:#fff}",
       ].join("")}</style>
       <div style={{ maxWidth: 880, margin: "0 auto" }}>
         <header style={{ marginBottom: 18 }}>
@@ -847,6 +885,10 @@ export function SelfCheck() {
                       : "An indicative band from this practice check. Your audit lead has not confirmed it, and this page does not set it."}
                     {" "}{SELF_CHECK_DISCLAIMER}
                   </p>
+                  {/* Which requirement item the number belongs to. Shown on the
+                      card as well as in the working below, because a committed
+                      auditor band has no working panel to carry it. */}
+                  {bandCoverage && <p style={{ ...muted, margin: "5px 0 0" }}>{bandCoverage}</p>}
                 </>
               )}
             </div>
@@ -960,9 +1002,8 @@ export function SelfCheck() {
             {view === "overview" && bandWorking && band.kind === "indicative" && (
               <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "13px 15px", margin: "14px 0 0", background: "#fff" }}>
                 <b style={{ fontSize: 14 }}>How this band was reached</b>
-                <p style={{ fontSize: 15, fontWeight: 700, color: INK, margin: "8px 0 2px" }}>
-                  {bandWorking.sum} → Band {bandWorking.band} of 5
-                </p>
+                <BandGraphicView g={bandGraphic(bandWorking, apsrScale)} sum={bandWorking.sum} />
+                {bandCoverage && <p style={{ ...muted, margin: "8px 0 2px" }}>{bandCoverage}</p>}
                 <div style={{ overflowX: "auto", marginTop: 10 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                     <thead>
@@ -998,6 +1039,46 @@ export function SelfCheck() {
                 <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
                   {ceilingNote(bandWorking)}
                 </p>
+
+                {/* The cap, turned into a to-do list. Every line below is
+                    either the Guidance Document's own wording, the official
+                    expected-evidence list filtered to entries that name the
+                    dimension, or a gap this run itself reported. */}
+                <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 10, padding: "12px 14px", margin: "12px 0" }}>
+                  <b style={{ fontSize: 13.5, color: "#1e40af" }}>How to reach a higher band</b>
+                  <p style={{ ...muted, margin: "6px 0 2px", color: "#1e3a8a" }}>{IMPROVE_HEADLINE}</p>
+                  <p style={{ ...muted, margin: "0 0 10px", color: "#1e3a8a" }}>{IMPROVE_WHY}</p>
+                  {unassessedDimensions(itemIdsForScope(area.scope)).map((d) => (
+                    <div key={d.key} style={{ borderTop: "1px solid #bfdbfe", paddingTop: 9, marginTop: 9 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>{d.label}</div>
+                      <div style={{ ...muted, margin: "2px 0 6px" }}>{d.plainQuestion}</div>
+                      <div style={{ ...muted, fontWeight: 700, color: "#475569" }}>What the Guidance Document asks for, at each band from here up</div>
+                      <ul style={{ ...muted, margin: "3px 0 7px", paddingLeft: 17 }}>
+                        {d.ladder.map((l) => <li key={l.band}><b>Band {l.band} {l.name}:</b> {l.descriptor}</li>)}
+                      </ul>
+                      {d.officialEvidence.length > 0 ? (
+                        <>
+                          <div style={{ ...muted, fontWeight: 700, color: "#475569" }}>On the official expected-evidence list for this requirement</div>
+                          <ul style={{ ...muted, margin: "3px 0 0", paddingLeft: 17 }}>
+                            {d.officialEvidence.map((e) => <li key={e}>{e}</li>)}
+                          </ul>
+                        </>
+                      ) : (
+                        <div style={{ ...muted }}>{d.noOfficialList}</div>
+                      )}
+                    </div>
+                  ))}
+                  {runGaps.length > 0 && (
+                    <div style={{ borderTop: "1px solid #bfdbfe", paddingTop: 9, marginTop: 9 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>What this run already told you is missing</div>
+                      {reviewShapedGapNote(runGaps) && <p style={{ ...muted, margin: "3px 0 5px" }}>{reviewShapedGapNote(runGaps)}</p>}
+                      <ul style={{ ...muted, margin: "3px 0 0", paddingLeft: 17 }}>
+                        {runGaps.slice(0, 8).map((g, i) => <li key={`${g.ref}-${i}`}><b>{g.ref}</b> {g.text}</li>)}
+                      </ul>
+                      {runGaps.length > 8 && <div style={{ ...muted, marginTop: 4 }}>and {runGaps.length - 8} more in the table above.</div>}
+                    </div>
+                  )}
+                </div>
 
                 <details style={{ marginTop: 6 }}>
                   <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700, color: INK }}>The official band scale, and where this result sits</summary>
@@ -1102,6 +1183,109 @@ function Working({ row }: { row: SelfCheckRow }) {
           <span style={{ color: "#475569" }}>{missing}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+// The band, drawn rather than described.
+//
+// Three honest pictures, no more:
+//   1. The 0-100 axis with the four dimension contributions stacked on it. That
+//      IS a sum, so it is the one thing drawn as adding up. The part of the axis
+//      this check cannot reach is hatched, so the ceiling is visible rather than
+//      only asserted.
+//   2. Each dimension against its own 25% track, so the SHAPE reads at a glance:
+//      which dimensions carry the score and which are flat because nothing here
+//      looked at them.
+//   3. The five-band scale with the result marked.
+//
+// Nothing here draws the requirement rows as feeding a total, because they do
+// not: the four dimension bands are a judgement, and only the dimension-to-
+// percentage step is arithmetic.
+//
+// Every state carries a word or a pattern as well as a colour. Hatching marks
+// "not assessed here" and "out of reach", so the two are legible in greyscale,
+// in the printed page and to anyone who cannot separate the hues.
+function BandGraphicView({ g, sum }: { g: BandGraphic; sum: string }) {
+  // AX is the left gutter for the dimension names. At 44 it clipped
+  // "Approach" to "Approac"; the names are the labels that make the shape
+  // readable, so they get the room.
+  const W = 760, AX = 78, AW = W - AX - 16;
+  const x = (pct: number) => AX + (pct / 100) * AW;
+  let run = 0;
+  const bars = g.segments.map((seg) => { const from = run; run += seg.pct; return { ...seg, from }; });
+  return (
+    // An SVG scaled to a 420px screen renders its 10.5px labels at about 5px,
+    // which is not legible. It keeps a minimum width and the container scrolls
+    // instead, which is the same thing the result tables on this page already do.
+    <div className="sc-band-graphic" style={{ marginTop: 10, overflowX: "auto" }}>
+      <svg viewBox={`0 0 ${W} 264`} width="100%" role="img" style={{ display: "block", minWidth: 620, height: "auto" }}
+        aria-label={`Band ${g.band} of 5. ${sum}. The highest this check can reach is ${g.ceiling}%.`}>
+        {/* The graphic draws its OWN surface. Flipping only the ink to suit a
+            dark browser left light text on this page's white card and made the
+            headings invisible: the page has no theme of its own. Owning the
+            surface keeps the graphic internally consistent whatever the card
+            around it does. */}
+        <rect x="0" y="0" width={W} height="264" rx="8" className="sc-surface" />
+        <defs>
+          {/* Diagonal hatch: the pattern, not the colour, is what says "not
+              assessed here" and "out of reach". */}
+          <pattern id="scHatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="7" height="7" className="sc-hatch-bg" />
+            <line x1="0" y1="0" x2="0" y2="7" className="sc-hatch-line" strokeWidth="3" />
+          </pattern>
+        </defs>
+
+        {/* 1 — the total, stacked */}
+        <text x={AX} y="16" className="sc-g-title">Your total, as the four dimensions add up</text>
+        <rect x={AX} y="24" width={AW} height="28" rx="4" className="sc-track" />
+        <rect x={x(g.ceiling)} y="24" width={AW - (x(g.ceiling) - AX)} height="28" rx="4" fill="url(#scHatch)" />
+        {bars.map((b) => (
+          <g key={b.key}>
+            <rect x={x(b.from)} y="24" width={Math.max(0, x(b.from + b.pct) - x(b.from))} height="28"
+              className={b.assessedHere ? "sc-seg-on" : "sc-seg-off"} fill={b.assessedHere ? undefined : "url(#scHatch)"} />
+            {b.pct > 0 && <text x={x(b.from) + 4} y="43" className="sc-g-seg">{b.pct}%</text>}
+          </g>
+        ))}
+        <line x1={x(g.ceiling)} y1="18" x2={x(g.ceiling)} y2="58" className="sc-ceiling" />
+        <text x={Math.min(x(g.ceiling) + 5, W - 210)} y="70" className="sc-g-note">{g.ceiling}% is the most this check can reach</text>
+        <text x={AX} y="70" className="sc-g-note">{sum}</text>
+
+        {/* 3 — the five-band scale, marked */}
+        <text x={AX} y="100" className="sc-g-title">The five bands, and where this lands</text>
+        {g.stops.map((st) => {
+          const left = x(st.from), right = x(st.to), here = st.band === g.band;
+          return (
+            <g key={st.band}>
+              <rect x={left} y="108" width={Math.max(1, right - left - 2)} height="26" rx="3"
+                className={here ? "sc-stop-here" : st.reachable ? "sc-stop" : "sc-stop-off"}
+                fill={st.reachable ? undefined : "url(#scHatch)"} />
+              <text x={left + 5} y="125" className={here ? "sc-g-stop-here" : "sc-g-stop"}>{st.band}{here ? " ←" : ""}</text>
+              {/* Two lines, because "Exceeding (out of reach here)" on one line
+                  ran straight through the next band's name. */}
+              <text x={left + 5} y="147" className="sc-g-small">{st.name}</text>
+              {!st.reachable && <text x={left + 5} y="158" className="sc-g-small">out of reach here</text>}
+            </g>
+          );
+        })}
+
+        {/* 2 — the shape: each dimension against its own 25% track */}
+        <text x={AX} y="188" className="sc-g-title">Each dimension, out of the {g.segments[0]?.max ?? 25}% it can earn</text>
+        {g.segments.map((seg, i) => {
+          const y = 198 + i * 16, tw = (AW / 100) * (seg.max * 4) / 4;
+          return (
+            <g key={seg.key}>
+              <text x="0" y={y + 9} className="sc-g-small">{seg.label.split(" ")[0]}</text>
+              <rect x={AX} y={y} width={tw} height="11" rx="2" className="sc-track" />
+              <rect x={AX} y={y} width={(seg.pct / seg.max) * tw} height="11" rx="2"
+                className={seg.assessedHere ? "sc-seg-on" : "sc-seg-off"} fill={seg.assessedHere ? undefined : "url(#scHatch)"} />
+              <text x={AX + tw + 6} y={y + 9} className="sc-g-small">
+                {seg.band === undefined ? "not scored" : `Band ${seg.band}`} · {seg.pct}%{seg.assessedHere ? "" : " · not assessed here"}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }

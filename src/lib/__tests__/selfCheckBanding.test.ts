@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { buildBandWorking, ceilingNote, ROWS_DO_NOT_SUM_NOTE, DIMENSION_SOURCE, BAND_LADDER } from "../selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, ceilingNote, ROWS_DO_NOT_SUM_NOTE, DIMENSION_SOURCE, BAND_LADDER } from "../selfCheckBanding";
+import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "../selfCheckImprove";
 import { VERDICT_LEGEND, PLAIN_VERDICT, PPD_PLAIN_VERDICT, RECORDS_PLAIN_VERDICT, buildSelfCheckHtml, buildSelfCheckCsv, toSelfCheckRows, countSelfCheck } from "../selfCheck";
 import type { EvidenceAssessmentRow } from "../../types";
 
@@ -136,5 +137,155 @@ describe("both exports carry the working", () => {
     expect(buildSelfCheckCsv("4.1 Admissions", rows, { kind: "none" })).not.toContain("How this band was reached");
     expect(buildSelfCheckHtml({ areaLabel: "a", areaDescription: "d", counts: countSelfCheck(rows), band: { kind: "none" }, rows, ranAt: "x" }))
       .not.toContain("How this band was reached");
+  });
+});
+
+describe("the band says which requirement item it covers", () => {
+  // suggestBand() is called with itemIdsForScope(scope)[0], and the committed
+  // band is the first item that has one. Two of the twenty-nine sub-criteria
+  // hold more than one item, and on those the number describes one item while
+  // the table above it describes them all.
+  it("names the item even when it is the only one", () => {
+    expect(bandCoverageNote("4.1.1", ["4.1.1"])).toBe("This band covers requirement 4.1.1, which is the only requirement item in this area.");
+  });
+
+  it("says outright which items the band leaves out", () => {
+    const note = bandCoverageNote("4.2.1", ["4.2.1", "4.2.2"]);
+    expect(note).toContain("4.2.1 ONLY");
+    expect(note).toContain("4.2.2 is not in it");
+    expect(note).toContain("cover all of them");
+  });
+
+  it("lists several excluded items in plain words", () => {
+    const note = bandCoverageNote("2.2.1", ["2.2.1", "2.2.2", "2.2.3"]);
+    expect(note).toContain("3 requirement items");
+    expect(note).toContain("2.2.2, 2.2.3 are not in it");
+  });
+
+  it("travels into both exports", () => {
+    const rows = toSelfCheckRows([row({})]);
+    const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
+    const note = bandCoverageNote("4.2.1", ["4.2.1", "4.2.2"]);
+    expect(buildSelfCheckCsv("4.2 Fees", rows, { kind: "none" }, "overview", [], w, note)).toContain("4.2.1 ONLY");
+    expect(buildSelfCheckHtml({
+      areaLabel: "4.2 Fees", areaDescription: "d", counts: countSelfCheck(rows),
+      band: { kind: "none" }, rows, ranAt: "x", view: "overview", bandWorking: w, bandCoverage: note,
+    })).toContain("4.2.1 ONLY");
+  });
+});
+
+describe("the graphic is drawn from the same numbers as the arithmetic", () => {
+  const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
+
+  it("gives every dimension its own track and its own earned share", () => {
+    const g = bandGraphic(w);
+    expect(g.segments.map((s) => [s.label, s.pct, s.max])).toEqual([
+      ["Approach", 10, 25], ["Processes", 10, 25], ["Systems & Outcomes", 5, 25], ["Review", 5, 25],
+    ]);
+    // The four segments are the only thing drawn as adding up, because they are
+    // the only thing that does.
+    expect(g.segments.reduce((n, s) => n + s.pct, 0)).toBe(g.total);
+  });
+
+  it("marks the part of the scale this check cannot reach", () => {
+    const g = bandGraphic(w);
+    expect(g.ceiling).toBe(60);
+    expect(g.stops.filter((s) => !s.reachable).map((s) => s.band)).toEqual([4, 5]);
+    expect(g.stops.find((s) => s.band === 3)!.reachable).toBe(true);
+  });
+
+  it("draws the band scale to the same thresholds the arithmetic uses", () => {
+    const g = bandGraphic(w);
+    expect(g.stops.map((s) => [s.from, s.to])).toEqual([[0, 20], [20, 40], [40, 60], [60, 80], [80, 100]]);
+    expect(g.band).toBe(2);
+  });
+
+  it("carries which dimensions this check assessed, so the flat ones read as unassessed rather than bad", () => {
+    expect(bandGraphic(w).segments.filter((s) => !s.assessedHere).map((s) => s.key)).toEqual(["systemsOutcomes", "review"]);
+  });
+});
+
+describe("the ceiling comes with a way out of it", () => {
+  it("names the two dimensions in plain words, not rubric language", () => {
+    const [so, rev] = unassessedDimensions(["4.1.1"]);
+    expect(so.plainQuestion).toMatch(/measured and tracked/);
+    expect(rev.plainQuestion).toMatch(/formally reviewed/);
+  });
+
+  // The whole point of the section: what "better" looks like, in the Guidance
+  // Document's own words rather than this app's.
+  it("quotes the official Band 4 and Band 5 descriptors verbatim", () => {
+    const [so, rev] = unassessedDimensions(["4.1.1"]);
+    expect(so.ladder.map((l) => l.band)).toEqual([3, 4, 5]);
+    expect(so.ladder.find((l) => l.band === 4)!.descriptor)
+      .toBe("Key systems are interacting with one another, producing desired outcomes with no conflicts");
+    expect(rev.ladder.find((l) => l.band === 5)!.descriptor)
+      .toBe("Many to most trends and current performance levels are evaluated against relevant comparisons and/or benchmarks");
+  });
+
+  // Review CAN be derived: 30 of the 31 requirement items carry an official
+  // expected-evidence entry that literally names review.
+  it("lists the official expected evidence for Review, filtered from the real list", () => {
+    expect(unassessedDimensions(["4.1.1"])[1].officialEvidence).toEqual(["Procedure review records"]);
+    expect(unassessedDimensions(["6.1.1"])[1].officialEvidence).toEqual(["Internal assessment process review records"]);
+  });
+
+  // Systems & Outcomes CANNOT be derived the same way, so it shows less rather
+  // than inventing a list. This is the honesty constraint, pinned.
+  it("shows nothing for Systems & Outcomes rather than guessing at an official list", () => {
+    const so = unassessedDimensions(["4.1.1"])[0];
+    expect(so.officialEvidence).toEqual([]);
+    expect(so.noOfficialList).toMatch(/does not itemise outcome evidence/);
+  });
+
+  it("says plainly that Band 4 and 5 are not this page's to give", () => {
+    expect(IMPROVE_HEADLINE).toMatch(/Band 4 and Band 5 are not reachable from this page/);
+    expect(IMPROVE_WHY).toMatch(/full audit/);
+  });
+
+  it("gathers the run's own reported gaps, and writes none of its own", () => {
+    const rows = toSelfCheckRows([row({
+      verdict: "Not met",
+      promiseChecks: [{ promiseText: "Academic Board minutes are kept", verdict: "not evidenced", evidence: "", chunkIds: [], rationale: "No minutes appear in the records." }],
+    })]);
+    const gaps = runNamedGaps(rows);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].text).toBe("Academic Board minutes are kept — No minutes appear in the records.");
+    // A Met row has nothing to improve, and an unjudged row was never decided.
+    expect(runNamedGaps(toSelfCheckRows([row({ verdict: "Met" })]))).toEqual([]);
+    expect(runNamedGaps(toSelfCheckRows([row({ verdict: "Not assessed" })]))).toEqual([]);
+  });
+
+  it("names the records-shaped pattern only when the run's own gaps show it", () => {
+    expect(reviewShapedGapNote([{ text: "Academic Board minutes are kept" }])).toMatch(/missing records rather than missing wording/);
+    expect(reviewShapedGapNote([{ text: "the wording does not name an owner" }])).toBe("");
+    expect(reviewShapedGapNote([])).toBe("");
+  });
+});
+
+describe("the graphic degrades honestly into both exports", () => {
+  const rows = toSelfCheckRows([row({ verdict: "Not met", promiseChecks: [{ promiseText: "KPI report is produced", verdict: "not evidenced", evidence: "", chunkIds: [], rationale: "No report found." }] })]);
+  const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
+
+  it("puts the shape and the guidance in the CSV, where an SVG cannot go", () => {
+    const csv = buildSelfCheckCsv("4.1 Admissions", rows, { kind: "none" }, "overview", [], w, "", ["4.1.1"]);
+    expect(csv).toContain("The shape of this result");
+    expect(csv).toContain("Systems & Outcomes,Band 1,5%,25%,NO");
+    expect(csv).toContain("How to reach a higher band");
+    expect(csv).toContain("Key systems are interacting with one another");
+    expect(csv).toContain("Procedure review records");
+    expect(csv).toContain("KPI report is produced");
+  });
+
+  it("puts the same in the printable page", () => {
+    const html = buildSelfCheckHtml({
+      areaLabel: "4.1 Admissions", areaDescription: "d", counts: countSelfCheck(rows),
+      band: { kind: "none" }, rows, ranAt: "x", view: "overview", bandWorking: w, itemIds: ["4.1.1"],
+    });
+    expect(html).toContain("The shape of this result");
+    expect(html).toContain("<b>NO</b>");
+    expect(html).toContain("How to reach a higher band");
+    expect(html).toContain("Many to most trends and current performance levels");
+    expect(html).toContain("Procedure review records");
   });
 });

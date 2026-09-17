@@ -12,7 +12,8 @@
 import { toCsv } from "./auditCsvExport";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, type BandWorking } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, type BandWorking } from "./selfCheckBanding";
+import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
 
@@ -574,6 +575,9 @@ export function buildSelfCheckCsv(
   areaLabel: string, rows: SelfCheckRow[], band: SelfCheckBand, view: SelfCheckView = "overview",
   files: SelfCheckFileRow[] = [],
   bandWorking?: BandWorking,
+  bandCoverage?: string,
+  // The scope's requirement items, for the official expected-evidence filter.
+  itemIds: string[] = [],
 ): string {
   const pad = (cells: string[]) => [...cells, ...Array(Math.max(0, SELF_CHECK_HEADERS.length - cells.length)).fill("")];
   const blank = pad([]);
@@ -583,6 +587,7 @@ export function buildSelfCheckCsv(
   const trailer = view === "overview" ? [bandLineOf(band)] : [VIEW_NOTE[view]];
   const counts = countFileRows(files);
   const warning = unreadableWarning(counts);
+  const gaps = runNamedGaps(rows);
   // The file list rides in the same spreadsheet, below the verdicts: a verdict
   // filed without the record of what was actually read is not defensible, and
   // two separate downloads get separated.
@@ -603,11 +608,36 @@ export function buildSelfCheckCsv(
   const bandBlock = !bandWorking ? [] : [
     blank,
     pad([`How this band was reached: ${bandWorking.sum} -> Band ${bandWorking.band}`]),
+    ...(bandCoverage ? [pad([bandCoverage])] : []),
     pad(["Dimension", "Band", "Contributes", "Official descriptor", "Where it came from"]),
     ...bandWorking.rows.map((d) => pad([d.label, d.band === undefined ? "not scored" : `Band ${d.band}`, `${d.pct}%`, d.descriptor, d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check"])),
     pad([ROWS_DO_NOT_SUM_NOTE]),
     pad([ceilingNote(bandWorking)]),
     pad([INFERRED_THRESHOLDS_NOTE]),
+    // The graphic cannot travel into a spreadsheet, so the numbers it is drawn
+    // from do instead, as their own rows. A reader of the file sees the same
+    // shape: what each dimension earned out of what it could.
+    blank,
+    pad(["The shape of this result"]),
+    pad(["Dimension", "Band", "Earned", "Out of", "Assessed by this check?"]),
+    ...bandGraphic(bandWorking).segments.map((seg) => pad([seg.label, seg.band === undefined ? "not scored" : `Band ${seg.band}`, `${seg.pct}%`, `${seg.max}%`, seg.assessedHere ? "yes" : "NO"])),
+    pad([`Total ${bandWorking.total}%`, `Band ${bandWorking.band}`, "", `ceiling ${bandWorking.ceilingTotal}%`, ""]),
+    blank,
+    pad(["How to reach a higher band"]),
+    pad([IMPROVE_HEADLINE]),
+    pad([IMPROVE_WHY]),
+    ...unassessedDimensions(itemIds).flatMap((d) => [
+      pad([d.label, d.plainQuestion]),
+      ...d.ladder.map((l) => pad(["", `Band ${l.band} ${l.name}`, l.descriptor])),
+      ...(d.officialEvidence.length > 0
+        ? d.officialEvidence.map((e) => pad(["", "Official expected evidence", e]))
+        : [pad(["", "", d.noOfficialList])]),
+    ]),
+    ...(gaps.length === 0 ? [] : [
+      pad(["What this run already told you is missing"]),
+      ...(reviewShapedGapNote(gaps) ? [pad([reviewShapedGapNote(gaps)])] : []),
+      ...gaps.map((g) => pad([g.ref, g.text])),
+    ]),
   ];
   return toCsv(SELF_CHECK_HEADERS, [
     ...rows.map((r) => pad([areaLabel, r.ref, r.requirement, r.label, r.why, r.fix, citedText(r.working), missingText(r.working), (r.expected ?? []).join("; ")])),
@@ -638,8 +668,11 @@ export function buildSelfCheckHtml(opts: {
   view?: SelfCheckView;
   files?: SelfCheckFileRow[];
   bandWorking?: BandWorking;
+  bandCoverage?: string;
+  itemIds?: string[];
 }): string {
-  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [], bandWorking } = opts;
+  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [], bandWorking, bandCoverage, itemIds = [] } = opts;
+  const gaps = runNamedGaps(rows);
   const legendHtml = `
     <h2>What each result means</h2>
     <table>
@@ -651,6 +684,7 @@ export function buildSelfCheckHtml(opts: {
   const bandHtml = !bandWorking ? "" : `
     <h2>How this band was reached</h2>
     <p><b>${escapeHtml(bandWorking.sum)} &rarr; Band ${bandWorking.band}</b></p>
+    ${bandCoverage ? `<p class="muted">${escapeHtml(bandCoverage)}</p>` : ""}
     <table>
       <thead><tr><th>Dimension</th><th>Band</th><th>Contributes</th><th>Official descriptor at that band</th><th>Where it came from</th></tr></thead>
       <tbody>${bandWorking.rows.map((d) => `<tr>
@@ -661,9 +695,36 @@ export function buildSelfCheckHtml(opts: {
         <td>${escapeHtml(d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check")}</td>
       </tr>`).join("")}</tbody>
     </table>
+    <h3>The shape of this result</h3>
+    <table>
+      <thead><tr><th>Dimension</th><th>Band</th><th>Earned</th><th>Out of</th><th>Assessed by this check?</th></tr></thead>
+      <tbody>${bandGraphic(bandWorking).segments.map((seg) => `<tr>
+        <td>${escapeHtml(seg.label)}</td>
+        <td>${seg.band === undefined ? "not scored" : `Band ${seg.band}`}</td>
+        <td>${seg.pct}%</td><td>${seg.max}%</td>
+        <td>${seg.assessedHere ? "yes" : "<b>NO</b>"}</td>
+      </tr>`).join("")}
+      <tr><td><b>Total</b></td><td><b>Band ${bandWorking.band}</b></td><td><b>${bandWorking.total}%</b></td><td>ceiling ${bandWorking.ceilingTotal}%</td><td></td></tr>
+      </tbody>
+    </table>
     <p class="muted">${escapeHtml(ROWS_DO_NOT_SUM_NOTE)}</p>
     <p class="muted">${escapeHtml(ceilingNote(bandWorking))}</p>
     <p class="muted">${escapeHtml(INFERRED_THRESHOLDS_NOTE)}</p>
+    <h2>How to reach a higher band</h2>
+    <p>${escapeHtml(IMPROVE_HEADLINE)}</p>
+    <p class="muted">${escapeHtml(IMPROVE_WHY)}</p>
+    ${unassessedDimensions(itemIds).map((d) => `
+      <h3>${escapeHtml(d.label)}</h3>
+      <p class="muted">${escapeHtml(d.plainQuestion)}</p>
+      <ul>${d.ladder.map((l) => `<li><b>Band ${l.band} ${escapeHtml(l.name)}:</b> ${escapeHtml(l.descriptor)}</li>`).join("")}</ul>
+      ${d.officialEvidence.length > 0
+        ? `<p class="muted"><b>On the official expected-evidence list for this requirement:</b></p><ul>${d.officialEvidence.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}</ul>`
+        : `<p class="muted">${escapeHtml(d.noOfficialList)}</p>`}
+    `).join("")}
+    ${gaps.length === 0 ? "" : `
+      <h3>What this run already told you is missing</h3>
+      ${reviewShapedGapNote(gaps) ? `<p class="muted">${escapeHtml(reviewShapedGapNote(gaps))}</p>` : ""}
+      <ul>${gaps.map((g) => `<li><b>${escapeHtml(g.ref)}</b> ${escapeHtml(g.text)}</li>`).join("")}</ul>`}
     <h2>The official band scale</h2>
     <table>
       <thead><tr><th>Band</th><th>Approach</th><th>Processes</th><th>Systems &amp; Outcomes</th><th>Review</th></tr></thead>

@@ -1,0 +1,110 @@
+// "How do I get a higher band", answered from real sources only.
+//
+// The ceiling is structural: this check reads a procedure folder and a records
+// folder, so it can speak to Approach and Processes and to nothing else.
+// Telling an auditor that and stopping leaves them stuck, so this assembles
+// what the two unassessed dimensions actually need, from three sources that
+// already exist in the app and nothing else:
+//
+//   1. The official §23 descriptors, verbatim (data/edutrustRubric.ts). These
+//      ARE the answer in the document's own words, at each band.
+//   2. The official expected-evidence list for the requirement, filtered to the
+//      entries that literally name review. 30 of the 31 requirement items carry
+//      one ("Governance review records", "Procedure review records", ...), so
+//      this is a filter on shipped official data, not a mapping invented here.
+//   3. What THIS run already reported missing, in its own words.
+//
+// Deliberately asymmetric: there is no equivalent filter for Systems &
+// Outcomes. Only 9 of 31 items have an expected-evidence entry that could be
+// read as outcome evidence, and the words that would catch them ("data",
+// "analysis") also catch entries that are nothing of the kind. Inventing a
+// dimension-to-evidence map would be fabricating an official list, so that
+// dimension shows the descriptors and the run's own gaps, and says the official
+// list does not itemise outcome evidence for this requirement.
+import { EDUTRUST_BANDS, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
+import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import type { Band } from "../types";
+import type { SelfCheckRow } from "./selfCheck";
+
+export type UnassessedDimension = {
+  key: "systemsOutcomes" | "review";
+  label: string;
+  // The official §23 definition, verbatim.
+  definition: string;
+  // The plain question the dimension asks, for a reader who will not parse
+  // "Desired outcome(s) derived from implementation."
+  plainQuestion: string;
+  // The official descriptor at each band from here up, verbatim, so "what does
+  // better look like" is answered by the document rather than by this app.
+  ladder: { band: Band; name: string; descriptor: string }[];
+  // Official expected-evidence entries for this requirement that name this
+  // dimension. Empty when the official list does not itemise it.
+  officialEvidence: string[];
+  // Said instead, when officialEvidence is empty.
+  noOfficialList: string;
+};
+
+const PLAIN_QUESTION: Record<UnassessedDimension["key"], string> = {
+  systemsOutcomes: "Are the results of this process measured and tracked, and do the numbers show it working?",
+  review: "Is this process formally reviewed on a schedule, and are the improvements agreed and then actually done?",
+};
+
+const NO_OFFICIAL_LIST: Record<UnassessedDimension["key"], string> = {
+  systemsOutcomes: "The official expected-evidence list for this requirement does not itemise outcome evidence, so nothing is listed here rather than guessing at it. The descriptors above are the official wording for what this dimension asks.",
+  review: "The official expected-evidence list for this requirement does not itemise review evidence, so nothing is listed here rather than guessing at it.",
+};
+
+// A literal word filter on official text, not a classification. "Procedure
+// review records" names review; that is the whole claim being made.
+const NAMES_REVIEW = /\breview(s|ed|ing)?\b/i;
+
+function officialEvidenceFor(key: UnassessedDimension["key"], itemIds: string[]): string[] {
+  if (key !== "review") return [];
+  const out = new Set<string>();
+  for (const id of itemIds) {
+    const req = GD4_REQUIREMENTS.find((r) => r.id === id);
+    for (const e of req?.expectedEvidence ?? []) if (NAMES_REVIEW.test(e)) out.add(e);
+  }
+  return [...out];
+}
+
+export function unassessedDimensions(itemIds: string[]): UnassessedDimension[] {
+  return (["systemsOutcomes", "review"] as const).map((key) => {
+    const meta = EDUTRUST_DIMENSIONS.find((d) => d.key === key)!;
+    const officialEvidence = officialEvidenceFor(key, itemIds);
+    return {
+      key,
+      label: meta.label,
+      definition: meta.definition,
+      plainQuestion: PLAIN_QUESTION[key],
+      ladder: EDUTRUST_BANDS.filter((b) => b.band >= 3).map((b) => ({ band: b.band, name: b.name, descriptor: b[key] })),
+      officialEvidence,
+      noOfficialList: officialEvidence.length > 0 ? "" : NO_OFFICIAL_LIST[key],
+    };
+  });
+}
+
+// What this run already said was missing, gathered in one place. Every string
+// is one the page is already showing on a row; nothing new is written here.
+export function runNamedGaps(rows: SelfCheckRow[]): { ref: string; requirement: string; text: string }[] {
+  const out: { ref: string; requirement: string; text: string }[] = [];
+  for (const r of rows) {
+    if (!r.working || r.verdict === "Met" || r.verdict === "Not assessed") continue;
+    for (const m of r.working.missing) out.push({ ref: r.ref, requirement: r.requirement, text: `${m.text} — ${m.why}` });
+  }
+  return out;
+}
+
+export const IMPROVE_HEADLINE =
+  "Band 4 and Band 5 are not reachable from this page, and that is not a judgement on your area.";
+
+export const IMPROVE_WHY =
+  "They are decided on Systems & Outcomes and on Review, and this check never opens the evidence those two need: it reads the folder holding your written procedure and the folder holding your records, and nothing else. Your audit lead assesses those two dimensions in the full audit. What follows is what they will be looking for, in the Guidance Document's own words.";
+
+// The pattern the reported 4.1 run showed, named only when the run's own gaps
+// actually show it. Not asserted from nothing.
+export function reviewShapedGapNote(gaps: { text: string }[]): string {
+  const hits = gaps.filter((g) => NAMES_REVIEW.test(g.text) || /\b(KPI|minutes|report|register|log|action plan|CAP)\b/i.test(g.text));
+  if (hits.length === 0) return "";
+  return `${hits.length} of the ${gaps.length} gaps this run named are missing records rather than missing wording: minutes, reports, registers, logs or action plans. That is the shape that holds Systems & Outcomes and Review down in the full audit, so closing them is the work that moves the band, not rewording the procedure.`;
+}

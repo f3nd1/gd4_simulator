@@ -112,3 +112,63 @@ export function ceilingNote(w: BandWorking): string {
 
 export const INFERRED_THRESHOLDS_NOTE =
   "The percentages and cut-offs are internal placeholders reconstructed from a single SSG auditor's worked example, not an auditor-confirmed formula. Do not present this band as an official result.";
+
+// What the band on screen actually covers.
+//
+// The band is produced for ONE requirement item: suggestBand() is called with
+// itemIdsForScope(scope)[0], and the auditor's committed band is likewise the
+// first item that has one. Two of the twenty-nine sub-criteria hold more than
+// one item (2.2 and 4.2), and on those the number describes one item while the
+// table above it describes them all. An auditor cannot tell that from the page,
+// so the page says it.
+//
+// Labelled rather than fixed: banding every item would mean either combining
+// item bands into one, which the official model does not define and which lives
+// in scoring.ts, or showing a separate panel per item. Neither is proportionate
+// to two sub-criteria while the band itself is under review.
+export function bandCoverageNote(bandedItemId: string, allItemIds: string[]): string {
+  const others = allItemIds.filter((id) => id !== bandedItemId);
+  if (others.length === 0) return `This band covers requirement ${bandedItemId}, which is the only requirement item in this area.`;
+  return `This band covers requirement ${bandedItemId} ONLY. This area has ${allItemIds.length} requirement items (${allItemIds.join(", ")}), and ${others.length === 1 ? `${others[0]} is` : `${others.join(", ")} are`} not in it. The requirement rows above cover all of them. Your audit lead bands each item separately.`;
+}
+
+// ── The graphic's geometry, computed here so the page, the printable page and
+// the tests all draw from one place and cannot disagree about what is shown.
+//
+// Honesty constraint baked into the shape: the FOUR dimension percentages are a
+// real sum, so they are drawn as a stacked bar that adds up. The row verdicts
+// are NOT a sum and are not drawn as feeding anything. The unreachable portion
+// is drawn as what it is, the part of the scale this check cannot speak to.
+export type BandGraphic = {
+  // One segment per dimension, in order, as percentages of the 0-100 axis.
+  segments: { key: BandDimensionRow["key"]; label: string; pct: number; max: number; assessedHere: boolean; band: ApsrDimensionScore | undefined }[];
+  total: number;
+  ceiling: number;
+  band: Band;
+  // The five bands as axis stops, with the total range each covers, so the
+  // scale can be drawn to the same thresholds the arithmetic uses.
+  stops: { band: Band; name: string; from: number; to: number; reachable: boolean }[];
+};
+
+export function bandGraphic(w: BandWorking, scale: ApsrScale = DEFAULT_APSR_SCALE): BandGraphic {
+  const [t1, t2, t3, t4] = scale.bandThresholds;
+  const bounds: [number, number][] = [[0, t1], [t1, t2], [t2, t3], [t3, t4], [t4, 100]];
+  return {
+    segments: w.rows.map((r) => ({ key: r.key, label: r.label, pct: r.pct, max: scale.maxPctPerDimension, assessedHere: r.assessedHere, band: r.band })),
+    total: w.total,
+    ceiling: w.ceilingTotal,
+    band: w.band,
+    stops: EDUTRUST_BANDS.map((b, i) => ({
+      band: b.band,
+      name: b.name,
+      from: bounds[i][0],
+      to: bounds[i][1],
+      // Reachable means the ceiling total actually LANDS in this band or above
+      // it, decided by the same finalBandFromPct the arithmetic uses. Comparing
+      // against the band's lower bound was off by one: a 60% ceiling touches
+      // Band 4's lower edge but maps to Band 3, because each boundary falls in
+      // the lower band.
+      reachable: b.band <= w.ceilingBand,
+    })),
+  };
+}
