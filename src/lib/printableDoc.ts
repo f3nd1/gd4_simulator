@@ -39,6 +39,8 @@ export const PRINTABLE_DOC_CSS = `
   th, td { text-align: left; padding: 6px 8px; vertical-align: top; border-bottom: 1px solid #e2e8f0; font-size: 11px; }
   th { background: #f8fafc; text-transform: uppercase; letter-spacing: 0.3px; font-size: 9.5px; color: #64748b; }
   td.mono { font-family: ui-monospace, monospace; white-space: nowrap; }
+  /* The band graphic: keep it whole on one page, and never let it print dark. */
+  .band-graphic { margin: 8px 0 14px; max-width: 720px; page-break-inside: avoid; break-inside: avoid; }
   @media print { body { margin: 12px; } }
 `;
 

@@ -172,3 +172,88 @@ export function bandGraphic(w: BandWorking, scale: ApsrScale = DEFAULT_APSR_SCAL
     })),
   };
 }
+
+// ── The graphic itself, as one builder used by BOTH the page and the printed
+// document.
+//
+// It was a React component drawing the SVG and a separate table in the PDF.
+// The printed page is what gets filed as working paper, so it needs the
+// picture more than the screen does, and two drawings of one result is exactly
+// the drift this repo has been bitten by before. One builder, two palettes.
+//
+// The palette is passed as style values rather than classes because the
+// printed document carries none of this page's CSS: the screen passes CSS
+// custom properties so dark mode still works through the media query, and the
+// print palette passes literal colours so paper is always light.
+export type BandPalette = {
+  ink: string; mute: string; track: string; on: string; off: string; here: string;
+  hatchBg: string; hatchLine: string; line: string; surface: string; edge: string;
+  onText: string; hereText: string;
+};
+
+export const SCREEN_BAND_PALETTE: BandPalette = {
+  ink: "var(--g-ink)", mute: "var(--g-mute)", track: "var(--g-track)", on: "var(--g-on)",
+  off: "var(--g-off)", here: "var(--g-here)", hatchBg: "var(--g-hatch-bg)", hatchLine: "var(--g-hatch-line)",
+  line: "var(--g-line)", surface: "var(--g-surface)", edge: "var(--g-edge)", onText: "#fff", hereText: "#fff",
+};
+
+// Paper is white, always. A dark-mode media query must never reach the printer.
+export const PRINT_BAND_PALETTE: BandPalette = {
+  ink: "#1f2733", mute: "#475569", track: "#e2e8f0", on: "#6d28d9", off: "#94a3b8",
+  here: "#1d4ed8", hatchBg: "#f8fafc", hatchLine: "#cbd5e1", line: "#0f172a",
+  surface: "#ffffff", edge: "#e2e8f0", onText: "#fff", hereText: "#fff",
+};
+
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+export function bandGraphicSvg(g: BandGraphic, sum: string, p: BandPalette, opts: { idSuffix?: string; minWidth?: number } = {}): string {
+  const W = 760, H = 264;
+  // The left gutter for the dimension names: at 44 it clipped "Approach".
+  const AX = 78, AW = W - AX - 16;
+  const x = (pct: number) => AX + (pct / 100) * AW;
+  const hatchId = `scHatch${opts.idSuffix ?? ""}`;
+  let run = 0;
+  const bars = g.segments.map((seg) => { const from = run; run += seg.pct; return { ...seg, from }; });
+  const t = (xx: number, yy: number, cls: string, txt: string) => `<text x="${xx}" y="${yy}" style="${cls}">${esc(txt)}</text>`;
+  const TITLE = `font-size:12px;font-weight:700;fill:${p.ink}`;
+  const NOTE = `font-size:11px;fill:${p.mute}`;
+  const SMALL = `font-size:10.5px;fill:${p.mute}`;
+  const SEG = `font-size:11px;font-weight:700;fill:${p.onText}`;
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;${opts.minWidth ? `min-width:${opts.minWidth}px;` : ""}height:auto;font-family:inherit"
+  aria-label="Band ${g.band} of 5. ${esc(sum)}. The highest this check can reach is ${g.ceiling} per cent.">
+  <rect x="0" y="0" width="${W}" height="${H}" rx="8" style="fill:${p.surface};stroke:${p.edge}"/>
+  <defs>
+    <pattern id="${hatchId}" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="7" height="7" style="fill:${p.hatchBg}"/>
+      <line x1="0" y1="0" x2="0" y2="7" style="stroke:${p.hatchLine}" stroke-width="3"/>
+    </pattern>
+  </defs>
+  ${t(AX, 16, TITLE, "Your total, as the four dimensions add up")}
+  <rect x="${AX}" y="24" width="${AW}" height="28" rx="4" style="fill:${p.track}"/>
+  <rect x="${x(g.ceiling)}" y="24" width="${AW - (x(g.ceiling) - AX)}" height="28" rx="4" fill="url(#${hatchId})"/>
+  ${bars.map((b) => `<rect x="${x(b.from)}" y="24" width="${Math.max(0, x(b.from + b.pct) - x(b.from))}" height="28" ${b.assessedHere ? `style="fill:${p.on}"` : `fill="url(#${hatchId})"`}/>${b.pct > 0 ? t(x(b.from) + 4, 43, SEG, `${b.pct}%`) : ""}`).join("")}
+  <line x1="${x(g.ceiling)}" y1="18" x2="${x(g.ceiling)}" y2="58" style="stroke:${p.line};stroke-width:2;stroke-dasharray:3 3"/>
+  ${t(AX, 70, NOTE, sum)}
+  ${t(Math.min(x(g.ceiling) + 5, W - 210), 70, NOTE, `${g.ceiling}% is the most this check can reach`)}
+
+  ${t(AX, 100, TITLE, "The five bands, and where this lands")}
+  ${g.stops.map((st) => {
+    const left = x(st.from), right = x(st.to), here = st.band === g.band;
+    const fill = here ? `style="fill:${p.here}"` : st.reachable ? `style="fill:${p.track}"` : `fill="url(#${hatchId})"`;
+    return `<rect x="${left}" y="108" width="${Math.max(1, right - left - 2)}" height="26" rx="3" ${fill}/>
+      ${t(left + 5, 125, `font-size:12px;font-weight:${here ? 800 : 700};fill:${here ? p.hereText : p.ink}`, `${st.band}${here ? " <" : ""}`)}
+      ${t(left + 5, 147, SMALL, st.name)}
+      ${st.reachable ? "" : t(left + 5, 158, SMALL, "out of reach here")}`;
+  }).join("")}
+
+  ${t(AX, 188, TITLE, `Each dimension, out of the ${g.segments[0]?.max ?? 25}% it can earn`)}
+  ${g.segments.map((seg, i) => {
+    const y = 198 + i * 16, tw = AW * (seg.max / 100);
+    return `${t(0, y + 9, SMALL, seg.label.split(" ")[0])}
+      <rect x="${AX}" y="${y}" width="${tw}" height="11" rx="2" style="fill:${p.track}"/>
+      <rect x="${AX}" y="${y}" width="${(seg.pct / seg.max) * tw}" height="11" rx="2" ${seg.assessedHere ? `style="fill:${p.on}"` : `fill="url(#${hatchId})"`}/>
+      ${t(AX + tw + 6, y + 9, SMALL, `${seg.band === undefined ? "not scored" : `Band ${seg.band}`} · ${seg.pct}%${seg.assessedHere ? "" : " · not assessed here"}`)}`;
+  }).join("")}
+</svg>`;
+}

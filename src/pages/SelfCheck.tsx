@@ -28,7 +28,7 @@ import {
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking, type BandGraphic } from "../lib/selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking, type BandGraphic } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -1189,104 +1189,36 @@ function Working({ row }: { row: SelfCheckRow }) {
 
 // The band, drawn rather than described.
 //
+// The drawing itself lives in selfCheckBanding.ts and is shared with the
+// printed document, because the print-out is what gets filed as working paper
+// and two drawings of one result is exactly the drift this repo has been bitten
+// by before. This wrapper supplies the screen palette (CSS custom properties,
+// so the dark-mode media query still applies) and the scroll container.
+//
 // Three honest pictures, no more:
-//   1. The 0-100 axis with the four dimension contributions stacked on it. That
-//      IS a sum, so it is the one thing drawn as adding up. The part of the axis
-//      this check cannot reach is hatched, so the ceiling is visible rather than
-//      only asserted.
-//   2. Each dimension against its own 25% track, so the SHAPE reads at a glance:
-//      which dimensions carry the score and which are flat because nothing here
-//      looked at them.
-//   3. The five-band scale with the result marked.
+//   1. The 0-100 axis with the four dimension contributions stacked. That IS a
+//      sum, so it is the one thing drawn as adding up, with the unreachable
+//      part of the axis hatched and the ceiling marked.
+//   2. The five-band scale with the result marked and out-of-reach bands
+//      hatched and labelled.
+//   3. Each dimension against its own 25% track, so the SHAPE reads at a
+//      glance: which dimensions carry the score and which are flat because
+//      nothing here looked at them.
 //
-// Nothing here draws the requirement rows as feeding a total, because they do
-// not: the four dimension bands are a judgement, and only the dimension-to-
-// percentage step is arithmetic.
-//
-// Every state carries a word or a pattern as well as a colour. Hatching marks
-// "not assessed here" and "out of reach", so the two are legible in greyscale,
-// in the printed page and to anyone who cannot separate the hues.
+// Nothing draws the requirement rows as feeding a total, because they do not:
+// the four dimension bands are a judgement, and only the dimension-to-
+// percentage step is arithmetic. Hatching, not colour, carries "not assessed
+// here" and "out of reach", so both read in greyscale and on paper.
 function BandGraphicView({ g, sum }: { g: BandGraphic; sum: string }) {
-  // AX is the left gutter for the dimension names. At 44 it clipped
-  // "Approach" to "Approac"; the names are the labels that make the shape
-  // readable, so they get the room.
-  const W = 760, AX = 78, AW = W - AX - 16;
-  const x = (pct: number) => AX + (pct / 100) * AW;
-  let run = 0;
-  const bars = g.segments.map((seg) => { const from = run; run += seg.pct; return { ...seg, from }; });
+  // An SVG scaled to a 420px screen renders its 10.5px labels at about 5px,
+  // which is not legible. It keeps a minimum width and the container scrolls
+  // instead, which is what the result tables on this page already do.
   return (
-    // An SVG scaled to a 420px screen renders its 10.5px labels at about 5px,
-    // which is not legible. It keeps a minimum width and the container scrolls
-    // instead, which is the same thing the result tables on this page already do.
-    <div className="sc-band-graphic" style={{ marginTop: 10, overflowX: "auto" }}>
-      <svg viewBox={`0 0 ${W} 264`} width="100%" role="img" style={{ display: "block", minWidth: 620, height: "auto" }}
-        aria-label={`Band ${g.band} of 5. ${sum}. The highest this check can reach is ${g.ceiling}%.`}>
-        {/* The graphic draws its OWN surface. Flipping only the ink to suit a
-            dark browser left light text on this page's white card and made the
-            headings invisible: the page has no theme of its own. Owning the
-            surface keeps the graphic internally consistent whatever the card
-            around it does. */}
-        <rect x="0" y="0" width={W} height="264" rx="8" className="sc-surface" />
-        <defs>
-          {/* Diagonal hatch: the pattern, not the colour, is what says "not
-              assessed here" and "out of reach". */}
-          <pattern id="scHatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <rect width="7" height="7" className="sc-hatch-bg" />
-            <line x1="0" y1="0" x2="0" y2="7" className="sc-hatch-line" strokeWidth="3" />
-          </pattern>
-        </defs>
-
-        {/* 1 — the total, stacked */}
-        <text x={AX} y="16" className="sc-g-title">Your total, as the four dimensions add up</text>
-        <rect x={AX} y="24" width={AW} height="28" rx="4" className="sc-track" />
-        <rect x={x(g.ceiling)} y="24" width={AW - (x(g.ceiling) - AX)} height="28" rx="4" fill="url(#scHatch)" />
-        {bars.map((b) => (
-          <g key={b.key}>
-            <rect x={x(b.from)} y="24" width={Math.max(0, x(b.from + b.pct) - x(b.from))} height="28"
-              className={b.assessedHere ? "sc-seg-on" : "sc-seg-off"} fill={b.assessedHere ? undefined : "url(#scHatch)"} />
-            {b.pct > 0 && <text x={x(b.from) + 4} y="43" className="sc-g-seg">{b.pct}%</text>}
-          </g>
-        ))}
-        <line x1={x(g.ceiling)} y1="18" x2={x(g.ceiling)} y2="58" className="sc-ceiling" />
-        <text x={Math.min(x(g.ceiling) + 5, W - 210)} y="70" className="sc-g-note">{g.ceiling}% is the most this check can reach</text>
-        <text x={AX} y="70" className="sc-g-note">{sum}</text>
-
-        {/* 3 — the five-band scale, marked */}
-        <text x={AX} y="100" className="sc-g-title">The five bands, and where this lands</text>
-        {g.stops.map((st) => {
-          const left = x(st.from), right = x(st.to), here = st.band === g.band;
-          return (
-            <g key={st.band}>
-              <rect x={left} y="108" width={Math.max(1, right - left - 2)} height="26" rx="3"
-                className={here ? "sc-stop-here" : st.reachable ? "sc-stop" : "sc-stop-off"}
-                fill={st.reachable ? undefined : "url(#scHatch)"} />
-              <text x={left + 5} y="125" className={here ? "sc-g-stop-here" : "sc-g-stop"}>{st.band}{here ? " ←" : ""}</text>
-              {/* Two lines, because "Exceeding (out of reach here)" on one line
-                  ran straight through the next band's name. */}
-              <text x={left + 5} y="147" className="sc-g-small">{st.name}</text>
-              {!st.reachable && <text x={left + 5} y="158" className="sc-g-small">out of reach here</text>}
-            </g>
-          );
-        })}
-
-        {/* 2 — the shape: each dimension against its own 25% track */}
-        <text x={AX} y="188" className="sc-g-title">Each dimension, out of the {g.segments[0]?.max ?? 25}% it can earn</text>
-        {g.segments.map((seg, i) => {
-          const y = 198 + i * 16, tw = (AW / 100) * (seg.max * 4) / 4;
-          return (
-            <g key={seg.key}>
-              <text x="0" y={y + 9} className="sc-g-small">{seg.label.split(" ")[0]}</text>
-              <rect x={AX} y={y} width={tw} height="11" rx="2" className="sc-track" />
-              <rect x={AX} y={y} width={(seg.pct / seg.max) * tw} height="11" rx="2"
-                className={seg.assessedHere ? "sc-seg-on" : "sc-seg-off"} fill={seg.assessedHere ? undefined : "url(#scHatch)"} />
-              <text x={AX + tw + 6} y={y + 9} className="sc-g-small">
-                {seg.band === undefined ? "not scored" : `Band ${seg.band}`} · {seg.pct}%{seg.assessedHere ? "" : " · not assessed here"}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
+    <div
+      className="sc-band-graphic"
+      style={{ marginTop: 10, overflowX: "auto" }}
+      dangerouslySetInnerHTML={{ __html: bandGraphicSvg(g, sum, SCREEN_BAND_PALETTE, { minWidth: 620 }) }}
+    />
   );
 }
 

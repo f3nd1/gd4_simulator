@@ -12,7 +12,7 @@
 import { toCsv } from "./auditCsvExport";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, type BandWorking } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, PRINT_BAND_PALETTE, type BandWorking } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
@@ -695,6 +695,11 @@ export function buildSelfCheckHtml(opts: {
         <td>${escapeHtml(d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check")}</td>
       </tr>`).join("")}</tbody>
     </table>
+    ${/* The picture, not only the numbers: this document is what gets filed as
+         working paper and shown to people, so the graphic matters here more
+         than on screen, not less. Print palette, so a dark-mode browser can
+         never send a dark chart to a printer. */ ""}
+    <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), bandWorking.sum, PRINT_BAND_PALETTE, { idSuffix: "Print" })}</div>
     <h3>The shape of this result</h3>
     <table>
       <thead><tr><th>Dimension</th><th>Band</th><th>Earned</th><th>Out of</th><th>Assessed by this check?</th></tr></thead>

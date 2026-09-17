@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildBandWorking, bandCoverageNote, bandGraphic, ceilingNote, ROWS_DO_NOT_SUM_NOTE, DIMENSION_SOURCE, BAND_LADDER } from "../selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, SCREEN_BAND_PALETTE, PRINT_BAND_PALETTE, ceilingNote, ROWS_DO_NOT_SUM_NOTE, DIMENSION_SOURCE, BAND_LADDER } from "../selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "../selfCheckImprove";
 import { VERDICT_LEGEND, PLAIN_VERDICT, PPD_PLAIN_VERDICT, RECORDS_PLAIN_VERDICT, buildSelfCheckHtml, buildSelfCheckCsv, toSelfCheckRows, countSelfCheck } from "../selfCheck";
 import type { EvidenceAssessmentRow } from "../../types";
@@ -287,5 +287,61 @@ describe("the graphic degrades honestly into both exports", () => {
     expect(html).toContain("How to reach a higher band");
     expect(html).toContain("Many to most trends and current performance levels");
     expect(html).toContain("Procedure review records");
+  });
+});
+
+describe("one drawing, two surfaces", () => {
+  const g = bandGraphic(buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 }));
+
+  // The printed page is what gets filed as working paper, so it carries the
+  // picture, not a second rendering of the same result that could drift from it.
+  it("draws the same geometry for screen and for print", () => {
+    const screen = bandGraphicSvg(g, "10% + 10% + 5% + 5% = 30%", SCREEN_BAND_PALETTE);
+    const print = bandGraphicSvg(g, "10% + 10% + 5% + 5% = 30%", PRINT_BAND_PALETTE);
+    const geometryOf = (svg: string) => svg.match(/<rect[^>]*x="[\d.]+"[^>]*width="[\d.]+"/g);
+    expect(geometryOf(screen)).toEqual(geometryOf(print));
+  });
+
+  // Paper is white. A dark-mode media query must never reach a printer, so the
+  // print palette carries literal colours and no custom properties at all.
+  it("never sends CSS custom properties, and therefore dark mode, to the printer", () => {
+    const print = bandGraphicSvg(g, "sum", PRINT_BAND_PALETTE);
+    expect(print).not.toContain("var(--");
+    expect(print).toContain("#");
+    // The screen version DOES use them, which is how its dark mode works.
+    expect(bandGraphicSvg(g, "sum", SCREEN_BAND_PALETTE)).toContain("var(--g-ink)");
+  });
+
+  it("keeps a readable minimum width on screen and lets print size itself", () => {
+    expect(bandGraphicSvg(g, "sum", SCREEN_BAND_PALETTE, { minWidth: 620 })).toContain("min-width:620px");
+    expect(bandGraphicSvg(g, "sum", PRINT_BAND_PALETTE)).not.toContain("min-width");
+  });
+
+  // Two SVGs in one document collide on pattern ids, and the second one then
+  // paints with the first one's hatch.
+  it("can carry a distinct pattern id, so two copies in one document do not collide", () => {
+    expect(bandGraphicSvg(g, "sum", PRINT_BAND_PALETTE, { idSuffix: "Print" })).toContain('id="scHatchPrint"');
+    expect(bandGraphicSvg(g, "sum", SCREEN_BAND_PALETTE)).toContain('id="scHatch"');
+  });
+
+  it("carries the state in words as well as in pattern, so it survives greyscale", () => {
+    const svg = bandGraphicSvg(g, "10% + 10% + 5% + 5% = 30%", PRINT_BAND_PALETTE);
+    expect(svg).toContain("not assessed here");
+    expect(svg).toContain("out of reach here");
+    expect(svg).toContain("is the most this check can reach");
+    expect(svg).toContain("aria-label");
+  });
+
+  it("puts the picture in the printable document, above the table of the same numbers", () => {
+    const rows = toSelfCheckRows([row({})]);
+    const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
+    const html = buildSelfCheckHtml({
+      areaLabel: "4.1 Admissions", areaDescription: "d", counts: countSelfCheck(rows),
+      band: { kind: "none" }, rows, ranAt: "x", view: "overview", bandWorking: w, itemIds: ["4.1.1"],
+    });
+    expect(html).toContain('<div class="band-graphic">');
+    expect(html).toContain("<svg");
+    expect(html.indexOf("<svg")).toBeLessThan(html.indexOf("The shape of this result"));
+    expect(html).not.toContain("var(--");
   });
 });
