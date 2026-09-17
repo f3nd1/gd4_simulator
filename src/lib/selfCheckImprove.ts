@@ -24,6 +24,7 @@
 // list does not itemise outcome evidence for this requirement.
 import { EDUTRUST_BANDS, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { normalizeAuditRef } from "./gd4Refs";
 import type { Band } from "../types";
 import type { SelfCheckRow } from "./selfCheck";
 
@@ -109,3 +110,60 @@ export function reviewShapedGapNote(gaps: { text: string }[]): string {
   if (hits.length === 0) return "";
   return `${hits.length} of the ${gaps.length} gaps this run named are missing records rather than missing wording: minutes, reports, registers, logs or action plans. That is the shape that holds Systems & Outcomes and Review down in the full audit, so closing them is the work that moves the band your audit lead sets, not rewording the procedure.`;
 }
+
+
+// ── What this run already found about Review ─────────────────────────────
+//
+// The one thing this check DOES produce that bears on an unassessed dimension.
+//
+// Measured against the shipped requirement data, not asserted: of the 200
+// official Describe/Show lines, 42 name a process review, and every one of the
+// 31 requirement items carries at least one. They read "Review the internal
+// assessment process for continual improvement", "Review the management review
+// process for continual improvement", and so on. All 42 were printed and read:
+// there is not a single false positive, because the word "review" in a
+// Describe/Show line always means reviewing the process itself.
+//
+// This check already judges those lines and already shows the verdicts in the
+// table. Gathering them in one place adds no judgement: same refs, same
+// verdicts, same words.
+//
+// What it deliberately is NOT:
+//   - not a Review band, and not an input to one. Turning line verdicts into a
+//     dimension verdict is what optionAChecklistWrite does, it feeds
+//     buildScored, and it is scoring. Nothing here touches it.
+//   - not a claim that these lines ARE the Review dimension. A line asks
+//     whether one process is reviewed; the dimension asks whether the whole
+//     system is evaluated, with improvement actions tracked and benchmarked.
+//     The higher bands need evidence this check never opens.
+//   - deliberately absent for Systems & Outcomes. Only 18 of 31 items have a
+//     line an outcome-word filter catches, and the words that catch them
+//     ("data", "performance") also catch "Ensure the confidentiality and
+//     security of all data" and "Appraisal and performance monitoring", which
+//     are processes. A filter that wrong is a fabricated list.
+
+// Built once from the shipped official data, so the set can never drift from
+// the requirement text the check is run against.
+const REVIEW_LINE_REFS: Set<string> = (() => {
+  const out = new Set<string>();
+  for (const r of GD4_REQUIREMENTS) {
+    for (const p of r.flatAuditPoints ?? []) {
+      if (p.sourceType === "describeShow" && NAMES_REVIEW.test(p.text)) out.add(normalizeAuditRef(p.ref));
+    }
+  }
+  return out;
+})();
+
+// The run's own rows for those lines, in the order the table shows them.
+// Every field is one the row already carries; nothing is re-judged.
+export function reviewShapedRows<T extends { ref: string }>(rows: T[]): T[] {
+  return rows.filter((r) => REVIEW_LINE_REFS.has(normalizeAuditRef(r.ref)));
+}
+
+export const REVIEW_FINDINGS_HEADING = "What this run already found about Review";
+
+export const REVIEW_FINDINGS_INTRO =
+  "These requirement lines are the official GD4 wording asking whether a process is reviewed for continual improvement, and this check has already judged them. They are repeated here, unchanged, because they are the one part of Review this check can speak to at all. They are not a Review score and do not add up to one: your audit lead weighs them alongside the outcome and improvement evidence this check never opens, and sets the band.";
+
+export const REVIEW_FINDINGS_NONE =
+  "This area's review lines were not among the ones this run judged, so there is nothing to repeat here.";

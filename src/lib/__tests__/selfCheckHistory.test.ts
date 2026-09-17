@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote } from "../selfCheckHistory";
 import { runDuration, sameFolderLink, SAME_LINK_WARNING, passFileRows, fileCheckMark, toFileRows } from "../selfCheckEvidence";
 import { buildSelfCheckCsv, buildSelfCheckHtml, toSelfCheckRows, countSelfCheck, SELF_CHECK_FILE_HEADERS } from "../selfCheck";
+import { reviewShapedRows, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO } from "../selfCheckImprove";
+import { buildBandWorking } from "../selfCheckBanding";
+import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
 import type { AuditFileRecord, EvidenceAssessmentResult, PPDReviewResult } from "../../types";
 
 const ev = (over: Partial<EvidenceAssessmentResult> = {}): EvidenceAssessmentResult => ({
@@ -177,5 +180,76 @@ describe("the same folder link in both boxes", () => {
     expect(html).toContain("took 12 seconds");
     // Silent when the two links differ, which is the normal case.
     expect(buildSelfCheckCsv("6.1", rows, { kind: "none" }, "overview", files)).not.toContain("SAME folder link");
+  });
+});
+
+describe("what this run already found about Review", () => {
+  // The one thing this check produces that bears on an unassessed dimension.
+  // Measured, not asserted: 42 of the 200 official Describe/Show lines name a
+  // process review, and every one of the 31 requirement items has at least one.
+  it("picks the official review-shaped lines, and nothing else", () => {
+    const rows = [
+      { ref: "6.1.1.DS1.a", requirement: "Defining assessment scope" },
+      { ref: "6.1.1.DS2", requirement: "Review the internal assessment process for continual improvement" },
+      { ref: "4.1.1.DS5", requirement: "Review the pre-course counselling procedures for continual improvement" },
+      { ref: "4.1.1.DS1", requirement: "Ensure counsellors are trained" },
+    ];
+    expect(reviewShapedRows(rows).map((r) => r.ref)).toEqual(["6.1.1.DS2", "4.1.1.DS5"]);
+  });
+
+  // Refs are joined through gd4Refs everywhere in this app, so a stored ref
+  // with different spacing or case still resolves.
+  it("matches through the app's own ref normalisation", () => {
+    expect(reviewShapedRows([{ ref: " 6.1.1.ds2 " }]).map((r) => r.ref)).toEqual([" 6.1.1.ds2 "]);
+    expect(reviewShapedRows([{ ref: "9.9.9.DS9" }])).toEqual([]);
+  });
+
+  it("covers every requirement item, which is why it is worth showing at all", () => {
+    const items = new Set<string>();
+    for (const r of GD4_REQUIREMENTS) {
+      const refs = (r.flatAuditPoints ?? []).filter((p) => p.sourceType === "describeShow").map((p) => ({ ref: p.ref }));
+      if (reviewShapedRows(refs).length > 0) items.add(r.id);
+    }
+    expect(items.size).toBe(GD4_REQUIREMENTS.length);
+  });
+
+  // It is NOT a band and must never read as one. Turning line verdicts into a
+  // dimension verdict is scoring, and this page produces no band by any path.
+  it("says in words that it is not a score and does not add up to one", () => {
+    expect(REVIEW_FINDINGS_INTRO).toMatch(/not a Review score and do not add up to one/);
+    expect(REVIEW_FINDINGS_INTRO).toMatch(/your audit lead/);
+    expect(REVIEW_FINDINGS_HEADING).not.toMatch(/band|score/i);
+    expect(REVIEW_FINDINGS_INTRO).not.toMatch(/Band \d/);
+  });
+
+  it("repeats the run's own verdicts into both exports, and invents none", () => {
+    const rows = toSelfCheckRows([{
+      gdRef: "6.1.1.DS2", gd4ItemId: "6.1.1", requirementText: "Review the internal assessment process for continual improvement",
+      ppdExtract: "", ppdVerdict: "Adequate", evidenceSummary: "", evidenceFiles: [], evidenceChunkIds: [],
+      verdict: "Not met", comment: "No review record was found.",
+    } as never]);
+    const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
+    const csv = buildSelfCheckCsv("6.1", rows, { kind: "none" }, "overview", [], w, undefined, ["6.1.1"]);
+    expect(csv).toContain("What this run already found about Review");
+    expect(csv).toContain("6.1.1.DS2,Does not comply");
+    const html = buildSelfCheckHtml({
+      areaLabel: "6.1", areaDescription: "d", counts: countSelfCheck(rows),
+      band: { kind: "none" }, rows, ranAt: "x", view: "overview", itemIds: ["6.1.1"], bandWorking: w,
+    });
+    expect(html).toContain("What this run already found about Review");
+    expect(html).toContain("✗ Does not comply");
+    // No band anywhere near it.
+    expect(html).not.toMatch(/Review[\s\S]{0,400}Band \d of 5/);
+  });
+
+  // Deliberately absent for Systems & Outcomes: the words that would catch
+  // outcome lines also catch "Ensure the confidentiality and security of all
+  // data", which is a process.
+  it("offers nothing equivalent for Systems & Outcomes", () => {
+    const rows = toSelfCheckRows([]);
+    const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
+    const csv = buildSelfCheckCsv("6.1", rows, { kind: "none" }, "overview", [], w, undefined, ["6.1.1"]);
+    expect(csv).not.toMatch(/already found about Systems/i);
+    expect(csv).toContain("does not itemise outcome evidence");
   });
 });

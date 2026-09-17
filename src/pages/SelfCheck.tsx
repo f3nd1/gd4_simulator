@@ -27,7 +27,7 @@ import {
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote } from "../lib/selfCheckHistory";
-import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "../lib/selfCheckImprove";
+import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
 import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
@@ -280,11 +280,13 @@ export function SelfCheck() {
       : fileRows),
     [view, ppdExisting, existing, fileRows],
   );
-  const tabFileCounts = useMemo(() => countFileRows(tabFileRows), [tabFileRows]);
   const expectedGroups = useMemo(() => expectedEvidenceGroups(rows), [rows]);
   // The run's own reported gaps, gathered for the improvement section. Nothing
   // new is written: these are the strings already on the rows.
   const runGaps = useMemo(() => runNamedGaps(rows), [rows]);
+  // The run's own verdicts on the official review-shaped lines. Same refs, same
+  // verdicts, same words as the table above; no judgement is added here.
+  const reviewRows = useMemo(() => reviewShapedRows(rows), [rows]);
   const counts = useMemo(() => countSelfCheck(rows), [rows]);
   const shownRun = runs[viewingRun];
   // What changed since the check before the one on screen. Counted from the
@@ -990,22 +992,22 @@ export function SelfCheck() {
             </div>
             )}
 
-            {/* Two warnings that change how every verdict below them reads, so
-                they print ABOVE the verdicts even though the file list they
-                come from sits below. A gap reported against a file that could
-                not be read is not a real gap, and a "documented AND evidenced"
-                reached by reading the procedure as its own record is not a
-                real pass. Both link down to the list. */}
-            {sameLink && (
-              <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
-                <b>{SAME_LINK_WARNING}</b>
-              </p>
-            )}
-            {tabFileCounts.unreadable > 0 && (
-              <p style={{ ...muted, background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "9px 11px" }}>
-                {unreadableWarning(tabFileCounts)} See "Every file this tab read" below the results.
-              </p>
-            )}
+            {/* Every file THIS TAB's pass read, open by default and tickable
+                down the list. It used to be a closed disclosure that only
+                opened itself when something was unreadable, so on a clean run
+                an auditor saw one line and had to know to click it.
+
+                It sits BELOW the verdicts it backs: open and above them it put
+                the findings table a full screen down the page, which is what
+                the last redesign was for. The unreadable-files warning still
+                prints above the verdicts, because it changes how they read.
+
+                Per pass, never merged: a file the records pass read is not
+                evidence the procedure pass read it, and merging the two would
+                be the same class of error as merging their chunk maps. The
+                overall tab keeps the merged view, which answers the different
+                question of what the whole check opened. */}
+            <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} />
 
             {/* The shape of the tab before a single row is read, and which
                 dimension this tab's own verdicts feed. Both were on the overall
@@ -1077,23 +1079,6 @@ export function SelfCheck() {
                 </tbody>
               </table>
             </div>
-
-            {/* Every file THIS TAB's pass read, open by default and tickable
-                down the list. It used to be a closed disclosure that only
-                opened itself when something was unreadable, so on a clean run
-                an auditor saw one line and had to know to click it.
-
-                It sits BELOW the verdicts it backs: open and above them it put
-                the findings table a full screen down the page, which is what
-                the last redesign was for. The unreadable-files warning still
-                prints above the verdicts, because it changes how they read.
-
-                Per pass, never merged: a file the records pass read is not
-                evidence the procedure pass read it, and merging the two would
-                be the same class of error as merging their chunk maps. The
-                overall tab keeps the merged view, which answers the different
-                question of what the whole check opened. */}
-            <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} />
 
             {/* The two dimensions this check can defend, and the two it leaves
                 alone. It shows no overall band: scoring Systems & Outcomes and
@@ -1170,6 +1155,33 @@ export function SelfCheck() {
                         </>
                       ) : (
                         <div style={{ ...muted }}>{d.noOfficialList}</div>
+                      )}
+                      {/* Review only. Every one of the 31 requirement items has
+                          at least one official line asking whether the process
+                          is reviewed, and this check has already judged them.
+                          Systems & Outcomes gets no equivalent: the words that
+                          would catch outcome lines also catch processes, and a
+                          filter that wrong is a fabricated list. */}
+                      {d.key === "review" && (
+                        <div style={{ borderTop: "1px solid #bfdbfe", paddingTop: 9, marginTop: 9 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>{REVIEW_FINDINGS_HEADING}</div>
+                          <p style={{ ...muted, margin: "3px 0 7px" }}>{REVIEW_FINDINGS_INTRO}</p>
+                          {reviewRows.length === 0 ? (
+                            <div style={{ ...muted }}>{REVIEW_FINDINGS_NONE}</div>
+                          ) : (
+                            <div style={{ display: "grid", gap: 5 }}>
+                              {reviewRows.map((r) => (
+                                <div key={r.ref} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
+                                  <span style={{ ...TONE_BG[r.tone], border: `1px solid ${TONE_BG[r.tone].fg}`, padding: "1px 8px", borderRadius: 6, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>{r.icon} {r.label}</span>
+                                  <span style={{ color: "#334155" }}>
+                                    {r.requirement}
+                                    <span style={{ ...muted, marginLeft: 6 }}>{r.ref}</span>
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}

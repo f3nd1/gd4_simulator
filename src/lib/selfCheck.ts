@@ -13,7 +13,7 @@ import { toCsv } from "./auditCsvExport";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
 import { ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, tallyBarSvg, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
-import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "./selfCheckImprove";
+import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
 
@@ -690,6 +690,7 @@ export function buildSelfCheckCsv(
   const counts = countFileRows(files);
   const warning = unreadableWarning(counts);
   const gaps = runNamedGaps(rows);
+  const reviewRows = reviewShapedRows(rows);
   // The file list rides in the same spreadsheet, below the verdicts: a verdict
   // filed without the record of what was actually read is not defensible, and
   // two separate downloads get separated.
@@ -738,6 +739,14 @@ export function buildSelfCheckCsv(
       ...(d.officialEvidence.length > 0
         ? d.officialEvidence.map((e) => pad(["", "Official expected evidence", e]))
         : [pad(["", "", d.noOfficialList])]),
+      // Review only, and the same refs and verdicts the table above carries.
+      ...(d.key !== "review" ? [] : [
+        pad([REVIEW_FINDINGS_HEADING]),
+        pad([REVIEW_FINDINGS_INTRO]),
+        ...(reviewRows.length === 0
+          ? [pad(["", "", REVIEW_FINDINGS_NONE])]
+          : reviewRows.map((r) => pad([r.ref, r.label, r.requirement]))),
+      ]),
     ]),
     ...(gaps.length === 0 ? [] : [
       pad(["What this run already told you is missing"]),
@@ -784,6 +793,7 @@ export function buildSelfCheckHtml(opts: {
 }): string {
   const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [], bandWorking, bandCoverage, itemIds = [], timing = "", sameLink = false } = opts;
   const gaps = runNamedGaps(rows);
+  const reviewRows = reviewShapedRows(rows);
   const legendHtml = `
     <h2>What each result means</h2>
     <table>
@@ -823,6 +833,12 @@ export function buildSelfCheckHtml(opts: {
       ${d.officialEvidence.length > 0
         ? `<p class="muted"><b>On the official expected-evidence list for this requirement:</b></p><ul>${d.officialEvidence.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}</ul>`
         : `<p class="muted">${escapeHtml(d.noOfficialList)}</p>`}
+      ${d.key !== "review" ? "" : `
+        <h3>${escapeHtml(REVIEW_FINDINGS_HEADING)}</h3>
+        <p class="muted">${escapeHtml(REVIEW_FINDINGS_INTRO)}</p>
+        ${reviewRows.length === 0
+          ? `<p class="muted">${escapeHtml(REVIEW_FINDINGS_NONE)}</p>`
+          : `<ul>${reviewRows.map((r) => `<li><b>${escapeHtml(`${r.icon} ${r.label}`)}</b> ${escapeHtml(r.requirement)} <span class="muted">${escapeHtml(r.ref)}</span></li>`).join("")}</ul>`}`}
     `).join("")}
     ${gaps.length === 0 ? "" : `
       <h3>What this run already told you is missing</h3>
