@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   formatElapsed, tallyFiles, fileStageSummary, activityLine, countedFor,
   stallState, SLOW_AFTER_MS, STUCK_AFTER_MS, type RunProgress,
+  waitingMessage, WAITING_MESSAGES, MESSAGE_ROTATE_MS, roughRemaining,
 } from "../selfCheckProgress";
 import type { AuditFileRecord } from "../../types";
 
@@ -166,5 +167,72 @@ describe("stall detection", () => {
   it("measures from the run start when no event has ever fired", () => {
     expect(stallState(T0 + SLOW_AFTER_MS, undefined, T0).level).toBe("slow");
     expect(stallState(T0 + 1_000, undefined, T0).level).toBe("none");
+  });
+});
+
+// The running card used to hold completely still for 15 to 25 seconds at a
+// time, which reads as a freeze. These two carry the "still alive" job between
+// engine events, so they must move on their own clock and must not invent
+// progress.
+describe("rotating waiting copy", () => {
+  it("changes as the wait goes on", () => {
+    const first = waitingMessage(0);
+    const later = waitingMessage(MESSAGE_ROTATE_MS + 100);
+    expect(later).not.toBe(first);
+  });
+
+  it("holds each line steady for its full window, so it does not twitch", () => {
+    expect(waitingMessage(0)).toBe(waitingMessage(MESSAGE_ROTATE_MS - 1));
+  });
+
+  it("cycles rather than running out on a long check", () => {
+    expect(waitingMessage(MESSAGE_ROTATE_MS * WAITING_MESSAGES.length)).toBe(waitingMessage(0));
+    expect(waitingMessage(MESSAGE_ROTATE_MS * 97)).toBeTruthy();
+  });
+
+  it("never claims progress that has not happened", () => {
+    for (const m of WAITING_MESSAGES) {
+      expect(m).not.toMatch(/almost|nearly (there|finished)|% |complete|finishing/i);
+      expect(m).not.toMatch(/—/);
+    }
+  });
+
+  it("copes with a negative elapsed value from a clock skew", () => {
+    expect(waitingMessage(-5000)).toBe(WAITING_MESSAGES[0]);
+  });
+});
+
+describe("rough finish estimate", () => {
+  it("says nothing until a requirement has actually finished", () => {
+    expect(roughRemaining(0, 8, 30_000)).toBeNull();
+  });
+
+  it("says nothing when there is no time measured yet", () => {
+    expect(roughRemaining(2, 8, 0)).toBeNull();
+  });
+
+  it("says nothing once everything is done, rather than counting to zero", () => {
+    expect(roughRemaining(8, 8, 160_000)).toBeNull();
+    expect(roughRemaining(9, 8, 160_000)).toBeNull();
+  });
+
+  // 2 done in 40s is 20s each; 6 left is about 120s.
+  it("derives the estimate from the pace already observed", () => {
+    expect(roughRemaining(2, 8, 40_000)).toBe("about 2 minutes left");
+  });
+
+  it("rounds coarsely, so it never reads as a countdown", () => {
+    // 1 done in 25s, 2 left = 50s -> nearest 30.
+    expect(roughRemaining(1, 3, 25_000)).toBe("about 60 seconds left");
+    expect(roughRemaining(4, 8, 300_000)).toBe("about 5 minutes left");
+  });
+
+  it("switches to plain words when the remainder is tiny", () => {
+    expect(roughRemaining(7, 8, 70_000)).toBe("nearly done");
+  });
+
+  it("never returns a figure below two minutes once it is speaking in minutes", () => {
+    const out = roughRemaining(1, 2, 91_000);
+    expect(out).toBe("about 2 minutes left");
   });
 });

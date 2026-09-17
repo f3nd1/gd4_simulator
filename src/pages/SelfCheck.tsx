@@ -10,6 +10,7 @@ import { buildWordingCapture, captureFilename } from "../lib/wordingCapture";
 import { printHtmlInNewTab, PRINTABLE_DOC_CSS, POPUP_BLOCKED_MESSAGE } from "../lib/printableDoc";
 import {
   formatElapsed, activityLine, countedFor, stallState, fileStageSummary, SLOW_TITLE,
+  waitingMessage, roughRemaining,
   type RunProgress, type StageKey,
 } from "../lib/selfCheckProgress";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
@@ -225,6 +226,7 @@ export function SelfCheck() {
     const stale = () => generation.current !== myGen;
     setRunStartedAt(Date.now());
     setNow(Date.now());
+    setStageStartedAt(Date.now());
     setDoneSummaries({});
     setError(null); setNote(null); setBand({ kind: "none" });
     const procedureOnly = plan.kind === "procedure-only";
@@ -377,6 +379,17 @@ export function SelfCheck() {
   const liveProgress: RunProgress | undefined =
     phase === "policy" ? (ppdProgress ?? undefined) : (phase === "records" || phase === "band") ? (evProgress ?? undefined) : undefined;
   const stall = stallState(now, liveProgress, runStartedAt || now);
+  // When the currently counted stage began. The finish estimate divides the
+  // time this stage has ACTUALLY taken by the requirements it has ACTUALLY
+  // finished, so it needs a real start, not the whole run's.
+  const [stageStartedAt, setStageStartedAt] = useState(0);
+  useEffect(() => { setStageStartedAt(Date.now()); }, [phase]);
+  const liveCount = countedFor(phase === "policy" ? "policy" : "records", liveProgress)
+    ?? countedFor("records", evProgress ?? undefined)
+    ?? countedFor("policy", ppdProgress ?? undefined);
+  const remaining = liveCount
+    ? roughRemaining(liveCount.done, liveCount.total, now - (stageStartedAt || now))
+    : null;
   // A completed stage keeps its one-line result. Snapshotted in an effect as
   // each stage ends, because the engine's progress object moves on to the next
   // pass and the previous pass's file ledger would otherwise be unreachable.
@@ -397,7 +410,25 @@ export function SelfCheck() {
     <div style={{ minHeight: "100vh", background: "#f4f6fa", padding: "26px 16px 70px" }}>
       {/* Indeterminate bar for the two stages that count nothing. Movement here
           means "still alive", never "N% done". */}
-      <style>{"@keyframes scSlide{0%{margin-left:0}50%{margin-left:62%}100%{margin-left:0}}"}</style>
+      <style>{[
+        "@keyframes scSlide{0%{margin-left:0}50%{margin-left:62%}100%{margin-left:0}}",
+        // Slow on purpose. A 4s breath is roughly a resting animal's, and it is
+        // the fastest thing about the cat.
+        "@keyframes scBreathe{0%,100%{transform:translateY(0) scaleY(1)}50%{transform:translateY(-0.7px) scaleY(1.025)}}",
+        // The tail rests for most of the cycle and flicks once, so the eye is
+        // drawn briefly rather than continuously.
+        "@keyframes scTail{0%,62%{transform:rotate(0deg)}72%{transform:rotate(-15deg)}82%{transform:rotate(7deg)}92%,100%{transform:rotate(0deg)}}",
+        // A blink is a fast squash on a long cycle: visible if you are looking,
+        // invisible if you are not.
+        "@keyframes scBlink{0%,94%,100%{transform:scaleY(1)}96%,98%{transform:scaleY(0.12)}}",
+        ".sc-cat-body{animation:scBreathe 4s ease-in-out infinite;transform-origin:23px 33px}",
+        ".sc-cat-tail{animation:scTail 3.2s ease-in-out infinite;transform-origin:33px 31px}",
+        ".sc-cat-eyes{animation:scBlink 6s ease-in-out infinite;transform-origin:23px 15px}",
+        // Anyone who has asked the operating system for less movement gets a
+        // still cat. The rotating copy and the elapsed timer still change, so
+        // the card is still demonstrably alive without any animation at all.
+        "@media (prefers-reduced-motion: reduce){.sc-cat-body,.sc-cat-tail,.sc-cat-eyes{animation:none}.sc-bar,.sc-indet{animation:none!important;transition:none!important}}",
+      ].join("")}</style>
       <div style={{ maxWidth: 880, margin: "0 auto" }}>
         <header style={{ marginBottom: 18 }}>
           <h1 style={{ fontSize: 25, margin: "0 0 6px", color: INK }}>Check your area before the audit</h1>
@@ -551,6 +582,9 @@ export function SelfCheck() {
                   the last, so a long run is never indistinguishable from a hang. */}
               <div style={{ ...muted, marginTop: 0, marginBottom: 10 }}>
                 Running for {formatElapsed(now - (runStartedAt || now))}
+                {/* Only once a requirement has actually finished, so the figure
+                    is measured pace rather than an invented constant. */}
+                {remaining && <span> · {remaining}</span>}
               </div>
 
               <ol style={{ listStyle: "none", padding: 0, margin: "0 0 12px" }}>
@@ -575,13 +609,13 @@ export function SelfCheck() {
                         <div style={{ marginLeft: 27, marginTop: 4 }}>
                           {count ? (
                             <div style={{ height: 6, background: "#e2e8f0", borderRadius: 99, overflow: "hidden", maxWidth: 320 }}>
-                              <div style={{ width: `${count.pct}%`, height: "100%", background: "#7c3aed", transition: "width .3s" }} />
+                              <div className="sc-bar" style={{ width: `${count.pct}%`, height: "100%", background: "#7c3aed", transition: "width 1.6s cubic-bezier(.22,.61,.36,1)" }} />
                             </div>
                           ) : (
                             // No counted denominator for this stage, so an
                             // indeterminate bar rather than an invented number.
                             <div style={{ height: 6, background: "#e2e8f0", borderRadius: 99, overflow: "hidden", maxWidth: 320 }}>
-                              <div style={{ height: "100%", width: "38%", background: "#c4b5fd", borderRadius: 99, animation: "scSlide 1.4s ease-in-out infinite" }} />
+                              <div className="sc-indet" style={{ height: "100%", width: "38%", background: "#c4b5fd", borderRadius: 99, animation: "scSlide 1.4s ease-in-out infinite" }} />
                             </div>
                           )}
                           <div style={{ ...muted, marginTop: 5 }}>
@@ -596,6 +630,14 @@ export function SelfCheck() {
                   );
                 })}
               </ol>
+
+              {/* The only thing on this card that moves between engine events.
+                  The stage list above is entirely event-driven and holds still
+                  for 15 to 25 seconds at a time, which reads as a freeze. */}
+              <div style={{ display: "flex", alignItems: "center", gap: 12, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+                <WaitingCat />
+                <div style={{ ...muted, margin: 0 }}>{waitingMessage(now - (runStartedAt || now))}</div>
+              </div>
 
               {/* Stall: the engine bumps a heartbeat on every event, so silence
                   is measurable rather than guessed. */}
@@ -765,6 +807,61 @@ function Tally({ n, label, tone }: { n: number; label: string; tone: string }) {
       <div style={{ fontSize: 21, fontWeight: 800, lineHeight: 1 }}>{n}</div>
       <div style={{ fontSize: 12, fontWeight: 600, marginTop: 3 }}>{label}</div>
     </div>
+  );
+}
+
+// A small cat that breathes, blinks and flicks its tail while the check runs.
+//
+// It exists because every OTHER indicator on this card is driven by engine
+// events, and those arrive 15 to 25 seconds apart. Between two of them the card
+// was completely still, which reads as a freeze rather than as work in
+// progress. This moves on its own clock and tells the honest truth: something
+// is alive. It claims nothing about progress, because it knows nothing about
+// progress.
+//
+// Kept calm rather than cute: everything is slow (a 4s breath, a 3.2s tail, a
+// blink every 6s), nothing travels across the card, and it is drawn in the
+// page's own muted slate and violet rather than in saturated colour, so it sits
+// quieter than the progress bar beside it. Pure inline SVG and CSS keyframes:
+// no image file, no library, no JavaScript loop.
+//
+// Under prefers-reduced-motion every animation is disabled by the stylesheet
+// below and the cat simply sits there; the rotating copy and the elapsed timer
+// carry the "still alive" job on their own.
+function WaitingCat() {
+  return (
+    <svg
+      width="58" height="50" viewBox="0 0 46 40" aria-hidden="true"
+      style={{ flexShrink: 0, display: "block" }}
+    >
+      <g className="sc-cat">
+        {/* tail, hinged at the body so the flick pivots rather than slides */}
+        <path
+          className="sc-cat-tail"
+          d="M33 31 C40 31, 42 25, 39 21"
+          fill="none" stroke="#8ea0b5" strokeWidth="2.8" strokeLinecap="round"
+        />
+        <g className="sc-cat-body">
+          {/* haunch and chest, one sitting silhouette */}
+          <path d="M14 33 C13 24, 17 19, 23 19 C29 19, 33 24, 32 33 Z" fill="#b6c2d2" />
+          {/* head */}
+          <circle cx="23" cy="15" r="8" fill="#b6c2d2" />
+          {/* ears */}
+          <path d="M16.5 10 L16 4.5 L21 8 Z" fill="#b6c2d2" />
+          <path d="M29.5 10 L30 4.5 L25 8 Z" fill="#b6c2d2" />
+          {/* eyes: two short strokes that squash shut on the blink */}
+          <g className="sc-cat-eyes">
+            <ellipse cx="20" cy="15" rx="1.3" ry="1.6" fill="#475569" />
+            <ellipse cx="26" cy="15" rx="1.3" ry="1.6" fill="#475569" />
+          </g>
+          {/* nose */}
+          <path d="M23 18 l-1.2 -1.4 h2.4 Z" fill="#a78bfa" />
+        </g>
+        {/* paws stay put while the body breathes above them */}
+        <ellipse cx="18" cy="33" rx="4" ry="2.2" fill="#d5dde7" />
+        <ellipse cx="28" cy="33" rx="4" ry="2.2" fill="#d5dde7" />
+      </g>
+    </svg>
   );
 }
 

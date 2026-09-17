@@ -166,4 +166,51 @@ export function stallState(now: number, p: RunProgress | undefined, startedAt: n
   };
 }
 
+// Copy that rotates while a single requirement is being read.
+//
+// One requirement takes 15 to 25 seconds, and every engine-driven indicator
+// holds completely still for that whole time. Two real screenshots 29 seconds
+// apart showed the bar move 0% to 25% and the line change from "requirement 1
+// of 8" to "requirement 3 of 8", with nothing moving in between, which reads as
+// a freeze. These lines change on their own clock so the card is never static.
+//
+// None of them claims progress. They say what the wait IS, which is the only
+// honest thing available between two engine events.
+export const WAITING_MESSAGES = [
+  "Each requirement takes a little while to read through.",
+  "Still reading your documents. This is the slow part of the check.",
+  "Working through one requirement at a time.",
+  "This is normal. A full check usually takes a few minutes.",
+];
+
+// Eight seconds: long enough not to twitch, short enough that a person who
+// looks away and back sees a different line.
+export const MESSAGE_ROTATE_MS = 8_000;
+
+export function waitingMessage(elapsedMs: number): string {
+  const i = Math.floor(Math.max(0, elapsedMs) / MESSAGE_ROTATE_MS) % WAITING_MESSAGES.length;
+  return WAITING_MESSAGES[i];
+}
+
+// A rough finish estimate, derived ONLY from the pace already observed: the
+// time this stage has actually taken divided by the requirements it has
+// actually finished. No timer, no constant, no guess before there is something
+// to measure.
+//
+// Returns null until at least one requirement is done, because before that
+// there is no denominator and any number would be invented.
+export function roughRemaining(done: number, total: number, msSinceStageStart: number): string | null {
+  if (done < 1 || total <= done || msSinceStageStart <= 0) return null;
+  const perItem = msSinceStageStart / done;
+  const remainingMs = (total - done) * perItem;
+  const secs = Math.round(remainingMs / 1000);
+  if (secs <= 20) return "nearly done";
+  // Rounded coarsely on purpose. A figure like "about 1m 47s left" reads as a
+  // countdown the run cannot honour; "about 2 minutes" reads as the estimate it
+  // actually is.
+  if (secs < 90) return `about ${Math.round(secs / 30) * 30} seconds left`;
+  const mins = Math.max(2, Math.round(secs / 60));
+  return `about ${mins} minutes left`;
+}
+
 export const SLOW_TITLE = "This step is taking longer than usual";
