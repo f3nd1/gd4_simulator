@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import type { AISettings } from "../types";
@@ -77,6 +78,7 @@ export const useAISettingsStore = create<AISettingsState>()(
     }),
     {
       name: "ucc-gd4-ai-settings:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-ai-settings:v1"),
       storage: workspaceStorage,
       // The API key IS included in the persisted (Supabase-synced) blob so it
       // follows the user across devices. (Everything is persisted as-is.)

@@ -4,6 +4,7 @@
 // driveClient chain) so it IS unit-testable under Vitest.
 
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { safeLocalStorage } from "./safeLocalStorage";
 
@@ -39,6 +40,7 @@ export const useGuidanceStore = create<GuidanceState>()(
       dismissedTips: {},
       dismissTip: (key) => set((s) => ({ dismissedTips: { ...s.dismissedTips, [key]: true } })),
     }),
-    { name: "ucc-gd4-guidance:v1", storage: createJSONStorage(() => safeLocalStorage) }
+    { name: "ucc-gd4-guidance:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-guidance:v1"), storage: createJSONStorage(() => safeLocalStorage) }
   )
 );

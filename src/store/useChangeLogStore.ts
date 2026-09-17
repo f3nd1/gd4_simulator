@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed, writesBlocked } from "./hydrationGate";
 import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
 import { getSupabaseClient } from "../lib/supabaseClient";
 import { summariseCommitMessage } from "../lib/changeLogSummary";
@@ -49,6 +50,11 @@ const appendOnlyStorage: StateStorage = {
   },
 
   setItem: async (name, value) => {
+    // See hydrationGate.ts. The union below already stops this store SHRINKING
+    // a remote log, so this is belt and braces rather than the load-bearing
+    // guard, but the rule is the same for every store: a failed hydration
+    // writes nothing.
+    if (writesBlocked(name)) return;
     // Parse the outgoing snapshot's changeLog.
     let outgoing: ChangeLogEntry[] = [];
     try { outgoing = (JSON.parse(value)?.state?.changeLog ?? []) as ChangeLogEntry[]; } catch { /* keep [] */ }
@@ -121,6 +127,7 @@ export const useChangeLogStore = create<ChangeLogStoreState>()(
     }),
     {
       name: STORAGE_KEY,
+      onRehydrateStorage: blockWritesIfHydrationFailed(STORAGE_KEY),
       version: 1,
       storage: createJSONStorage(() => appendOnlyStorage),
       // UNION on hydrate: a slow/empty remote load can never shrink an already

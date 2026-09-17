@@ -74,6 +74,24 @@ describe("every persisted store's storage adapter", () => {
     }
   });
 
+  // The write barrier for a store that failed to hydrate (hydrationGate.ts).
+  // Without it, a store that could not load holds DEFAULTS and keeps writing,
+  // and the next write publishes those defaults over the real row. That is the
+  // shape of BOTH workspace losses so far, so it is enforced here rather than
+  // remembered: a new persisted store cannot ship without it.
+  it("blocks writes after a failed hydration, in every persisted store", () => {
+    for (const [name, e] of Object.entries(EXPECTED)) {
+      const src = sourceOf(name);
+      expect(src, `${name} does not wire the hydration write barrier`).toMatch(
+        /onRehydrateStorage:\s*blockWritesIfHydrationFailed\(/
+      );
+      // Keyed to its OWN persist key, or it would gate a different store.
+      expect(src, `${name} gates the wrong key`).toMatch(
+        new RegExp(`blockWritesIfHydrationFailed(<[^>]*>)?\\(\\s*(STORAGE_KEY|"${e.key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}")`)
+      );
+    }
+  });
+
   // A store that does not sync is data that dies with the browser profile, so
   // the list of them is deliberately short and deliberately pinned.
   it("keeps browser-local storage to the two stores that genuinely cannot sync", () => {

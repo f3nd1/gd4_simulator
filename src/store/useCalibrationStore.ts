@@ -3,6 +3,7 @@
 // is a measurement tool's working state, not audit data.
 
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import {persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import type { ConsistencyTestResult, ABTestResult } from "../lib/calibrationTesting";
@@ -152,6 +153,7 @@ export const useCalibrationStore = create<CalibrationState>()(
     }),
     {
       name: "ucc-gd4-calibration:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-calibration:v1"),
       storage: workspaceStorage,
       // v1: consistencyTests / abTests are keyed by sub-criterion id, which the
       // GD4 re-align changed (2.1 → 2.1.1/2.1.2, 7.2 removed, …). Drop entries

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import { DEFAULT_APSR_SCALE, type ApsrScale } from "../lib/checklistBanding";
@@ -109,6 +110,7 @@ export const useScoringConfigStore = create<ScoringConfigState>()(
     }),
     {
       name: "ucc-gd4-scoring-config:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-scoring-config:v1"),
       storage: workspaceStorage,
       // v1: repair ladders persisted before the setters enforced order. A
       // workspace that only ever used a preset is untouched (all three presets

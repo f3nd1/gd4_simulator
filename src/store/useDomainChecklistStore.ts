@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import {
@@ -96,7 +97,8 @@ export const useDomainChecklistStore = create<DomainChecklistState>()(
 
       resetAll: () => set({ overrides: EMPTY_DOMAIN_OVERRIDES }),
     }),
-    { name: "ucc-gd4-domain-checklist:v1", storage: workspaceStorage }
+    { name: "ucc-gd4-domain-checklist:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-domain-checklist:v1"), storage: workspaceStorage }
   )
 );
 

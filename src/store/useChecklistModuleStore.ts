@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import type {
@@ -922,6 +923,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
     }),
     {
       name: "ucc-gd4-checklist:v2",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-checklist:v2"),
       storage: workspaceStorage,
       // v1: the GD4 sub-criterion re-align removed/renamed items (7.2.x →
       // 7.1.2–7.1.5, then collapsed into 7.1.1). This store is keyed by
@@ -948,11 +950,14 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           });
           s = {
             ...s,
-            entries: Object.fromEntries(Object.entries(s.entries).map(([id, e]) => [id, {
+            // A null value in the record is not a shape this app writes, but a
+            // migration that throws on one costs the whole store (hydrationGate.ts),
+            // so it is skipped rather than dereferenced.
+            entries: Object.fromEntries(Object.entries(s.entries).map(([id, e]) => [id, e ? {
               ...e,
               specific: (e.specific ?? []).map(migLine),
               pendingGenerated: (e.pendingGenerated ?? []).map(migLine),
-            }])),
+            } : e])),
           };
         }
         return s;

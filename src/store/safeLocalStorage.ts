@@ -14,6 +14,7 @@
 // the app, not by reading it.
 import type { StateStorage } from "zustand/middleware";
 import { useSaveStatusStore } from "./useSaveStatusStore";
+import { writesBlocked, anyWritesBlocked } from "./hydrationGate";
 
 export const LOCAL_SAVE_FAILED_MESSAGE =
   "Local save failed — storage full. Your work is safe in memory but export or push soon.";
@@ -21,9 +22,14 @@ export const LOCAL_SAVE_FAILED_MESSAGE =
 // The single place the app writes to localStorage without risking a throw.
 // Returns false when the write was refused, so callers that care can tell.
 export function writeLocal(name: string, value: string): boolean {
+  // A store that failed to hydrate holds DEFAULTS, and writing those over the
+  // stored copy is how a workspace is lost. See hydrationGate.ts.
+  if (writesBlocked(name)) return false;
   try {
     localStorage.setItem(name, value);
-    useSaveStatusStore.getState().clearLocalSaveError();
+    // Only a genuine recovery clears the banner. While any store is blocked,
+    // another store saving fine says nothing about the one that is not.
+    if (!anyWritesBlocked()) useSaveStatusStore.getState().clearLocalSaveError();
     return true;
   } catch (err) {
     console.warn(

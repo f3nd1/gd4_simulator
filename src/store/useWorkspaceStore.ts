@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage, flushPendingSaves } from "./supabaseStorage";
 import type {
@@ -7666,6 +7667,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     //    per-call prompts); only what is WRITTEN to storage is truncated.
     {
       name: "ucc-gd4-workspace:v3",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-workspace:v3"),
       storage: workspaceStorage,
       // Transient run-state never survives a page load: the JS run that owned
       // it is gone once the tab reloads. These fields (the live drafting /
@@ -7909,36 +7911,48 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ...s,
             evidenceAssessments: demoteUnjudgedMap(s.evidenceAssessments) ?? s.evidenceAssessments,
             evidenceAssessmentHistory: demoteUnjudgedHistory(s.evidenceAssessmentHistory) ?? s.evidenceAssessmentHistory,
-            versions: (s.versions ?? []).map((v) => ({
-              ...v,
-              snapshot: {
-                ...v.snapshot,
-                evidenceAssessments: demoteUnjudgedMap(v.snapshot.evidenceAssessments),
-                evidenceAssessmentHistory: demoteUnjudgedHistory(v.snapshot.evidenceAssessmentHistory),
-              },
-            })),
+            // `snapshot` is required by the TYPE and not by the stored data.
+            // Dereferencing it unguarded made this migration throw, which
+            // zustand swallows: the store then kept its DEFAULT state and the
+            // next write published those defaults over the real row. A
+            // migration must be total over whatever is actually stored.
+            versions: (Array.isArray(s.versions) ? s.versions : []).map((v) => (v?.snapshot
+              ? {
+                  ...v,
+                  snapshot: {
+                    ...v.snapshot,
+                    evidenceAssessments: demoteUnjudgedMap(v.snapshot.evidenceAssessments),
+                    evidenceAssessmentHistory: demoteUnjudgedHistory(v.snapshot.evidenceAssessmentHistory),
+                  },
+                }
+              : v)),
           } as WorkspaceState;
         }
         return s;
       },
       partialize: (s) => {
-        const capLog = (entries: AIReviewLogEntry[]) =>
-          entries.map((e) => ({ ...e, promptSent: capPersistedText(e.promptSent), generatedContent: capPersistedText(e.generatedContent) }));
+        const capLog = (log: AIReviewLogEntry[]) =>
+          (Array.isArray(log) ? log : []).map((e) => ({ ...e, promptSent: capPersistedText(e?.promptSent), generatedContent: capPersistedText(e?.generatedContent) }));
+        // Every cap below takes whatever the state actually holds, not what the
+        // type promises. partialize runs inside setState on every write, and a
+        // throw here saves nothing, silently, for good. See hydrationGate.ts.
+        const entries = <V,>(r: Record<string, V> | null | undefined): [string, V][] =>
+          r && typeof r === "object" ? Object.entries(r) : [];
         const capPpd = (r: Record<string, PPDReviewResult>) =>
-          Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v.promptSent) }]));
+          Object.fromEntries(entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v?.promptSent) }]));
         const capEv = (r: Record<string, EvidenceAssessmentResult>) =>
-          Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v.promptSent) }]));
+          Object.fromEntries(entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v?.promptSent) }]));
         const capOr = (r: Record<string, OutcomeReviewPassResult>) =>
-          Object.fromEntries(Object.entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v.promptSent) }]));
+          Object.fromEntries(entries(r).map(([k, v]) => [k, { ...v, promptSent: capPersistedText(v?.promptSent) }]));
         // Task 2: same promptSent cap, applied to every ARCHIVED run in
         // history — without this, each past run's full prompt would persist
         // uncapped, and OPTION_A_RUN_HISTORY_CAP runs of that is exactly the
         // large-blob-in-persisted-state growth the single-result cap above
         // exists to prevent.
         const capPpdHistory = (r: Record<string, PPDReviewResult[]>) =>
-          Object.fromEntries(Object.entries(r).map(([k, arr]) => [k, arr.map((v) => ({ ...v, promptSent: capPersistedText(v.promptSent) }))]));
+          Object.fromEntries(entries(r).map(([k, arr]) => [k, (arr ?? []).map((v) => ({ ...v, promptSent: capPersistedText(v?.promptSent) }))]));
         const capEvHistory = (r: Record<string, EvidenceAssessmentResult[]>) =>
-          Object.fromEntries(Object.entries(r).map(([k, arr]) => [k, arr.map((v) => ({ ...v, promptSent: capPersistedText(v.promptSent) }))]));
+          Object.fromEntries(entries(r).map(([k, arr]) => [k, (arr ?? []).map((v) => ({ ...v, promptSent: capPersistedText(v?.promptSent) }))]));
         return {
           ...s,
           fileTextCache: {},
@@ -7954,17 +7968,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           outcomeReviewResults: capOr(s.outcomeReviewResults),
           // Historical snapshots: strip the embedded log (new snapshots no
           // longer capture it) and cap embedded Option A prompts.
-          versions: s.versions.map((v) => ({
-            ...v,
-            snapshot: {
-              ...v.snapshot,
-              aiReviewLog: undefined,
-              ppdReviewResults: v.snapshot.ppdReviewResults ? capPpd(v.snapshot.ppdReviewResults) : undefined,
-              ppdReviewHistory: v.snapshot.ppdReviewHistory ? capPpdHistory(v.snapshot.ppdReviewHistory) : undefined,
-              evidenceAssessments: v.snapshot.evidenceAssessments ? capEv(v.snapshot.evidenceAssessments) : undefined,
-              evidenceAssessmentHistory: v.snapshot.evidenceAssessmentHistory ? capEvHistory(v.snapshot.evidenceAssessmentHistory) : undefined,
-            },
-          })),
+          // partialize runs on EVERY write, inside setState. A throw here does
+          // not fail loudly: the in-memory state has already been updated, so
+          // the UI shows the change and NOTHING is ever saved, for the rest of
+          // that workspace's life. Reproduced live on 2026-09-17 with one
+          // `versions` entry that had no `snapshot` — the auditor appeared on
+          // screen and never reached Supabase. Like a migration, this must be
+          // total over whatever the state actually holds.
+          versions: (Array.isArray(s.versions) ? s.versions : []).map((v) => (v?.snapshot
+            ? {
+                ...v,
+                snapshot: {
+                  ...v.snapshot,
+                  aiReviewLog: undefined,
+                  ppdReviewResults: v.snapshot.ppdReviewResults ? capPpd(v.snapshot.ppdReviewResults) : undefined,
+                  ppdReviewHistory: v.snapshot.ppdReviewHistory ? capPpdHistory(v.snapshot.ppdReviewHistory) : undefined,
+                  evidenceAssessments: v.snapshot.evidenceAssessments ? capEv(v.snapshot.evidenceAssessments) : undefined,
+                  evidenceAssessmentHistory: v.snapshot.evidenceAssessmentHistory ? capEvHistory(v.snapshot.evidenceAssessmentHistory) : undefined,
+                },
+              }
+            : v)),
         };
       },
     }

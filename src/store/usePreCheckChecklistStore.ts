@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import { DEFAULT_CHECKLISTS, type ChecklistData, type ChecklistItemDef } from "../lib/preAnalysisChecklist";
@@ -118,6 +119,7 @@ export const usePreCheckChecklistStore = create<PreCheckChecklistState>()(
 
       resetToDefaults: () => set({ checklists: DEFAULT_CHECKLISTS }),
     }),
-    { name: "ucc-gd4-precheck-checklist:v1", storage: workspaceStorage }
+    { name: "ucc-gd4-precheck-checklist:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-precheck-checklist:v1"), storage: workspaceStorage }
   )
 );

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import type { ChecklistAuditBucket, ChecklistCheckVerdict } from "../lib/ai/agentRuntime";
@@ -130,7 +131,8 @@ export const useChecklistVerdictStore = create<ChecklistVerdictState>()(
         })),
       clear: () => set({ entries: {} }),
     }),
-    { name: "ucc-gd4-checklist-verdicts:v1", storage: workspaceStorage, version: 0 }
+    { name: "ucc-gd4-checklist-verdicts:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-checklist-verdicts:v1"), storage: workspaceStorage, version: 0 }
   )
 );
 

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import type { ReviewablePrompt, PromptReviewRecord } from "../types";
@@ -71,6 +72,7 @@ export const usePromptReviewStore = create<PromptReviewState>()(
           };
         }),
     }),
-    { name: "ucc-gd4-prompt-review:v1", storage: workspaceStorage }
+    { name: "ucc-gd4-prompt-review:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-prompt-review:v1"), storage: workspaceStorage }
   )
 );

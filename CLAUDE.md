@@ -90,6 +90,8 @@ test rather than this prose. Three adapters exist:
 
 Never give a store zustand's default storage: `localStorage.setItem` throws inside `setState` on a full disk, which propagates through render and blanks the app.
 
+**Every persisted store must also wire `onRehydrateStorage: blockWritesIfHydrationFailed(<its key>)`** (`src/store/hydrationGate.ts`), and `storeAdapters.test.ts` fails if one does not. zustand swallows a throw from `migrate` (or from parsing a corrupt blob) into its own `.catch`: `hasHydrated` stays false, the store keeps its DEFAULT state, and nothing stops it writing, so the next `setState` publishes those defaults over the real Supabase row. That is the shape of BOTH workspace losses so far (59d0009 wrote before hydration; the 2026-09-17 one never finished hydrating). The gate turns that into a refusal plus a banner instead of silent destruction. Its companion rule: **a `migrate` must be total over whatever is actually stored** — never dereference nested persisted data without a guard, because the type says nothing about a blob written years ago. `migrationsAreTotal.test.ts` runs every migration over hostile payloads at every `fromVersion`.
+
 | Store | Purpose | Persist key | `version` | Adapter |
 |---|---|---|---|---|
 | `useWorkspaceStore` | Main store: cycle, auditors, folders, audit runs (`auditRunHistory`), Option A results, findings (`customFindings`), closures, calibration memories, human-decision log, `fileTextCache`, snapshots | `ucc-gd4-workspace:v3` | **11** | workspaceStorage |

@@ -4,6 +4,7 @@
 // working state that does not need cross-device sync.
 
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import {persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import type {
@@ -487,6 +488,7 @@ export const useFindingDraftStore = create<FindingDraftState>()(
     }),
     {
       name: "ucc-gd4-finding-drafts:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-finding-drafts:v1"),
       storage: workspaceStorage,
     }
   )

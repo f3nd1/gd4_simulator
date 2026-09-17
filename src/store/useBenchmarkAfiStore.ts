@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import { BENCHMARK_AFIS } from "../data/benchmarkAFIs";
@@ -90,6 +91,7 @@ export const useBenchmarkAfiStore = create<BenchmarkAfiState>()(
     }),
     {
       name: "ucc-gd4-custom-benchmark:v1", // UNCHANGED persisted key
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-custom-benchmark:v1"),
       storage: workspaceStorage,
       version: 1,
       migrate: (persisted, fromVersion) => {

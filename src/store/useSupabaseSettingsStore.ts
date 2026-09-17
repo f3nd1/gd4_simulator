@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { safeLocalStorage } from "./safeLocalStorage";
 
@@ -24,6 +25,7 @@ export const useSupabaseSettingsStore = create<SupabaseSettingsState>()(
     }),
     {
       name: "ucc-gd4-supabase-settings:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-supabase-settings:v1"),
       // Browser-local by necessity (see above), but through the non-throwing
       // adapter: zustand's default calls localStorage.setItem bare, so on a
       // full disk saving these details threw an uncaught QuotaExceededError

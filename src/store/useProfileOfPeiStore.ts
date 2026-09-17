@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import type {
@@ -235,6 +236,7 @@ export const useProfileOfPeiStore = create<ProfileOfPeiState & ProfileOfPeiActio
     }),
     {
       name: "profile-of-pei-v2",
+      onRehydrateStorage: blockWritesIfHydrationFailed("profile-of-pei-v2"),
       // Audit content, not device preference: the profile feeds every AI
       // assessment (school context), so it must sync cross-device like the
       // rest of the workspace. Was localStorage-only, which silently showed a

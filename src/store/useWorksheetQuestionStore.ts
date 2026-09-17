@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import { fnv1a } from "../lib/domainChecklist";
@@ -93,6 +94,8 @@ export function migrateWorksheetQuestions(persisted: unknown, from: number): { e
     const old2 = persisted as { entries?: Record<string, StoredQuestion> };
     const entries: Record<string, StoredQuestion> = {};
     for (const [id, e] of Object.entries(old2?.entries ?? {})) {
+      // See hydrationGate.ts: a throw here would cost the whole store.
+      if (!e) continue;
       entries[id] = {
         ...e,
         questions: (e.questions ?? []).map((q) =>
@@ -106,6 +109,8 @@ export function migrateWorksheetQuestions(persisted: unknown, from: number): { e
   const old = persisted as { entries?: Record<string, { asks?: { describe?: string; showMe?: string }[]; sourceHash?: string; generatedAt?: string; edited?: boolean }> };
   const entries: Record<string, StoredQuestion> = {};
   for (const [id, e] of Object.entries(old?.entries ?? {})) {
+    // See hydrationGate.ts: a throw here would cost the whole store.
+    if (!e) continue;
     const hand = e.edited === true;
     const questions: WorksheetQuestion[] = [];
     for (const a of e.asks ?? []) {
@@ -200,6 +205,7 @@ export const useWorksheetQuestionStore = create<WorksheetQuestionState>()(
     }),
     {
       name: "ucc-gd4-worksheet-cache:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-worksheet-cache:v1"),
       version: 3,
       storage: workspaceStorage,
       migrate: (persisted, from) => migrateWorksheetQuestions(persisted, from),

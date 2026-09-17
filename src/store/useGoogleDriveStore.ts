@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import { getSupabaseClient } from "../lib/supabaseClient";
@@ -140,6 +141,7 @@ export const useGoogleDriveStore = create<GoogleDriveState>()(
     }),
     {
       name: "ucc-gd4-google-drive:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-google-drive:v1"),
       storage: workspaceStorage,
       partialize: (s) => ({ clientId: s.clientId }),
     }

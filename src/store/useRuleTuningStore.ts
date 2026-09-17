@@ -8,6 +8,7 @@
 //   runs — protected until the user deliberately promotes a new one.
 
 import { create } from "zustand";
+import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
 import {
@@ -114,6 +115,7 @@ export const useRuleTuningStore = create<RuleTuningState>()(
     }),
     {
       name: "ucc-gd4-rule-tuning:v1",
+      onRehydrateStorage: blockWritesIfHydrationFailed("ucc-gd4-rule-tuning:v1"),
       storage: workspaceStorage,
       // Guarantee the original baseline always exists after rehydrate (older
       // blobs, or a corrupted list, can never lose the restorable default).
