@@ -32,12 +32,45 @@ export type SelfCheckFileRow = {
   cited: boolean;
 };
 
+// One fix per REASON the file could not be read, because they are different
+// problems. "Run OCR on it" is nonsense advice for an .mp4 and useless advice
+// for a PDF that simply took too long, and an auditor who follows it wastes
+// their afternoon.
+//
+// The scan route is Google Drive's own OCR, which is the only text-extraction
+// tool a non-technical user already has and is licensed for: opening a PDF or
+// an image with Google Docs converts it and keeps the recognised text. It is
+// imperfect on poor scans, which the wording says rather than promising.
 const RESCAN =
-  "This looks like a scan or a photo rather than a text document. Run OCR on it, or re-save it as a text PDF or a Word file, then run the check again.";
+  "This is a picture of a document, so there is no text in it to read. In Google Drive, right-click the file, choose Open with, then Google Docs: Drive reads the text off the picture and makes a new document. Check it came out readable, save it into this folder, then run the check again.";
+const NO_TEXT_LAYER =
+  "Nothing could be read out of this file. If it is a scan or a photo, open it in Drive with Google Docs to convert it to text. If it should already be text, open it and check you can select the words, then re-save it as a Word file or a text PDF.";
 const REOPEN =
   "Check the file opens for you in Google Drive and that the folder is shared with the audit account, then run the check again.";
-const NO_TEXT =
-  "Open the file and check you can select text in it. A scan or a photo needs OCR, or re-save it as a text PDF or a Word file, then run the check again.";
+// A file the reader gave up on. Nothing is wrong with its text; it was too big
+// or too complex to finish inside the cap.
+const TOO_SLOW =
+  "This file took too long to read and was dropped so the rest of the check could finish. It is usually a very large or very complex PDF. Split it into smaller files, or export just the pages that matter, then run the check again.";
+// Audio and video carry no text and never will. OCR cannot help, and saying so
+// stops an auditor chasing a fix that does not exist.
+const NO_TEXT_EVER =
+  "This is a video or audio file, so it has no text for this check to read, and no conversion will change that. If it is evidence, add the written record that goes with it: minutes, a signed note, a log entry or a transcript.";
+
+// Media has no text layer to recover, whatever the read outcome was.
+function isTimeBasedMedia(rec: Pick<AuditFileRecord, "mimeType" | "name">): boolean {
+  return /^(video|audio)\//i.test(rec.mimeType || "") || /\.(mp4|mov|avi|mkv|wmv|mp3|wav|m4a|aac)$/i.test(rec.name || "");
+}
+
+// A picture rather than a document: a scanned PDF, or an image file.
+function isPicture(rec: Pick<AuditFileRecord, "mimeType" | "name" | "suspectedScannedPdf" | "extractedTextQuality">): boolean {
+  return !!rec.suspectedScannedPdf || rec.extractedTextQuality === "none"
+    || /^image\//i.test(rec.mimeType || "") || /\.(png|jpe?g|tiff?|heic|bmp|gif)$/i.test(rec.name || "");
+}
+
+// The reader gave up rather than finding nothing.
+function wasTooSlow(skipReason: string | undefined): boolean {
+  return /hung|auto-skipped|too long|timed? ?out/i.test(skipReason || "");
+}
 
 function charDetail(n: number | undefined): string {
   if (!n) return "";
@@ -63,10 +96,14 @@ export function toFileRow(rec: AuditFileRecord): SelfCheckFileRow {
     return { ...base, outcome: "unreadable", label: "Could not be opened", detail: rec.failReason || "The file could not be opened.", action: REOPEN };
   }
   if (rec.readStatus === "skipped") {
+    const media = isTimeBasedMedia(rec);
+    const slow = wasTooSlow(rec.skipReason);
     return {
-      ...base, outcome: "unreadable", label: "No text could be read from it",
+      ...base,
+      outcome: "unreadable",
+      label: media ? "No text to read" : slow ? "Took too long, dropped" : "No text could be read from it",
       detail: rec.skipReason || "No extractable text.",
-      action: rec.suspectedScannedPdf || rec.extractedTextQuality === "none" ? RESCAN : NO_TEXT,
+      action: media ? NO_TEXT_EVER : slow ? TOO_SLOW : isPicture(rec) ? RESCAN : NO_TEXT_LAYER,
     };
   }
   // Listed but never reached: the run ended first. Not a clean read and not a

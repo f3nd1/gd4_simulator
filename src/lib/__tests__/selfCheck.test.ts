@@ -313,9 +313,9 @@ describe("a procedure check answers a different question, in different words", (
     for (const v of Object.values(PPD_PLAIN_VERDICT)) {
       expect(v.label).not.toMatch(/complies|comply/i);
     }
-    expect(PPD_PLAIN_VERDICT.Adequate.label).toBe("Written down");
-    expect(PPD_PLAIN_VERDICT.Partial.label).toBe("Partly written down");
-    expect(PPD_PLAIN_VERDICT["Not documented"].label).toBe("Not written down");
+    expect(PPD_PLAIN_VERDICT.Adequate.label).toBe("Documented");
+    expect(PPD_PLAIN_VERDICT.Partial.label).toBe("Partly documented");
+    expect(PPD_PLAIN_VERDICT["Not documented"].label).toBe("Not documented");
   });
 
   it("keeps Could not check neutral here too", () => {
@@ -328,7 +328,7 @@ describe("a procedure check answers a different question, in different words", (
     const [r] = toProcedureRows([ppdRow({ requirementText: "Do the thing.", shortComment: "Clause 4." })]);
     expect(r.requirement).toBe("Do the thing.");
     expect(r.ref).toBe("5.4.1.DS1");
-    expect(r.label).toBe("Written down");
+    expect(r.label).toBe("Documented");
   });
 
   it("takes the fix from the suggested rewrite only, never writing one", () => {
@@ -361,7 +361,7 @@ describe("a procedure-only download says so", () => {
       band: { kind: "none" }, rows, ranAt: "x", view: "procedure-only",
     });
     expect(html).toContain("written procedure only");
-    expect(html).toContain("not written down");
+    expect(html).toContain("not documented");
     expect(html).not.toContain("does not comply");
   });
 });
@@ -492,7 +492,7 @@ describe("the records-only view reports what the records pass found, and nothing
 
   it("says nothing was found when the row cited none", () => {
     const [r] = toRecordsRows([row({ verdict: "Not met", evidenceChunkIds: [] })]);
-    expect(r.label).toBe("Nothing found");
+    expect(r.label).toBe("No records found");
     expect(r.why).toMatch(/none of them mentioned this requirement/);
   });
 
@@ -506,7 +506,7 @@ describe("the records-only view reports what the records pass found, and nothing
   // records half read everything and found nothing.
   it("still reports the records half of an unjudged pair", () => {
     const r = row({ verdict: "Partial", ppdVerdict: "Not assessed", evidenceChunkIds: [] });
-    expect(toRecordsRows([r])[0].label).toBe("Nothing found");
+    expect(toRecordsRows([r])[0].label).toBe("No records found");
     expect(toSelfCheckRows([r])[0].label).toBe("Could not check");
   });
 
@@ -514,7 +514,7 @@ describe("the records-only view reports what the records pass found, and nothing
   // into a view that claims to describe the records alone.
   it("does not inherit the combined verdict's label", () => {
     const [r] = toRecordsRows([row({ verdict: "Partial", ppdVerdict: "Adequate", evidenceChunkIds: [] })]);
-    expect(r.label).toBe("Nothing found");
+    expect(r.label).toBe("No records found");
     expect(r.label).not.toBe("Partly complies");
   });
 });
@@ -553,7 +553,7 @@ describe("the two passes are separable, and each is counted in its own words", (
   it("gives the records view no 'partly' bucket", () => {
     expect(VIEW_TALLY.records.partly).toBeNull();
     expect(VIEW_TALLY.overview.partly).toBe("partly complies");
-    expect(VIEW_TALLY.procedure.partly).toBe("partly written down");
+    expect(VIEW_TALLY.procedure.partly).toBe("partly documented");
   });
 
   // The run that never opened a record and the procedure half of a full run
@@ -569,7 +569,7 @@ describe("the two passes are separable, and each is counted in its own words", (
   it("exports each view in that view's own words, with no band on half an answer", () => {
     const rows = toRecordsRows([row({ verdict: "Not met", evidenceChunkIds: [] })]);
     const csv = buildSelfCheckCsv("6.1 Internal Assessment", rows, { kind: "none" }, "records");
-    expect(csv).toContain("Nothing found");
+    expect(csv).toContain("No records found");
     expect(csv).toContain(VIEW_NOTE.records);
     expect(csv).not.toContain("No band yet for this area.");
     const html = buildSelfCheckHtml({
@@ -577,8 +577,9 @@ describe("the two passes are separable, and each is counted in its own words", (
       band: { kind: "none" }, rows, ranAt: "x", view: "records",
     });
     expect(html).toContain(VIEW_LABEL.records);
-    expect(html).toContain("nothing found");
-    expect(html).not.toContain("partly");
+    expect(html).toContain("no records found");
+    // The records view has no middle state, so the tally must not offer one.
+    expect(html).not.toContain("partly complies");
   });
 
   // The overall view is the historic export, byte for byte: the tabs are added

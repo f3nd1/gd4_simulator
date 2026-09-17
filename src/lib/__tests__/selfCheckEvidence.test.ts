@@ -31,9 +31,9 @@ describe("what was actually read, told apart from what is genuinely absent", () 
   it("tells a scan with no text apart from a plain empty file, and names the different fix", () => {
     const scan = toFileRow(file({ readStatus: "skipped", skipReason: "No extractable text (empty or unreadable).", suspectedScannedPdf: true }));
     expect(scan.outcome).toBe("unreadable");
-    expect(scan.action).toMatch(/OCR/);
+    expect(scan.action).toMatch(/Google Docs/);
     const plain = toFileRow(file({ readStatus: "skipped", skipReason: "No extractable text (empty or unreadable)." }));
-    expect(plain.action).toMatch(/select text/i);
+    expect(plain.action).toMatch(/select the words/i);
     expect(plain.action).not.toBe(scan.action);
   });
 
@@ -148,7 +148,7 @@ describe("the working is filed with the result, in both exports", () => {
     verdict: "Partial", gd4ItemId: "6.1.1", gdRef: "6.1.1.DS1",
     evidenceQuote: "The internal assessment was completed in March.", evidenceChunkIds: ["C001"],
     promiseChecks: [{ promiseText: "Assessors are independent of the area assessed", verdict: "not evidenced", evidence: "No record found.", chunkIds: [] }],
-  })], { chunkFileNames: { C001: "Assessment report.pdf" } });
+  })], { evidenceChunkFileNames: { C001: "Assessment report.pdf" } });
   const files = toFileRows(undefined, [file({ readStatus: "failed", name: "Scan.pdf" })]);
 
   it("carries the quote, the missing element and the official list into the CSV, with the file list below", () => {
@@ -271,5 +271,39 @@ describe("the unread caveat goes only where the claim was made", () => {
   it("appends nothing to a reason that never claimed everything was read", () => {
     expect(qualifyForUnreadable("The checking service did not answer for this one.", 3)).toBe("The checking service did not answer for this one.");
     expect(qualifyForUnreadable("", 3)).toBe("");
+  });
+});
+
+describe("a quote is attributed to the file it actually came from", () => {
+  // The two Option A passes number their chunks INDEPENDENTLY, each from C001.
+  // Merging their chunk-to-file maps is therefore a collision, not a widening:
+  // the later map wins every shared id. On a real 4.1 run that attributed every
+  // quote on the procedure tab to an applicant's test spreadsheet, because the
+  // evidence run's C001 had overwritten the procedure run's C001.
+  const POLICY = { C001: "Admissions Policy.docx", C002: "Admissions Policy.docx" };
+  const EVIDENCE = { C001: "GAO, YIJIA English Proficiency Test.xlsx", C002: "Enrolment log.xlsx" };
+  const ctx = { policyChunkFileNames: POLICY, evidenceChunkFileNames: EVIDENCE };
+
+  it("cites the PROCEDURE file on the procedure tab", () => {
+    const [r] = toProcedureRows([{
+      ref: "4.1.1.DS1", gd4ItemId: "4.1.1", requirementText: "x", verdict: "Adequate",
+      shortComment: "", fullComment: "", chunkIds: ["C001"], supportQuote: "Counsellors are trained annually.",
+    }], ctx);
+    expect(r.working!.citations).toEqual([{ file: "Admissions Policy.docx", quote: "Counsellors are trained annually." }]);
+    expect(citedText(r.working)).not.toContain("GAO");
+  });
+
+  it("cites the RECORDS file on the records tab, for the same chunk id", () => {
+    const [r] = toRecordsRows([row({
+      verdict: "Met", evidenceChunkIds: ["C001"], evidenceQuote: "Three students were placed on a support plan.", evidenceFiles: [],
+    })], ctx);
+    expect(r.working!.citations[0].file).toBe("GAO, YIJIA English Proficiency Test.xlsx");
+  });
+
+  it("keeps them apart even when both maps carry the same ids", () => {
+    const [p] = toProcedureRows([{ ref: "4.1.1.DS2", gd4ItemId: "4.1.1", requirementText: "x", verdict: "Adequate", shortComment: "", fullComment: "", chunkIds: ["C002"], supportQuote: "q" }], ctx);
+    const [e] = toRecordsRows([row({ verdict: "Met", evidenceChunkIds: ["C002"], evidenceQuote: "q2", evidenceFiles: [] })], ctx);
+    expect(p.working!.citedFiles).toEqual(["Admissions Policy.docx"]);
+    expect(e.working!.citedFiles).toEqual(["Enrolment log.xlsx"]);
   });
 });

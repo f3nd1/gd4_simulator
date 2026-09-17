@@ -23,10 +23,11 @@ import {
   selfCheckFilename, describeBlock, plainRunError, plainDetail, planFor, toProcedureRows, toRecordsRows,
   SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE,
   VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
-  citedText, missingText, expectedEvidenceGroups,
+  citedText, missingText, expectedEvidenceGroups, VERDICT_LEGEND,
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
+import { buildBandWorking, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -87,6 +88,7 @@ export function SelfCheck() {
   // a different question and must never be dressed as a full one.
   const [mode, setMode] = useState<"full" | "procedure-only">("full");
   const [tab, setTab] = useState<SelfCheckView>("overview");
+  const [bandWorking, setBandWorking] = useState<BandWorking | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -220,7 +222,11 @@ export function SelfCheck() {
   const runCtx = useMemo(
     () => ({
       ppdRows: ppdExisting?.rows,
-      chunkFileNames: { ...(ppdExisting?.chunkFileNames ?? {}), ...(existing?.chunkFileNames ?? {}) },
+      // NEVER merged. Each pass numbers its chunks from C001 independently, so
+      // one merged map makes the later pass's files win every shared id, which
+      // attributed every procedure quote to a file from the records folder.
+      policyChunkFileNames: ppdExisting?.chunkFileNames,
+      evidenceChunkFileNames: existing?.chunkFileNames,
       unreadableFiles: countFileRows(toFileRows(ppdExisting?.fileLedger, existing?.fileLedger)).unreadable,
     }),
     [ppdExisting, existing],
@@ -261,7 +267,7 @@ export function SelfCheck() {
     setNow(Date.now());
     setStageStartedAt(Date.now());
     setDoneSummaries({});
-    setError(null); setNote(null); setBand({ kind: "none" });
+    setError(null); setNote(null); setBand({ kind: "none" }); setBandWorking(null);
     const procedureOnly = plan.kind === "procedure-only";
     setMode(procedureOnly ? "procedure-only" : "full");
     setTab("overview");
@@ -337,6 +343,14 @@ export function SelfCheck() {
         if (s) {
           const m = apsrMatrixResult(s.dimensionBands, apsrScale);
           setBand({ kind: "indicative", band: m.band, name: bandName(m.band), totalPct: m.total });
+          // The same four dimension scores the band is computed from, kept so
+          // the page can show the arithmetic instead of asserting the result.
+          setBandWorking(buildBandWorking(s.dimensionBands, {
+            approach: s.dimensions.approach.reason,
+            processes: s.dimensions.processes.reason,
+            systemsOutcomes: s.dimensions.systemsOutcomes.reason,
+            review: s.dimensions.review.reason,
+          }, apsrScale));
         }
       }
       setRanAt(new Date().toLocaleString("en-SG"));
@@ -398,7 +412,7 @@ export function SelfCheck() {
     if (!area) return;
     // The tab you are looking at is the tab you get, named on the file so two
     // downloads of the same run can never be confused for each other.
-    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, fileRows), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
+    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, fileRows, view === "overview" ? bandWorking ?? undefined : undefined), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
   }
   function onPdf() {
     if (!area) return;
@@ -406,6 +420,8 @@ export function SelfCheck() {
       `<style>${PRINTABLE_DOC_CSS}</style>${buildSelfCheckHtml({
         areaLabel: `${area.scope} ${area.title}`, areaDescription: area.description,
         counts, band, rows, ranAt, view, files: fileRows,
+        // The band belongs to the whole area, so it prints on the overall view only.
+        bandWorking: view === "overview" ? bandWorking ?? undefined : undefined,
       })}`,
       view === "overview" ? `Self-check ${area.title}` : `Self-check ${area.title} — ${VIEW_LABEL[view]}`,
     );
@@ -635,7 +651,7 @@ export function SelfCheck() {
                   return (
                     <li key={s.key} style={{ padding: "6px 0", color: state === "todo" ? "#94a3b8" : INK, fontSize: 14 }}>
                       <div style={{ display: "flex", gap: 9, alignItems: "center" }}>
-                        <span style={{ width: 18 }}>{state === "done" ? "✓" : state === "now" ? "◐" : "○"}</span>
+                        <span style={{ width: 18 }}>{state === "done" ? "✓" : state === "now" ? "!" : "○"}</span>
                         <span style={{ fontWeight: state === "now" ? 700 : 400 }}>{s.label}</span>
                         {count && <span style={{ ...muted, marginLeft: 4 }}>{count.pct}%</span>}
                       </div>
@@ -794,7 +810,7 @@ export function SelfCheck() {
                   ))}
                 </div>
                 <p style={{ ...muted, margin: "7px 0 0" }}>
-                  Written down but no records means the procedure is fine and the proof is missing. Records but nothing written down means it happens but the procedure does not say so. The two tabs above show which requirement is which.
+                  Documented but no records means the procedure is fine and the proof is missing. Records but nothing documented means it happens but the procedure does not say so. The two tabs above show which requirement is which.
                 </p>
               </div>
             )}
@@ -885,6 +901,21 @@ export function SelfCheck() {
               </details>
             )}
 
+            {/* Read BEFORE the table. An auditor could not tell whether
+                "Written down" meant compliant, and the honest answer is that
+                each tab settles half the question. */}
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fff" }}>
+              <b style={{ fontSize: 13 }}>What each result means on this tab</b>
+              <div style={{ display: "grid", gap: 5, marginTop: 7 }}>
+                {VERDICT_LEGEND[view].map((l) => (
+                  <div key={l.label} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
+                    <span style={{ ...TONE_BG[LEGEND_TONE[l.icon]], padding: "1px 8px", borderRadius: 999, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>{l.icon} {l.label}</span>
+                    <span style={{ color: "#475569" }}>{l.meaning}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
@@ -900,7 +931,12 @@ export function SelfCheck() {
                     <tr key={r.ref} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top" }}>
                       <td style={{ padding: "10px" }}>{r.requirement}<div style={{ ...muted, fontSize: 11 }}>{r.ref}</div></td>
                       <td style={{ padding: "10px" }}>
-                        <span style={{ ...TONE_BG[r.tone], padding: "3px 9px", borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", display: "inline-block" }}>{r.label}</span>
+                        <span
+                          style={{ ...TONE_BG[r.tone], padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 6 }}
+                          title={r.label}
+                        >
+                          <span aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>{r.icon}</span>{r.label}
+                        </span>
                       </td>
                       <td style={{ padding: "10px", color: "#334155" }}>
                         {r.why || <span style={muted}>No reason recorded.</span>}
@@ -914,6 +950,88 @@ export function SelfCheck() {
                 </tbody>
               </table>
             </div>
+
+            {/* The band, with its working. "Band 2 of 5" on its own is an
+                assertion an auditor cannot defend. What can honestly be shown
+                is the second half of the chain: the four dimension judgements
+                became percentages, and those were summed. The first half, rows
+                to dimension judgements, is NOT arithmetic, and the note says so
+                rather than drawing an arrow that does not exist. */}
+            {view === "overview" && bandWorking && band.kind === "indicative" && (
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "13px 15px", margin: "14px 0 0", background: "#fff" }}>
+                <b style={{ fontSize: 14 }}>How this band was reached</b>
+                <p style={{ fontSize: 15, fontWeight: 700, color: INK, margin: "8px 0 2px" }}>
+                  {bandWorking.sum} → Band {bandWorking.band} of 5
+                </p>
+                <div style={{ overflowX: "auto", marginTop: 10 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", background: "#f8fafc" }}>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "18%" }}>Dimension</th>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "9%" }}>Band</th>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "9%" }}>Contributes</th>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "32%" }}>Official descriptor at that band</th>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0" }}>Where it came from</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bandWorking.rows.map((d) => (
+                        <tr key={d.key} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top", background: d.assessedHere ? undefined : "#f8fafc" }}>
+                          <td style={{ padding: "8px 9px", fontWeight: 600 }}>
+                            {d.label}
+                            <div style={{ ...muted, fontSize: 11 }}>{d.definition}</div>
+                          </td>
+                          <td style={{ padding: "8px 9px" }}>{d.band === undefined ? <span style={muted}>not scored</span> : `Band ${d.band}`}</td>
+                          <td style={{ padding: "8px 9px", fontWeight: 700 }}>{d.pct}%</td>
+                          <td style={{ padding: "8px 9px", color: "#475569" }}>{d.descriptor || <span style={muted}>—</span>}</td>
+                          <td style={{ padding: "8px 9px", color: "#475569" }}>
+                            {d.assessedHere
+                              ? (d.reason || DIMENSION_SOURCE[d.key])
+                              : <b style={{ color: "#92400e" }}>{DIMENSION_SOURCE[d.key]}</b>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p style={{ ...muted, marginBottom: 0 }}>{ROWS_DO_NOT_SUM_NOTE}</p>
+                <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
+                  {ceilingNote(bandWorking)}
+                </p>
+
+                <details style={{ marginTop: 6 }}>
+                  <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700, color: INK }}>The official band scale, and where this result sits</summary>
+                  <div style={{ overflowX: "auto", marginTop: 8 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", background: "#f8fafc" }}>
+                          <th style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0", width: "16%" }}>Band</th>
+                          <th style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0" }}>Approach</th>
+                          <th style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0" }}>Processes</th>
+                          <th style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0" }}>Systems &amp; Outcomes</th>
+                          <th style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0" }}>Review</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {BAND_LADDER.map((b) => {
+                          const here = b.band === bandWorking.band;
+                          return (
+                            <tr key={b.band} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top", background: here ? "#eff6ff" : undefined, fontWeight: here ? 700 : 400 }}>
+                              <td style={{ padding: "7px 8px" }}>Band {b.band} {b.name}{here && <div style={{ fontSize: 11, color: "#1e40af" }}>← this result</div>}</td>
+                              <td style={{ padding: "7px 8px", color: "#475569" }}>{b.approach}</td>
+                              <td style={{ padding: "7px 8px", color: "#475569" }}>{b.processes}</td>
+                              <td style={{ padding: "7px 8px", color: "#475569" }}>{b.systemsOutcomes}</td>
+                              <td style={{ padding: "7px 8px", color: "#475569" }}>{b.review}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+                <p style={{ ...muted, marginBottom: 0, marginTop: 8 }}>{INFERRED_THRESHOLDS_NOTE}</p>
+              </div>
+            )}
 
             {/* What good looks like, from the official published list and
                 nothing else. Once per requirement item, because that is the
@@ -953,6 +1071,9 @@ export function SelfCheck() {
 }
 
 const FILE_TONE: Record<SelfCheckFileRow["outcome"], string> = { read: "good", check: "medium", unreadable: "critical" };
+// The legend chips carry the same colour as the rows they explain, keyed off
+// the glyph so the two can never drift apart.
+const LEGEND_TONE: Record<string, string> = { "✓": "good", "!": "medium", "✗": "critical", "?": "neutral" };
 
 // The working behind one verdict: the passage that satisfied it and where it
 // came from, or the named element that is missing, or why nothing could be

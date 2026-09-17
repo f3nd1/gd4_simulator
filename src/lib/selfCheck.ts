@@ -12,6 +12,7 @@
 import { toCsv } from "./auditCsvExport";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
+import { ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, type BandWorking } from "./selfCheckBanding";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
 
@@ -25,15 +26,28 @@ export const SELF_CHECK_DISCLAIMER =
 // comply/not-comply: "Partial" is a real, different answer, and flattening it
 // into a fail would misreport the engine. "Not assessed" is not a fail at all
 // and never carries a fail colour.
-export type PlainVerdict = { label: string; tone: string; isGap: boolean };
+// `icon` is carried beside `tone` so a state is never signalled by colour
+// alone: the glyph reads in the table, in a print-out and for anyone who
+// cannot separate the greens from the reds.
+//
+// Glyphs are restricted to ones that actually render in the print-to-tab PDF.
+// A half-filled circle (U+25D0) looked right on screen and came out of the
+// printer as a stray chevron, which is worse than no glyph at all.
+export type PlainVerdict = { label: string; tone: string; isGap: boolean; icon: string };
+
+// One line per state, shown ABOVE the table it applies to. An auditor could not
+// tell whether "Written down" meant compliant, and the answer is that it does
+// not: the two tabs each answer half the question, and only the overall view
+// puts them together.
+export type VerdictLegendLine = { icon: string; label: string; meaning: string };
 
 export const PLAIN_VERDICT: Record<EvidenceVerdict, PlainVerdict> = {
-  Met: { label: "Complies", tone: "good", isGap: false },
-  Partial: { label: "Partly complies", tone: "medium", isGap: true },
-  "Not met": { label: "Does not comply", tone: "critical", isGap: true },
+  Met: { label: "Complies", tone: "good", isGap: false, icon: "✓" },
+  Partial: { label: "Partly complies", tone: "medium", isGap: true, icon: "!" },
+  "Not met": { label: "Does not comply", tone: "critical", isGap: true, icon: "✗" },
   // Neutral tone on purpose. Grey, never red: the documents did not say either
   // way, which is a gap in what was supplied, not a judgement on the area.
-  "Not assessed": { label: "Could not check", tone: "neutral", isGap: false },
+  "Not assessed": { label: "Could not check", tone: "neutral", isGap: false, icon: "?" },
 };
 
 // Two genuinely different things put a line here, and the note has to cover
@@ -126,11 +140,15 @@ export function plainDetail(raw: string): string {
 // So a procedure-only check runs the procedure pass ALONE and answers a
 // different question, in different words, with no band. "Written down" can
 // never be misread as "Complies".
+// "Written down" did not read as a verdict: an auditor could not tell from it
+// whether the requirement was satisfied. "Documented" is the word the GD4
+// vocabulary already uses for this judgement, and the legend below says in one
+// line what it does and does not settle.
 export const PPD_PLAIN_VERDICT: Record<PPDVerdict, PlainVerdict> = {
-  Adequate: { label: "Written down", tone: "good", isGap: false },
-  Partial: { label: "Partly written down", tone: "medium", isGap: true },
-  "Not documented": { label: "Not written down", tone: "critical", isGap: true },
-  "Not assessed": { label: "Could not check", tone: "neutral", isGap: false },
+  Adequate: { label: "Documented", tone: "good", isGap: false, icon: "✓" },
+  Partial: { label: "Partly documented", tone: "medium", isGap: true, icon: "!" },
+  "Not documented": { label: "Not documented", tone: "critical", isGap: true, icon: "✗" },
+  "Not assessed": { label: "Could not check", tone: "neutral", isGap: false, icon: "?" },
 };
 
 // What each combination of the two fields will and will not check. Shown
@@ -190,6 +208,9 @@ export type SelfCheckRow = {
   verdict: EvidenceVerdict;
   label: string;
   tone: string;
+  // Never colour alone: the glyph travels with the row into the table and the
+  // printable page.
+  icon: string;
   why: string;
   fix: string;
   // The working an auditor has to show to defend the verdict: what was looked
@@ -205,7 +226,15 @@ export type SelfCheckRow = {
 // list is still meaningful without it and old callers must keep working.
 export type SelfCheckContext = {
   ppdRows?: PPDReviewRow[];
-  chunkFileNames?: Record<string, string>;
+  // The two passes number their chunks INDEPENDENTLY, each from C001
+  // (useWorkspaceStore.ts:1559 and 2065), and each keeps its own
+  // chunkFileNames map. Merging them is therefore not a widening, it is a
+  // COLLISION: the later map silently wins every shared id. That is exactly
+  // what happened: every quote on the procedure tab was attributed to an
+  // applicant's spreadsheet, because the evidence run's C001 overwrote the
+  // procedure run's C001. One map per pass, never merged.
+  policyChunkFileNames?: Record<string, string>;
+  evidenceChunkFileNames?: Record<string, string>;
   // How many files the run could not read. A gap reported alongside an unread
   // file is not a clean gap, and the row has to say so.
   unreadableFiles?: number;
@@ -233,6 +262,34 @@ export function fixFor(r: EvidenceAssessmentRow, isGap: boolean): string {
   return "";
 }
 
+// Read BEFORE the table, never after: the point of a legend is to tell you how
+// to read the column you are about to scan.
+export const VERDICT_LEGEND: Record<SelfCheckView, VerdictLegendLine[]> = {
+  overview: [
+    { icon: "✓", label: "Complies", meaning: "Your procedure covers this requirement AND your records show it happening." },
+    { icon: "!", label: "Partly complies", meaning: "One half falls short: either the procedure is thin, or the records do not carry it all the way. The Missing line on the row names what is short." },
+    { icon: "✗", label: "Does not comply", meaning: "The requirement is not satisfied on the evidence supplied. This is the state that becomes a finding." },
+    { icon: "?", label: "Could not check", meaning: "Nothing was decided, in either direction. It is not a pass and not a fail, and the row says which of the four reasons applies." },
+  ],
+  procedure: [
+    { icon: "✓", label: "Documented", meaning: "Your written procedure covers this requirement. It does NOT mean the requirement is met: your records still have to show it happening." },
+    { icon: "!", label: "Partly documented", meaning: "The procedure covers some of the requirement and leaves part of it unsaid. The Missing line names the part." },
+    { icon: "✗", label: "Not documented", meaning: "Nothing in the written procedure covers this requirement. Records alone cannot close it: the procedure has to say what the PEI does." },
+    { icon: "?", label: "Could not check", meaning: "The procedure pass reached no verdict for this line. It is not a fail." },
+  ],
+  "procedure-only": [
+    { icon: "✓", label: "Documented", meaning: "Your written procedure covers this requirement. It does NOT mean the requirement is met: nothing here looked at your records." },
+    { icon: "!", label: "Partly documented", meaning: "The procedure covers some of the requirement and leaves part of it unsaid." },
+    { icon: "✗", label: "Not documented", meaning: "Nothing in the written procedure covers this requirement." },
+    { icon: "?", label: "Could not check", meaning: "The procedure pass reached no verdict for this line. It is not a fail." },
+  ],
+  records: [
+    { icon: "✓", label: "Records found", meaning: "At least one record in your folder speaks to this requirement. It does NOT mean the requirement is met: the procedure must cover it too, and the record must actually satisfy it. The Overall tab is the combined answer." },
+    { icon: "✗", label: "No records found", meaning: "Every file that could be read was searched and none of them spoke to this requirement." },
+    { icon: "?", label: "Could not check", meaning: "Your records were not checked for this line, usually because the check did not answer for it." },
+  ],
+};
+
 export type SelfCheckCounts = { complies: number; partly: number; doesNot: number; couldNotCheck: number; total: number };
 
 export function toSelfCheckRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckContext = {}): SelfCheckRow[] {
@@ -250,6 +307,7 @@ export function toSelfCheckRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckCon
       verdict: unjudgedBothSides(r) ? "Not assessed" : r.verdict,
       label: plain.label,
       tone: plain.tone,
+      icon: plain.icon,
       // The engine's own justification. A row whose AI call failed says so
       // rather than showing an empty cell that reads like "nothing to say".
       why: r.assessmentFailed
@@ -263,7 +321,9 @@ export function toSelfCheckRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckCon
       // OFI, taken only from the engine's suggestedAction. Never written here,
       // and only ever present on a row the engine judged short.
       fix: fixFor(r, plain.isGap),
-      working: buildWorking(r, ppdByRef.get(r.gdRef), ctx.chunkFileNames),
+      // The evidence map: every chunk id on an EvidenceAssessmentRow, including
+      // its promise checks, was minted by the evidence pass.
+      working: buildWorking(r, ppdByRef.get(r.gdRef), ctx.evidenceChunkFileNames),
       expected: expectedEvidenceFor(r.gd4ItemId),
     };
   });
@@ -272,7 +332,9 @@ export function toSelfCheckRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckCon
 // The procedure pass's own rows, in the same shape, so the table, the CSV and
 // the printable page are the existing ones rather than a second set.
 export function toProcedureRows(rows: PPDReviewRow[], ctx: SelfCheckContext = {}): SelfCheckRow[] {
-  const fileOf = (cid: string) => ctx.chunkFileNames?.[cid] || "";
+  // The POLICY map: a PPDReviewRow's chunk ids were minted by the procedure
+  // pass and mean nothing in the evidence pass's numbering.
+  const fileOf = (cid: string) => ctx.policyChunkFileNames?.[cid] || "";
   return rows.map((r) => {
     const plain = PPD_PLAIN_VERDICT[r.verdict] ?? PPD_PLAIN_VERDICT["Not assessed"];
     return {
@@ -284,6 +346,7 @@ export function toProcedureRows(rows: PPDReviewRow[], ctx: SelfCheckContext = {}
       verdict: r.verdict === "Adequate" ? "Met" : r.verdict === "Partial" ? "Partial" : r.verdict === "Not documented" ? "Not met" : "Not assessed",
       label: plain.label,
       tone: plain.tone,
+      icon: plain.icon,
       why: plainWhy(r.fullComment || r.shortComment || ""),
       // The procedure pass's OFI is its suggested rewrite. Copied, never written.
       fix: (r.suggestedRewrite || "").trim(),
@@ -312,9 +375,9 @@ export function toProcedureRows(rows: PPDReviewRow[], ctx: SelfCheckContext = {}
 // the four real combinations visible: documented and evidenced, documented but
 // not evidenced, evidenced but not documented, neither.
 export const RECORDS_PLAIN_VERDICT: Record<"found" | "none" | "unknown", PlainVerdict> = {
-  found: { label: "Records found", tone: "good", isGap: false },
-  none: { label: "Nothing found", tone: "critical", isGap: true },
-  unknown: { label: "Could not check", tone: "neutral", isGap: false },
+  found: { label: "Records found", tone: "good", isGap: false, icon: "✓" },
+  none: { label: "No records found", tone: "critical", isGap: true, icon: "✗" },
+  unknown: { label: "Could not check", tone: "neutral", isGap: false, icon: "?" },
 };
 
 export function toRecordsRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckContext = {}): SelfCheckRow[] {
@@ -337,13 +400,14 @@ export function toRecordsRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckConte
       verdict: kind === "found" ? "Met" : kind === "none" ? "Not met" : "Not assessed",
       label: plain.label,
       tone: plain.tone,
+      icon: plain.icon,
       why: r.assessmentFailed
         ? "The checking service did not answer for this one, so your records were not checked. Run the check again."
         : cited
           ? (r.evidenceSummary || "").trim() || "A record covering this was found in your folder."
           : qualifyForUnreadable("Every document in your records folder was read, and none of them mentioned this requirement.", ctx.unreadableFiles ?? 0),
       fix: fixFor(r, plain.isGap),
-      working: buildWorking(r, ppdByRef.get(r.gdRef), ctx.chunkFileNames),
+      working: buildWorking(r, ppdByRef.get(r.gdRef), ctx.evidenceChunkFileNames),
       expected: expectedEvidenceFor(r.gd4ItemId),
     };
   });
@@ -373,9 +437,11 @@ export const VIEW_LABEL: Record<SelfCheckView, string> = {
 // inventing a middle state would be a judgement this pass never made.
 export const VIEW_TALLY: Record<SelfCheckView, { complies: string; partly: string | null; doesNot: string }> = {
   overview: { complies: "complies", partly: "partly complies", doesNot: "does not comply" },
-  procedure: { complies: "written down", partly: "partly written down", doesNot: "not written down" },
-  "procedure-only": { complies: "written down", partly: "partly written down", doesNot: "not written down" },
-  records: { complies: "records found", partly: null, doesNot: "nothing found" },
+  // The tally words must be the same words as the row states, or the column and
+  // the count read as two different vocabularies.
+  procedure: { complies: "documented", partly: "partly documented", doesNot: "not documented" },
+  "procedure-only": { complies: "documented", partly: "partly documented", doesNot: "not documented" },
+  records: { complies: "records found", partly: null, doesNot: "no records found" },
 };
 
 export const VIEW_NOTE: Record<SelfCheckView, string> = {
@@ -392,10 +458,12 @@ export const VIEW_NOTE: Record<SelfCheckView, string> = {
 // into one of the four.
 export type Combination = "both" | "written-only" | "records-only" | "neither" | "unknown";
 
+// Same vocabulary as the row states, or the summary and the table read as two
+// different languages for one result.
 export const COMBINATION_LABEL: Record<Combination, string> = {
-  both: "written down and evidenced",
-  "written-only": "written down, no records",
-  "records-only": "records only, not written down",
+  both: "documented and evidenced",
+  "written-only": "documented, no records",
+  "records-only": "records only, not documented",
   neither: "neither",
   unknown: "could not tell",
 };
@@ -505,6 +573,7 @@ export function bandLineOf(band: SelfCheckBand): string {
 export function buildSelfCheckCsv(
   areaLabel: string, rows: SelfCheckRow[], band: SelfCheckBand, view: SelfCheckView = "overview",
   files: SelfCheckFileRow[] = [],
+  bandWorking?: BandWorking,
 ): string {
   const pad = (cells: string[]) => [...cells, ...Array(Math.max(0, SELF_CHECK_HEADERS.length - cells.length)).fill("")];
   const blank = pad([]);
@@ -524,11 +593,29 @@ export function buildSelfCheckCsv(
     pad(SELF_CHECK_FILE_HEADERS),
     ...files.map((f) => pad([f.name, f.bucket, f.label, f.detail, f.action, f.cited ? "yes" : "no"])),
   ];
+  // The legend travels with the file: a spreadsheet forwarded to an external
+  // assessor has to explain its own state names.
+  const legendBlock = [
+    blank,
+    pad(["What each result means"]),
+    ...VERDICT_LEGEND[view].map((l) => pad([`${l.icon} ${l.label}`, l.meaning])),
+  ];
+  const bandBlock = !bandWorking ? [] : [
+    blank,
+    pad([`How this band was reached: ${bandWorking.sum} -> Band ${bandWorking.band}`]),
+    pad(["Dimension", "Band", "Contributes", "Official descriptor", "Where it came from"]),
+    ...bandWorking.rows.map((d) => pad([d.label, d.band === undefined ? "not scored" : `Band ${d.band}`, `${d.pct}%`, d.descriptor, d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check"])),
+    pad([ROWS_DO_NOT_SUM_NOTE]),
+    pad([ceilingNote(bandWorking)]),
+    pad([INFERRED_THRESHOLDS_NOTE]),
+  ];
   return toCsv(SELF_CHECK_HEADERS, [
     ...rows.map((r) => pad([areaLabel, r.ref, r.requirement, r.label, r.why, r.fix, citedText(r.working), missingText(r.working), (r.expected ?? []).join("; ")])),
     blank,
     ...trailer.map((t) => pad([t])),
     pad([SELF_CHECK_DISCLAIMER]),
+    ...legendBlock,
+    ...bandBlock,
     ...fileBlock,
   ]);
 }
@@ -550,8 +637,41 @@ export function buildSelfCheckHtml(opts: {
   ranAt: string;
   view?: SelfCheckView;
   files?: SelfCheckFileRow[];
+  bandWorking?: BandWorking;
 }): string {
-  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [] } = opts;
+  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [], bandWorking } = opts;
+  const legendHtml = `
+    <h2>What each result means</h2>
+    <table>
+      <thead><tr><th>Result</th><th>What it means</th></tr></thead>
+      <tbody>${VERDICT_LEGEND[view].map((l) => `<tr><td><b>${escapeHtml(l.icon)} ${escapeHtml(l.label)}</b></td><td>${escapeHtml(l.meaning)}</td></tr>`).join("")}</tbody>
+    </table>`;
+  // The band, with its working, because "Band 2 of 5" on its own is an
+  // assertion an auditor cannot defend to anybody.
+  const bandHtml = !bandWorking ? "" : `
+    <h2>How this band was reached</h2>
+    <p><b>${escapeHtml(bandWorking.sum)} &rarr; Band ${bandWorking.band}</b></p>
+    <table>
+      <thead><tr><th>Dimension</th><th>Band</th><th>Contributes</th><th>Official descriptor at that band</th><th>Where it came from</th></tr></thead>
+      <tbody>${bandWorking.rows.map((d) => `<tr>
+        <td>${escapeHtml(d.label)}</td>
+        <td>${d.band === undefined ? "not scored" : `Band ${d.band}`}</td>
+        <td>${d.pct}%</td>
+        <td>${escapeHtml(d.descriptor)}</td>
+        <td>${escapeHtml(d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check")}</td>
+      </tr>`).join("")}</tbody>
+    </table>
+    <p class="muted">${escapeHtml(ROWS_DO_NOT_SUM_NOTE)}</p>
+    <p class="muted">${escapeHtml(ceilingNote(bandWorking))}</p>
+    <p class="muted">${escapeHtml(INFERRED_THRESHOLDS_NOTE)}</p>
+    <h2>The official band scale</h2>
+    <table>
+      <thead><tr><th>Band</th><th>Approach</th><th>Processes</th><th>Systems &amp; Outcomes</th><th>Review</th></tr></thead>
+      <tbody>${BAND_LADDER.map((b) => `<tr${b.band === bandWorking.band ? ' style="font-weight:700"' : ""}>
+        <td>Band ${b.band} ${escapeHtml(b.name)}${b.band === bandWorking.band ? " (this result)" : ""}</td>
+        <td>${escapeHtml(b.approach)}</td><td>${escapeHtml(b.processes)}</td><td>${escapeHtml(b.systemsOutcomes)}</td><td>${escapeHtml(b.review)}</td>
+      </tr>`).join("")}</tbody>
+    </table>`;
   const fileCounts = countFileRows(files);
   const fileWarning = unreadableWarning(fileCounts);
   // Printed in black and white, so the unreadable rows carry a word rather than
@@ -601,17 +721,19 @@ export function buildSelfCheckHtml(opts: {
     <p><b>${counts.complies} ${words.complies}${words.partly ? ` · ${counts.partly} ${words.partly}` : ""} · ${counts.doesNot} ${words.doesNot} · ${counts.couldNotCheck} could not check</b></p>
     <p>${escapeHtml(bandLine)}</p>
     ${unjudgedNote ? `<p class="muted">${escapeHtml(unjudgedNote)}</p>` : ""}
+    ${legendHtml}
     <table>
       <thead><tr><th>What the requirement asks</th><th>Result</th><th>Why</th><th>What to fix</th></tr></thead>
       <tbody>
         ${rows.map((r) => `<tr>
           <td>${escapeHtml(r.requirement)}<br><span class="muted">${escapeHtml(r.ref)}</span></td>
-          <td>${escapeHtml(r.label)}</td>
+          <td>${escapeHtml(`${r.icon} ${r.label}`)}</td>
           <td>${escapeHtml(r.why)}${workingHtml(r)}</td>
           <td>${escapeHtml(r.fix)}</td>
         </tr>`).join("")}
       </tbody>
     </table>
+    ${bandHtml}
     ${expectedSection}
     ${filesTable}
     <p class="muted">${escapeHtml(SELF_CHECK_DISCLAIMER)}</p>
