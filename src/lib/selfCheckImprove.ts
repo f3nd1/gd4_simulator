@@ -1,10 +1,11 @@
-// "How do I get a higher band", answered from real sources only.
+// "What will the full audit look at that this check does not", answered from
+// real sources only.
 //
-// The ceiling is structural: this check reads a procedure folder and a records
+// The limit is structural: this check reads a procedure folder and a records
 // folder, so it can speak to Approach and Processes and to nothing else.
-// Telling an auditor that and stopping leaves them stuck, so this assembles
-// what the two unassessed dimensions actually need, from three sources that
-// already exist in the app and nothing else:
+// Telling an auditor that and stopping leaves them with nothing to act on, so
+// this assembles what the two unassessed dimensions actually need, from three
+// sources that already exist in the app and nothing else:
 //
 //   1. The official §23 descriptors, verbatim (data/edutrustRubric.ts). These
 //      ARE the answer in the document's own words, at each band.
@@ -96,15 +97,15 @@ export function runNamedGaps(rows: SelfCheckRow[]): { ref: string; requirement: 
 }
 
 export const IMPROVE_HEADLINE =
-  "Band 4 and Band 5 are not reachable from this page, and that is not a judgement on your area.";
+  "Two of the four dimensions are not assessed here, and that is not a judgement on your area.";
 
 export const IMPROVE_WHY =
-  "They are decided on Systems & Outcomes and on Review, and this check never opens the evidence those two need: it reads the folder holding your written procedure and the folder holding your records, and nothing else. Your audit lead assesses those two dimensions in the full audit. What follows is what they will be looking for, in the Guidance Document's own words.";
+  "This check never opens the evidence Systems & Outcomes and Review need: it reads the folder holding your written procedure and the folder holding your records, and nothing else. Your audit lead assesses those two dimensions in the full audit, and sets the band from all four. What follows is what they will be looking for, in the Guidance Document's own words.";
 
 // The pattern the reported 4.1 run showed, named only when the run's own gaps
 // actually show it. Not asserted from nothing.
 export function reviewShapedGapNote(gaps: { text: string }[]): string {
   const hits = gaps.filter((g) => NAMES_REVIEW.test(g.text) || /\b(KPI|minutes|report|register|log|action plan|CAP)\b/i.test(g.text));
   if (hits.length === 0) return "";
-  return `${hits.length} of the ${gaps.length} gaps this run named are missing records rather than missing wording: minutes, reports, registers, logs or action plans. That is the shape that holds Systems & Outcomes and Review down in the full audit, so closing them is the work that moves the band, not rewording the procedure.`;
+  return `${hits.length} of the ${gaps.length} gaps this run named are missing records rather than missing wording: minutes, reports, registers, logs or action plans. That is the shape that holds Systems & Outcomes and Review down in the full audit, so closing them is the work that moves the band your audit lead sets, not rewording the procedure.`;
 }

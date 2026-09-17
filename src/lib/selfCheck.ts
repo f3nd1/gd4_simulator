@@ -12,7 +12,7 @@
 import { toCsv } from "./auditCsvExport";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, PRINT_BAND_PALETTE, type BandWorking } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, PRINT_BAND_PALETTE, type BandWorking } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
@@ -502,16 +502,14 @@ export function mostlyUnchecked(c: SelfCheckCounts): boolean {
   return c.total > 0 && c.couldNotCheck / c.total >= 0.5;
 }
 
+// Only two states, because a self-check run no longer produces a band. The
+// auditor's committed band is a recorded fact about the area and survives;
+// "none" means nobody has set one yet. The old "indicative" and "not-recorded"
+// kinds both described a band this page worked out for itself, which it does
+// not do any more.
 export type SelfCheckBand =
   | { kind: "none" }
-  | { kind: "auditor"; band: Band; name: string; totalPct: number }
-  | { kind: "indicative"; band: Band; name: string; totalPct: number }
-  // An earlier check being downloaded before it is replaced. The band it was
-  // shown with came from suggestBand(), which never commits and stores nothing
-  // with the result, so it is genuinely gone. Recomputing it would need a live
-  // AI call and would produce a DIFFERENT band from the one the user saw, so
-  // the document says so outright rather than leaving the field blank.
-  | { kind: "not-recorded" };
+  | { kind: "auditor"; band: Band; name: string; totalPct: number };
 
 export const SELF_CHECK_HEADERS = [
   "Area", "GD4 reference", "What the requirement asks", "Result", "Why", "What to fix",
@@ -559,13 +557,12 @@ export function missingText(w: SelfCheckWorking | undefined): string {
 
 // One wording for the band, used by BOTH downloads so a CSV and a PDF of the
 // same run can never describe the result differently.
-export const SCORE_NOT_RECORDED =
-  "Score not recorded for this earlier check. The band shown at the time was worked out live and was not saved with the result. Run the check again to get a current one.";
+export const NO_BAND_LINE =
+  "This check gives no band. It assesses two of the four EduTrust dimensions, Approach and Processes; your audit lead assesses all four and sets the band.";
 
 export function bandLineOf(band: SelfCheckBand): string {
-  if (band.kind === "none") return "No band yet for this area.";
-  if (band.kind === "not-recorded") return SCORE_NOT_RECORDED;
-  return `${band.kind === "auditor" ? "Band set by your auditor" : "Indicative band, not yet confirmed by your auditor"}: Band ${band.band} of 5 — ${band.name} (${band.totalPct}%)`;
+  if (band.kind === "none") return NO_BAND_LINE;
+  return `Band set by your auditor: Band ${band.band} of 5 — ${band.name} (${band.totalPct}%)`;
 }
 
 // The band and the disclaimer ride in the CSV too. A spreadsheet gets
@@ -605,25 +602,28 @@ export function buildSelfCheckCsv(
     pad(["What each result means"]),
     ...VERDICT_LEGEND[view].map((l) => pad([`${l.icon} ${l.label}`, l.meaning])),
   ];
+  // The graphic cannot travel into a spreadsheet, so the numbers it is drawn
+  // from do instead, as rows: what each dimension earned out of what it could,
+  // and which two were never assessed. No total row, because there is no total.
   const bandBlock = !bandWorking ? [] : [
     blank,
-    pad([`How this band was reached: ${bandWorking.sum} -> Band ${bandWorking.band}`]),
+    pad(["What this check assessed"]),
     ...(bandCoverage ? [pad([bandCoverage])] : []),
-    pad(["Dimension", "Band", "Contributes", "Official descriptor", "Where it came from"]),
-    ...bandWorking.rows.map((d) => pad([d.label, d.band === undefined ? "not scored" : `Band ${d.band}`, `${d.pct}%`, d.descriptor, d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check"])),
+    pad(["Dimension", "Band", "Earned", "Out of", "Assessed by this check?", "Official descriptor", "Where it came from"]),
+    ...bandWorking.rows.map((d) => pad([
+      d.label,
+      d.band === undefined ? "not scored" : `Band ${d.band}`,
+      d.assessedHere ? `${d.pct}%` : "",
+      `${bandWorking.maxPct}%`,
+      d.assessedHere ? "yes" : "NO",
+      d.descriptor,
+      d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check",
+    ])),
     pad([ROWS_DO_NOT_SUM_NOTE]),
-    pad([ceilingNote(bandWorking)]),
+    pad([TWO_DIMENSIONS_NOTE]),
     pad([INFERRED_THRESHOLDS_NOTE]),
-    // The graphic cannot travel into a spreadsheet, so the numbers it is drawn
-    // from do instead, as their own rows. A reader of the file sees the same
-    // shape: what each dimension earned out of what it could.
     blank,
-    pad(["The shape of this result"]),
-    pad(["Dimension", "Band", "Earned", "Out of", "Assessed by this check?"]),
-    ...bandGraphic(bandWorking).segments.map((seg) => pad([seg.label, seg.band === undefined ? "not scored" : `Band ${seg.band}`, `${seg.pct}%`, `${seg.max}%`, seg.assessedHere ? "yes" : "NO"])),
-    pad([`Total ${bandWorking.total}%`, `Band ${bandWorking.band}`, "", `ceiling ${bandWorking.ceilingTotal}%`, ""]),
-    blank,
-    pad(["How to reach a higher band"]),
+    pad(["What the full audit will look for"]),
     pad([IMPROVE_HEADLINE]),
     pad([IMPROVE_WHY]),
     ...unassessedDimensions(itemIds).flatMap((d) => [
@@ -679,43 +679,30 @@ export function buildSelfCheckHtml(opts: {
       <thead><tr><th>Result</th><th>What it means</th></tr></thead>
       <tbody>${VERDICT_LEGEND[view].map((l) => `<tr><td><b>${escapeHtml(l.icon)} ${escapeHtml(l.label)}</b></td><td>${escapeHtml(l.meaning)}</td></tr>`).join("")}</tbody>
     </table>`;
-  // The band, with its working, because "Band 2 of 5" on its own is an
-  // assertion an auditor cannot defend to anybody.
+  // The two dimensions this check can defend, and the two it leaves alone. The
+  // picture comes first because this document is what gets filed as working
+  // paper and shown to people, so the graphic matters here more than on screen,
+  // not less. Print palette, so a dark-mode browser can never send a dark chart
+  // to a printer.
   const bandHtml = !bandWorking ? "" : `
-    <h2>How this band was reached</h2>
-    <p><b>${escapeHtml(bandWorking.sum)} &rarr; Band ${bandWorking.band}</b></p>
+    <h2>What this check assessed</h2>
+    <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), PRINT_BAND_PALETTE, { idSuffix: "Print" })}</div>
     ${bandCoverage ? `<p class="muted">${escapeHtml(bandCoverage)}</p>` : ""}
     <table>
-      <thead><tr><th>Dimension</th><th>Band</th><th>Contributes</th><th>Official descriptor at that band</th><th>Where it came from</th></tr></thead>
+      <thead><tr><th>Dimension</th><th>Band</th><th>Earned</th><th>Out of</th><th>Assessed by this check?</th><th>Official descriptor at that band</th><th>Where it came from</th></tr></thead>
       <tbody>${bandWorking.rows.map((d) => `<tr>
         <td>${escapeHtml(d.label)}</td>
         <td>${d.band === undefined ? "not scored" : `Band ${d.band}`}</td>
-        <td>${d.pct}%</td>
+        <td>${d.assessedHere ? `${d.pct}%` : ""}</td><td>${bandWorking.maxPct}%</td>
+        <td>${d.assessedHere ? "yes" : "<b>NO</b>"}</td>
         <td>${escapeHtml(d.descriptor)}</td>
         <td>${escapeHtml(d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check")}</td>
       </tr>`).join("")}</tbody>
     </table>
-    ${/* The picture, not only the numbers: this document is what gets filed as
-         working paper and shown to people, so the graphic matters here more
-         than on screen, not less. Print palette, so a dark-mode browser can
-         never send a dark chart to a printer. */ ""}
-    <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), bandWorking.sum, PRINT_BAND_PALETTE, { idSuffix: "Print" })}</div>
-    <h3>The shape of this result</h3>
-    <table>
-      <thead><tr><th>Dimension</th><th>Band</th><th>Earned</th><th>Out of</th><th>Assessed by this check?</th></tr></thead>
-      <tbody>${bandGraphic(bandWorking).segments.map((seg) => `<tr>
-        <td>${escapeHtml(seg.label)}</td>
-        <td>${seg.band === undefined ? "not scored" : `Band ${seg.band}`}</td>
-        <td>${seg.pct}%</td><td>${seg.max}%</td>
-        <td>${seg.assessedHere ? "yes" : "<b>NO</b>"}</td>
-      </tr>`).join("")}
-      <tr><td><b>Total</b></td><td><b>Band ${bandWorking.band}</b></td><td><b>${bandWorking.total}%</b></td><td>ceiling ${bandWorking.ceilingTotal}%</td><td></td></tr>
-      </tbody>
-    </table>
     <p class="muted">${escapeHtml(ROWS_DO_NOT_SUM_NOTE)}</p>
-    <p class="muted">${escapeHtml(ceilingNote(bandWorking))}</p>
+    <p class="muted">${escapeHtml(TWO_DIMENSIONS_NOTE)}</p>
     <p class="muted">${escapeHtml(INFERRED_THRESHOLDS_NOTE)}</p>
-    <h2>How to reach a higher band</h2>
+    <h2>What the full audit will look for</h2>
     <p>${escapeHtml(IMPROVE_HEADLINE)}</p>
     <p class="muted">${escapeHtml(IMPROVE_WHY)}</p>
     ${unassessedDimensions(itemIds).map((d) => `
@@ -733,8 +720,8 @@ export function buildSelfCheckHtml(opts: {
     <h2>The official band scale</h2>
     <table>
       <thead><tr><th>Band</th><th>Approach</th><th>Processes</th><th>Systems &amp; Outcomes</th><th>Review</th></tr></thead>
-      <tbody>${BAND_LADDER.map((b) => `<tr${b.band === bandWorking.band ? ' style="font-weight:700"' : ""}>
-        <td>Band ${b.band} ${escapeHtml(b.name)}${b.band === bandWorking.band ? " (this result)" : ""}</td>
+      <tbody>${BAND_LADDER.map((b) => `<tr>
+        <td>Band ${b.band} ${escapeHtml(b.name)}</td>
         <td>${escapeHtml(b.approach)}</td><td>${escapeHtml(b.processes)}</td><td>${escapeHtml(b.systemsOutcomes)}</td><td>${escapeHtml(b.review)}</td>
       </tr>`).join("")}</tbody>
     </table>`;

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, SCREEN_BAND_PALETTE, PRINT_BAND_PALETTE, ceilingNote, ROWS_DO_NOT_SUM_NOTE, DIMENSION_SOURCE, BAND_LADDER } from "../selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, SCREEN_BAND_PALETTE, PRINT_BAND_PALETTE, TWO_DIMENSIONS_NOTE, ROWS_DO_NOT_SUM_NOTE, DIMENSION_SOURCE, BAND_LADDER } from "../selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "../selfCheckImprove";
-import { VERDICT_LEGEND, PLAIN_VERDICT, PPD_PLAIN_VERDICT, RECORDS_PLAIN_VERDICT, buildSelfCheckHtml, buildSelfCheckCsv, toSelfCheckRows, countSelfCheck } from "../selfCheck";
+import { VERDICT_LEGEND, PLAIN_VERDICT, PPD_PLAIN_VERDICT, RECORDS_PLAIN_VERDICT, bandLineOf, NO_BAND_LINE, buildSelfCheckHtml, buildSelfCheckCsv, toSelfCheckRows, countSelfCheck } from "../selfCheck";
 import type { EvidenceAssessmentRow } from "../../types";
 
 const row = (over: Partial<EvidenceAssessmentRow> = {}): EvidenceAssessmentRow => ({
@@ -10,26 +10,39 @@ const row = (over: Partial<EvidenceAssessmentRow> = {}): EvidenceAssessmentRow =
   verdict: "Partial", comment: "Partly shown.", ...over,
 });
 
-describe("the band shows its working, and claims nothing it cannot show", () => {
-  // The chain is: rows -> (AI judgement, NOT arithmetic) -> four dimension
-  // bands -> (arithmetic) -> total -> band. Only the second half is a sum, and
-  // only the second half is presented as one.
-  it("turns each dimension band into its percentage and sums them", () => {
-    const w = buildBandWorking({ approach: 4, processes: 4, systemsOutcomes: 2, review: 0 });
-    expect(w.rows.map((r) => r.pct)).toEqual([20, 20, 10, 0]);
-    expect(w.total).toBe(50);
-    expect(w.sum).toBe("20% + 20% + 10% + 0% = 50%");
-    // The SSG auditor's own worked example lands on Band 3.
-    expect(w.band).toBe(3);
+describe("the self-check reports only the dimensions it actually assessed", () => {
+  // The defect this pins: the model diagnoses all four dimensions from lines
+  // that say outright it never opened the evidence for two of them. Feeding
+  // those into a total understated a genuinely Band 4 area as Band 3 and a
+  // genuinely Band 3 area as Band 2 (measured against apsrMatrixResult). The
+  // two are dropped at the one place the rows are built, so NO surface can
+  // print a band, a percentage or a descriptor for them.
+  it("refuses the model's score for the two dimensions it never opened", () => {
+    const w = buildBandWorking({ approach: 4, processes: 4, systemsOutcomes: 3, review: 3 });
+    expect(w.rows.map((r) => [r.key, r.band, r.pct, r.descriptor])).toEqual([
+      ["approach", 4, 20, "An effective, efficient and organised approach meeting overall requirements is evident"],
+      ["processes", 4, 20, "Intended processes are well-managed by owners; desired outputs are produced by these processes"],
+      ["systemsOutcomes", undefined, 0, ""],
+      ["review", undefined, 0, ""],
+    ]);
   });
 
-  it("quotes the official descriptor for the band each dimension was given", () => {
+  it("produces no total, no sum and no overall band at all", () => {
+    const w = buildBandWorking({ approach: 5, processes: 5, systemsOutcomes: 5, review: 5 });
+    expect(Object.keys(w).sort()).toEqual(["maxPct", "rows"]);
+    expect(w).not.toHaveProperty("band");
+    expect(w).not.toHaveProperty("total");
+    expect(w).not.toHaveProperty("sum");
+    expect(w).not.toHaveProperty("ceilingBand");
+  });
+
+  it("quotes the official descriptor for the band each assessed dimension was given", () => {
     const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
     expect(w.rows[0].descriptor).toBe("The beginning of an organised approach is evident");
-    expect(w.rows[3].descriptor).toBe("No planned review; no improvement is made");
+    expect(w.rows[1].descriptor).toBe("Processes are established but with weak deployment in key areas");
   });
 
-  it("leaves a dimension with no score blank rather than inventing a zero band", () => {
+  it("leaves an assessed dimension with no score blank rather than inventing a zero band", () => {
     const w = buildBandWorking({ approach: 3, processes: undefined, systemsOutcomes: undefined, review: undefined });
     expect(w.rows[1].band).toBeUndefined();
     expect(w.rows[1].descriptor).toBe("");
@@ -38,33 +51,47 @@ describe("the band shows its working, and claims nothing it cannot show", () => 
 
   // A score of 0 is a real state in the auditor's example (R=0%) and has no
   // descriptor, so it must not be rendered as "Band 0".
-  it("handles a zero score without pretending it is a band", () => {
-    const w = buildBandWorking({ approach: 1, processes: 1, systemsOutcomes: 0, review: 0 });
-    expect(w.rows[2].band).toBe(0);
-    expect(w.rows[2].descriptor).toBe("");
-    expect(w.total).toBe(10);
+  it("handles a zero score on an assessed dimension without pretending it is a band", () => {
+    const w = buildBandWorking({ approach: 0, processes: 1, systemsOutcomes: 0, review: 0 });
+    expect(w.rows[0].band).toBe(0);
+    expect(w.rows[0].descriptor).toBe("");
+    expect(w.rows[0].pct).toBe(0);
   });
 
-  // The most important honest statement on the page: this path reads a
-  // procedure and records, so two of the four dimensions are never assessed
-  // here and a self-check cannot reach the top bands.
-  it("marks the two dimensions this check does not assess, and states the ceiling", () => {
+  it("marks which two dimensions this check does not assess, and says why", () => {
     const w = buildBandWorking({ approach: 5, processes: 5, systemsOutcomes: 5, review: 5 });
     expect(w.rows.filter((r) => !r.assessedHere).map((r) => r.key)).toEqual(["systemsOutcomes", "review"]);
-    expect(w.ceilingTotal).toBe(60);
-    expect(w.ceilingBand).toBe(3);
-    expect(ceilingNote(w)).toContain("Band 3");
+    expect(TWO_DIMENSIONS_NOTE).toMatch(/gives no overall band/);
+    expect(TWO_DIMENSIONS_NOTE).toMatch(/one to two bands/);
     expect(DIMENSION_SOURCE.systemsOutcomes).toMatch(/Not assessed by this check/);
     expect(DIMENSION_SOURCE.review).toMatch(/Not assessed by this check/);
   });
 
-  it("says outright that the rows below do not sum to the band", () => {
+  // The per-dimension ceiling is configurable, and the exports have no access
+  // to the store. Printing the default 25% beside a percentage computed from a
+  // different scale was a quiet contradiction inside one table.
+  it("carries the configured per-dimension ceiling, not the default", () => {
+    expect(buildBandWorking({ approach: 2 } as never).maxPct).toBe(25);
+    const w = buildBandWorking({ approach: 2 } as never, {}, { maxPctPerDimension: 40, bandThresholds: [20, 40, 60, 80] });
+    expect(w.maxPct).toBe(40);
+    expect(bandGraphic(w).segments[0].max).toBe(40);
+  });
+
+  it("says outright that the rows below do not sum to the dimensions", () => {
     expect(ROWS_DO_NOT_SUM_NOTE).toMatch(/No single requirement below carries a score/);
     expect(ROWS_DO_NOT_SUM_NOTE).toMatch(/Approach/);
     expect(ROWS_DO_NOT_SUM_NOTE).toMatch(/Processes/);
   });
 
-  it("carries the whole ladder, verbatim, for the result to sit on", () => {
+  // The auditor's OWN band is a recorded fact about the area and survives.
+  it("still reports a band the auditor committed, and none of its own", () => {
+    expect(bandLineOf({ kind: "auditor", band: 4, name: "Exceeding", totalPct: 80 }))
+      .toBe("Band set by your auditor: Band 4 of 5 — Exceeding (80%)");
+    expect(bandLineOf({ kind: "none" })).toBe(NO_BAND_LINE);
+    expect(NO_BAND_LINE).toMatch(/gives no band/);
+  });
+
+  it("carries the whole ladder, verbatim, as reference for the two dimension bands", () => {
     expect(BAND_LADDER).toHaveLength(5);
     expect(BAND_LADDER[2].name).toBe("Meeting Expectation");
   });
@@ -111,32 +138,58 @@ describe("both exports carry the working", () => {
   const rows = toSelfCheckRows([row({})]);
   const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
 
-  it("puts the legend and the banding arithmetic in the CSV", () => {
+  it("puts the legend and the two dimension bands in the CSV", () => {
     const csv = buildSelfCheckCsv("4.1 Admissions", rows, { kind: "none" }, "overview", [], w);
     expect(csv).toContain("What each result means");
     expect(csv).toContain("Partly complies");
-    expect(csv).toContain("10% + 10% + 5% + 5% = 30%");
+    expect(csv).toContain("What this check assessed");
+    expect(csv).toContain("Approach,Band 2,10%,25%,yes");
     expect(csv).toContain("NOT assessed by this check");
     expect(csv).toContain("No single requirement below carries a score");
   });
 
-  it("puts the legend, the glyphs, the arithmetic and the ladder in the printable page", () => {
+  it("puts the legend, the glyphs, the dimensions and the ladder in the printable page", () => {
     const html = buildSelfCheckHtml({
       areaLabel: "4.1 Admissions", areaDescription: "d", counts: countSelfCheck(rows),
       band: { kind: "none" }, rows, ranAt: "x", view: "overview", bandWorking: w,
     });
     expect(html).toContain("What each result means");
     expect(html).toContain("! Partly complies");
-    expect(html).toContain("How this band was reached");
-    expect(html).toContain("10% + 10% + 5% + 5% = 30%");
+    expect(html).toContain("What this check assessed");
     expect(html).toContain("The official band scale");
     expect(html).toContain("Meeting Expectation");
   });
 
-  it("omits the banding section when there is no band to explain", () => {
-    expect(buildSelfCheckCsv("4.1 Admissions", rows, { kind: "none" })).not.toContain("How this band was reached");
+  // Neither export may reach a total, a band or a descriptor for a dimension
+  // nobody looked at. This is the guard against the whole defect coming back
+  // through a file rather than through the screen.
+  it("never prints an overall band, a total, or a score for the unassessed two", () => {
+    const csv = buildSelfCheckCsv("4.1 Admissions", rows, { kind: "none" }, "overview", [], w, "", ["4.1.1"]);
+    const html = buildSelfCheckHtml({
+      areaLabel: "4.1 Admissions", areaDescription: "d", counts: countSelfCheck(rows),
+      band: { kind: "none" }, rows, ranAt: "x", view: "overview", bandWorking: w, itemIds: ["4.1.1"],
+    });
+    for (const doc of [csv, html]) {
+      expect(doc).not.toContain("How this band was reached");
+      // No overall band, so nothing on the five-band ladder is "this result"
+      // and there is no ceiling to explain.
+      expect(doc).not.toContain("this result");
+      expect(doc).not.toMatch(/ceiling/i);
+      expect(doc).not.toMatch(/= 30%/);
+    }
+    // The unassessed row itself: no band, no percentage earned, and an EMPTY
+    // descriptor cell. "Systems and outcomes are non-existent" is the official
+    // Band 1 descriptor, and printing it beside a dimension nobody opened is
+    // the exact thing this change removed. (The full five-band ladder further
+    // down the document still quotes it, as reference for all five bands.)
+    expect(csv).toContain("Systems & Outcomes,not scored,,25%,NO,,NOT assessed by this check");
+    expect(html).toMatch(/<td>Systems &amp; Outcomes<\/td>\s*<td>not scored<\/td>\s*<td><\/td><td>25%<\/td>\s*<td><b>NO<\/b><\/td>\s*<td><\/td>/);
+  });
+
+  it("omits the dimension section when there is nothing assessed to report", () => {
+    expect(buildSelfCheckCsv("4.1 Admissions", rows, { kind: "none" })).not.toContain("What this check assessed");
     expect(buildSelfCheckHtml({ areaLabel: "a", areaDescription: "d", counts: countSelfCheck(rows), band: { kind: "none" }, rows, ranAt: "x" }))
-      .not.toContain("How this band was reached");
+      .not.toContain("What this check assessed");
   });
 });
 
@@ -147,6 +200,16 @@ describe("the band says which requirement item it covers", () => {
   // the table above it describes them all.
   it("names the item even when it is the only one", () => {
     expect(bandCoverageNote("4.1.1", ["4.1.1"])).toBe("This band covers requirement 4.1.1, which is the only requirement item in this area.");
+  });
+
+  // Two callers, two subjects: the auditor's committed band on the card, and
+  // the dimension panel below it. Calling the panel "this band" would report
+  // exactly the thing this page stopped claiming.
+  it("names which of the two it is captioning", () => {
+    expect(bandCoverageNote("4.1.1", ["4.1.1"], "This dimension assessment"))
+      .toMatch(/^This dimension assessment covers requirement 4\.1\.1/);
+    expect(bandCoverageNote("4.2.1", ["4.2.1", "4.2.2"], "This dimension assessment"))
+      .toMatch(/^This dimension assessment covers requirement 4\.2\.1 ONLY/);
   });
 
   it("says outright which items the band leaves out", () => {
@@ -174,30 +237,20 @@ describe("the band says which requirement item it covers", () => {
   });
 });
 
-describe("the graphic is drawn from the same numbers as the arithmetic", () => {
+describe("the graphic draws four independent dimensions and nothing else", () => {
   const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
 
   it("gives every dimension its own track and its own earned share", () => {
     const g = bandGraphic(w);
     expect(g.segments.map((s) => [s.label, s.pct, s.max])).toEqual([
-      ["Approach", 10, 25], ["Processes", 10, 25], ["Systems & Outcomes", 5, 25], ["Review", 5, 25],
+      ["Approach", 10, 25], ["Processes", 10, 25], ["Systems & Outcomes", 0, 25], ["Review", 0, 25],
     ]);
-    // The four segments are the only thing drawn as adding up, because they are
-    // the only thing that does.
-    expect(g.segments.reduce((n, s) => n + s.pct, 0)).toBe(g.total);
   });
 
-  it("marks the part of the scale this check cannot reach", () => {
-    const g = bandGraphic(w);
-    expect(g.ceiling).toBe(60);
-    expect(g.stops.filter((s) => !s.reachable).map((s) => s.band)).toEqual([4, 5]);
-    expect(g.stops.find((s) => s.band === 3)!.reachable).toBe(true);
-  });
-
-  it("draws the band scale to the same thresholds the arithmetic uses", () => {
-    const g = bandGraphic(w);
-    expect(g.stops.map((s) => [s.from, s.to])).toEqual([[0, 20], [20, 40], [40, 60], [60, 80], [80, 100]]);
-    expect(g.band).toBe(2);
+  // The stacked total bar and the five-band scale with the result marked on it
+  // are both gone: a total whose bottom half was never assessed is not a total.
+  it("carries no total, no ceiling and no band scale to mark a result on", () => {
+    expect(Object.keys(bandGraphic(w))).toEqual(["segments"]);
   });
 
   it("carries which dimensions this check assessed, so the flat ones read as unassessed rather than bad", () => {
@@ -205,7 +258,7 @@ describe("the graphic is drawn from the same numbers as the arithmetic", () => {
   });
 });
 
-describe("the ceiling comes with a way out of it", () => {
+describe("the two unassessed dimensions come with what the full audit needs", () => {
   it("names the two dimensions in plain words, not rubric language", () => {
     const [so, rev] = unassessedDimensions(["4.1.1"]);
     expect(so.plainQuestion).toMatch(/measured and tracked/);
@@ -238,9 +291,11 @@ describe("the ceiling comes with a way out of it", () => {
     expect(so.noOfficialList).toMatch(/does not itemise outcome evidence/);
   });
 
-  it("says plainly that Band 4 and 5 are not this page's to give", () => {
-    expect(IMPROVE_HEADLINE).toMatch(/Band 4 and Band 5 are not reachable from this page/);
+  it("frames the section as what the full audit will look for, not as a lost band", () => {
+    expect(IMPROVE_HEADLINE).toMatch(/not assessed here, and that is not a judgement on your area/);
+    expect(IMPROVE_HEADLINE).not.toMatch(/reachable/);
     expect(IMPROVE_WHY).toMatch(/full audit/);
+    expect(IMPROVE_WHY).toMatch(/sets the band from all four/);
   });
 
   it("gathers the run's own reported gaps, and writes none of its own", () => {
@@ -269,9 +324,9 @@ describe("the graphic degrades honestly into both exports", () => {
 
   it("puts the shape and the guidance in the CSV, where an SVG cannot go", () => {
     const csv = buildSelfCheckCsv("4.1 Admissions", rows, { kind: "none" }, "overview", [], w, "", ["4.1.1"]);
-    expect(csv).toContain("The shape of this result");
-    expect(csv).toContain("Systems & Outcomes,Band 1,5%,25%,NO");
-    expect(csv).toContain("How to reach a higher band");
+    expect(csv).toContain("What this check assessed");
+    expect(csv).toContain("Systems & Outcomes,not scored,,25%,NO");
+    expect(csv).toContain("What the full audit will look for");
     expect(csv).toContain("Key systems are interacting with one another");
     expect(csv).toContain("Procedure review records");
     expect(csv).toContain("KPI report is produced");
@@ -282,9 +337,9 @@ describe("the graphic degrades honestly into both exports", () => {
       areaLabel: "4.1 Admissions", areaDescription: "d", counts: countSelfCheck(rows),
       band: { kind: "none" }, rows, ranAt: "x", view: "overview", bandWorking: w, itemIds: ["4.1.1"],
     });
-    expect(html).toContain("The shape of this result");
+    expect(html).toContain("What this check assessed");
     expect(html).toContain("<b>NO</b>");
-    expect(html).toContain("How to reach a higher band");
+    expect(html).toContain("What the full audit will look for");
     expect(html).toContain("Many to most trends and current performance levels");
     expect(html).toContain("Procedure review records");
   });
@@ -296,8 +351,8 @@ describe("one drawing, two surfaces", () => {
   // The printed page is what gets filed as working paper, so it carries the
   // picture, not a second rendering of the same result that could drift from it.
   it("draws the same geometry for screen and for print", () => {
-    const screen = bandGraphicSvg(g, "10% + 10% + 5% + 5% = 30%", SCREEN_BAND_PALETTE);
-    const print = bandGraphicSvg(g, "10% + 10% + 5% + 5% = 30%", PRINT_BAND_PALETTE);
+    const screen = bandGraphicSvg(g, SCREEN_BAND_PALETTE);
+    const print = bandGraphicSvg(g, PRINT_BAND_PALETTE);
     const geometryOf = (svg: string) => svg.match(/<rect[^>]*x="[\d.]+"[^>]*width="[\d.]+"/g);
     expect(geometryOf(screen)).toEqual(geometryOf(print));
   });
@@ -305,33 +360,37 @@ describe("one drawing, two surfaces", () => {
   // Paper is white. A dark-mode media query must never reach a printer, so the
   // print palette carries literal colours and no custom properties at all.
   it("never sends CSS custom properties, and therefore dark mode, to the printer", () => {
-    const print = bandGraphicSvg(g, "sum", PRINT_BAND_PALETTE);
+    const print = bandGraphicSvg(g, PRINT_BAND_PALETTE);
     expect(print).not.toContain("var(--");
     expect(print).toContain("#");
     // The screen version DOES use them, which is how its dark mode works.
-    expect(bandGraphicSvg(g, "sum", SCREEN_BAND_PALETTE)).toContain("var(--g-ink)");
+    expect(bandGraphicSvg(g, SCREEN_BAND_PALETTE)).toContain("var(--g-ink)");
   });
 
   it("keeps a readable minimum width on screen and lets print size itself", () => {
-    expect(bandGraphicSvg(g, "sum", SCREEN_BAND_PALETTE, { minWidth: 620 })).toContain("min-width:620px");
-    expect(bandGraphicSvg(g, "sum", PRINT_BAND_PALETTE)).not.toContain("min-width");
+    expect(bandGraphicSvg(g, SCREEN_BAND_PALETTE, { minWidth: 430 })).toContain("min-width:430px");
+    expect(bandGraphicSvg(g, PRINT_BAND_PALETTE)).not.toContain("min-width");
   });
 
   // Two SVGs in one document collide on pattern ids, and the second one then
   // paints with the first one's hatch.
   it("can carry a distinct pattern id, so two copies in one document do not collide", () => {
-    expect(bandGraphicSvg(g, "sum", PRINT_BAND_PALETTE, { idSuffix: "Print" })).toContain('id="scHatchPrint"');
-    expect(bandGraphicSvg(g, "sum", SCREEN_BAND_PALETTE)).toContain('id="scHatch"');
+    expect(bandGraphicSvg(g, PRINT_BAND_PALETTE, { idSuffix: "Print" })).toContain('id="scHatchPrint"');
+    expect(bandGraphicSvg(g, SCREEN_BAND_PALETTE)).toContain('id="scHatch"');
   });
 
   it("carries the state in words as well as in pattern, so it survives greyscale", () => {
-    const svg = bandGraphicSvg(g, "10% + 10% + 5% + 5% = 30%", PRINT_BAND_PALETTE);
-    expect(svg).toContain("not assessed here");
-    expect(svg).toContain("out of reach here");
-    expect(svg).toContain("is the most this check can reach");
+    const svg = bandGraphicSvg(g, PRINT_BAND_PALETTE);
+    expect(svg).toContain("not assessed by this check");
+    expect(svg).toContain("Band 2 of 5 · 10% of 25%");
+    expect(svg).toContain("they are not added up into a band here");
     expect(svg).toContain("aria-label");
+    // Nothing in the picture names a band for a dimension nobody opened.
+    expect(svg).not.toMatch(/Band 1/);
   });
 
+  // Exactly one SVG in the printed document. Two drawings of one result is the
+  // drift this file exists to prevent.
   it("puts the picture in the printable document, above the table of the same numbers", () => {
     const rows = toSelfCheckRows([row({})]);
     const w = buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 });
@@ -340,8 +399,8 @@ describe("one drawing, two surfaces", () => {
       band: { kind: "none" }, rows, ranAt: "x", view: "overview", bandWorking: w, itemIds: ["4.1.1"],
     });
     expect(html).toContain('<div class="band-graphic">');
-    expect(html).toContain("<svg");
-    expect(html.indexOf("<svg")).toBeLessThan(html.indexOf("The shape of this result"));
+    expect(html.match(/<svg/g)).toHaveLength(1);
+    expect(html.indexOf("<svg")).toBeLessThan(html.indexOf("<th>Dimension</th>"));
     expect(html).not.toContain("var(--");
   });
 });

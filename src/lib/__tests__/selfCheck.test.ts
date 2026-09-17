@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   PLAIN_VERDICT, toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv,
   buildSelfCheckHtml, selfCheckFilename, describeBlock, plainRunError, plainWhy, plainDetail, COULD_NOT_CHECK_NOTE,
-  planFor, toProcedureRows, PPD_PLAIN_VERDICT, PROCEDURE_ONLY_NOTE, bandLineOf,
+  planFor, toProcedureRows, PPD_PLAIN_VERDICT, PROCEDURE_ONLY_NOTE, bandLineOf, NO_BAND_LINE,
   unjudgedBothSides, toRecordsRows, NO_EVIDENCE_FIRST_STEP,
   combinationOf, countCombinations, VIEW_TALLY, VIEW_NOTE, VIEW_LABEL, COMBINATION_LABEL, UNJUDGED_BOTH_SIDES_WHY,
   SELF_CHECK_DISCLAIMER, SELF_CHECK_HEADERS,
@@ -81,7 +81,7 @@ describe("counts and the mostly-unchecked callout", () => {
 
 describe("downloads", () => {
   const rows = toSelfCheckRows([row({ verdict: "Not met", comment: "Nothing found, and a comma.", suggestedAction: "Add it." })]);
-  const someBand = { kind: "indicative", band: 3, name: "Meeting Expectation", totalPct: 50 } as const;
+  const someBand = { kind: "auditor", band: 3, name: "Meeting Expectation", totalPct: 50 } as const;
   it("writes the agreed CSV header and quotes a comma so columns cannot shift", () => {
     const csv = buildSelfCheckCsv("5.4 Student Learning", rows, someBand);
     expect(csv.split("\r\n")[0]).toBe(SELF_CHECK_HEADERS.join(","));
@@ -89,23 +89,23 @@ describe("downloads", () => {
   });
   // A spreadsheet gets forwarded and printed on its own. Without these two it
   // reads like a bare verdict list somebody could pass off as an outcome.
-  it("carries the band and the disclaimer in the CSV, not just on screen", () => {
+  it("carries the auditor's band and the disclaimer in the CSV, not just on screen", () => {
     const csv = buildSelfCheckCsv("5.4 Student Learning", rows, someBand);
     expect(csv).toContain("Band 3 of 5");
-    expect(csv).toContain("not yet confirmed by your auditor");
+    expect(csv).toContain("Band set by your auditor");
     expect(csv).toContain(SELF_CHECK_DISCLAIMER);
   });
-  it("says so in the CSV when there is no band, rather than leaving it blank", () => {
-    expect(buildSelfCheckCsv("5.4 Student Learning", rows, { kind: "none" })).toContain("No band yet for this area.");
+  it("says in the CSV that the check gives no band, rather than leaving it blank", () => {
+    expect(buildSelfCheckCsv("5.4 Student Learning", rows, { kind: "none" })).toContain(NO_BAND_LINE);
   });
   it("carries the disclaimer into the printable version", () => {
     const html = buildSelfCheckHtml({
       areaLabel: "5.4 Student Learning", areaDescription: "d",
-      counts: countSelfCheck(rows), band: { kind: "indicative", band: 3, name: "Meeting Expectation", totalPct: 50 },
+      counts: countSelfCheck(rows), band: someBand,
       rows, ranAt: "x",
     });
     expect(html).toContain(SELF_CHECK_DISCLAIMER);
-    expect(html).toContain("not yet confirmed by your auditor");
+    expect(html).toContain("Band set by your auditor");
   });
   // The printable copy used to explain "Could not check" on every run,
   // including one where nothing was unjudged — a warning about a result that
@@ -366,33 +366,31 @@ describe("a procedure-only download says so", () => {
   });
 });
 
-// The band a PREVIOUS result was shown with was never saved: suggestBand()
-// commits nothing and EvidenceAssessmentResult has no band field. Recomputing
-// it would need a live AI call and would produce a DIFFERENT band from the one
-// the user saw, so the download says so on the face of the document. A blank
-// band field would be worse than the defect this fixes.
-describe("downloading an earlier check that has no saved score", () => {
+// An earlier check downloaded before it is replaced. There is no self-check
+// band to have lost: this page derives none, so the document says what every
+// self-check document says. The auditor's committed band is a stored fact and
+// still travels.
+describe("downloading an earlier check", () => {
   const rows = toSelfCheckRows([row({ verdict: "Met" })]);
 
-  it("states it on the band line rather than leaving it empty", () => {
-    const line = bandLineOf({ kind: "not-recorded" });
-    expect(line).toContain("Score not recorded for this earlier check");
-    expect(line).not.toBe("");
+  it("states on the band line that the check gives no band", () => {
+    expect(bandLineOf({ kind: "none" })).toBe(NO_BAND_LINE);
+    expect(NO_BAND_LINE).toMatch(/Approach and Processes/);
+    expect(NO_BAND_LINE).toMatch(/your audit lead assesses all four/);
   });
 
   it("puts that sentence in the CSV where the band would be", () => {
-    const csv = buildSelfCheckCsv("5.4 Student Learning", rows, { kind: "not-recorded" });
-    expect(csv).toContain("Score not recorded for this earlier check");
-    expect(csv).not.toContain("No band yet for this area.");
+    const csv = buildSelfCheckCsv("5.4 Student Learning", rows, { kind: "none" });
+    expect(csv).toContain(NO_BAND_LINE);
     expect(csv).toContain(SELF_CHECK_DISCLAIMER);
   });
 
   it("puts it in the printable copy too", () => {
     const html = buildSelfCheckHtml({
       areaLabel: "5.4 Student Learning", areaDescription: "d", counts: countSelfCheck(rows),
-      band: { kind: "not-recorded" }, rows, ranAt: "x",
+      band: { kind: "none" }, rows, ranAt: "x",
     });
-    expect(html).toContain("Score not recorded for this earlier check");
+    expect(html).toContain("This check gives no band");
   });
 
   it("still reports a band that WAS saved, because the auditor's one survives", () => {

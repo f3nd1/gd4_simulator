@@ -4,7 +4,6 @@ import { EDUTRUST_BANDS } from "../data/edutrustRubric";
 import { runScopesForSub, scopeTitle, itemIdsForScope, folderScopeId } from "../lib/evidenceScope";
 import { parseFolderId } from "../lib/drive/driveClient";
 import { aiOfflineReason } from "../lib/ai/aiClient";
-import { apsrMatrixResult } from "../lib/checklistBanding";
 import { downloadCsv } from "../lib/auditCsvExport";
 import { buildWordingCapture, captureFilename } from "../lib/wordingCapture";
 import { printHtmlInNewTab, PRINTABLE_DOC_CSS, POPUP_BLOCKED_MESSAGE } from "../lib/printableDoc";
@@ -21,14 +20,14 @@ import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import {
   toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv, buildSelfCheckHtml,
   selfCheckFilename, describeBlock, plainRunError, plainDetail, planFor, toProcedureRows, toRecordsRows,
-  SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE,
+  SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE, NO_BAND_LINE,
   VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
   citedText, missingText, expectedEvidenceGroups, VERDICT_LEGEND,
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, ceilingNote, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking, type BandGraphic } from "../lib/selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking, type BandGraphic } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -90,7 +89,10 @@ export function SelfCheck() {
   const [mode, setMode] = useState<"full" | "procedure-only">("full");
   const [tab, setTab] = useState<SelfCheckView>("overview");
   const [bandWorking, setBandWorking] = useState<BandWorking | null>(null);
+  // Two coverage notes, because they caption two different things: the
+  // auditor's committed band on the card, and the dimension panel below it.
   const [bandCoverage, setBandCoverage] = useState("");
+  const [dimensionCoverage, setDimensionCoverage] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -272,7 +274,7 @@ export function SelfCheck() {
     setNow(Date.now());
     setStageStartedAt(Date.now());
     setDoneSummaries({});
-    setError(null); setNote(null); setBand({ kind: "none" }); setBandWorking(null); setBandCoverage("");
+    setError(null); setNote(null); setBand({ kind: "none" }); setBandWorking(null); setBandCoverage(""); setDimensionCoverage("");
     const procedureOnly = plan.kind === "procedure-only";
     setMode(procedureOnly ? "procedure-only" : "full");
     setTab("overview");
@@ -323,10 +325,13 @@ export function SelfCheck() {
       }
 
       setPhase("band");
-      // The band is read from the EXISTING holistic banding. If your auditor
-      // has already set one it is shown as theirs; otherwise the same
-      // suggestion engine they use produces an indicative one. Neither is
-      // committed here: this page never writes a band.
+      // No band is derived from this check. The auditor's committed band shows
+      // if there is one, because that is a recorded fact about the area rather
+      // than a reading of this run. suggestBand() is still called, but ONLY for
+      // the two dimensions this path actually wrote a real status onto: its
+      // Systems & Outcomes and Review judgements are made from lines that say
+      // outright it did not look, and feeding those into the total understated
+      // a genuinely Band 4 area as Band 3. buildBandWorking drops them.
       const itemIds = itemIdsForScope(area.scope);
       // WHICH item the band belongs to, not just the band. Two sub-criteria
       // (2.2 and 4.2) hold more than one requirement item, and both the
@@ -334,6 +339,9 @@ export function SelfCheck() {
       // covers them all. Unlabelled, that is misreporting an auditor cannot see.
       const committedEntry = itemIds.map((id) => ({ id, band: checklistEntries[id]?.holisticBand })).find((e) => !!e.band);
       const committed = committedEntry?.band;
+      // Which requirement item the panel below describes. Two sub-criteria
+      // (2.2 and 4.2) hold more than one item, and the panel describes ONE of
+      // them while the table covers them all.
       // A run where nothing could be judged has nothing to band. Asking for a
       // suggestion anyway produced "Band 3 — Meeting Expectation" on a result
       // whose every line read "Could not check", which is the most misleading
@@ -345,24 +353,19 @@ export function SelfCheck() {
       const judged = ev.rows.some((r) => r.verdict !== "Not assessed" && !unjudgedBothSides(r));
       if (committed) {
         setBand({ kind: "auditor", band: committed.band, name: bandName(committed.band), totalPct: committed.totalPct });
-        setBandCoverage(bandCoverageNote(committedEntry!.id, itemIds));
-      } else if (judged) {
+        setBandCoverage(bandCoverageNote(committedEntry!.id, itemIds, "This band"));
+      }
+      if (judged) {
         const s = await useChecklistModuleStore.getState().suggestBand(itemIds[0]);
         if (stale()) return;
-        // apsrMatrixResult is the app's own band computation (checklistBanding).
-        // Called, never reimplemented, and the result is only displayed.
         if (s) {
-          const m = apsrMatrixResult(s.dimensionBands, apsrScale);
-          setBand({ kind: "indicative", band: m.band, name: bandName(m.band), totalPct: m.total });
-          // The same four dimension scores the band is computed from, kept so
-          // the page can show the arithmetic instead of asserting the result.
           setBandWorking(buildBandWorking(s.dimensionBands, {
             approach: s.dimensions.approach.reason,
             processes: s.dimensions.processes.reason,
             systemsOutcomes: s.dimensions.systemsOutcomes.reason,
             review: s.dimensions.review.reason,
           }, apsrScale));
-          setBandCoverage(bandCoverageNote(itemIds[0], itemIds));
+          setDimensionCoverage(bandCoverageNote(itemIds[0], itemIds, "This dimension assessment"));
         }
       }
       setRanAt(new Date().toLocaleString("en-SG"));
@@ -382,20 +385,19 @@ export function SelfCheck() {
 
   // The previous result, exactly as stored, for the two download controls in
   // the replace dialog. Deliberately NOT the component's `rows`/`band`/`ranAt`:
-  // those are session state, and the stored result carries its own runAt. Its
-  // band is another matter — see SCORE_NOT_RECORDED in selfCheck.ts.
+  // those are session state, and the stored result carries its own runAt.
   const previous = useMemo(() => {
     const src = plan.kind === "procedure-only" ? ppdExisting : existing;
     if (!src || src.rows.length === 0 || !area) return null;
     const prevRows = plan.kind === "procedure-only"
       ? toProcedureRows((src as { rows: Parameters<typeof toProcedureRows>[0] }).rows)
       : toSelfCheckRows((src as { rows: Parameters<typeof toSelfCheckRows>[0] }).rows);
-    // The auditor's committed band is a stored fact and survives; the
-    // indicative one was never saved with the result, so say so on the file.
+    // The auditor's committed band is a stored fact and survives. There is no
+    // other band to lose: this page derives none.
     const committed = itemIdsForScope(area.scope).map((id) => checklistEntries[id]?.holisticBand).find((bd) => !!bd);
     const prevBand: SelfCheckBand = committed
       ? { kind: "auditor", band: committed.band, name: bandName(committed.band), totalPct: committed.totalPct }
-      : { kind: "not-recorded" };
+      : { kind: "none" };
     const ranAtPrev = new Date(src.runAt).toLocaleString("en-SG");
     return { rows: prevRows, counts: countSelfCheck(prevRows), band: prevBand, ranAt: ranAtPrev };
   }, [plan.kind, existing, ppdExisting, area, checklistEntries]);
@@ -501,26 +503,11 @@ export function SelfCheck() {
         // renders on a light card and on a dark one. The rest of this page is
         // light-only today; the graphic is written so it does not become
         // unreadable if the browser renders dark, rather than pretending the
-        // app has a theme it does not have.
-        ".sc-band-graphic{--g-ink:#1f2733;--g-mute:#64748b;--g-track:#e2e8f0;--g-on:#7c3aed;--g-off:#94a3b8;--g-here:#1d4ed8;--g-hatch-bg:#f1f5f9;--g-hatch-line:#cbd5e1;--g-line:#0f172a;--g-surface:#fff;--g-edge:#e2e8f0}",
-        "@media (prefers-color-scheme: dark){.sc-band-graphic{--g-ink:#e2e8f0;--g-mute:#94a3b8;--g-track:#334155;--g-on:#a78bfa;--g-off:#64748b;--g-here:#93c5fd;--g-hatch-bg:#1e293b;--g-hatch-line:#475569;--g-line:#e2e8f0;--g-surface:#0f172a;--g-edge:#334155}}",
-        ".sc-band-graphic .sc-surface{fill:var(--g-surface);stroke:var(--g-edge)}",
-        ".sc-band-graphic .sc-track{fill:var(--g-track)}",
-        ".sc-band-graphic .sc-seg-on{fill:var(--g-on)}",
-        ".sc-band-graphic .sc-seg-off{fill:var(--g-off)}",
-        ".sc-band-graphic .sc-hatch-bg{fill:var(--g-hatch-bg)}",
-        ".sc-band-graphic .sc-hatch-line{stroke:var(--g-hatch-line)}",
-        ".sc-band-graphic .sc-stop{fill:var(--g-track)}",
-        ".sc-band-graphic .sc-stop-off{fill:var(--g-hatch-bg)}",
-        ".sc-band-graphic .sc-stop-here{fill:var(--g-here)}",
-        ".sc-band-graphic .sc-ceiling{stroke:var(--g-line);stroke-width:2;stroke-dasharray:3 3}",
-        ".sc-band-graphic text{font-family:inherit}",
-        ".sc-band-graphic .sc-g-title{font-size:12px;font-weight:700;fill:var(--g-ink)}",
-        ".sc-band-graphic .sc-g-note{font-size:11px;fill:var(--g-mute)}",
-        ".sc-band-graphic .sc-g-small{font-size:10.5px;fill:var(--g-mute)}",
-        ".sc-band-graphic .sc-g-seg{font-size:11px;font-weight:700;fill:#fff}",
-        ".sc-band-graphic .sc-g-stop{font-size:12px;font-weight:700;fill:var(--g-ink)}",
-        ".sc-band-graphic .sc-g-stop-here{font-size:12px;font-weight:800;fill:#fff}",
+        // app has a theme it does not have. The printed copy passes literal
+        // colours instead (PRINT_BAND_PALETTE), so no dark-mode media query can
+        // reach paper. Every other rule the SVG needs is an inline style.
+        ".sc-band-graphic{--g-ink:#1f2733;--g-mute:#64748b;--g-track:#e2e8f0;--g-on:#7c3aed;--g-hatch-bg:#f1f5f9;--g-hatch-line:#cbd5e1;--g-surface:#fff;--g-edge:#e2e8f0}",
+        "@media (prefers-color-scheme: dark){.sc-band-graphic{--g-ink:#e2e8f0;--g-mute:#94a3b8;--g-track:#334155;--g-on:#a78bfa;--g-hatch-bg:#1e293b;--g-hatch-line:#475569;--g-surface:#0f172a;--g-edge:#334155}}",
       ].join("")}</style>
       <div style={{ maxWidth: 880, margin: "0 auto" }}>
         <header style={{ marginBottom: 18 }}>
@@ -867,22 +854,16 @@ export function SelfCheck() {
 
             {view === "overview" && (
             <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fbfcfe" }}>
-              {band.kind === "none" || band.kind === "not-recorded" ? (
+              {band.kind === "none" ? (
                 <>
-                  <b style={{ fontSize: 14 }}>No band yet for this area</b>
-                  <p style={{ ...muted, margin: "5px 0 0" }}>
-                    {counts.couldNotCheck === counts.total
-                      ? "Nothing in this check could be judged, so there is nothing to base a band on. Your audit lead sets the final band."
-                      : "A band could not be worked out from this check. Your audit lead sets the final band."}
-                  </p>
+                  <b style={{ fontSize: 14 }}>This check gives no band</b>
+                  <p style={{ ...muted, margin: "5px 0 0" }}>{NO_BAND_LINE}</p>
                 </>
               ) : (
                 <>
                   <b style={{ fontSize: 14 }}>Band {band.band} of 5 — {band.name}</b>
                   <p style={{ ...muted, margin: "5px 0 0" }}>
-                    {band.kind === "auditor"
-                      ? "This is the band your audit lead has already recorded for this area."
-                      : "An indicative band from this practice check. Your audit lead has not confirmed it, and this page does not set it."}
+                    This is the band your audit lead has already recorded for this area. It is not a result of this check.
                     {" "}{SELF_CHECK_DISCLAIMER}
                   </p>
                   {/* Which requirement item the number belongs to. Shown on the
@@ -993,24 +974,25 @@ export function SelfCheck() {
               </table>
             </div>
 
-            {/* The band, with its working. "Band 2 of 5" on its own is an
-                assertion an auditor cannot defend. What can honestly be shown
-                is the second half of the chain: the four dimension judgements
-                became percentages, and those were summed. The first half, rows
-                to dimension judgements, is NOT arithmetic, and the note says so
-                rather than drawing an arrow that does not exist. */}
-            {view === "overview" && bandWorking && band.kind === "indicative" && (
+            {/* The two dimensions this check can defend, and the two it leaves
+                alone. It shows no overall band: scoring Systems & Outcomes and
+                Review at the bottom for never having been opened understated a
+                genuinely Band 4 area as Band 3, which is an absence of
+                assessment presented as a judgement. The rows-to-dimension step
+                is a judgement and not arithmetic, and the note says so rather
+                than drawing an arrow that does not exist. */}
+            {view === "overview" && bandWorking && (
               <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "13px 15px", margin: "14px 0 0", background: "#fff" }}>
-                <b style={{ fontSize: 14 }}>How this band was reached</b>
-                <BandGraphicView g={bandGraphic(bandWorking, apsrScale)} sum={bandWorking.sum} />
-                {bandCoverage && <p style={{ ...muted, margin: "8px 0 2px" }}>{bandCoverage}</p>}
+                <b style={{ fontSize: 14 }}>What this check assessed</b>
+                <BandGraphicView g={bandGraphic(bandWorking)} />
+                {dimensionCoverage && <p style={{ ...muted, margin: "8px 0 2px" }}>{dimensionCoverage}</p>}
                 <div style={{ overflowX: "auto", marginTop: 10 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                     <thead>
                       <tr style={{ textAlign: "left", background: "#f8fafc" }}>
                         <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "18%" }}>Dimension</th>
                         <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "9%" }}>Band</th>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "9%" }}>Contributes</th>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "12%" }}>Earned</th>
                         <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "32%" }}>Official descriptor at that band</th>
                         <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0" }}>Where it came from</th>
                       </tr>
@@ -1023,7 +1005,9 @@ export function SelfCheck() {
                             <div style={{ ...muted, fontSize: 11 }}>{d.definition}</div>
                           </td>
                           <td style={{ padding: "8px 9px" }}>{d.band === undefined ? <span style={muted}>not scored</span> : `Band ${d.band}`}</td>
-                          <td style={{ padding: "8px 9px", fontWeight: 700 }}>{d.pct}%</td>
+                          <td style={{ padding: "8px 9px", fontWeight: 700 }}>
+                            {d.assessedHere ? `${d.pct}% of ${bandWorking.maxPct}%` : <span style={{ ...muted, fontWeight: 400 }}>not assessed</span>}
+                          </td>
                           <td style={{ padding: "8px 9px", color: "#475569" }}>{d.descriptor || <span style={muted}>—</span>}</td>
                           <td style={{ padding: "8px 9px", color: "#475569" }}>
                             {d.assessedHere
@@ -1037,15 +1021,15 @@ export function SelfCheck() {
                 </div>
                 <p style={{ ...muted, marginBottom: 0 }}>{ROWS_DO_NOT_SUM_NOTE}</p>
                 <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
-                  {ceilingNote(bandWorking)}
+                  {TWO_DIMENSIONS_NOTE}
                 </p>
 
-                {/* The cap, turned into a to-do list. Every line below is
+                {/* What the other two dimensions need. Every line below is
                     either the Guidance Document's own wording, the official
                     expected-evidence list filtered to entries that name the
                     dimension, or a gap this run itself reported. */}
                 <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 10, padding: "12px 14px", margin: "12px 0" }}>
-                  <b style={{ fontSize: 13.5, color: "#1e40af" }}>How to reach a higher band</b>
+                  <b style={{ fontSize: 13.5, color: "#1e40af" }}>What the full audit will look for</b>
                   <p style={{ ...muted, margin: "6px 0 2px", color: "#1e3a8a" }}>{IMPROVE_HEADLINE}</p>
                   <p style={{ ...muted, margin: "0 0 10px", color: "#1e3a8a" }}>{IMPROVE_WHY}</p>
                   {unassessedDimensions(itemIdsForScope(area.scope)).map((d) => (
@@ -1081,7 +1065,7 @@ export function SelfCheck() {
                 </div>
 
                 <details style={{ marginTop: 6 }}>
-                  <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700, color: INK }}>The official band scale, and where this result sits</summary>
+                  <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700, color: INK }}>The official band scale, for all four dimensions</summary>
                   <div style={{ overflowX: "auto", marginTop: 8 }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                       <thead>
@@ -1095,10 +1079,9 @@ export function SelfCheck() {
                       </thead>
                       <tbody>
                         {BAND_LADDER.map((b) => {
-                          const here = b.band === bandWorking.band;
                           return (
-                            <tr key={b.band} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top", background: here ? "#eff6ff" : undefined, fontWeight: here ? 700 : 400 }}>
-                              <td style={{ padding: "7px 8px" }}>Band {b.band} {b.name}{here && <div style={{ fontSize: 11, color: "#1e40af" }}>← this result</div>}</td>
+                            <tr key={b.band} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top" }}>
+                              <td style={{ padding: "7px 8px" }}>Band {b.band} {b.name}</td>
                               <td style={{ padding: "7px 8px", color: "#475569" }}>{b.approach}</td>
                               <td style={{ padding: "7px 8px", color: "#475569" }}>{b.processes}</td>
                               <td style={{ padding: "7px 8px", color: "#475569" }}>{b.systemsOutcomes}</td>
@@ -1209,7 +1192,7 @@ function Working({ row }: { row: SelfCheckRow }) {
 // the four dimension bands are a judgement, and only the dimension-to-
 // percentage step is arithmetic. Hatching, not colour, carries "not assessed
 // here" and "out of reach", so both read in greyscale and on paper.
-function BandGraphicView({ g, sum }: { g: BandGraphic; sum: string }) {
+function BandGraphicView({ g }: { g: BandGraphic }) {
   // An SVG scaled to a 420px screen renders its 10.5px labels at about 5px,
   // which is not legible. It keeps a minimum width and the container scrolls
   // instead, which is what the result tables on this page already do.
@@ -1217,7 +1200,7 @@ function BandGraphicView({ g, sum }: { g: BandGraphic; sum: string }) {
     <div
       className="sc-band-graphic"
       style={{ marginTop: 10, overflowX: "auto" }}
-      dangerouslySetInnerHTML={{ __html: bandGraphicSvg(g, sum, SCREEN_BAND_PALETTE, { minWidth: 620 }) }}
+      dangerouslySetInnerHTML={{ __html: bandGraphicSvg(g, SCREEN_BAND_PALETTE, { minWidth: 430 }) }}
     />
   );
 }
