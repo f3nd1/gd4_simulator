@@ -23,8 +23,10 @@ import {
   selfCheckFilename, describeBlock, plainRunError, plainDetail, planFor, toProcedureRows, toRecordsRows,
   SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE,
   VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
-  type SelfCheckBand, type SelfCheckView, type Combination,
+  citedText, missingText, expectedEvidenceGroups,
+  type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
+import { toFileRows, countFileRows, unreadableWarning, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -212,14 +214,34 @@ export function SelfCheck() {
   // half and gets no tabs at all, so the tab state is ignored there rather
   // than offering a records view that was never run.
   const view: SelfCheckView = procedureOnlyResult ? "procedure-only" : tab;
+  // Everything the working is read from: the procedure pass's own rows (for the
+  // clause-by-clause breakdown) and both passes' chunk-to-file maps (so a quote
+  // names the file it came from, not a chunk id).
+  const runCtx = useMemo(
+    () => ({
+      ppdRows: ppdExisting?.rows,
+      chunkFileNames: { ...(ppdExisting?.chunkFileNames ?? {}), ...(existing?.chunkFileNames ?? {}) },
+      unreadableFiles: countFileRows(toFileRows(ppdExisting?.fileLedger, existing?.fileLedger)).unreadable,
+    }),
+    [ppdExisting, existing],
+  );
   const rows = useMemo(
     () => {
-      if (view === "records") return existing ? toRecordsRows(existing.rows) : [];
-      if (view === "overview") return existing ? toSelfCheckRows(existing.rows) : [];
-      return ppdExisting ? toProcedureRows(ppdExisting.rows) : [];
+      if (view === "records") return existing ? toRecordsRows(existing.rows, runCtx) : [];
+      if (view === "overview") return existing ? toSelfCheckRows(existing.rows, runCtx) : [];
+      return ppdExisting ? toProcedureRows(ppdExisting.rows, runCtx) : [];
     },
-    [view, existing, ppdExisting],
+    [view, existing, ppdExisting, runCtx],
   );
+  // What the run actually opened, from the two passes' own file ledgers. A
+  // procedure-only run never read the records folder, so only its ledger is
+  // listed: showing an empty records section would imply a folder was read.
+  const fileRows = useMemo(
+    () => toFileRows(ppdExisting?.fileLedger, procedureOnlyResult ? undefined : existing?.fileLedger),
+    [ppdExisting, existing, procedureOnlyResult],
+  );
+  const fileCounts = useMemo(() => countFileRows(fileRows), [fileRows]);
+  const expectedGroups = useMemo(() => expectedEvidenceGroups(rows), [rows]);
   const counts = useMemo(() => countSelfCheck(rows), [rows]);
   const combos = useMemo(() => (existing ? countCombinations(existing.rows) : null), [existing]);
   // Off the stored result, not off `rows`: switching to a tab that happens to
@@ -376,14 +398,14 @@ export function SelfCheck() {
     if (!area) return;
     // The tab you are looking at is the tab you get, named on the file so two
     // downloads of the same run can never be confused for each other.
-    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
+    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, fileRows), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
   }
   function onPdf() {
     if (!area) return;
     const ok = printHtmlInNewTab(
       `<style>${PRINTABLE_DOC_CSS}</style>${buildSelfCheckHtml({
         areaLabel: `${area.scope} ${area.title}`, areaDescription: area.description,
-        counts, band, rows, ranAt, view,
+        counts, band, rows, ranAt, view, files: fileRows,
       })}`,
       view === "overview" ? `Self-check ${area.title}` : `Self-check ${area.title} — ${VIEW_LABEL[view]}`,
     );
@@ -814,6 +836,55 @@ export function SelfCheck() {
             </div>
             )}
 
+            {/* What was actually read, before any verdict. An auditor cannot
+                otherwise tell "you genuinely have no evidence for this" from
+                "your evidence exists but the file could not be read", and those
+                two demand completely different actions. Read from the two
+                passes' own file ledgers — no new tracking. */}
+            {fileRows.length > 0 && (
+              <details open={fileCounts.unreadable > 0} style={{ border: "1px solid #e2e8f0", borderRadius: 10, margin: "12px 0", background: "#fff" }}>
+                <summary style={{ padding: "11px 13px", cursor: "pointer", fontSize: 13.5, fontWeight: 700, color: INK }}>
+                  What was read: {fileCounts.read} read
+                  {fileCounts.check > 0 && ` · ${fileCounts.check} worth checking`}
+                  {fileCounts.unreadable > 0 && ` · ${fileCounts.unreadable} could not be read`}
+                </summary>
+                <div style={{ padding: "0 13px 13px" }}>
+                  {fileCounts.unreadable > 0 && (
+                    <p style={{ ...muted, background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "9px 11px", marginTop: 0 }}>
+                      {unreadableWarning(fileCounts)}
+                    </p>
+                  )}
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", background: "#f8fafc" }}>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0" }}>File</th>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "16%" }}>Folder</th>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "16%" }}>Was it read?</th>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "22%" }}>Detail</th>
+                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "28%" }}>What to do about it</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fileRows.map((f, i) => (
+                        <tr key={`${f.bucket}-${f.name}-${i}`} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top", background: f.outcome === "unreadable" ? "#fef2f2" : undefined }}>
+                          <td style={{ padding: "8px 9px" }}>
+                            {f.name}
+                            {f.cited && <div style={{ ...muted, fontSize: 11 }}>quoted in a result</div>}
+                          </td>
+                          <td style={{ padding: "8px 9px", color: "#475569" }}>{f.bucket}</td>
+                          <td style={{ padding: "8px 9px" }}>
+                            <span style={{ ...TONE_BG[FILE_TONE[f.outcome]], padding: "2px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, display: "inline-block" }}>{f.label}</span>
+                          </td>
+                          <td style={{ padding: "8px 9px", color: "#475569" }}>{f.detail || "—"}</td>
+                          <td style={{ padding: "8px 9px", color: "#334155" }}>{f.action || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            )}
+
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
@@ -831,13 +902,38 @@ export function SelfCheck() {
                       <td style={{ padding: "10px" }}>
                         <span style={{ ...TONE_BG[r.tone], padding: "3px 9px", borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", display: "inline-block" }}>{r.label}</span>
                       </td>
-                      <td style={{ padding: "10px", color: "#334155" }}>{r.why || <span style={muted}>No reason recorded.</span>}</td>
-                      <td style={{ padding: "10px", color: "#334155" }}>{r.fix || <span style={muted}>{r.tone === "good" || r.tone === "neutral" ? "—" : "The check did not suggest anything specific here. Ask your audit lead what would close it."}</span>}</td>
+                      <td style={{ padding: "10px", color: "#334155" }}>
+                        {r.why || <span style={muted}>No reason recorded.</span>}
+                        <Working row={r} />
+                      </td>
+                      <td style={{ padding: "10px", color: "#334155" }}>
+                        {r.fix || <span style={muted}>{r.tone === "good" || r.tone === "neutral" ? "—" : "The check did not suggest anything specific here. Ask your audit lead what would close it."}</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+
+            {/* What good looks like, from the official published list and
+                nothing else. Once per requirement item, because that is the
+                granularity the list is published at. */}
+            {expectedGroups.length > 0 && (
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 14px", margin: "14px 0 0", background: "#f8fafc" }}>
+                <b style={{ fontSize: 13.5 }}>What a passing record contains</b>
+                <p style={{ ...muted, margin: "4px 0 8px" }}>
+                  The official EduTrust GD4 expected-evidence list, quoted as published. It is not a judgement on anything you hold.
+                </p>
+                {expectedGroups.map((g) => (
+                  <div key={g.itemId} style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: "#475569" }}>Requirement {g.itemId}</div>
+                    <ul style={{ ...muted, margin: "2px 0 0", paddingLeft: 17 }}>
+                      {g.items.map((i) => <li key={i}>{i}</li>)}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
               <button type="button" onClick={onPdf} style={{ ...bigBtn, fontSize: 13.5, padding: "10px 18px" }}>⬇ Download as PDF</button>
@@ -852,6 +948,39 @@ export function SelfCheck() {
           </section>
         )}
       </div>
+    </div>
+  );
+}
+
+const FILE_TONE: Record<SelfCheckFileRow["outcome"], string> = { read: "good", check: "medium", unreadable: "critical" };
+
+// The working behind one verdict: the passage that satisfied it and where it
+// came from, or the named element that is missing, or why nothing could be
+// decided. All of it is read off the row the engine already produced; none of
+// it is written here, which is why a row with no breakdown says exactly that
+// instead of filling the space.
+function Working({ row }: { row: SelfCheckRow }) {
+  const cited = citedText(row.working);
+  const missing = missingText(row.working);
+  const unchecked = row.verdict === "Not assessed";
+  if (!cited && !missing) return null;
+  return (
+    <div style={{ marginTop: 7, paddingTop: 7, borderTop: "1px dashed #e2e8f0", fontSize: 12.5, lineHeight: 1.5 }}>
+      {cited && (
+        <div style={{ marginBottom: missing ? 5 : 0 }}>
+          <span style={{ fontWeight: 700, color: "#166534" }}>Quoted: </span>
+          <span style={{ color: "#475569" }}>{cited}</span>
+        </div>
+      )}
+      {missing && (
+        <div>
+          {/* A line nothing could be decided for has no missing ELEMENT — it
+              has a reason, and colouring it as a gap would be the same error
+              as counting it as one. */}
+          <span style={{ fontWeight: 700, color: unchecked ? "#475569" : "#991b1b" }}>{unchecked ? "Why not: " : "Missing: "}</span>
+          <span style={{ color: "#475569" }}>{missing}</span>
+        </div>
+      )}
     </div>
   );
 }

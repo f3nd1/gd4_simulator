@@ -12,6 +12,7 @@
 import { toCsv } from "./auditCsvExport";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
+import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
 
 // The disclaimer the rest of the app carries, repeated verbatim in every
@@ -191,6 +192,23 @@ export type SelfCheckRow = {
   tone: string;
   why: string;
   fix: string;
+  // The working an auditor has to show to defend the verdict: what was looked
+  // for, what was quoted, which named element is missing, and why nothing could
+  // be decided. Absent on rows built without the run context.
+  working?: SelfCheckWorking;
+  // The official GD4 expected-evidence list for this requirement item, verbatim.
+  // Empty when the shipped data has none; never generated.
+  expected?: string[];
+};
+
+// The run context the working is read from. Optional everywhere, because a row
+// list is still meaningful without it and old callers must keep working.
+export type SelfCheckContext = {
+  ppdRows?: PPDReviewRow[];
+  chunkFileNames?: Record<string, string>;
+  // How many files the run could not read. A gap reported alongside an unread
+  // file is not a clean gap, and the row has to say so.
+  unreadableFiles?: number;
 };
 
 // The engine only writes suggestedAction from its AI judge. On a line where
@@ -217,7 +235,8 @@ export function fixFor(r: EvidenceAssessmentRow, isGap: boolean): string {
 
 export type SelfCheckCounts = { complies: number; partly: number; doesNot: number; couldNotCheck: number; total: number };
 
-export function toSelfCheckRows(rows: EvidenceAssessmentRow[]): SelfCheckRow[] {
+export function toSelfCheckRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckContext = {}): SelfCheckRow[] {
+  const ppdByRef = new Map((ctx.ppdRows ?? []).map((p) => [p.ref, p]));
   return rows.map((r) => {
     // An unjudged pair is shown for what it is, not as a partial pass.
     const plain = unjudgedBothSides(r)
@@ -237,17 +256,23 @@ export function toSelfCheckRows(rows: EvidenceAssessmentRow[]): SelfCheckRow[] {
         ? "The checking service did not answer for this one, so nothing was judged. Run the check again."
         : unjudgedBothSides(r)
           ? UNJUDGED_BOTH_SIDES_WHY
-          : plainWhy(r.comment || r.evidenceSummary || ""),
+          // Applied to every row, not only the gaps: a "Could not check" row
+          // carried the same "every document was read" claim, and it is just
+          // as wrong there.
+          : qualifyForUnreadable(plainWhy(r.comment || r.evidenceSummary || ""), ctx.unreadableFiles ?? 0),
       // OFI, taken only from the engine's suggestedAction. Never written here,
       // and only ever present on a row the engine judged short.
       fix: fixFor(r, plain.isGap),
+      working: buildWorking(r, ppdByRef.get(r.gdRef), ctx.chunkFileNames),
+      expected: expectedEvidenceFor(r.gd4ItemId),
     };
   });
 }
 
 // The procedure pass's own rows, in the same shape, so the table, the CSV and
 // the printable page are the existing ones rather than a second set.
-export function toProcedureRows(rows: PPDReviewRow[]): SelfCheckRow[] {
+export function toProcedureRows(rows: PPDReviewRow[], ctx: SelfCheckContext = {}): SelfCheckRow[] {
+  const fileOf = (cid: string) => ctx.chunkFileNames?.[cid] || "";
   return rows.map((r) => {
     const plain = PPD_PLAIN_VERDICT[r.verdict] ?? PPD_PLAIN_VERDICT["Not assessed"];
     return {
@@ -262,6 +287,18 @@ export function toProcedureRows(rows: PPDReviewRow[]): SelfCheckRow[] {
       why: plainWhy(r.fullComment || r.shortComment || ""),
       // The procedure pass's OFI is its suggested rewrite. Copied, never written.
       fix: (r.suggestedRewrite || "").trim(),
+      working: {
+        lookedFor: r.requirementText,
+        // Only a quote the pass verified as a real substring of the document.
+        citations: r.supportQuote ? [{ file: fileOf(r.chunkIds?.[0] ?? "") || "your written procedure", quote: r.supportQuote }] : [],
+        citedFiles: [...new Set((r.chunkIds ?? []).map(fileOf))].filter(Boolean),
+        missing: (r.subClauses ?? []).filter((sc) => sc.verdict === "not documented").map((sc) => ({ text: sc.text, why: "Your written procedure does not cover this part." })),
+        notCheckedReason: r.verdict === "Not assessed" && r.extractionStats && r.extractionStats.raw > 0
+          ? "The tool found passages that may be relevant but could not match them word for word against your procedure, so it did not judge this line. That is a tool limit, not a finding about your area."
+          : "",
+        noBreakdown: (r.verdict === "Partial" || r.verdict === "Not documented") && (r.subClauses ?? []).filter((sc) => sc.verdict === "not documented").length === 0,
+      },
+      expected: expectedEvidenceFor(r.gd4ItemId),
     };
   });
 }
@@ -280,7 +317,8 @@ export const RECORDS_PLAIN_VERDICT: Record<"found" | "none" | "unknown", PlainVe
   unknown: { label: "Could not check", tone: "neutral", isGap: false },
 };
 
-export function toRecordsRows(rows: EvidenceAssessmentRow[]): SelfCheckRow[] {
+export function toRecordsRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckContext = {}): SelfCheckRow[] {
+  const ppdByRef = new Map((ctx.ppdRows ?? []).map((p) => [p.ref, p]));
   return rows.map((r) => {
     const cited = (r.evidenceChunkIds?.length ?? 0) > 0;
     // An unjudged PAIR is deliberately NOT unknown here. What made the combined
@@ -303,8 +341,10 @@ export function toRecordsRows(rows: EvidenceAssessmentRow[]): SelfCheckRow[] {
         ? "The checking service did not answer for this one, so your records were not checked. Run the check again."
         : cited
           ? (r.evidenceSummary || "").trim() || "A record covering this was found in your folder."
-          : "Every document in your records folder was read, and none of them mentioned this requirement.",
+          : qualifyForUnreadable("Every document in your records folder was read, and none of them mentioned this requirement.", ctx.unreadableFiles ?? 0),
       fix: fixFor(r, plain.isGap),
+      working: buildWorking(r, ppdByRef.get(r.gdRef), ctx.chunkFileNames),
+      expected: expectedEvidenceFor(r.gd4ItemId),
     };
   });
 }
@@ -406,7 +446,47 @@ export type SelfCheckBand =
 
 export const SELF_CHECK_HEADERS = [
   "Area", "GD4 reference", "What the requirement asks", "Result", "Why", "What to fix",
+  // The working an auditor files alongside the verdict. Three more columns
+  // rather than a prose blob, so a spreadsheet can be sorted and filtered on
+  // them the way working paper actually gets used.
+  "Evidence quoted", "What is missing", "Official expected evidence",
 ];
+
+export const SELF_CHECK_FILE_HEADERS = ["File", "Folder", "Was it read?", "Detail", "What to do about it", "Quoted in a result"];
+
+// One place both exports turn a row's working into flat text, so the CSV and
+// the printable page can never describe the same row differently.
+export function citedText(w: SelfCheckWorking | undefined): string {
+  if (!w) return "";
+  if (w.citations.length > 0) return w.citations.map((c) => `"${c.quote}" (${c.file})`).join("\n");
+  if (w.citedFiles.length > 0) return `Cited ${w.citedFiles.join(", ")}, with no exact excerpt captured.`;
+  return "";
+}
+
+export const NO_BREAKDOWN_NOTE = "The check did not break this shortfall into named elements.";
+
+// The official expected-evidence list is published per requirement ITEM, not
+// per requirement line, so it is shown once per item rather than repeated
+// under every line of that item — ten identical copies down a page is noise an
+// auditor has to read past, and it implied a line-level list that does not
+// exist. The label says which item it belongs to.
+export type ExpectedEvidenceGroup = { itemId: string; items: string[] };
+
+export function expectedEvidenceGroups(rows: SelfCheckRow[]): ExpectedEvidenceGroup[] {
+  const seen = new Map<string, string[]>();
+  for (const r of rows) {
+    const itemId = r.ref.split(".").slice(0, 3).join(".");
+    if (!seen.has(itemId) && (r.expected ?? []).length > 0) seen.set(itemId, r.expected ?? []);
+  }
+  return [...seen].map(([itemId, items]) => ({ itemId, items }));
+}
+
+export function missingText(w: SelfCheckWorking | undefined): string {
+  if (!w) return "";
+  if (w.missing.length > 0) return w.missing.map((m) => `${m.text} — ${m.why}`).join("\n");
+  if (w.notCheckedReason) return w.notCheckedReason;
+  return w.noBreakdown ? NO_BREAKDOWN_NOTE : "";
+}
 
 // One wording for the band, used by BOTH downloads so a CSV and a PDF of the
 // same run can never describe the result differently.
@@ -424,17 +504,32 @@ export function bandLineOf(band: SelfCheckBand): string {
 // list that somebody could mistake for an official outcome.
 export function buildSelfCheckCsv(
   areaLabel: string, rows: SelfCheckRow[], band: SelfCheckBand, view: SelfCheckView = "overview",
+  files: SelfCheckFileRow[] = [],
 ): string {
-  const blank = ["", "", "", "", "", ""];
+  const pad = (cells: string[]) => [...cells, ...Array(Math.max(0, SELF_CHECK_HEADERS.length - cells.length)).fill("")];
+  const blank = pad([]);
   // Only the overall view carries a band: one pass on its own was never banded,
   // and printing the area's band on top of half the answer would read as though
   // that half produced it.
   const trailer = view === "overview" ? [bandLineOf(band)] : [VIEW_NOTE[view]];
-  return toCsv(SELF_CHECK_HEADERS, [
-    ...rows.map((r) => [areaLabel, r.ref, r.requirement, r.label, r.why, r.fix]),
+  const counts = countFileRows(files);
+  const warning = unreadableWarning(counts);
+  // The file list rides in the same spreadsheet, below the verdicts: a verdict
+  // filed without the record of what was actually read is not defensible, and
+  // two separate downloads get separated.
+  const fileBlock = files.length === 0 ? [] : [
     blank,
-    ...trailer.map((t) => [t, "", "", "", "", ""]),
-    [SELF_CHECK_DISCLAIMER, "", "", "", "", ""],
+    pad([`What was read (${counts.total} file${counts.total === 1 ? "" : "s"}: ${counts.read} read, ${counts.check} to check, ${counts.unreadable} unreadable)`]),
+    ...(warning ? [pad([warning])] : []),
+    pad(SELF_CHECK_FILE_HEADERS),
+    ...files.map((f) => pad([f.name, f.bucket, f.label, f.detail, f.action, f.cited ? "yes" : "no"])),
+  ];
+  return toCsv(SELF_CHECK_HEADERS, [
+    ...rows.map((r) => pad([areaLabel, r.ref, r.requirement, r.label, r.why, r.fix, citedText(r.working), missingText(r.working), (r.expected ?? []).join("; ")])),
+    blank,
+    ...trailer.map((t) => pad([t])),
+    pad([SELF_CHECK_DISCLAIMER]),
+    ...fileBlock,
   ]);
 }
 
@@ -454,8 +549,45 @@ export function buildSelfCheckHtml(opts: {
   rows: SelfCheckRow[];
   ranAt: string;
   view?: SelfCheckView;
+  files?: SelfCheckFileRow[];
 }): string {
-  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview" } = opts;
+  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [] } = opts;
+  const fileCounts = countFileRows(files);
+  const fileWarning = unreadableWarning(fileCounts);
+  // Printed in black and white, so the unreadable rows carry a word rather than
+  // only a colour.
+  const OUTCOME_MARK: Record<SelfCheckFileRow["outcome"], string> = { read: "", check: "CHECK — ", unreadable: "NOT READ — " };
+  const filesTable = files.length === 0 ? "" : `
+    <h2>What was read</h2>
+    ${fileWarning ? `<p><b>${escapeHtml(fileWarning)}</b></p>` : ""}
+    <p class="muted">${fileCounts.read} read · ${fileCounts.check} read but worth checking · ${fileCounts.unreadable} could not be read</p>
+    <table>
+      <thead><tr><th>File</th><th>Folder</th><th>Was it read?</th><th>Detail</th><th>What to do about it</th><th>Quoted</th></tr></thead>
+      <tbody>
+        ${files.map((f) => `<tr>
+          <td>${escapeHtml(f.name)}</td>
+          <td>${escapeHtml(f.bucket)}</td>
+          <td>${escapeHtml(OUTCOME_MARK[f.outcome] + f.label)}</td>
+          <td>${escapeHtml(f.detail)}</td>
+          <td>${escapeHtml(f.action)}</td>
+          <td>${f.cited ? "yes" : "no"}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+  // The working, rendered inside the existing cells rather than as extra
+  // columns: a printed page at A4 cannot carry nine columns and stay readable.
+  const workingHtml = (r: SelfCheckRow) => {
+    const cited = citedText(r.working);
+    const missing = missingText(r.working);
+    // A line nothing could be decided for has a reason, not a missing element.
+    const label = r.verdict === "Not assessed" ? "Why not:" : "Missing:";
+    return `${cited ? `<div class="muted"><b>Quoted:</b> ${escapeHtml(cited)}</div>` : ""}${missing ? `<div class="muted"><b>${label}</b> ${escapeHtml(missing)}</div>` : ""}`;
+  };
+  const groups = expectedEvidenceGroups(rows);
+  const expectedSection = groups.length === 0 ? "" : `
+    <h2>What a passing record contains</h2>
+    <p class="muted">The official EduTrust GD4 expected-evidence list, quoted as published. It is not a judgement on anything you hold.</p>
+    ${groups.map((g) => `<p><b>Requirement ${escapeHtml(g.itemId)}</b><br>${g.items.map((i) => escapeHtml(i)).join("<br>")}</p>`).join("")}`;
   const words = VIEW_TALLY[view];
   const bandLine = view === "overview" ? bandLineOf(band) : VIEW_NOTE[view];
   // Same condition as the screen: a run with nothing unjudged must not carry a
@@ -475,11 +607,13 @@ export function buildSelfCheckHtml(opts: {
         ${rows.map((r) => `<tr>
           <td>${escapeHtml(r.requirement)}<br><span class="muted">${escapeHtml(r.ref)}</span></td>
           <td>${escapeHtml(r.label)}</td>
-          <td>${escapeHtml(r.why)}</td>
+          <td>${escapeHtml(r.why)}${workingHtml(r)}</td>
           <td>${escapeHtml(r.fix)}</td>
         </tr>`).join("")}
       </tbody>
     </table>
+    ${expectedSection}
+    ${filesTable}
     <p class="muted">${escapeHtml(SELF_CHECK_DISCLAIMER)}</p>
   `;
 }
