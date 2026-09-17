@@ -3,6 +3,8 @@ import {
   PLAIN_VERDICT, toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv,
   buildSelfCheckHtml, selfCheckFilename, describeBlock, plainRunError, plainWhy, plainDetail, COULD_NOT_CHECK_NOTE,
   planFor, toProcedureRows, PPD_PLAIN_VERDICT, PROCEDURE_ONLY_NOTE, bandLineOf,
+  unjudgedBothSides, toRecordsRows, NO_EVIDENCE_FIRST_STEP,
+  combinationOf, countCombinations, VIEW_TALLY, VIEW_NOTE, VIEW_LABEL, COMBINATION_LABEL, UNJUDGED_BOTH_SIDES_WHY,
   SELF_CHECK_DISCLAIMER, SELF_CHECK_HEADERS,
 } from "../selfCheck";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow } from "../../types";
@@ -45,8 +47,12 @@ describe("rows are copied from the engine, never written here", () => {
     expect(r.label).toBe("Does not comply");
   });
 
-  it("invents no fix when the engine suggested none", () => {
-    expect(toSelfCheckRows([row({ verdict: "Not met", suggestedAction: undefined })])[0].fix).toBe("");
+  // Narrowed: a gap the engine DID reason about (it cited records) and still
+  // suggested nothing for is left silent, because inventing a fix there would
+  // be guessing. A gap where nothing was found at all now gets the one honest
+  // first step instead, which is asserted in its own block below.
+  it("invents no fix when the engine reasoned about records and suggested none", () => {
+    expect(toSelfCheckRows([row({ verdict: "Not met", evidenceChunkIds: ["C001"], suggestedAction: undefined })])[0].fix).toBe("");
   });
 
   it("falls back to the evidence summary rather than showing an empty reason", () => {
@@ -344,7 +350,7 @@ describe("a procedure check answers a different question, in different words", (
 describe("a procedure-only download says so", () => {
   const rows = toProcedureRows([ppdRow({ verdict: "Not documented" })]);
   it("puts the procedure-only note in the CSV where the band would be", () => {
-    const csv = buildSelfCheckCsv("5.4 Student Learning", rows, { kind: "none" }, true);
+    const csv = buildSelfCheckCsv("5.4 Student Learning", rows, { kind: "none" }, "procedure-only");
     expect(csv).toContain("not a band");
     expect(csv).not.toContain("No band yet for this area.");
     expect(csv).toContain(SELF_CHECK_DISCLAIMER);
@@ -352,7 +358,7 @@ describe("a procedure-only download says so", () => {
   it("marks the printable copy in its own title", () => {
     const html = buildSelfCheckHtml({
       areaLabel: "5.4 Student Learning", areaDescription: "d", counts: countSelfCheck(rows),
-      band: { kind: "none" }, rows, ranAt: "x", procedureOnly: true,
+      band: { kind: "none" }, rows, ranAt: "x", view: "procedure-only",
     });
     expect(html).toContain("written procedure only");
     expect(html).toContain("not written down");
@@ -392,5 +398,217 @@ describe("downloading an earlier check that has no saved score", () => {
   it("still reports a band that WAS saved, because the auditor's one survives", () => {
     expect(bandLineOf({ kind: "auditor", band: 3, name: "Meeting Expectation", totalPct: 60 }))
       .toContain("Band set by your auditor");
+  });
+});
+
+// The engine's zero-evidence branch (agentRuntime.ts:3550-3553) sends BOTH a
+// real "PPD Partial" judgement and an absent "PPD Not assessed" one down the
+// same `else verdict = "Partial"`. A real run on 6.1 surfaced the second as
+// "Partly complies", which turns two absences into a partial pass.
+describe("an unjudged pair is never shown as a partial pass", () => {
+  const unjudged = row({ verdict: "Partial", ppdVerdict: "Not assessed", evidenceChunkIds: [] });
+
+  it("detects the case: no PPD judgement and nothing cited from the records", () => {
+    expect(unjudgedBothSides(unjudged)).toBe(true);
+  });
+
+  it("shows it as Could not check, not Partly complies", () => {
+    const [r] = toSelfCheckRows([unjudged]);
+    expect(r.label).toBe("Could not check");
+    expect(r.tone).toBe("neutral");
+  });
+
+  it("counts it as could-not-check, so the tally agrees with the label", () => {
+    const c = countSelfCheck(toSelfCheckRows([unjudged]));
+    expect(c.couldNotCheck).toBe(1);
+    expect(c.partly).toBe(0);
+  });
+
+  // PPD "Partial" IS a judgement, so capping the line at Partial is defensible
+  // and must be left exactly as the engine decided it.
+  it("leaves a genuine PPD Partial alone", () => {
+    const real = row({ verdict: "Partial", ppdVerdict: "Partial", evidenceChunkIds: [] });
+    expect(unjudgedBothSides(real)).toBe(false);
+    expect(toSelfCheckRows([real])[0].label).toBe("Partly complies");
+  });
+
+  it("leaves a Partial that the records DID support alone", () => {
+    const supported = row({ verdict: "Partial", ppdVerdict: "Not assessed", evidenceChunkIds: ["C001"] });
+    expect(unjudgedBothSides(supported)).toBe(false);
+    expect(toSelfCheckRows([supported])[0].label).toBe("Partly complies");
+  });
+});
+
+describe("engine jargon never reaches the Why column", () => {
+  const ENGINE_ZERO_EXTRACTION =
+    'It was not evident that the PEI had implemented this requirement, in accordance with its documented PPD. ' +
+    'The extraction pass read every provided evidence document and returned no candidate passage for this line (0 extracted). PPD verdict was "Not assessed".';
+
+  it("translates the zero-extraction evidence comment", () => {
+    const out = plainWhy(ENGINE_ZERO_EXTRACTION);
+    expect(out).toContain("Nothing in your records spoke to this requirement");
+    expect(out).not.toMatch(/extraction|0 extracted|PPD|PEI|candidate passage/i);
+  });
+
+  it("drops the trailing PPD verdict, which belongs in the procedure view", () => {
+    expect(plainWhy(ENGINE_ZERO_EXTRACTION)).not.toMatch(/Not assessed|verdict/i);
+  });
+
+  it("reaches the rendered row, not just the helper", () => {
+    const [r] = toSelfCheckRows([row({ verdict: "Not met", comment: ENGINE_ZERO_EXTRACTION })]);
+    expect(r.why).toContain("Nothing in your records");
+  });
+});
+
+describe("a gap with nothing found still gets an honest first step", () => {
+  it("replaces silence with the one thing the row itself proves", () => {
+    const [r] = toSelfCheckRows([row({ verdict: "Not met", evidenceChunkIds: [], suggestedAction: undefined })]);
+    expect(r.fix).toBe(NO_EVIDENCE_FIRST_STEP);
+    expect(r.fix).toMatch(/keep a record of it happening/);
+  });
+
+  it("never overwrites a fix the engine did produce", () => {
+    const [r] = toSelfCheckRows([row({ verdict: "Not met", evidenceChunkIds: [], suggestedAction: "Add dates to the register." })]);
+    expect(r.fix).toBe("Add dates to the register.");
+  });
+
+  it("stays silent on a Met row, which needs no fix", () => {
+    expect(toSelfCheckRows([row({ verdict: "Met", evidenceChunkIds: [] })])[0].fix).toBe("");
+  });
+
+  // A gap the engine DID reason about and still said nothing about should not
+  // be handed generic advice in place of its own silence.
+  it("stays silent on a gap where records WERE found", () => {
+    expect(toSelfCheckRows([row({ verdict: "Not met", evidenceChunkIds: ["C001"] })])[0].fix).toBe("");
+  });
+});
+
+describe("the records-only view reports what the records pass found, and nothing more", () => {
+  it("says records were found when the row cited one", () => {
+    const [r] = toRecordsRows([row({ verdict: "Met", evidenceChunkIds: ["C001"], evidenceSummary: "The log shows this." })]);
+    expect(r.label).toBe("Records found");
+    expect(r.why).toBe("The log shows this.");
+  });
+
+  it("says nothing was found when the row cited none", () => {
+    const [r] = toRecordsRows([row({ verdict: "Not met", evidenceChunkIds: [] })]);
+    expect(r.label).toBe("Nothing found");
+    expect(r.why).toMatch(/none of them mentioned this requirement/);
+  });
+
+  it("says could not check rather than guessing, on a row nothing was decided for", () => {
+    expect(toRecordsRows([row({ assessmentFailed: true })])[0].label).toBe("Could not check");
+    expect(toRecordsRows([row({ verdict: "Not assessed", evidenceChunkIds: [] })])[0].label).toBe("Could not check");
+  });
+
+  // The pair that the OVERALL view has to call "Could not check" is not unknown
+  // on this side: the procedure half is what could not be decided, and the
+  // records half read everything and found nothing.
+  it("still reports the records half of an unjudged pair", () => {
+    const r = row({ verdict: "Partial", ppdVerdict: "Not assessed", evidenceChunkIds: [] });
+    expect(toRecordsRows([r])[0].label).toBe("Nothing found");
+    expect(toSelfCheckRows([r])[0].label).toBe("Could not check");
+  });
+
+  // The combined verdict is a PPD-plus-evidence judgement, so it must not leak
+  // into a view that claims to describe the records alone.
+  it("does not inherit the combined verdict's label", () => {
+    const [r] = toRecordsRows([row({ verdict: "Partial", ppdVerdict: "Adequate", evidenceChunkIds: [] })]);
+    expect(r.label).toBe("Nothing found");
+    expect(r.label).not.toBe("Partly complies");
+  });
+});
+
+describe("the two passes are separable, and each is counted in its own words", () => {
+  it("puts every requirement in one of the four combinations", () => {
+    expect(combinationOf(row({ ppdVerdict: "Adequate", evidenceChunkIds: ["C001"] }))).toBe("both");
+    expect(combinationOf(row({ ppdVerdict: "Partial", evidenceChunkIds: [] }))).toBe("written-only");
+    expect(combinationOf(row({ ppdVerdict: "Not documented", evidenceChunkIds: ["C002"] }))).toBe("records-only");
+    expect(combinationOf(row({ ppdVerdict: "Not documented", evidenceChunkIds: [] }))).toBe("neither");
+  });
+
+  // A missing judgement on either side is its own answer. Folding it into one
+  // of the four would be the same defect as reporting an unjudged pair as a
+  // partial pass.
+  it("reports an unknown side as unknown rather than picking a combination", () => {
+    expect(combinationOf(row({ ppdVerdict: "Not assessed", evidenceChunkIds: [] }))).toBe("unknown");
+    expect(combinationOf(row({ ppdVerdict: "Adequate", assessmentFailed: true, evidenceChunkIds: ["C001"] }))).toBe("unknown");
+  });
+
+  it("counts them all, and the counts add up to the rows", () => {
+    const rows = [
+      row({ ppdVerdict: "Adequate", evidenceChunkIds: ["C001"] }),
+      row({ ppdVerdict: "Adequate", evidenceChunkIds: [] }),
+      row({ ppdVerdict: "Not documented", evidenceChunkIds: [] }),
+      row({ ppdVerdict: "Not assessed", evidenceChunkIds: [] }),
+    ];
+    const c = countCombinations(rows);
+    expect(c).toEqual({ both: 1, "written-only": 1, "records-only": 0, neither: 1, unknown: 1 });
+    expect(Object.values(c).reduce((a, b) => a + b, 0)).toBe(rows.length);
+    for (const k of Object.keys(c)) expect(COMBINATION_LABEL[k as keyof typeof COMBINATION_LABEL]).toBeTruthy();
+  });
+
+  // The records pass never produced a middle state, so no view may offer one:
+  // "partly evidenced" would be a judgement nobody made.
+  it("gives the records view no 'partly' bucket", () => {
+    expect(VIEW_TALLY.records.partly).toBeNull();
+    expect(VIEW_TALLY.overview.partly).toBe("partly complies");
+    expect(VIEW_TALLY.procedure.partly).toBe("partly written down");
+  });
+
+  // The run that never opened a record and the procedure half of a full run
+  // read the same, and must not: only one of them is missing its other half.
+  it("keeps the procedure-only note separate from the procedure tab's", () => {
+    expect(VIEW_NOTE["procedure-only"]).toBe(PROCEDURE_ONLY_NOTE);
+    expect(VIEW_NOTE.procedure).not.toBe(PROCEDURE_ONLY_NOTE);
+    expect(VIEW_NOTE.procedure).toContain("other tab");
+    expect(VIEW_NOTE.records).toContain("other tab");
+    expect(VIEW_NOTE.overview).toBe("");
+  });
+
+  it("exports each view in that view's own words, with no band on half an answer", () => {
+    const rows = toRecordsRows([row({ verdict: "Not met", evidenceChunkIds: [] })]);
+    const csv = buildSelfCheckCsv("6.1 Internal Assessment", rows, { kind: "none" }, "records");
+    expect(csv).toContain("Nothing found");
+    expect(csv).toContain(VIEW_NOTE.records);
+    expect(csv).not.toContain("No band yet for this area.");
+    const html = buildSelfCheckHtml({
+      areaLabel: "6.1 Internal Assessment", areaDescription: "d", counts: countSelfCheck(rows),
+      band: { kind: "none" }, rows, ranAt: "x", view: "records",
+    });
+    expect(html).toContain(VIEW_LABEL.records);
+    expect(html).toContain("nothing found");
+    expect(html).not.toContain("partly");
+  });
+
+  // The overall view is the historic export, byte for byte: the tabs are added
+  // beside it, they do not rewrite what a previous download looked like.
+  it("leaves the overall export exactly as it was", () => {
+    const rows = toSelfCheckRows([row({})]);
+    expect(buildSelfCheckCsv("5.4 Student Learning", rows, { kind: "none" }, "overview"))
+      .toBe(buildSelfCheckCsv("5.4 Student Learning", rows, { kind: "none" }));
+    const base = { areaLabel: "5.4 Student Learning", areaDescription: "d", counts: countSelfCheck(rows), band: { kind: "none" } as const, rows, ranAt: "x" };
+    expect(buildSelfCheckHtml({ ...base, view: "overview" })).toBe(buildSelfCheckHtml(base));
+  });
+});
+
+describe("an unjudged pair explains both halves, not just the records", () => {
+  // The engine's comment for this row is about the records alone, so under a
+  // "Could not check" verdict it read as a definite finding the page then
+  // refused to act on.
+  it("names the procedure half as well", () => {
+    const [r] = toSelfCheckRows([row({ verdict: "Partial", ppdVerdict: "Not assessed", evidenceChunkIds: [], comment: "It was not evident that the PEI had implemented this requirement. The extraction pass read every provided evidence document and returned no candidate passage for this line (0 extracted)." })]);
+    expect(r.label).toBe("Could not check");
+    expect(r.why).toBe(UNJUDGED_BOTH_SIDES_WHY);
+    expect(r.why).toContain("written procedure");
+    expect(r.why).toContain("records");
+  });
+
+  // A records-side gap the procedure pass DID judge keeps the engine's own
+  // translated reason: only the pair with nothing on either side changes.
+  it("leaves a judged-procedure gap with its own reason", () => {
+    const [r] = toSelfCheckRows([row({ verdict: "Not met", ppdVerdict: "Adequate", evidenceChunkIds: [], comment: "The extraction pass read every provided evidence document and returned no candidate passage for this line (0 extracted)." })]);
+    expect(r.why).not.toBe(UNJUDGED_BOTH_SIDES_WHY);
+    expect(r.why).toContain("Nothing in your records spoke to this requirement");
   });
 });

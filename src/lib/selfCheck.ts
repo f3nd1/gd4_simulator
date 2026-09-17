@@ -67,9 +67,21 @@ const WHY_TRANSLATIONS: { match: RegExp; plain: string }[] = [
   },
 ];
 
+// The engine's deterministic zero-extraction comment for the EVIDENCE pass
+// opens "It was not evident that the PEI had implemented this requirement...",
+// so the "Not assessed" gate below never saw it and the raw string reached the
+// page: "the extraction pass read every provided evidence document and returned
+// no candidate passage for this line (0 extracted). PPD verdict was ...".
+// Matched on its own wording, and the trailing PPD verdict is dropped because
+// it belongs in the procedure view, not appended to a records sentence.
+const ZERO_EXTRACTION_EVIDENCE = /extraction pass read every provided evidence document|returned no candidate passage for this line/i;
+
 export function plainWhy(raw: string): string {
   const t = raw.trim();
   if (!t) return "";
+  if (ZERO_EXTRACTION_EVIDENCE.test(t)) {
+    return "Nothing in your records spoke to this requirement. Every document in your records folder was read, and none of them mentioned it.";
+  }
   if (!/^Not assessed/i.test(t)) return t;
   for (const { match, plain } of WHY_TRANSLATIONS) if (match.test(t)) return plain;
   // An unrecognised "Not assessed" reason: say the honest minimum rather than
@@ -156,6 +168,32 @@ export function planFor(hasProcedure: boolean, hasEvidence: boolean): CheckPlan 
 export const PROCEDURE_ONLY_NOTE =
   "This checked your written procedure only. It does not say whether any of it actually happens, and it is not a band. Add your records folder and run it again for the full check.";
 
+// The engine's zero-evidence branch (agentRuntime.ts:3550-3553) decides a line
+// deterministically from the PPD verdict:
+//
+//   PPD "Not documented" -> Not met
+//   PPD "Adequate"       -> Not met (with promises) / Partial (without)
+//   everything else      -> Partial
+//
+// That last `else` catches two very different states. PPD "Partial" is a REAL
+// judgement, and capping the line at Partial is a defensible conservative call.
+// PPD "Not assessed" is the ABSENCE of a judgement, so when the records side
+// also found nothing the engine knows nothing on either side, and reporting
+// "Partly complies" turns two absences into a partial pass.
+//
+// The stored verdict is left exactly as the engine wrote it (it feeds findings,
+// bands and the auditor's own views, all out of scope here). What changes is
+// what this page TELLS a process owner, which is this layer's whole job.
+export function unjudgedBothSides(r: Pick<EvidenceAssessmentRow, "verdict" | "ppdVerdict" | "evidenceChunkIds">): boolean {
+  return r.verdict === "Partial" && r.ppdVerdict === "Not assessed" && (r.evidenceChunkIds?.length ?? 0) === 0;
+}
+
+// The engine's own comment for this row explains the records half only, which
+// on its own reads as a definite finding ("nothing spoke to this") sitting
+// under a verdict that says nothing could be decided. Both halves are named.
+export const UNJUDGED_BOTH_SIDES_WHY =
+  "Neither half of this check could be judged. The check could not tell whether your written procedure covers this, and nothing in your records spoke to it either. It is not a fail: see the two tabs for each half.";
+
 export type SelfCheckRow = {
   ref: string;
   requirement: string;
@@ -166,25 +204,54 @@ export type SelfCheckRow = {
   fix: string;
 };
 
+// The engine only writes suggestedAction from its AI judge. On a line where
+// extraction returned nothing, the judge never runs (the verdict is decided
+// deterministically), so the field is simply absent and the page said "No
+// specific fix was suggested." to the very person whose whole purpose is
+// knowing what to fix.
+//
+// This invents no fix and raises no finding. It states the one thing the row
+// itself already proves: nothing in the records spoke to this requirement, so
+// the first step is a record existing at all.
+export const NO_EVIDENCE_FIRST_STEP =
+  "Nothing in your records covers this yet, so there is no detail to correct. The first step is to keep a record of it happening, then run the check again.";
+
+export function fixFor(r: EvidenceAssessmentRow, isGap: boolean): string {
+  const given = (r.suggestedAction || "").trim();
+  if (given) return given;
+  // Only where the row genuinely found nothing, and only on a gap. A Met row
+  // needs no fix, and a gap the engine DID reason about should not be given
+  // generic advice in place of its own silence.
+  if (isGap && (r.evidenceChunkIds?.length ?? 0) === 0) return NO_EVIDENCE_FIRST_STEP;
+  return "";
+}
+
 export type SelfCheckCounts = { complies: number; partly: number; doesNot: number; couldNotCheck: number; total: number };
 
 export function toSelfCheckRows(rows: EvidenceAssessmentRow[]): SelfCheckRow[] {
   return rows.map((r) => {
-    const plain = PLAIN_VERDICT[r.verdict] ?? PLAIN_VERDICT["Not assessed"];
+    // An unjudged pair is shown for what it is, not as a partial pass.
+    const plain = unjudgedBothSides(r)
+      ? PLAIN_VERDICT["Not assessed"]
+      : (PLAIN_VERDICT[r.verdict] ?? PLAIN_VERDICT["Not assessed"]);
     return {
       ref: r.gdRef,
       requirement: r.requirementText,
-      verdict: r.verdict,
+      // The tally counts off this field, so it has to agree with the label. A
+      // row shown as "Could not check" must not be counted as a partial pass.
+      verdict: unjudgedBothSides(r) ? "Not assessed" : r.verdict,
       label: plain.label,
       tone: plain.tone,
       // The engine's own justification. A row whose AI call failed says so
       // rather than showing an empty cell that reads like "nothing to say".
       why: r.assessmentFailed
         ? "The checking service did not answer for this one, so nothing was judged. Run the check again."
-        : plainWhy(r.comment || r.evidenceSummary || ""),
+        : unjudgedBothSides(r)
+          ? UNJUDGED_BOTH_SIDES_WHY
+          : plainWhy(r.comment || r.evidenceSummary || ""),
       // OFI, taken only from the engine's suggestedAction. Never written here,
       // and only ever present on a row the engine judged short.
-      fix: (r.suggestedAction || "").trim(),
+      fix: fixFor(r, plain.isGap),
     };
   });
 }
@@ -208,6 +275,113 @@ export function toProcedureRows(rows: PPDReviewRow[]): SelfCheckRow[] {
       fix: (r.suggestedRewrite || "").trim(),
     };
   });
+}
+
+// What the RECORDS pass alone found, with no verdict invented.
+//
+// EvidenceAssessmentRow.verdict is explicitly the COMBINED PPD-plus-evidence
+// judgement, so it cannot answer "what did the records show" on its own. What
+// the row does prove by itself is whether the records pass cited anything, and
+// that is all this reports. Pairing it with the procedure view is what makes
+// the four real combinations visible: documented and evidenced, documented but
+// not evidenced, evidenced but not documented, neither.
+export const RECORDS_PLAIN_VERDICT: Record<"found" | "none" | "unknown", PlainVerdict> = {
+  found: { label: "Records found", tone: "good", isGap: false },
+  none: { label: "Nothing found", tone: "critical", isGap: true },
+  unknown: { label: "Could not check", tone: "neutral", isGap: false },
+};
+
+export function toRecordsRows(rows: EvidenceAssessmentRow[]): SelfCheckRow[] {
+  return rows.map((r) => {
+    const cited = (r.evidenceChunkIds?.length ?? 0) > 0;
+    // An unjudged PAIR is deliberately NOT unknown here. What made the combined
+    // verdict undecidable was the procedure side; the records side really did
+    // run and really did find nothing, and saying "could not check" beside
+    // "every document was read and none mentioned it" contradicts itself.
+    const kind = r.assessmentFailed || r.verdict === "Not assessed"
+      ? "unknown"
+      : cited ? "found" : "none";
+    const plain = RECORDS_PLAIN_VERDICT[kind];
+    return {
+      ref: r.gdRef,
+      requirement: r.requirementText,
+      // Mapped onto the shared axis so the one table and one tally can render
+      // this view too. The LABEL above is what a process owner reads.
+      verdict: kind === "found" ? "Met" : kind === "none" ? "Not met" : "Not assessed",
+      label: plain.label,
+      tone: plain.tone,
+      why: r.assessmentFailed
+        ? "The checking service did not answer for this one, so your records were not checked. Run the check again."
+        : cited
+          ? (r.evidenceSummary || "").trim() || "A record covering this was found in your folder."
+          : "Every document in your records folder was read, and none of them mentioned this requirement.",
+      fix: fixFor(r, plain.isGap),
+    };
+  });
+}
+
+// ── The two passes, shown apart ──────────────────────────────────────────
+//
+// Option A runs two passes that answer two different questions, and blending
+// them into one verdict hid the distinction that is the whole point of it:
+// "does your written procedure say this" and "do your records show it
+// happening" can fail independently, and the fix is different for each.
+//
+// "procedure-only" is the run that never opened a record; "procedure" is the
+// same pass seen as one half of a full run. Same words, different note: only
+// one of them is missing its other half.
+export type SelfCheckView = "overview" | "procedure" | "records" | "procedure-only";
+
+export const VIEW_LABEL: Record<SelfCheckView, string> = {
+  overview: "Overall",
+  procedure: "Your written procedure",
+  records: "Your records",
+  "procedure-only": "Your written procedure",
+};
+
+// Each view counts in its own vocabulary. A records view has no "partly":
+// either a record covering the requirement was found or it was not, and
+// inventing a middle state would be a judgement this pass never made.
+export const VIEW_TALLY: Record<SelfCheckView, { complies: string; partly: string | null; doesNot: string }> = {
+  overview: { complies: "complies", partly: "partly complies", doesNot: "does not comply" },
+  procedure: { complies: "written down", partly: "partly written down", doesNot: "not written down" },
+  "procedure-only": { complies: "written down", partly: "partly written down", doesNot: "not written down" },
+  records: { complies: "records found", partly: null, doesNot: "nothing found" },
+};
+
+export const VIEW_NOTE: Record<SelfCheckView, string> = {
+  overview: "",
+  "procedure-only": PROCEDURE_ONLY_NOTE,
+  procedure: "This is what your written procedure says it will do. It does not say whether any of it actually happened. Your records answer that, on the other tab.",
+  records: "This is what your records show actually happened. It does not say whether your written procedure covers it. Your written procedure answers that, on the other tab.",
+};
+
+// The four combinations a process owner has to be able to see, and the fifth
+// honest state. Read off the row itself: ppdVerdict is what the procedure pass
+// decided, and a cited chunk is the records pass having found something. A
+// missing judgement on either side is reported as unknown rather than folded
+// into one of the four.
+export type Combination = "both" | "written-only" | "records-only" | "neither" | "unknown";
+
+export const COMBINATION_LABEL: Record<Combination, string> = {
+  both: "written down and evidenced",
+  "written-only": "written down, no records",
+  "records-only": "records only, not written down",
+  neither: "neither",
+  unknown: "could not tell",
+};
+
+export function combinationOf(r: EvidenceAssessmentRow): Combination {
+  if (r.assessmentFailed || r.ppdVerdict === "Not assessed" || !r.ppdVerdict) return "unknown";
+  const written = r.ppdVerdict === "Adequate" || r.ppdVerdict === "Partial";
+  const cited = (r.evidenceChunkIds?.length ?? 0) > 0;
+  return written ? (cited ? "both" : "written-only") : (cited ? "records-only" : "neither");
+}
+
+export function countCombinations(rows: EvidenceAssessmentRow[]): Record<Combination, number> {
+  const out: Record<Combination, number> = { both: 0, "written-only": 0, "records-only": 0, neither: 0, unknown: 0 };
+  for (const r of rows) out[combinationOf(r)] += 1;
+  return out;
 }
 
 export function countSelfCheck(rows: SelfCheckRow[]): SelfCheckCounts {
@@ -260,10 +434,13 @@ export function bandLineOf(band: SelfCheckBand): string {
 // forwarded and printed on its own; without them it reads like a bare verdict
 // list that somebody could mistake for an official outcome.
 export function buildSelfCheckCsv(
-  areaLabel: string, rows: SelfCheckRow[], band: SelfCheckBand, procedureOnly = false,
+  areaLabel: string, rows: SelfCheckRow[], band: SelfCheckBand, view: SelfCheckView = "overview",
 ): string {
   const blank = ["", "", "", "", "", ""];
-  const trailer = procedureOnly ? [PROCEDURE_ONLY_NOTE] : [bandLineOf(band)];
+  // Only the overall view carries a band: one pass on its own was never banded,
+  // and printing the area's band on top of half the answer would read as though
+  // that half produced it.
+  const trailer = view === "overview" ? [bandLineOf(band)] : [VIEW_NOTE[view]];
   return toCsv(SELF_CHECK_HEADERS, [
     ...rows.map((r) => [areaLabel, r.ref, r.requirement, r.label, r.why, r.fix]),
     blank,
@@ -287,19 +464,20 @@ export function buildSelfCheckHtml(opts: {
   band: SelfCheckBand;
   rows: SelfCheckRow[];
   ranAt: string;
-  procedureOnly?: boolean;
+  view?: SelfCheckView;
 }): string {
-  const { areaLabel, areaDescription, counts, band, rows, ranAt, procedureOnly } = opts;
-  const bandLine = procedureOnly ? PROCEDURE_ONLY_NOTE : bandLineOf(band);
+  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview" } = opts;
+  const words = VIEW_TALLY[view];
+  const bandLine = view === "overview" ? bandLineOf(band) : VIEW_NOTE[view];
   // Same condition as the screen: a run with nothing unjudged must not carry a
   // paragraph explaining "Could not check", which reads as a warning about a
   // result that is not there.
   const unjudgedNote = counts.couldNotCheck === 0 ? "" : mostlyUnchecked(counts) ? MOSTLY_UNCHECKED_NOTE : COULD_NOT_CHECK_NOTE;
   return `
-    <h1>Self-check: ${escapeHtml(areaLabel)}${procedureOnly ? " (written procedure only)" : ""}</h1>
+    <h1>Self-check: ${escapeHtml(areaLabel)}${view === "procedure-only" ? " (written procedure only)" : view === "overview" ? "" : ` — ${escapeHtml(VIEW_LABEL[view])}`}</h1>
     <p class="muted">${escapeHtml(areaDescription)}</p>
     <p class="muted">Checked on ${escapeHtml(ranAt)}</p>
-    <p><b>${counts.complies} ${procedureOnly ? "written down" : "complies"} · ${counts.partly} ${procedureOnly ? "partly written down" : "partly complies"} · ${counts.doesNot} ${procedureOnly ? "not written down" : "does not comply"} · ${counts.couldNotCheck} could not check</b></p>
+    <p><b>${counts.complies} ${words.complies}${words.partly ? ` · ${counts.partly} ${words.partly}` : ""} · ${counts.doesNot} ${words.doesNot} · ${counts.couldNotCheck} could not check</b></p>
     <p>${escapeHtml(bandLine)}</p>
     ${unjudgedNote ? `<p class="muted">${escapeHtml(unjudgedNote)}</p>` : ""}
     <table>

@@ -20,9 +20,10 @@ import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import {
   toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv, buildSelfCheckHtml,
-  selfCheckFilename, describeBlock, plainRunError, plainDetail, planFor, toProcedureRows, PROCEDURE_ONLY_NOTE,
+  selfCheckFilename, describeBlock, plainRunError, plainDetail, planFor, toProcedureRows, toRecordsRows,
   SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE,
-  type SelfCheckBand,
+  VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
+  type SelfCheckBand, type SelfCheckView, type Combination,
 } from "../lib/selfCheck";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
@@ -83,6 +84,7 @@ export function SelfCheck() {
   // Which half the result on screen came from. A procedure-only result answers
   // a different question and must never be dressed as a full one.
   const [mode, setMode] = useState<"full" | "procedure-only">("full");
+  const [tab, setTab] = useState<SelfCheckView>("overview");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -205,15 +207,24 @@ export function SelfCheck() {
   ].filter(Boolean) as string[];
   const linkClash = clashes.length > 0;
 
+  const procedureOnlyResult = mode === "procedure-only";
+  // Which half of the result is on screen. A procedure-only run has only one
+  // half and gets no tabs at all, so the tab state is ignored there rather
+  // than offering a records view that was never run.
+  const view: SelfCheckView = procedureOnlyResult ? "procedure-only" : tab;
   const rows = useMemo(
-    () => (mode === "procedure-only"
-      ? (ppdExisting ? toProcedureRows(ppdExisting.rows) : [])
-      : (existing ? toSelfCheckRows(existing.rows) : [])),
-    [mode, existing, ppdExisting],
+    () => {
+      if (view === "records") return existing ? toRecordsRows(existing.rows) : [];
+      if (view === "overview") return existing ? toSelfCheckRows(existing.rows) : [];
+      return ppdExisting ? toProcedureRows(ppdExisting.rows) : [];
+    },
+    [view, existing, ppdExisting],
   );
   const counts = useMemo(() => countSelfCheck(rows), [rows]);
-  const procedureOnlyResult = mode === "procedure-only";
-  const showResult = phase === "done" && rows.length > 0;
+  const combos = useMemo(() => (existing ? countCombinations(existing.rows) : null), [existing]);
+  // Off the stored result, not off `rows`: switching to a tab that happens to
+  // be empty must not make the whole result section disappear.
+  const showResult = phase === "done" && (procedureOnlyResult ? !!ppdExisting?.rows.length : !!existing?.rows.length);
 
   async function run() {
     if (!area || !folder || !ready) return;
@@ -231,6 +242,7 @@ export function SelfCheck() {
     setError(null); setNote(null); setBand({ kind: "none" });
     const procedureOnly = plan.kind === "procedure-only";
     setMode(procedureOnly ? "procedure-only" : "full");
+    setTab("overview");
     setPhase("folder");
 
     // Two explicit links, one per bucket. Each pass keeps EVERY file in its own
@@ -289,7 +301,10 @@ export function SelfCheck() {
       // whose every line read "Could not check", which is the most misleading
       // thing this page could say. The auditor's OWN band still shows: that one
       // is a recorded fact about the area, not a reading of this run.
-      const judged = ev.rows.some((r) => r.verdict !== "Not assessed");
+      // Same definition the table uses. The engine stores an unjudged pair as
+      // "Partial" (agentRuntime.ts:3553), so reading its verdict alone counted
+      // a run where nothing was decided as judged, and banded it.
+      const judged = ev.rows.some((r) => r.verdict !== "Not assessed" && !unjudgedBothSides(r));
       if (committed) {
         setBand({ kind: "auditor", band: committed.band, name: bandName(committed.band), totalPct: committed.totalPct });
       } else if (judged) {
@@ -340,7 +355,7 @@ export function SelfCheck() {
   function onPreviousCsv() {
     if (!area || !previous) return;
     downloadCsv(
-      buildSelfCheckCsv(`${area.scope} ${area.title}`, previous.rows, previous.band, plan.kind === "procedure-only"),
+      buildSelfCheckCsv(`${area.scope} ${area.title}`, previous.rows, previous.band, plan.kind === "procedure-only" ? "procedure-only" : "overview"),
       selfCheckFilename(`${area.title} previous`, "csv"),
     );
   }
@@ -350,7 +365,7 @@ export function SelfCheck() {
       `<style>${PRINTABLE_DOC_CSS}</style>${buildSelfCheckHtml({
         areaLabel: `${area.scope} ${area.title}`, areaDescription: area.description,
         counts: previous.counts, band: previous.band, rows: previous.rows,
-        ranAt: previous.ranAt, procedureOnly: plan.kind === "procedure-only",
+        ranAt: previous.ranAt, view: plan.kind === "procedure-only" ? "procedure-only" : "overview",
       })}`,
       `Self-check ${area.title} (earlier check)`,
     );
@@ -359,16 +374,18 @@ export function SelfCheck() {
 
   function onCsv() {
     if (!area) return;
-    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, procedureOnlyResult), selfCheckFilename(area.title, "csv"));
+    // The tab you are looking at is the tab you get, named on the file so two
+    // downloads of the same run can never be confused for each other.
+    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
   }
   function onPdf() {
     if (!area) return;
     const ok = printHtmlInNewTab(
       `<style>${PRINTABLE_DOC_CSS}</style>${buildSelfCheckHtml({
         areaLabel: `${area.scope} ${area.title}`, areaDescription: area.description,
-        counts, band, rows, ranAt, procedureOnly: procedureOnlyResult,
+        counts, band, rows, ranAt, view,
       })}`,
-      `Self-check ${area.title}`,
+      view === "overview" ? `Self-check ${area.title}` : `Self-check ${area.title} — ${VIEW_LABEL[view]}`,
     );
     if (!ok) setNote(POPUP_BLOCKED_MESSAGE);
   }
@@ -705,20 +722,59 @@ export function SelfCheck() {
               {area.scope} {area.title} · {procedureOnlyResult ? "written procedure only" : "procedure and records"} · checked {ranAt}
             </p>
 
+            {/* The check asks two separate questions and they fail
+                independently: your procedure can be silent while your records
+                are full, and the other way round. Blended into one verdict that
+                difference was invisible, and the fix for each is different. */}
+            {!procedureOnlyResult && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "14px 0 10px" }}>
+                {(["overview", "procedure", "records"] as const).map((k) => (
+                  <button
+                    key={k} type="button" onClick={() => setTab(k)}
+                    style={{
+                      border: "1px solid", borderColor: tab === k ? INK : "#cbd5e1", background: tab === k ? INK : "#fff",
+                      color: tab === k ? "#fff" : INK, borderRadius: 999, padding: "8px 16px",
+                      fontSize: 13.5, fontWeight: 700, cursor: "pointer",
+                    }}
+                  >
+                    {k === "overview" ? "Overall" : VIEW_LABEL[k]}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* A procedure-only result answers "is it written down?", so it is
                 counted in those words. "Complies" on a run that never opened a
                 record would be a claim nobody made. */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0" }}>
-              <Tally n={counts.complies} label={procedureOnlyResult ? "written down" : "complies"} tone="good" />
-              <Tally n={counts.partly} label={procedureOnlyResult ? "partly written down" : "partly complies"} tone="medium" />
-              <Tally n={counts.doesNot} label={procedureOnlyResult ? "not written down" : "does not comply"} tone="critical" />
+              <Tally n={counts.complies} label={VIEW_TALLY[view].complies} tone="good" />
+              {VIEW_TALLY[view].partly && <Tally n={counts.partly} label={VIEW_TALLY[view].partly!} tone="medium" />}
+              <Tally n={counts.doesNot} label={VIEW_TALLY[view].doesNot} tone="critical" />
               <Tally n={counts.couldNotCheck} label="could not check" tone="neutral" />
             </div>
 
-            {procedureOnlyResult && (
+            {VIEW_NOTE[view] && (
               <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
-                {PROCEDURE_ONLY_NOTE}
+                {VIEW_NOTE[view]}
               </p>
+            )}
+
+            {/* The four combinations, counted, on the overall tab only: it is
+                the one place both halves are in view at once. */}
+            {view === "overview" && combos && combos.unknown < counts.total && (
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fbfcfe" }}>
+                <b style={{ fontSize: 13 }}>Written procedure vs records</b>
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 7 }}>
+                  {(Object.keys(COMBINATION_LABEL) as Combination[]).filter((k) => combos[k] > 0).map((k) => (
+                    <span key={k} style={{ fontSize: 13, color: "#334155" }}>
+                      <b style={{ fontSize: 15 }}>{combos[k]}</b> {COMBINATION_LABEL[k]}
+                    </span>
+                  ))}
+                </div>
+                <p style={{ ...muted, margin: "7px 0 0" }}>
+                  Written down but no records means the procedure is fine and the proof is missing. Records but nothing written down means it happens but the procedure does not say so. The two tabs above show which requirement is which.
+                </p>
+              </div>
             )}
 
             {counts.couldNotCheck > 0 && !mostlyUnchecked(counts) && (
@@ -733,7 +789,7 @@ export function SelfCheck() {
               </p>
             )}
 
-            {!procedureOnlyResult && (
+            {view === "overview" && (
             <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fbfcfe" }}>
               {band.kind === "none" || band.kind === "not-recorded" ? (
                 <>
@@ -776,7 +832,7 @@ export function SelfCheck() {
                         <span style={{ ...TONE_BG[r.tone], padding: "3px 9px", borderRadius: 999, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", display: "inline-block" }}>{r.label}</span>
                       </td>
                       <td style={{ padding: "10px", color: "#334155" }}>{r.why || <span style={muted}>No reason recorded.</span>}</td>
-                      <td style={{ padding: "10px", color: "#334155" }}>{r.fix || <span style={muted}>{r.tone === "good" || r.tone === "neutral" ? "—" : "No specific fix was suggested."}</span>}</td>
+                      <td style={{ padding: "10px", color: "#334155" }}>{r.fix || <span style={muted}>{r.tone === "good" || r.tone === "neutral" ? "—" : "The check did not suggest anything specific here. Ask your audit lead what would close it."}</span>}</td>
                     </tr>
                   ))}
                 </tbody>
