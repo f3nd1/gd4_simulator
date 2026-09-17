@@ -92,7 +92,7 @@ Never give a store zustand's default storage: `localStorage.setItem` throws insi
 
 | Store | Purpose | Persist key | `version` | Adapter |
 |---|---|---|---|---|
-| `useWorkspaceStore` | Main store: cycle, auditors, folders, audit runs (`auditRunHistory`), Option A results, findings (`customFindings`), closures, calibration memories, human-decision log, `fileTextCache`, snapshots | `ucc-gd4-workspace:v3` | **10** | workspaceStorage |
+| `useWorkspaceStore` | Main store: cycle, auditors, folders, audit runs (`auditRunHistory`), Option A results, findings (`customFindings`), closures, calibration memories, human-decision log, `fileTextCache`, snapshots | `ucc-gd4-workspace:v3` | **11** | workspaceStorage |
 | `useChecklistModuleStore` | Per-item checklist lines/evidence/drafts; `raiseAllUnmetFindings()`, `confirmDraftFinding()`, `replaceAuditEvidence()` | `ucc-gd4-checklist:v2` | **2** | workspaceStorage |
 | `useAISettingsStore` | OpenAI key + model selection (the key DOES sync via Supabase) | `ucc-gd4-ai-settings:v1` | 1 | workspaceStorage |
 | `useBenchmarkAfiStore` | Full benchmark AFI list (59 seeded + uploads); scoped `resetToDefaults` preserves `CUST-*` uploads | `ucc-gd4-custom-benchmark:v1` | 1 | workspaceStorage |
@@ -187,7 +187,7 @@ Key exact-value constraints (TypeScript union types — violations cause TS erro
 
 - Only `playwright-core` is installed. Import: `import pw from '<repo>/node_modules/playwright-core/index.js'; const { chromium } = pw;` and launch with `executablePath: '/opt/pw-browsers/chromium'`.
 - Start the dev server in the background; ignore WebSocket/HMR console noise. `pkill -f vite` exits 144 (kills the shell) — run it as its own command and ignore the exit code.
-- **Seeding state**: write localStorage under the EXACT persist key from the stores table, as `{ state: {...}, version: N }` where N is the table's `version` column — the `:vN` suffix in the key name is NOT the version number (`ucc-gd4-workspace:v3` needs `version: 6`; a wrong version silently discards your seed via `migrate`). After `localStorage.setItem`, a hash-only `page.goto` does NOT re-hydrate — you must `page.reload()`.
+- **Seeding state**: write localStorage under the EXACT persist key from the stores table, as `{ state: {...}, version: N }` where N is the table's `version` column — the `:vN` suffix in the key name is NOT the version number (`ucc-gd4-workspace:v3` needs `version: 11`; a wrong version silently discards your seed via `migrate`). After `localStorage.setItem`, a hash-only `page.goto` does NOT re-hydrate — you must `page.reload()`.
 - Partial `ucc-gd4-workspace:v3` seeds can crash render (cross-field derivations expect coherent state, e.g. `Cannot read properties of undefined (reading '1.1.1')`). Seed minimal-but-coherent fields, and prefer proving pure logic via `vite-node` + unit tests, using the browser only for wiring/visibility checks.
 - No OpenAI key in the sandbox: mock `https://api.openai.com/v1/chat/completions` with `page.route`, and seed `ucc-gd4-ai-settings:v1` (`version: 1`, `enabled: true`, any `apiKey`) so `aiOfflineReason` is null.
 - Prefer role/heading-scoped locators — a bare `text=` selector often matches both the nav link and the page heading (strict-mode violation).

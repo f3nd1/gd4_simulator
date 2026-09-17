@@ -11,6 +11,7 @@
 
 import { toCsv } from "./auditCsvExport";
 import { escapeHtml } from "./printableDoc";
+import { unjudgedBothSides } from "./unjudgedRows";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
 
 // The disclaimer the rest of the app carries, repeated verbatim in every
@@ -168,25 +169,13 @@ export function planFor(hasProcedure: boolean, hasEvidence: boolean): CheckPlan 
 export const PROCEDURE_ONLY_NOTE =
   "This checked your written procedure only. It does not say whether any of it actually happens, and it is not a band. Add your records folder and run it again for the full check.";
 
-// The engine's zero-evidence branch (agentRuntime.ts:3550-3553) decides a line
-// deterministically from the PPD verdict:
-//
-//   PPD "Not documented" -> Not met
-//   PPD "Adequate"       -> Not met (with promises) / Partial (without)
-//   everything else      -> Partial
-//
-// That last `else` catches two very different states. PPD "Partial" is a REAL
-// judgement, and capping the line at Partial is a defensible conservative call.
-// PPD "Not assessed" is the ABSENCE of a judgement, so when the records side
-// also found nothing the engine knows nothing on either side, and reporting
-// "Partly complies" turns two absences into a partial pass.
-//
-// The stored verdict is left exactly as the engine wrote it (it feeds findings,
-// bands and the auditor's own views, all out of scope here). What changes is
-// what this page TELLS a process owner, which is this layer's whole job.
-export function unjudgedBothSides(r: Pick<EvidenceAssessmentRow, "verdict" | "ppdVerdict" | "evidenceChunkIds">): boolean {
-  return r.verdict === "Partial" && r.ppdVerdict === "Not assessed" && (r.evidenceChunkIds?.length ?? 0) === 0;
-}
+// The engine now returns "Not assessed" for a line neither pass judged, and the
+// stored runs that predate that fix are migrated on load (unjudgedRows.ts).
+// This display guard stays as the last line of defence, because two paths can
+// still deliver such a row: a `derivedFromAudit` result reused from the staged
+// audit (which never went through the Option A branch), and a workspace
+// restored from an export made before the fix.
+export { unjudgedBothSides } from "./unjudgedRows";
 
 // The engine's own comment for this row explains the records half only, which
 // on its own reads as a definite finding ("nothing spoke to this") sitting

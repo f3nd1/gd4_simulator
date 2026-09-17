@@ -3550,12 +3550,23 @@ Respond with JSON only:
     let verdict: EvidenceVerdict;
     if (inp.ppdVerdict === "Not documented") verdict = "Not met";
     else if (inp.ppdVerdict === "Adequate") verdict = promises.length > 0 ? "Not met" : "Partial";
-    else verdict = "Partial"; // PPD "Partial" (or an unassessed PPD) caps the line
+    else if (inp.ppdVerdict === "Partial") verdict = "Partial"; // a REAL PPD judgement, conservatively capping the line
+    // PPD "Not assessed" is the ABSENCE of a judgement, not a weak one. With
+    // the evidence side also empty NOTHING was judged on either side, and the
+    // old `else` returned "Partial" here — an absence of judgement stored as a
+    // partial pass, which then wrote a Weak checklist line, raised a Partial
+    // finding and fed the band. Matches every other missing-data branch above.
+    else verdict = "Not assessed";
+    const unjudged = verdict === "Not assessed";
     return {
       ref: inp.ref,
-      evidenceSummary: "No implementation evidence found for this requirement.",
+      evidenceSummary: unjudged
+        ? "Not assessed — the procedure pass reached no verdict for this line, and no evidence passage was found for it."
+        : "No implementation evidence found for this requirement.",
       verdict,
-      comment: `It was not evident that the PEI had implemented this requirement, in accordance with its documented PPD. The extraction pass read every provided evidence document and returned no candidate passage for this line${promises.length > 0 ? ` or its ${promises.length} PPD promise${promises.length === 1 ? "" : "s"}` : ""} (0 extracted). PPD verdict was "${inp.ppdVerdict}".`,
+      comment: unjudged
+        ? `Not assessed — nothing was judged on either side. The procedure pass returned no verdict for this line, and the extraction pass read every provided evidence document and returned no candidate passage for it${promises.length > 0 ? ` or its ${promises.length} PPD promise${promises.length === 1 ? "" : "s"}` : ""} (0 extracted). This is missing data, NOT evidence that the requirement is unimplemented: re-run the PPD review and the evidence assessment.`
+        : `It was not evident that the PEI had implemented this requirement, in accordance with its documented PPD. The extraction pass read every provided evidence document and returned no candidate passage for this line${promises.length > 0 ? ` or its ${promises.length} PPD promise${promises.length === 1 ? "" : "s"}` : ""} (0 extracted). PPD verdict was "${inp.ppdVerdict}".`,
       chunkIds: [],
       promiseChecks: promiseChecks.length > 0 ? promiseChecks : undefined,
       extractionStats,

@@ -112,6 +112,7 @@ function enqueuePanelAutoRun(findingId: string, getRunner: () => (id: string, op
 }
 import { normalizeAuditRef, findingDedupeKey, findingKeyOf, migrateDs1Ref } from "../lib/gd4Refs";
 import { buildOptionALineWrites, buildOptionASourceTrace } from "../lib/optionAChecklistWrite";
+import { demoteUnjudgedMap, demoteUnjudgedHistory } from "../lib/unjudgedRows";
 import { DEFAULT_AUDIT_MODE, partitionWritesByMode, partitionOptionAWrites, auditModeLabel, stagedWriteConfidence } from "../lib/runModes";
 import { buildFullAuditPlan, fullAuditLabel, runFullAuditPlan, type FullAuditEntry, type FullAuditProgress } from "../lib/fullAudit";
 import { effectiveVerdictTemp, describeImage, effectiveSettings, addUsage, aiOfflineReason, type AIUsage } from "../lib/ai/aiClient";
@@ -7719,7 +7720,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
       // to a surviving item id) is untouched. The reconcile is idempotent, so a
       // workspace at an earlier version is safely brought up to the latest.
-      version: 10,
+      version: 11,
       migrate: (persisted, fromVersion) => {
         let s = persisted as WorkspaceState;
         if (!s) return s;
@@ -7895,6 +7896,28 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ),
             } as WorkspaceState;
           }
+        }
+        if (fromVersion < 11) {
+          // Runs stored before the engine stopped calling an unjudged pair
+          // "Partial". Narrow and provable: only rows where the procedure pass
+          // reached no verdict AND no evidence passage was cited. Snapshots and
+          // run history are migrated too, so restoring one cannot bring the old
+          // verdict back. Checklist lines and findings already written from
+          // such a row are deliberately NOT rewritten — those are human-visible
+          // records, and silently editing them is not this app's contract.
+          s = {
+            ...s,
+            evidenceAssessments: demoteUnjudgedMap(s.evidenceAssessments) ?? s.evidenceAssessments,
+            evidenceAssessmentHistory: demoteUnjudgedHistory(s.evidenceAssessmentHistory) ?? s.evidenceAssessmentHistory,
+            versions: (s.versions ?? []).map((v) => ({
+              ...v,
+              snapshot: {
+                ...v.snapshot,
+                evidenceAssessments: demoteUnjudgedMap(v.snapshot.evidenceAssessments),
+                evidenceAssessmentHistory: demoteUnjudgedHistory(v.snapshot.evidenceAssessmentHistory),
+              },
+            })),
+          } as WorkspaceState;
         }
         return s;
       },
