@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote } from "../selfCheckHistory";
 import { runDuration, sameFolderLink, SAME_LINK_WARNING, passFileRows, fileCheckMark, toFileRows } from "../selfCheckEvidence";
-import { buildSelfCheckCsv, buildSelfCheckHtml, toSelfCheckRows, countSelfCheck, SELF_CHECK_FILE_HEADERS } from "../selfCheck";
+import { buildSelfCheckCsv, buildSelfCheckHtml, toSelfCheckRows, countSelfCheck, tallySlices, SELF_CHECK_FILE_HEADERS } from "../selfCheck";
 import { reviewShapedRows, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO } from "../selfCheckImprove";
-import { buildBandWorking } from "../selfCheckBanding";
+import { buildBandWorking, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PRINT_BAND_PALETTE } from "../selfCheckBanding";
 import { summariseRun, appendRunSummary, SELF_CHECK_RUN_LOG_CAP, type SelfCheckRunSummary } from "../selfCheckRunLog";
 import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
 import type { AuditFileRecord, EvidenceAssessmentResult, PPDReviewResult } from "../../types";
@@ -325,5 +325,56 @@ describe("the long tail: summaries outlive the full runs", () => {
 
   it("is empty, not broken, with no logs at all", () => {
     expect(selfCheckRuns(undefined, undefined, undefined, undefined, undefined, undefined)).toEqual([]);
+  });
+});
+
+describe("the bar says what the reader is looking at", () => {
+  const c = (complies: number, partly: number, doesNot: number, couldNotCheck: number) =>
+    ({ complies, partly, doesNot, couldNotCheck, total: complies + partly + doesNot + couldNotCheck });
+
+  // The old heading read "The shape of this tab, 8 requirement lines", which
+  // names the axis. On the reported 6.1 run every line came out the same way,
+  // so it sat over one block of one colour and said nothing at all.
+  it("states the finding when every line lands in one state", () => {
+    expect(tallyHeadline(tallySlices(c(0, 0, 8, 0), "overview"))).toBe("All 8 requirement lines do not comply");
+    expect(tallyHeadline(tallySlices(c(8, 0, 0, 0), "overview"))).toBe("All 8 requirement lines comply");
+  });
+
+  // Worst first, because that is what an auditor acts on.
+  it("leads with the worst state that actually occurred", () => {
+    expect(tallyHeadline(tallySlices(c(3, 2, 3, 0), "overview"))).toBe("3 of 8 requirement lines do not comply");
+    expect(tallyHeadline(tallySlices(c(6, 2, 0, 0), "overview"))).toBe("2 of 8 requirement lines partly comply");
+    expect(tallyHeadline(tallySlices(c(4, 0, 0, 4), "overview"))).toBe("4 of 8 requirement lines could not be checked");
+  });
+
+  // Each tab counts in its own vocabulary, and the heading has to follow it.
+  it("speaks each tab's own language", () => {
+    expect(tallyHeadline(tallySlices(c(0, 0, 8, 0), "procedure"))).toBe("All 8 requirement lines are not documented");
+    expect(tallyHeadline(tallySlices(c(8, 0, 0, 0), "records"))).toBe("All 8 requirement lines have records");
+    expect(tallyHeadline(tallySlices(c(0, 0, 8, 0), "records"))).toBe("All 8 requirement lines have no records");
+  });
+
+  it("stays grammatical on a single line, and says nothing when there is nothing", () => {
+    expect(tallyHeadline(tallySlices(c(0, 1, 0, 0), "overview"))).toBe("The only requirement line partly complies");
+    expect(tallyHeadline(tallySlices(c(0, 0, 0, 0), "overview"))).toBe("");
+  });
+
+  it("puts the same sentence in the drawing and in its aria-label, and no longer names the axis", () => {
+    const svg = tallyBarSvg(tallySlices(c(0, 0, 8, 0), "overview"), PRINT_BAND_PALETTE);
+    expect(svg).toContain("All 8 requirement lines do not comply");
+    expect(svg).not.toContain("The shape of this tab");
+    expect(svg).toMatch(/aria-label="All 8 requirement lines do not comply/);
+  });
+
+  // The sibling heading named its axis too.
+  it("says how many dimensions were judged rather than describing the chart", () => {
+    const g = bandGraphic(buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 }));
+    const svg = bandGraphicSvg(g, PRINT_BAND_PALETTE);
+    expect(svg).toContain("2 of the 4 EduTrust dimensions were judged here");
+    // The two judged dimensions are named on their own rows, not in the
+    // subtitle: with them there as well the line ran off the right edge.
+    expect(svg).toContain("Approach");
+    expect(svg).toContain("not added up into a band");
+    expect(svg).not.toContain("Each dimension on its own");
   });
 });

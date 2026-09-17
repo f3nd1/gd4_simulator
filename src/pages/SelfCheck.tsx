@@ -26,7 +26,7 @@ import {
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
-import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef } from "../lib/selfCheckHistory";
+import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef, type RunDiff } from "../lib/selfCheckHistory";
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
 import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking } from "../lib/selfCheckBanding";
@@ -303,10 +303,6 @@ export function SelfCheck() {
   const reviewRows = useMemo(() => reviewShapedRows(rows), [rows]);
   const counts = useMemo(() => countSelfCheck(rows), [rows]);
   const shownRun = runs[viewingRun];
-  // Deletable runs: archived AND still openable. An aged-out timeline entry has
-  // no full result to delete.
-  const archivedCount = runs.filter((r) => !r.current && r.openable).length;
-  const agedOut = runs.filter((r) => !r.openable).length;
   // What changed since the check before the one on screen. Counted from the
   // two runs' own stored verdicts; nothing is re-judged.
   const runDiff = useMemo(() => {
@@ -646,6 +642,18 @@ export function SelfCheck() {
             ))}
           </select>
           {area && <p style={{ ...muted, marginTop: 10, marginBottom: 0 }}>{area.description}</p>}
+          {/* Whether this area has been checked before, as soon as it is
+              picked. It answers the returning user's first question without
+              running anything and without scrolling past a full result. */}
+          {area && (
+            <RunHistory
+              runs={runs} viewingRun={viewingRun} setRunIndex={setRunIndex}
+              allRuns={allRuns} setAllRuns={setAllRuns}
+              confirmDelete={confirmDelete} setConfirmDelete={setConfirmDelete}
+              scope={scope} deleteSelfCheckRun={deleteSelfCheckRun} clearSelfCheckHistory={clearSelfCheckHistory}
+              runDiff={runDiff} shownRun={shownRun}
+            />
+          )}
         </section>
 
         {/* 2 — two links, because the engine reads the two folders differently */}
@@ -654,15 +662,27 @@ export function SelfCheck() {
             <span style={stepNum}>2</span><h2 style={h2}>Where are your documents?</h2>
           </div>
           <p style={{ ...muted, marginTop: 0 }}>
-            Two folders, because they answer two different questions. They must be two DIFFERENT folders:
-            one link in both boxes makes every document count as your written procedure and as your records
-            at the same time, and a requirement then looks proved because your procedure says it happens.
+            Two folders, because they answer two different questions: what you say you do, and what you actually did.
+            They must be two DIFFERENT folders: one link in both boxes makes every document count as your written
+            procedure and as your records at the same time, and a requirement then looks proved because your
+            procedure says it happens.
+          </p>
+          {/* The check cannot tell a swapped pair from an honest "documented
+              but no records" result: both were run, and both produce the same
+              evidence-side signature down to the same comment. So the only
+              honest help is at the point of entry, and this says what the two
+              boxes mean in four words each and what going wrong looks like. */}
+          <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", margin: "8px 0 0" }}>
+            <b>Getting these the wrong way round is easy to do and hard to spot.</b> The check reads the first
+            box looking for what you promise and the second looking for proof it happened, and it cannot tell a
+            swapped pair from an area with no records yet. If almost every line comes back the same way and the
+            reasons keep saying the records were policy wording, check the two boxes before you believe the result.
           </p>
           <div style={{ height: 6 }} />
 
           <LinkField
             label="Where is your written procedure?"
-            help="The folder holding the document that says how this area is meant to work: your policy, your procedure, your handbook or your terms of reference."
+            help="What you SAY you do. The document that sets out how this area is meant to work: your policy, your procedure, your handbook or your terms of reference. Not minutes, registers, logs or reports, even when they are about this area: those go in the second box."
             value={procLink} onChange={setProcLink} state={procState} disabled={!area || running}
             onEdit={() => { setError(null); setConfirmOverwrite(false); }}
           />
@@ -671,7 +691,7 @@ export function SelfCheck() {
 
           <LinkField
             label="Where is your evidence?"
-            help="The folder holding the records that show it actually happens: minutes, forms, logs, registers, signed copies, reports and emails."
+            help="What you actually DID. The records that show it happening: minutes, forms, logs, registers, signed copies, reports and emails. Not your policy or procedure documents, even when their names mention records: those go in the first box."
             value={evLink} onChange={setEvLink} state={evState} disabled={!area || running}
             onEdit={() => { setError(null); setConfirmOverwrite(false); }}
           />
@@ -877,134 +897,6 @@ export function SelfCheck() {
               {area.scope} {area.title} · {procedureOnlyResult ? "written procedure only" : "procedure and records"} · checked {shownRun?.label || ranAt}
               {shownRun?.duration && ` · took ${shownRun.duration}`}
             </p>
-
-            {/* Which run is on screen, and how long each took. The history is
-                the workspace store's own, kept since long before this page and
-                simply never read here, so nothing new is stored beyond one
-                number per run. Viewing an earlier run is pure display: it
-                re-renders the rows that run recorded and never re-runs, never
-                re-bands and never writes. */}
-            {runs.length > 0 && (
-              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", margin: "10px 0 0", background: viewingRun === 0 ? "#fbfcfe" : "#fffbeb", borderColor: viewingRun === 0 ? "#e2e8f0" : "#fde68a" }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <b style={{ fontSize: 13 }}>{runs.length} check{runs.length === 1 ? "" : "s"} of this area</b>
-                  <span style={{ ...muted }}>
-                    {runs.length === 1
-                      ? "Kept here so you can come back to it. Running again keeps this one and adds a new one."
-                      : "Newest first. Choosing an earlier one shows what it recorded at the time."}
-                  </span>
-                </div>
-                {/* Bounded by HEIGHT, not by a count: the timeline runs to 120
-                    entries, and a grid of 120 cards would bury the result under
-                    it. A count worked at 1500px and still filled a phone, where
-                    the cards are one per row, so the collapsed list is a fixed
-                    box that scrolls and behaves the same at every width.
-                    Nothing is hidden: every run is in the box, and the expander
-                    lifts the cap entirely. */}
-                <div style={{
-                  display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8,
-                  ...(allRuns ? {} : { maxHeight: RUNS_BOX_HEIGHT, overflowY: "auto" as const }),
-                }}>
-                  {runs.map((r) => {
-                    const here = r.index === viewingRun;
-                    const words = VIEW_TALLY[r.procedureOnly ? "procedure-only" : "overview"];
-                    return (
-                      <div key={`${r.index}-${r.runAt}`} style={{ border: "1px solid", borderColor: here ? INK : "#cbd5e1", borderRadius: 8, background: here ? INK : r.openable ? "#fff" : "#f8fafc", color: here ? "#fff" : r.openable ? INK : "#64748b", overflow: "hidden" }}>
-                        <button
-                          type="button" disabled={!r.openable} onClick={() => setRunIndex(r.index)}
-                          title={r.openable ? undefined : "Only this run's date, time and counts were kept. The full result is no longer stored."}
-                          style={{ border: "none", background: "transparent", color: "inherit", padding: "6px 10px 5px", fontSize: 12, fontWeight: 700, cursor: r.openable ? "pointer" : "default", textAlign: "left", display: "block", width: "100%" }}
-                        >
-                          {r.current ? "Latest" : `#${runs.length - r.index}`}{r.procedureOnly ? " · procedure only" : ""}{r.openable ? "" : " · summary only"}
-                          <div style={{ fontWeight: 400, fontSize: 11, marginTop: 2 }}>{r.label}</div>
-                          <div style={{ fontWeight: 400, fontSize: 11, opacity: 0.85 }}>{r.duration || "time not recorded"}</div>
-                          {/* The headline counts, so two runs can be compared
-                              without opening either. */}
-                          <div style={{ fontWeight: 400, fontSize: 11, opacity: 0.85, marginTop: 2 }}>
-                            {r.counts.total === 0 ? "no lines recorded" : [
-                              `${r.counts.complies} ${words.complies}`,
-                              words.partly ? `${r.counts.partly} ${words.partly}` : "",
-                              `${r.counts.doesNot} ${words.doesNot}`,
-                              r.counts.couldNotCheck > 0 ? `${r.counts.couldNotCheck} could not check` : "",
-                            ].filter(Boolean).join(" · ")}
-                          </div>
-                        </button>
-                        {/* Archived runs only. The current result is what the
-                            Evidence Folder and PPD Review pages read, and a
-                            process owner must not be able to remove the result
-                            their audit lead is working from. It is replaced by
-                            running again, never deleted. The store refuses
-                            index 0 as well, so this is not the only guard. */}
-                        {!r.current && r.openable && (
-                          <button
-                            type="button" onClick={() => setConfirmDelete({ kind: "run", index: r.index })}
-                            title={`Delete the check from ${r.label}`}
-                            style={{ border: "none", borderTop: "1px solid #e2e8f0", background: "transparent", color: "#991b1b", padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", width: "100%", textAlign: "left" }}
-                          >
-                            Delete this check
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {confirmDelete && (
-                  <DeleteConfirm
-                    what={confirmDelete}
-                    runs={runs}
-                    onCancel={() => setConfirmDelete(null)}
-                    onConfirm={() => {
-                      if (!scope) return;
-                      if (confirmDelete.kind === "history") clearSelfCheckHistory(scope);
-                      else deleteSelfCheckRun(scope, confirmDelete.index);
-                      setConfirmDelete(null);
-                      setRunIndex(0);
-                    }}
-                  />
-                )}
-                {runs.length > 3 && (
-                  <button
-                    type="button" onClick={() => setAllRuns((v) => !v)}
-                    style={{ marginTop: 8, display: "block", background: "none", border: "none", padding: 0, color: "#1d4ed8", fontSize: 12, fontWeight: 700, cursor: "pointer", textDecoration: "underline" }}
-                  >
-                    {allRuns ? "Show fewer" : `Open out all ${runs.length} checks`}
-                  </button>
-                )}
-                {archivedCount > 0 && (
-                  <button
-                    type="button" onClick={() => setConfirmDelete({ kind: "history" })}
-                    style={{ marginTop: 14, display: "block", background: "none", border: "1px solid #fecaca", borderRadius: 7, padding: "5px 10px", color: "#991b1b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
-                  >
-                    Delete all {archivedCount} earlier check{archivedCount === 1 ? "" : "s"}, keeping the latest
-                  </button>
-                )}
-                {agedOut > 0 && (
-                  <p style={{ ...muted, margin: "8px 0 0" }}>
-                    The {agedOut} oldest {agedOut === 1 ? "entry keeps" : "entries keep"} only the date, the time taken and the counts.
-                    This area holds the last {OPTION_A_RUN_HISTORY_CAP + 1} checks in full, and a summary of the {SELF_CHECK_RUN_LOG_CAP} most recent.
-                  </p>
-                )}
-                {viewingRun > 0 && (
-                  <p style={{ ...muted, color: "#92400e", margin: "8px 0 0", fontWeight: 700 }}>
-                    You are looking at an earlier check, not your latest one. Nothing here can be re-run or changed; choose Latest to go back.
-                  </p>
-                )}
-                {shownRun && (shownRun.procedureDuration || shownRun.recordsDuration) && (
-                  <p style={{ ...muted, margin: "6px 0 0" }}>
-                    Written procedure pass {shownRun.procedureDuration || "not recorded"} · records pass {shownRun.recordsDuration || "not recorded"}.
-                    {" "}{runTimingNote(runs, viewingRun)}
-                  </p>
-                )}
-                {runDiff && (
-                  <p style={{ ...muted, margin: "6px 0 0" }}>
-                    <b>Against the check before it:</b> {diffSummary(runDiff)}.
-                    {runDiff.improved.length > 0 && ` Improved: ${runDiff.improved.slice(0, 6).map((c) => c.ref).join(", ")}${runDiff.improved.length > 6 ? ", and others" : ""}.`}
-                    {runDiff.worsened.length > 0 && ` Went backwards: ${runDiff.worsened.slice(0, 6).map((c) => c.ref).join(", ")}${runDiff.worsened.length > 6 ? ", and others" : ""}.`}
-                  </p>
-                )}
-              </div>
-            )}
 
             {/* The check asks two separate questions and they fail
                 independently: your procedure can be silent while your records
@@ -1558,6 +1450,167 @@ function FileTable({ rows, perPass, sameLink }: { rows: SelfCheckFileRow[]; perP
 const RUNS_BOX_HEIGHT = 232;
 
 type DeleteTarget = { kind: "run"; index: number } | { kind: "history" };
+
+// Has this area been checked before, when, and how did it come out.
+//
+// This used to live inside the step 4 result section, so it only appeared once
+// a result was on screen: a returning user had to scroll past a full result to
+// reach it, and on an area they had never checked they were told nothing at
+// all. It is the answer to a question asked at step 1, when the area is picked,
+// so that is where it renders. It is rendered ONCE: the "you are looking at an
+// earlier check" banner stays with the result, which is the only place that
+// distinction has to be made.
+function RunHistory(props: {
+  runs: SelfCheckRunRef[];
+  viewingRun: number;
+  setRunIndex: (i: number) => void;
+  allRuns: boolean;
+  setAllRuns: (f: (v: boolean) => boolean) => void;
+  confirmDelete: DeleteTarget | null;
+  setConfirmDelete: (t: DeleteTarget | null) => void;
+  scope: string;
+  deleteSelfCheckRun: (s: string, i: number) => void;
+  clearSelfCheckHistory: (s: string) => void;
+  runDiff: RunDiff | null;
+  shownRun: SelfCheckRunRef | undefined;
+}) {
+  const { runs, viewingRun, setRunIndex, allRuns, setAllRuns, confirmDelete, setConfirmDelete, scope, runDiff, shownRun, deleteSelfCheckRun, clearSelfCheckHistory } = props;
+  const archivedCount = runs.filter((r) => !r.current && r.openable).length;
+  const agedOut = runs.filter((r) => !r.openable).length;
+  // An area nobody has checked says so, rather than showing nothing and
+  // leaving a first-time user to guess whether the page is broken.
+  if (runs.length === 0) {
+    return (
+      <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", margin: "10px 0 0" }}>
+        This area has not been checked yet. Once you run it, every check is kept here so you can come back to it and compare.
+      </p>
+    );
+  }
+  // Viewing an earlier run is pure display: it re-renders the rows that run
+  // recorded and never re-runs, never re-bands and never writes.
+  return (
+    <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", margin: "10px 0 0", background: viewingRun === 0 ? "#fbfcfe" : "#fffbeb", borderColor: viewingRun === 0 ? "#e2e8f0" : "#fde68a" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                <b style={{ fontSize: 13 }}>{runs.length} check{runs.length === 1 ? "" : "s"} of this area</b>
+                <span style={{ ...muted }}>
+                  {runs.length === 1
+                    ? "Kept here so you can come back to it. Running again keeps this one and adds a new one."
+                    : "Newest first. Choosing an earlier one shows what it recorded at the time."}
+                </span>
+              </div>
+              {/* Bounded by HEIGHT, not by a count: the timeline runs to 120
+                  entries, and a grid of 120 cards would bury the result under
+                  it. A count worked at 1500px and still filled a phone, where
+                  the cards are one per row, so the collapsed list is a fixed
+                  box that scrolls and behaves the same at every width.
+                  Nothing is hidden: every run is in the box, and the expander
+                  lifts the cap entirely. */}
+              <div style={{
+                display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8,
+                ...(allRuns ? {} : { maxHeight: RUNS_BOX_HEIGHT, overflowY: "auto" as const }),
+              }}>
+                {runs.map((r) => {
+                  const here = r.index === viewingRun;
+                  const words = VIEW_TALLY[r.procedureOnly ? "procedure-only" : "overview"];
+                  return (
+                    <div key={`${r.index}-${r.runAt}`} style={{ border: "1px solid", borderColor: here ? INK : "#cbd5e1", borderRadius: 8, background: here ? INK : r.openable ? "#fff" : "#f8fafc", color: here ? "#fff" : r.openable ? INK : "#64748b", overflow: "hidden" }}>
+                      <button
+                        type="button" disabled={!r.openable} onClick={() => setRunIndex(r.index)}
+                        title={r.openable ? undefined : "Only this run's date, time and counts were kept. The full result is no longer stored."}
+                        style={{ border: "none", background: "transparent", color: "inherit", padding: "6px 10px 5px", fontSize: 12, fontWeight: 700, cursor: r.openable ? "pointer" : "default", textAlign: "left", display: "block", width: "100%" }}
+                      >
+                        {r.current ? "Latest" : `#${runs.length - r.index}`}{r.procedureOnly ? " · procedure only" : ""}{r.openable ? "" : " · summary only"}
+                        <div style={{ fontWeight: 400, fontSize: 11, marginTop: 2 }}>{r.label}</div>
+                        <div style={{ fontWeight: 400, fontSize: 11, opacity: 0.85 }}>{r.duration || "time not recorded"}</div>
+                        {/* The headline counts, so two runs can be compared
+                            without opening either. */}
+                        <div style={{ fontWeight: 400, fontSize: 11, opacity: 0.85, marginTop: 2 }}>
+                          {r.counts.total === 0 ? "no lines recorded" : [
+                            `${r.counts.complies} ${words.complies}`,
+                            words.partly ? `${r.counts.partly} ${words.partly}` : "",
+                            `${r.counts.doesNot} ${words.doesNot}`,
+                            r.counts.couldNotCheck > 0 ? `${r.counts.couldNotCheck} could not check` : "",
+                          ].filter(Boolean).join(" · ")}
+                        </div>
+                      </button>
+                      {/* Archived runs only. The current result is what the
+                          Evidence Folder and PPD Review pages read, and a
+                          process owner must not be able to remove the result
+                          their audit lead is working from. It is replaced by
+                          running again, never deleted. The store refuses
+                          index 0 as well, so this is not the only guard. */}
+                      {!r.current && r.openable && (
+                        <button
+                          type="button" onClick={() => setConfirmDelete({ kind: "run", index: r.index })}
+                          title={`Delete the check from ${r.label}`}
+                          style={{ border: "none", borderTop: "1px solid #e2e8f0", background: "transparent", color: "#991b1b", padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", width: "100%", textAlign: "left" }}
+                        >
+                          Delete this check
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {confirmDelete && (
+                <DeleteConfirm
+                  what={confirmDelete}
+                  runs={runs}
+                  onCancel={() => setConfirmDelete(null)}
+                  onConfirm={() => {
+                    if (!scope) return;
+                    if (confirmDelete.kind === "history") clearSelfCheckHistory(scope);
+                    else deleteSelfCheckRun(scope, confirmDelete.index);
+                    setConfirmDelete(null);
+                    setRunIndex(0);
+                  }}
+                />
+              )}
+              {runs.length > 3 && (
+                <button
+                  type="button" onClick={() => setAllRuns((v) => !v)}
+                  style={{ marginTop: 8, display: "block", background: "none", border: "none", padding: 0, color: "#1d4ed8", fontSize: 12, fontWeight: 700, cursor: "pointer", textDecoration: "underline" }}
+                >
+                  {allRuns ? "Show fewer" : `Open out all ${runs.length} checks`}
+                </button>
+              )}
+              {archivedCount > 0 && (
+                <button
+                  type="button" onClick={() => setConfirmDelete({ kind: "history" })}
+                  style={{ marginTop: 14, display: "block", background: "none", border: "1px solid #fecaca", borderRadius: 7, padding: "5px 10px", color: "#991b1b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                >
+                  Delete all {archivedCount} earlier check{archivedCount === 1 ? "" : "s"}, keeping the latest
+                </button>
+              )}
+              {agedOut > 0 && (
+                <p style={{ ...muted, margin: "8px 0 0" }}>
+                  The {agedOut} oldest {agedOut === 1 ? "entry keeps" : "entries keep"} only the date, the time taken and the counts.
+                  This area holds the last {OPTION_A_RUN_HISTORY_CAP + 1} checks in full, and a summary of the {SELF_CHECK_RUN_LOG_CAP} most recent.
+                </p>
+              )}
+              {viewingRun > 0 && (
+                <p style={{ ...muted, color: "#92400e", margin: "8px 0 0", fontWeight: 700 }}>
+                  You are looking at an earlier check, not your latest one. Nothing here can be re-run or changed; choose Latest to go back.
+                </p>
+              )}
+              {shownRun && (shownRun.procedureDuration || shownRun.recordsDuration) && (
+                <p style={{ ...muted, margin: "6px 0 0" }}>
+                  Written procedure pass {shownRun.procedureDuration || "not recorded"} · records pass {shownRun.recordsDuration || "not recorded"}.
+                  {" "}{runTimingNote(runs, viewingRun)}
+                </p>
+              )}
+              {runDiff && (
+                <p style={{ ...muted, margin: "6px 0 0" }}>
+                  <b>Against the check before it:</b> {diffSummary(runDiff)}.
+                  {runDiff.improved.length > 0 && ` Improved: ${runDiff.improved.slice(0, 6).map((c) => c.ref).join(", ")}${runDiff.improved.length > 6 ? ", and others" : ""}.`}
+                  {runDiff.worsened.length > 0 && ` Went backwards: ${runDiff.worsened.slice(0, 6).map((c) => c.ref).join(", ")}${runDiff.worsened.length > 6 ? ", and others" : ""}.`}
+                </p>
+              )}
+    </div>
+  );
+}
+
 
 // Two steps, in place, spelling out exactly what goes and what stays.
 //

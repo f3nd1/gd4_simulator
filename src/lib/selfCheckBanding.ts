@@ -227,6 +227,7 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
   const NAME = `font-size:10.5px;fill:${p.ink}`;
   const SMALL = `font-size:10px;fill:${p.mute}`;
   const max = g.segments[0]?.max ?? 25;
+  const judged = g.segments.filter((s) => s.assessedHere).map((s) => s.label);
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;max-width:${W}px;${opts.minWidth ? `min-width:${opts.minWidth}px;` : ""}height:auto;font-family:inherit"
   aria-label="${opts.feeds ? `Which dimension this tab feeds: ${esc(g.segments.find((s) => s.key === opts.feeds!.key)?.label ?? "")}. ${esc(opts.feeds.caption)} ` : "What this check assessed, by dimension. "}${esc(g.segments.map((s) => `${s.label}: ${segmentText(s)}`).join(". "))}. No overall band is given.">
@@ -237,8 +238,11 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
       <line x1="0" y1="0" x2="0" y2="7" style="stroke:${p.hatchLine}" stroke-width="3"/>
     </pattern>
   </defs>
-  ${t(10, 14, TITLE, opts.feeds ? "Each dimension on its own, and which one this tab feeds" : "Each dimension on its own")}
-  ${t(10, 27, SMALL, `out of the ${max}% it can earn · they are not added up into a band here`)}
+  ${t(10, 14, TITLE, `${judged.length} of the ${g.segments.length} EduTrust dimensions ${judged.length === 1 ? "was" : "were"} judged here`)}
+  ${/* Kept short: the rows below already name which two were judged, and with
+       the names prefixed as well the line ran off the right edge of the
+       drawing and lost "not added up into a band", which is the honest part. */ ""}
+  ${t(10, 27, SMALL, `out of the ${max}% each can earn · not added up into a band`)}
   ${g.segments.map((seg, i) => {
     const y = TOP + i * ROW;
     // Unassessed: the WHOLE track is hatched, which reads as unknown. An empty
@@ -277,6 +281,47 @@ const TALLY_FILL: Record<TallySlice["tone"], string> = {
   good: "#16a34a", medium: "#d97706", critical: "#dc2626", neutral: "#94a3b8",
 };
 
+// The heading over the bar. It used to read "The shape of this tab, 8
+// requirement lines", which names the axis rather than the finding, and on a
+// run where every line came out the same way it sat over a single block of one
+// colour saying nothing at all.
+//
+// It now leads with the WORST state that actually occurred, because that is
+// what an auditor acts on, and it falls out correctly when everything lands in
+// one state: "All 8 requirement lines do not comply". Counted, never inferred:
+// every number and every label comes from the slices themselves.
+export function tallyHeadline(slices: TallySlice[]): string {
+  const shown = slices.filter((s) => s.n > 0);
+  const total = shown.reduce((n, s) => n + s.n, 0);
+  if (total === 0) return "";
+  // Worst first: critical, then medium, then the neutral "could not check",
+  // and only then the good state, which is the one case with nothing to act on.
+  const order: TallySlice["tone"][] = ["critical", "medium", "neutral", "good"];
+  const lead = order.map((t) => shown.find((s) => s.tone === t)).find(Boolean)!;
+  // A single line keeps the tally's own third-person wording, which is already
+  // singular: "All 1 requirement line partly comply" was the alternative.
+  if (total === 1) return `The only requirement line ${lead.label}`;
+  const lines = `${total} requirement lines`;
+  if (shown.length === 1) return `All ${lines} ${verbFor(lead.label)}`;
+  return `${lead.n} of ${lines} ${verbFor(lead.label)}`;
+}
+
+// The tally labels are written as third-person singular ("complies", "does not
+// comply") because they caption a count. Leading a sentence with a number
+// needs the plural, and only for the counts that are not already plural.
+function verbFor(label: string): string {
+  return label
+    .replace(/^complies$/, "comply")
+    .replace(/^partly complies$/, "partly comply")
+    .replace(/^does not comply$/, "do not comply")
+    .replace(/^documented$/, "are documented")
+    .replace(/^partly documented$/, "are partly documented")
+    .replace(/^not documented$/, "are not documented")
+    .replace(/^records found$/, "have records")
+    .replace(/^no records found$/, "have no records")
+    .replace(/^could not check$/, "could not be checked");
+}
+
 export function tallyBarSvg(slices: TallySlice[], p: BandPalette): string {
   const shown = slices.filter((s) => s.n > 0);
   const total = shown.reduce((n, s) => n + s.n, 0);
@@ -285,9 +330,9 @@ export function tallyBarSvg(slices: TallySlice[], p: BandPalette): string {
   const H = BARY + BARH + 8 + shown.length * ROW;
   let run = 0;
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;max-width:${W}px;min-width:300px;height:auto;font-family:inherit"
-  aria-label="${esc(shown.map((s) => `${s.n} ${s.label}`).join(", "))}, out of ${total}.">
+  aria-label="${esc(tallyHeadline(slices))}. ${esc(shown.map((s) => `${s.n} ${s.label}`).join(", "))}.">
   <rect x="0" y="0" width="${W}" height="${H}" rx="8" style="fill:${p.surface};stroke:${p.edge}"/>
-  ${`<text x="${BX}" y="12" style="font-size:11px;font-weight:700;fill:${p.ink}">The shape of this tab, ${total} requirement line${total === 1 ? "" : "s"}</text>`}
+  ${`<text x="${BX}" y="12" style="font-size:11px;font-weight:700;fill:${p.ink}">${esc(tallyHeadline(slices))}</text>`}
   ${shown.map((s) => {
     const x = BX + (run / total) * BW, w = (s.n / total) * BW;
     run += s.n;

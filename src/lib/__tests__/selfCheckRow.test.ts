@@ -156,10 +156,12 @@ describe("every tab carries a picture of its own", () => {
 
   it("draws only the states that occurred, and names each count in words", () => {
     const svg = tallyBarSvg(tallySlices({ complies: 3, partly: 7, doesNot: 0, couldNotCheck: 0, total: 10 }, "overview"), PRINT_BAND_PALETTE);
-    expect(svg).toContain("The shape of this tab, 10 requirement lines");
+    // The heading now states the finding, not the axis.
+    expect(svg).toContain("7 of 10 requirement lines partly comply");
     expect(svg).toContain("complies");
     expect(svg).toContain("aria-label");
-    expect(svg).not.toContain("does not comply");
+    // A state that did not occur is neither drawn nor listed.
+    expect(svg).not.toMatch(/\bdoes not comply\b/);
     expect(tallyBarSvg(tallySlices({ complies: 0, partly: 0, doesNot: 0, couldNotCheck: 0, total: 0 }, "overview"), PRINT_BAND_PALETTE)).toBe("");
   });
 
@@ -215,14 +217,14 @@ describe("nothing the screen collapses is lost from the filed working paper", ()
   it("puts the shape of the tab in both exports, on a half-tab as well", () => {
     const procRows = toProcedureRows([ppdRow()]);
     const csv = buildSelfCheckCsv("6.1 Internal audit", procRows, { kind: "none" }, "procedure");
-    expect(csv).toContain("The shape of this tab, 1 requirement line");
+    expect(csv).toContain("The only requirement line partly documented");
     expect(csv).toContain(PROCEDURE_FEEDS.caption);
     const html = buildSelfCheckHtml({
       areaLabel: "6.1 Internal audit", areaDescription: "d", counts: countSelfCheck(procRows),
       band: { kind: "none" }, rows: procRows, ranAt: "x", view: "procedure",
       bandWorking: buildBandWorking({ approach: 2, processes: 2, systemsOutcomes: 1, review: 1 }),
     });
-    expect(html).toContain("The shape of this tab");
+    expect(html).toContain("The only requirement line partly documented");
     expect(html).toContain("What this tab feeds");
     expect(html).toContain(PROCEDURE_FEEDS.caption);
     // The full dimension panel belongs to the whole area, not to one half of it.

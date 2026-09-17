@@ -391,7 +391,7 @@ describe("one drawing, two surfaces", () => {
     const svg = bandGraphicSvg(g, PRINT_BAND_PALETTE);
     expect(svg).toContain("not assessed by this check");
     expect(svg).toContain("Band 2 of 5 · 10% of 25%");
-    expect(svg).toContain("they are not added up into a band here");
+    expect(svg).toContain("not added up into a band");
     expect(svg).toContain("aria-label");
     // Nothing in the picture names a band for a dimension nobody opened.
     expect(svg).not.toMatch(/Band 1/);
