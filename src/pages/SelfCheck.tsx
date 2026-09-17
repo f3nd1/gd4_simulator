@@ -12,7 +12,7 @@ import {
   waitingMessage, roughRemaining,
   type RunProgress, type StageKey,
 } from "../lib/selfCheckProgress";
-import { useWorkspaceStore } from "../store/useWorkspaceStore";
+import { useWorkspaceStore, OPTION_A_RUN_HISTORY_CAP } from "../store/useWorkspaceStore";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
@@ -26,7 +26,7 @@ import {
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
-import { selfCheckRuns, diffRuns, diffSummary, runTimingNote } from "../lib/selfCheckHistory";
+import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef } from "../lib/selfCheckHistory";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
 import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking } from "../lib/selfCheckBanding";
 
@@ -75,6 +75,8 @@ export function SelfCheck() {
   const ppdProgress = useWorkspaceStore((s) => s.ppdReviewProgress);
   const ppdResults = useWorkspaceStore((s) => s.ppdReviewResults);
   const evHistory = useWorkspaceStore((s) => s.evidenceAssessmentHistory);
+  const deleteSelfCheckRun = useWorkspaceStore((s) => s.deleteSelfCheckRun);
+  const clearSelfCheckHistory = useWorkspaceStore((s) => s.clearSelfCheckHistory);
   const ppdHistory = useWorkspaceStore((s) => s.ppdReviewHistory);
   const cycleStatus = useWorkspaceStore((s) => s.cycle.status);
   const auditors = useWorkspaceStore((s) => s.auditors);
@@ -100,6 +102,10 @@ export function SelfCheck() {
   // changes or a new run finishes, so "you are looking at an old result" can
   // never be a state somebody arrives in without choosing it.
   const [runIndex, setRunIndex] = useState(0);
+  // Deleting is two steps and never a browser confirm(): the panel has to say
+  // WHICH check goes, what is left behind, and that the audit lead's PPD
+  // Review page reads the same history and loses it too.
+  const [confirmDelete, setConfirmDelete] = useState<DeleteTarget | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -300,7 +306,14 @@ export function SelfCheck() {
   const combos = useMemo(() => (existing ? countCombinations(existing.rows) : null), [existing]);
   // Off the stored result, not off `rows`: switching to a tab that happens to
   // be empty must not make the whole result section disappear.
-  const showResult = phase === "done" && (procedureOnlyResult ? !!ppdExisting?.rows.length : !!existing?.rows.length);
+  //
+  // And NOT gated on phase === "done" any more. `phase` is session state that
+  // starts at "idle", so a stored result rendered only in the browser session
+  // that produced it: come back tomorrow and the page showed steps 1-3 and
+  // nothing else. The run history was therefore unreachable without running
+  // again, and running again was the one thing that pushed the result you
+  // wanted to look at into the archive. Reproduced live before it was fixed.
+  const showResult = !running && (procedureOnlyResult ? !!ppdExisting?.rows.length : !!existing?.rows.length);
 
   async function run() {
     if (!area || !folder || !ready) return;
@@ -609,7 +622,7 @@ export function SelfCheck() {
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
             <span style={stepNum}>1</span><h2 style={h2}>Which area do you look after?</h2>
           </div>
-          <select value={scope} onChange={(e) => { setScope(e.target.value); setRunIndex(0); setPhase("idle"); setError(null); setConfirmOverwrite(false); }}
+          <select value={scope} onChange={(e) => { setScope(e.target.value); setRunIndex(0); setConfirmDelete(null); setPhase("idle"); setError(null); setConfirmOverwrite(false); }}
             style={{ ...input, cursor: "pointer" }} disabled={running}>
             <option value="">Choose your area…</option>
             {[...new Set(areas.map((a) => a.criterionId))].map((cid) => (
@@ -688,7 +701,7 @@ export function SelfCheck() {
                 {resultAtRisk ? "This area has already been checked." : "Your audit lead has already set up this area."}
               </b>
               <p style={{ ...muted, margin: "6px 0 10px" }}>
-                {resultAtRisk && `Running again replaces the previous ${plan.kind === "procedure-only" ? "written procedure check" : "result"} for this area, including anything your audit lead has seen. Nothing is deleted. Download a copy below if you want one. `}
+                {resultAtRisk && `The check you have now stays: it moves into the list of earlier checks on the result below, and you can open it whenever you like. What changes is which one counts as the current ${plan.kind === "procedure-only" ? "written procedure check" : "result"} for this area, and the current one is what your audit lead sees. ${runs.length >= OPTION_A_RUN_HISTORY_CAP + 1 ? `This area is already keeping ${runs.length} checks, which is the most it holds, so the oldest one drops off. ` : ""}`}
                 {linkClash && `It also replaces the ${clashes.length === 2 ? "written procedure and records folders" : `${clashes[0]} folder`} your audit lead recorded for this area with what you pasted above. If you are not sure that is right, check with them first.`}
               </p>
               <button type="button" style={{ ...bigBtn, fontSize: 13.5, padding: "9px 16px" }} onClick={() => void run()}>Yes, check it again</button>
@@ -859,28 +872,73 @@ export function SelfCheck() {
                 number per run. Viewing an earlier run is pure display: it
                 re-renders the rows that run recorded and never re-runs, never
                 re-bands and never writes. */}
-            {runs.length > 1 && (
+            {runs.length > 0 && (
               <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", margin: "10px 0 0", background: viewingRun === 0 ? "#fbfcfe" : "#fffbeb", borderColor: viewingRun === 0 ? "#e2e8f0" : "#fde68a" }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <b style={{ fontSize: 13 }}>{runs.length} checks of this area</b>
-                  <span style={{ ...muted }}>Newest first. Choosing an earlier one shows what it recorded at the time.</span>
+                  <b style={{ fontSize: 13 }}>{runs.length} check{runs.length === 1 ? "" : "s"} of this area</b>
+                  <span style={{ ...muted }}>
+                    {runs.length === 1
+                      ? "Kept here so you can come back to it. Running again keeps this one and adds a new one."
+                      : "Newest first. Choosing an earlier one shows what it recorded at the time."}
+                  </span>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-                  {runs.map((r) => (
-                    <button
-                      key={`${r.index}-${r.runAt}`} type="button" onClick={() => setRunIndex(r.index)}
-                      style={{
-                        border: "1px solid", borderColor: r.index === viewingRun ? INK : "#cbd5e1",
-                        background: r.index === viewingRun ? INK : "#fff", color: r.index === viewingRun ? "#fff" : INK,
-                        borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left",
-                      }}
-                    >
-                      {r.current ? "Latest" : `#${runs.length - r.index}`}
-                      <div style={{ fontWeight: 400, fontSize: 11, marginTop: 2 }}>{r.label}</div>
-                      <div style={{ fontWeight: 400, fontSize: 11, opacity: 0.85 }}>{r.duration || "time not recorded"}</div>
-                    </button>
-                  ))}
+                  {runs.map((r) => {
+                    const here = r.index === viewingRun;
+                    const words = VIEW_TALLY[r.procedureOnly ? "procedure-only" : "overview"];
+                    return (
+                      <div key={`${r.index}-${r.runAt}`} style={{ border: "1px solid", borderColor: here ? INK : "#cbd5e1", borderRadius: 8, background: here ? INK : "#fff", color: here ? "#fff" : INK, overflow: "hidden" }}>
+                        <button
+                          type="button" onClick={() => setRunIndex(r.index)}
+                          style={{ border: "none", background: "transparent", color: "inherit", padding: "6px 10px 5px", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left", display: "block", width: "100%" }}
+                        >
+                          {r.current ? "Latest" : `#${runs.length - r.index}`}{r.procedureOnly ? " · procedure only" : ""}
+                          <div style={{ fontWeight: 400, fontSize: 11, marginTop: 2 }}>{r.label}</div>
+                          <div style={{ fontWeight: 400, fontSize: 11, opacity: 0.85 }}>{r.duration || "time not recorded"}</div>
+                          {/* The headline counts, so two runs can be compared
+                              without opening either. */}
+                          <div style={{ fontWeight: 400, fontSize: 11, opacity: 0.85, marginTop: 2 }}>
+                            {r.counts.total === 0 ? "no lines recorded" : [
+                              `${r.counts.complies} ${words.complies}`,
+                              words.partly ? `${r.counts.partly} ${words.partly}` : "",
+                              `${r.counts.doesNot} ${words.doesNot}`,
+                              r.counts.couldNotCheck > 0 ? `${r.counts.couldNotCheck} could not check` : "",
+                            ].filter(Boolean).join(" · ")}
+                          </div>
+                        </button>
+                        <button
+                          type="button" onClick={() => setConfirmDelete({ kind: "run", index: r.index })}
+                          title={`Delete the check from ${r.label}`}
+                          style={{ border: "none", borderTop: `1px solid ${here ? "#475569" : "#e2e8f0"}`, background: "transparent", color: here ? "#fecaca" : "#991b1b", padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", width: "100%", textAlign: "left" }}
+                        >
+                          Delete this check
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
+                {runs.length > 1 && (
+                  <button
+                    type="button" onClick={() => setConfirmDelete({ kind: "history" })}
+                    style={{ marginTop: 8, background: "none", border: "none", padding: 0, color: "#991b1b", fontSize: 12, fontWeight: 700, cursor: "pointer", textDecoration: "underline" }}
+                  >
+                    Delete all {runs.length - 1} earlier check{runs.length - 1 === 1 ? "" : "s"}, keeping the latest
+                  </button>
+                )}
+                {confirmDelete && (
+                  <DeleteConfirm
+                    what={confirmDelete}
+                    runs={runs}
+                    onCancel={() => setConfirmDelete(null)}
+                    onConfirm={() => {
+                      if (!scope) return;
+                      if (confirmDelete.kind === "history") clearSelfCheckHistory(scope);
+                      else deleteSelfCheckRun(scope, confirmDelete.index);
+                      setConfirmDelete(null);
+                      setRunIndex(0);
+                    }}
+                  />
+                )}
                 {viewingRun > 0 && (
                   <p style={{ ...muted, color: "#92400e", margin: "8px 0 0", fontWeight: 700 }}>
                     You are looking at an earlier check, not your latest one. Nothing here can be re-run or changed; choose Latest to go back.
@@ -1444,6 +1502,63 @@ function FileTable({ rows, perPass, sameLink }: { rows: SelfCheckFileRow[]; perP
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+type DeleteTarget = { kind: "run"; index: number } | { kind: "history" };
+
+// Two steps, in place, spelling out exactly what goes and what stays.
+//
+// The blast radius is real and is named here rather than discovered later:
+// ppdReviewHistory and evidenceAssessmentHistory are the workspace store's
+// own, and the audit lead browses the same arrays on the PPD Review page
+// (PPDReview.tsx:447 and :1079). Deleting here deletes there.
+//
+// Deleting the LATEST check promotes the next one down to current, because
+// "current" is what the Evidence Folder and PPD Review pages read. With
+// nothing to promote, the area is left with no result, and the panel says so
+// in those words instead of leaving it to be found out.
+function DeleteConfirm({ what, runs, onCancel, onConfirm }: { what: DeleteTarget; runs: SelfCheckRunRef[]; onCancel: () => void; onConfirm: () => void }) {
+  const target = what.kind === "run" ? runs[what.index] : undefined;
+  const promoted = what.kind === "run" && what.index === 0 ? runs[1] : undefined;
+  const lastOne = what.kind === "run" && what.index === 0 && runs.length === 1;
+  return (
+    <div style={{ border: "2px solid #991b1b", background: "#fef2f2", borderRadius: 10, padding: "12px 14px", marginTop: 10 }}>
+      <b style={{ fontSize: 13.5, color: "#991b1b" }}>
+        {what.kind === "history" ? `Delete all ${runs.length - 1} earlier check${runs.length - 1 === 1 ? "" : "s"}?` : `Delete the check from ${target?.label ?? "this run"}?`}
+      </b>
+      <ul style={{ ...muted, color: "#7f1d1d", margin: "7px 0 0", paddingLeft: 17, lineHeight: 1.55 }}>
+        {what.kind === "history" ? (
+          <>
+            <li>Every earlier check of this area goes. The latest one stays exactly as it is.</li>
+            <li>This cannot be undone. Download anything you want to keep first.</li>
+          </>
+        ) : (
+          <>
+            <li>The whole check from <b>{target?.label}</b> goes: its results, what it read and its timing.</li>
+            {lastOne && <li><b>This is the only check of this area.</b> Deleting it leaves the area with no result at all, and your audit lead will see nothing here until you run it again.</li>}
+            {promoted && <li>The check from <b>{promoted.label}</b> becomes the current one, and is what your audit lead will see.</li>}
+            {what.index > 0 && <li>Your latest check is not affected.</li>}
+            <li>This cannot be undone. Download it first if you want a copy.</li>
+          </>
+        )}
+        <li>It also disappears from the PPD Review page your audit lead uses, which reads the same list.</li>
+      </ul>
+      <div style={{ display: "flex", gap: 8, marginTop: 11 }}>
+        <button
+          type="button" onClick={onConfirm}
+          style={{ border: "1px solid #991b1b", background: "#991b1b", color: "#fff", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+        >
+          {what.kind === "history" ? "Yes, delete them" : "Yes, delete it"}
+        </button>
+        <button
+          type="button" onClick={onCancel}
+          style={{ border: "1px solid #cbd5e1", background: "#fff", color: INK, borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+        >
+          Keep it
+        </button>
       </div>
     </div>
   );

@@ -11,6 +11,7 @@
 // So the retention rule is the one already in force, and this adds no storage
 // at all beyond one number per run (durationMs). Nothing here writes.
 import { runDuration } from "./selfCheckEvidence";
+import { unjudgedBothSides } from "./unjudgedRows";
 import type { EvidenceAssessmentResult, PPDReviewResult } from "../types";
 
 export type SelfCheckRunRef = {
@@ -26,6 +27,14 @@ export type SelfCheckRunRef = {
   procedureDuration: string;
   recordsDuration: string;
   lines: number;
+  // The headline counts, so one run can be compared with the one before it
+  // without opening either. Counted here off the stored rows with the SAME
+  // definitions countSelfCheck uses, including the unjudged-pair demotion, so
+  // a number in the list can never disagree with the tally on the result.
+  counts: { complies: number; partly: number; doesNot: number; couldNotCheck: number; total: number };
+  // Shown on a procedure-only run, where "complies" would be a claim nobody
+  // made: that run never opened a record.
+  procedureOnly: boolean;
 };
 
 const fmt = (iso: string) => {
@@ -55,6 +64,8 @@ export function selfCheckRuns(
     if (!runAt) continue;
     const total = (e?.durationMs ?? 0) + (p?.durationMs ?? 0);
     out.push({
+      counts: countStored(e?.rows, p?.rows),
+      procedureOnly: !e,
       index: i,
       current: i === 0,
       runAt,
@@ -122,4 +133,21 @@ export function diffSummary(d: RunDiff): string {
   if (d.onlyHere.length) bits.push(`${d.onlyHere.length} only in this run`);
   if (d.onlyThere.length) bits.push(`${d.onlyThere.length} only in the earlier run`);
   return bits.join(" · ");
+}
+
+
+// The same verdict axis the result page counts on, applied to whichever pass
+// the run actually has. A procedure-only run is counted on its PPD verdicts,
+// mapped exactly as toProcedureRows maps them.
+function countStored(
+  evRows: { verdict: string; ppdVerdict?: string }[] | undefined,
+  ppdRows: { verdict: string }[] | undefined,
+): SelfCheckRunRef["counts"] {
+  const zero = { complies: 0, partly: 0, doesNot: 0, couldNotCheck: 0, total: 0 };
+  const verdicts: string[] = evRows
+    ? evRows.map((r) => (unjudgedBothSides(r as never) ? "Not assessed" : r.verdict))
+    : (ppdRows ?? []).map((r) => (r.verdict === "Adequate" ? "Met" : r.verdict === "Partial" ? "Partial" : r.verdict === "Not documented" ? "Not met" : "Not assessed"));
+  if (verdicts.length === 0) return zero;
+  const n = (v: string) => verdicts.filter((x) => x === v).length;
+  return { complies: n("Met"), partly: n("Partial"), doesNot: n("Not met"), couldNotCheck: n("Not assessed"), total: verdicts.length };
 }

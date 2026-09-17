@@ -179,7 +179,7 @@ const PROMPT_PERSIST_CAP = 4_000;
 
 // Task 2: how many PAST (non-current) Option A runs to keep per
 // sub-criterion, same cap convention as useCalibrationStore's RUN_HISTORY_CAP.
-const OPTION_A_RUN_HISTORY_CAP = 20;
+export const OPTION_A_RUN_HISTORY_CAP = 20;
 // Clarification-round history cap — small records (no prompts/blobs), so a
 // generous ceiling; same length-cap-in-the-action convention as the run history.
 const CLARIFICATION_ROUND_CAP = 50;
@@ -771,6 +771,20 @@ export type WorkspaceState = {
   // Same additive history pattern as ppdReviewHistory — past runs only, the
   // current one stays at evidenceAssessments[subId].
   evidenceAssessmentHistory: Record<string, EvidenceAssessmentResult[]>;
+  // Remove ONE run of a sub-criterion, by the position the self-check page
+  // shows: 0 is the current result, 1.. are archived runs newest first. The two
+  // passes are paired by position (each run pushes to both arrays), so both
+  // halves go together or the pairing shifts and an earlier run would render
+  // one pass from one date beside the other pass from another.
+  //
+  // Deleting position 0 PROMOTES the newest archived run to current, because
+  // "current" is what the Evidence Folder and PPD Review pages read and
+  // leaving a hole there would silently empty the audit lead's view. With no
+  // archived run to promote, the area is left with no result at all, which is
+  // the honest outcome and what the confirmation says will happen.
+  deleteSelfCheckRun: (subCriterionId: string, index: number) => void;
+  // Every archived run for a sub-criterion. The CURRENT result is untouched.
+  clearSelfCheckHistory: (subCriterionId: string) => void;
   // Populates evidenceAssessments[sub] by REUSING the Evidence Folder staged
   // audit's stored per-checklist-line results (matched by GD4 requirement
   // ref) — no AI calls. Returns true if any audited line was found.
@@ -1350,6 +1364,40 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       clearLockBlockedReason: () => set({ lockBlockedReason: null }),
 
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
+
+      deleteSelfCheckRun: (subCriterionId, index) => {
+        if (index < 0) return;
+        set((st) => {
+          const ppdHist = st.ppdReviewHistory[subCriterionId] ?? [];
+          const evHist = st.evidenceAssessmentHistory[subCriterionId] ?? [];
+          if (index === 0) {
+            // Promote, do not leave a hole: see the interface comment.
+            const nextPpd = ppdHist[0], nextEv = evHist[0];
+            const ppdResults = { ...st.ppdReviewResults };
+            const evResults = { ...st.evidenceAssessments };
+            if (nextPpd) ppdResults[subCriterionId] = nextPpd; else delete ppdResults[subCriterionId];
+            if (nextEv) evResults[subCriterionId] = nextEv; else delete evResults[subCriterionId];
+            return {
+              ppdReviewResults: ppdResults,
+              evidenceAssessments: evResults,
+              ppdReviewHistory: { ...st.ppdReviewHistory, [subCriterionId]: ppdHist.slice(1) },
+              evidenceAssessmentHistory: { ...st.evidenceAssessmentHistory, [subCriterionId]: evHist.slice(1) },
+            };
+          }
+          const at = index - 1;
+          return {
+            ppdReviewHistory: { ...st.ppdReviewHistory, [subCriterionId]: ppdHist.filter((_, i) => i !== at) },
+            evidenceAssessmentHistory: { ...st.evidenceAssessmentHistory, [subCriterionId]: evHist.filter((_, i) => i !== at) },
+          };
+        });
+      },
+
+      clearSelfCheckHistory: (subCriterionId) => {
+        set((st) => ({
+          ppdReviewHistory: { ...st.ppdReviewHistory, [subCriterionId]: [] },
+          evidenceAssessmentHistory: { ...st.evidenceAssessmentHistory, [subCriterionId]: [] },
+        }));
+      },
 
       cancelBusy: () => {
         // Abort the current file read immediately so the loop doesn't wait for
