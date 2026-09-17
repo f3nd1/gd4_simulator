@@ -11,7 +11,7 @@
 // So the retention rule is the one already in force, and this adds no storage
 // at all beyond one number per run (durationMs). Nothing here writes.
 import { runDuration } from "./selfCheckEvidence";
-import { unjudgedBothSides } from "./unjudgedRows";
+import { summariseRun, type SelfCheckRunSummary } from "./selfCheckRunLog";
 import type { EvidenceAssessmentResult, PPDReviewResult } from "../types";
 
 export type SelfCheckRunRef = {
@@ -35,6 +35,11 @@ export type SelfCheckRunRef = {
   // Shown on a procedure-only run, where "complies" would be a claim nobody
   // made: that run never opened a record.
   procedureOnly: boolean;
+  // False once the full result has aged out of the 20-run cap: the run is
+  // still on the timeline with its date, time and counts, but there is nothing
+  // left to open. Said in those words rather than offering a button that
+  // silently does nothing.
+  openable: boolean;
 };
 
 const fmt = (iso: string) => {
@@ -51,32 +56,53 @@ export function selfCheckRuns(
   evHistory: EvidenceAssessmentResult[] | undefined,
   ppd: PPDReviewResult | undefined,
   ppdHistory: PPDReviewResult[] | undefined,
+  evLog?: SelfCheckRunSummary[],
+  ppdLog?: SelfCheckRunSummary[],
 ): SelfCheckRunRef[] {
   const evAll = [ev, ...(evHistory ?? [])].filter(Boolean) as EvidenceAssessmentResult[];
   const ppdAll = [ppd, ...(ppdHistory ?? [])].filter(Boolean) as PPDReviewResult[];
-  // A procedure-only run has no evidence result at all, so the spine is
-  // whichever list is longer rather than the evidence one.
-  const count = Math.max(evAll.length, ppdAll.length);
+  const evL = Array.isArray(evLog) ? evLog : [];
+  const ppdL = Array.isArray(ppdLog) ? ppdLog : [];
+  // The SUMMARY log is the spine, because it outlives the full results: it
+  // holds 120 entries where they hold 21. Full results attach to the first
+  // positions, which is exactly where they are, since both are newest-first
+  // and both are written by the same run.
+  //
+  // A procedure-only run has no evidence result and no evidence summary at
+  // all, so every length here is a max rather than the evidence one.
+  const count = Math.max(evAll.length, ppdAll.length, evL.length, ppdL.length);
   const out: SelfCheckRunRef[] = [];
   for (let i = 0; i < count; i++) {
     const e = evAll[i], p = ppdAll[i];
-    const runAt = e?.runAt || p?.runAt || "";
+    const es = evL[i], ps = ppdL[i];
+    const runAt = e?.runAt || p?.runAt || es?.at || ps?.at || "";
     if (!runAt) continue;
-    const total = (e?.durationMs ?? 0) + (p?.durationMs ?? 0);
+    // Prefer the full result's own figures; fall back to the summary once the
+    // full result has aged out. Never mix: a summary is what that run recorded.
+    const eMs = e?.durationMs ?? es?.ms;
+    const pMs = p?.durationMs ?? ps?.ms;
+    const total = (eMs ?? 0) + (pMs ?? 0);
+    const openable = !!e || !!p;
     out.push({
-      counts: countStored(e?.rows, p?.rows),
-      procedureOnly: !e,
+      counts: e || p ? countStored(e?.rows, p?.rows) : fromSummary(es ?? ps),
+      procedureOnly: openable ? !e : !es,
+      openable,
       index: i,
       current: i === 0,
       runAt,
       label: fmt(runAt),
       duration: runDuration(total),
-      procedureDuration: runDuration(p?.durationMs),
-      recordsDuration: runDuration(e?.durationMs),
-      lines: (e?.rows ?? p?.rows ?? []).length,
+      procedureDuration: runDuration(pMs),
+      recordsDuration: runDuration(eMs),
+      lines: e?.rows?.length ?? p?.rows?.length ?? es?.n ?? ps?.n ?? 0,
     });
   }
   return out;
+}
+
+function fromSummary(s: SelfCheckRunSummary | undefined): SelfCheckRunRef["counts"] {
+  if (!s) return { complies: 0, partly: 0, doesNot: 0, couldNotCheck: 0, total: 0 };
+  return { complies: s.c, partly: s.p, doesNot: s.d, couldNotCheck: s.u, total: s.n };
 }
 
 // How this run compares with the one before it, in words, from the two figures
@@ -136,18 +162,14 @@ export function diffSummary(d: RunDiff): string {
 }
 
 
-// The same verdict axis the result page counts on, applied to whichever pass
-// the run actually has. A procedure-only run is counted on its PPD verdicts,
-// mapped exactly as toProcedureRows maps them.
+// The same verdict axis the result page counts on, via the one definition the
+// summary log also uses, so a run's counts cannot change when its full result
+// ages out and the timeline entry takes over.
 function countStored(
   evRows: { verdict: string; ppdVerdict?: string }[] | undefined,
   ppdRows: { verdict: string }[] | undefined,
 ): SelfCheckRunRef["counts"] {
-  const zero = { complies: 0, partly: 0, doesNot: 0, couldNotCheck: 0, total: 0 };
-  const verdicts: string[] = evRows
-    ? evRows.map((r) => (unjudgedBothSides(r as never) ? "Not assessed" : r.verdict))
-    : (ppdRows ?? []).map((r) => (r.verdict === "Adequate" ? "Met" : r.verdict === "Partial" ? "Partial" : r.verdict === "Not documented" ? "Not met" : "Not assessed"));
-  if (verdicts.length === 0) return zero;
-  const n = (v: string) => verdicts.filter((x) => x === v).length;
-  return { complies: n("Met"), partly: n("Partial"), doesNot: n("Not met"), couldNotCheck: n("Not assessed"), total: verdicts.length };
+  return fromSummary(evRows
+    ? summariseRun("", undefined, evRows, "records")
+    : summariseRun("", undefined, ppdRows, "procedure"));
 }

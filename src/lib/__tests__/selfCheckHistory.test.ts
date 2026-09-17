@@ -4,6 +4,7 @@ import { runDuration, sameFolderLink, SAME_LINK_WARNING, passFileRows, fileCheck
 import { buildSelfCheckCsv, buildSelfCheckHtml, toSelfCheckRows, countSelfCheck, SELF_CHECK_FILE_HEADERS } from "../selfCheck";
 import { reviewShapedRows, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO } from "../selfCheckImprove";
 import { buildBandWorking } from "../selfCheckBanding";
+import { summariseRun, appendRunSummary, SELF_CHECK_RUN_LOG_CAP, type SelfCheckRunSummary } from "../selfCheckRunLog";
 import { GD4_REQUIREMENTS } from "../../data/gd4Requirements";
 import type { AuditFileRecord, EvidenceAssessmentResult, PPDReviewResult } from "../../types";
 
@@ -251,5 +252,78 @@ describe("what this run already found about Review", () => {
     const csv = buildSelfCheckCsv("6.1", rows, { kind: "none" }, "overview", [], w, undefined, ["6.1.1"]);
     expect(csv).not.toMatch(/already found about Systems/i);
     expect(csv).toContain("does not itemise outcome evidence");
+  });
+});
+
+describe("the long tail: summaries outlive the full runs", () => {
+  const sum = (at: string, over: Partial<SelfCheckRunSummary> = {}): SelfCheckRunSummary =>
+    ({ at, ms: 60_000, c: 2, p: 3, d: 1, u: 0, n: 6, ...over });
+
+  // The cap is chosen from measured bytes, not an illustration: 75 bytes per
+  // summary, 150 per run across both logs, 17.8 KB per area at 120.
+  it("keeps a summary small enough that the cap is not the binding constraint", () => {
+    const bytes = new TextEncoder().encode(JSON.stringify(sum("2026-09-17T22:35:56.123Z"))).length;
+    expect(bytes).toBeLessThan(100);
+    expect(SELF_CHECK_RUN_LOG_CAP).toBe(120);
+    // Worst case across all 29 sub-criteria, both logs, against a 5 MB budget.
+    const worst = bytes * 2 * SELF_CHECK_RUN_LOG_CAP * 29;
+    expect(worst).toBeLessThan(0.7 * 1024 * 1024);
+  });
+
+  it("caps newest-first, and survives a log that is missing or not an array", () => {
+    let log = [] as SelfCheckRunSummary[];
+    for (let i = 0; i < SELF_CHECK_RUN_LOG_CAP + 5; i++) log = appendRunSummary(log, sum(`r${i}`));
+    expect(log).toHaveLength(SELF_CHECK_RUN_LOG_CAP);
+    expect(log[0].at).toBe(`r${SELF_CHECK_RUN_LOG_CAP + 4}`);
+    expect(appendRunSummary(undefined, sum("a"))).toHaveLength(1);
+    expect(appendRunSummary("corrupt" as never, sum("a"))).toHaveLength(1);
+  });
+
+  it("counts a run the same way whether it is summarised or read from its rows", () => {
+    const rows = [{ gdRef: "a", verdict: "Met" }, { gdRef: "b", verdict: "Partial" }, { gdRef: "c", verdict: "Not met" }];
+    const s = summariseRun("x", 1000, rows, "records");
+    expect([s.c, s.p, s.d, s.u, s.n]).toEqual([1, 1, 1, 0, 3]);
+    // Via selfCheckRuns, the full-result path must agree with the summary path.
+    const full = selfCheckRuns(ev({ rows } as never), [], undefined, undefined)[0];
+    const tail = selfCheckRuns(undefined, [], undefined, undefined, [s], [])[0];
+    expect(tail.counts).toEqual(full.counts);
+  });
+
+  // A procedure-only run is counted on its PPD verdicts, mapped as
+  // toProcedureRows maps them.
+  it("maps a procedure-only run onto the same axis", () => {
+    const s = summariseRun("x", 0, [{ verdict: "Adequate" }, { verdict: "Partial" }, { verdict: "Not documented" }, { verdict: "Not assessed" }], "procedure");
+    expect([s.c, s.p, s.d, s.u, s.n]).toEqual([1, 1, 1, 1, 4]);
+  });
+
+  it("lists an aged-out run with its figures, and marks it as not openable", () => {
+    const runs = selfCheckRuns(
+      ev({ runAt: "2026-09-17T05:00:00.000Z", durationMs: 10_000 }), [],
+      ppd({ runAt: "2026-09-17T04:59:00.000Z", durationMs: 20_000 }), [],
+      [sum("2026-09-17T05:00:00.000Z", { ms: 10_000 }), sum("2026-01-01T00:00:00.000Z", { ms: 90_000, c: 5, p: 0, d: 1, u: 0, n: 6 })],
+      [sum("2026-09-17T04:59:00.000Z", { ms: 20_000 }), sum("2026-01-01T00:00:00.000Z", { ms: 30_000 })],
+    );
+    expect(runs).toHaveLength(2);
+    expect(runs[0].openable).toBe(true);
+    // Still on the timeline, with everything a comparison needs.
+    expect(runs[1].openable).toBe(false);
+    expect(runs[1].label).toContain("2026");
+    expect(runs[1].duration).toBe("2 minutes 0 seconds");
+    expect(runs[1].counts).toEqual({ complies: 5, partly: 0, doesNot: 1, couldNotCheck: 0, total: 6 });
+  });
+
+  it("prefers the full result's own figures while it still exists", () => {
+    const runs = selfCheckRuns(
+      ev({ runAt: "2026-09-17T05:00:00.000Z", durationMs: 10_000, rows: [{ gdRef: "a", verdict: "Met" }] } as never), [],
+      undefined, undefined,
+      // A summary that disagrees must never win over the run it describes.
+      [sum("2026-09-17T05:00:00.000Z", { ms: 999_000, c: 99, n: 99 })], [],
+    );
+    expect(runs[0].counts.complies).toBe(1);
+    expect(runs[0].duration).toBe("10 seconds");
+  });
+
+  it("is empty, not broken, with no logs at all", () => {
+    expect(selfCheckRuns(undefined, undefined, undefined, undefined, undefined, undefined)).toEqual([]);
   });
 });

@@ -41,6 +41,7 @@ import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders, reconcileFolders } from "../data/folders";
 import { itemIdsForScope, folderScopeId, runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
 import { isStaleRun } from "../lib/runGeneration";
+import { summariseRun, appendRunSummary, type SelfCheckRunSummary } from "../lib/selfCheckRunLog";
 import { runChecklistLibraryPass } from "../lib/checklistLibraryRun";
 import { abortReason, skipReasonForAbort, skipReasonForCause, type AbortCause } from "../lib/abortCause";
 import { currentItemIds, currentSubIds, pruneRecordByKeys, reconcileEvidenceMap } from "../lib/structuralReconcile";
@@ -771,19 +772,27 @@ export type WorkspaceState = {
   // Same additive history pattern as ppdReviewHistory — past runs only, the
   // current one stays at evidenceAssessments[subId].
   evidenceAssessmentHistory: Record<string, EvidenceAssessmentResult[]>;
-  // Remove ONE run of a sub-criterion, by the position the self-check page
-  // shows: 0 is the current result, 1.. are archived runs newest first. The two
-  // passes are paired by position (each run pushes to both arrays), so both
-  // halves go together or the pairing shifts and an earlier run would render
-  // one pass from one date beside the other pass from another.
+  // The long tail. One tiny summary per run per pass, mirroring the two
+  // history arrays position for position, so a run stays on the timeline and
+  // comparable long after its full result has aged out of the 20-run cap.
+  // 150 bytes per run for both; see selfCheckRunLog.ts for why the cap is 120.
+  ppdRunLog: Record<string, SelfCheckRunSummary[]>;
+  evidenceRunLog: Record<string, SelfCheckRunSummary[]>;
+  // Remove ONE ARCHIVED run of a sub-criterion, by the position the self-check
+  // page shows: 1.. are archived runs newest first.
   //
-  // Deleting position 0 PROMOTES the newest archived run to current, because
-  // "current" is what the Evidence Folder and PPD Review pages read and
-  // leaving a hole there would silently empty the audit lead's view. With no
-  // archived run to promote, the area is left with no result at all, which is
-  // the honest outcome and what the confirmation says will happen.
+  // Index 0, the CURRENT result, is refused. It is what the Evidence Folder and
+  // PPD Review pages read, and a process owner must not be able to remove the
+  // result their audit lead is working from. That is enforced here rather than
+  // only hidden in the page, so the restriction cannot be lost by a UI change.
+  // The current result is replaced by running again, never deleted.
+  //
+  // The two passes are paired by position (each run pushes to both arrays), so
+  // both halves go together or the pairing shifts and an earlier run would
+  // render one pass from one date beside the other pass from another.
   deleteSelfCheckRun: (subCriterionId: string, index: number) => void;
-  // Every archived run for a sub-criterion. The CURRENT result is untouched.
+  // Every ARCHIVED run for a sub-criterion, and their timeline entries. The
+  // CURRENT result and its own timeline entry are untouched.
   clearSelfCheckHistory: (subCriterionId: string) => void;
   // Populates evidenceAssessments[sub] by REUSING the Evidence Folder staged
   // audit's stored per-checklist-line results (matched by GD4 requirement
@@ -1296,8 +1305,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       evidenceAuditReport: null,
       ppdReviewResults: {},
       ppdReviewHistory: {},
+      ppdRunLog: {},
       evidenceAssessments: {},
       evidenceAssessmentHistory: {},
+      evidenceRunLog: {},
       evidenceAssessmentProgress: null,
       outcomeReviewResults: {},
       outcomeReviewProgress: null,
@@ -1366,28 +1377,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
       deleteSelfCheckRun: (subCriterionId, index) => {
-        if (index < 0) return;
+        // Archived runs only. The current result belongs to the audit lead.
+        if (index < 1) return;
         set((st) => {
           const ppdHist = st.ppdReviewHistory[subCriterionId] ?? [];
           const evHist = st.evidenceAssessmentHistory[subCriterionId] ?? [];
-          if (index === 0) {
-            // Promote, do not leave a hole: see the interface comment.
-            const nextPpd = ppdHist[0], nextEv = evHist[0];
-            const ppdResults = { ...st.ppdReviewResults };
-            const evResults = { ...st.evidenceAssessments };
-            if (nextPpd) ppdResults[subCriterionId] = nextPpd; else delete ppdResults[subCriterionId];
-            if (nextEv) evResults[subCriterionId] = nextEv; else delete evResults[subCriterionId];
-            return {
-              ppdReviewResults: ppdResults,
-              evidenceAssessments: evResults,
-              ppdReviewHistory: { ...st.ppdReviewHistory, [subCriterionId]: ppdHist.slice(1) },
-              evidenceAssessmentHistory: { ...st.evidenceAssessmentHistory, [subCriterionId]: evHist.slice(1) },
-            };
-          }
           const at = index - 1;
+          if (at >= Math.max(ppdHist.length, evHist.length)) return {};
           return {
             ppdReviewHistory: { ...st.ppdReviewHistory, [subCriterionId]: ppdHist.filter((_, i) => i !== at) },
             evidenceAssessmentHistory: { ...st.evidenceAssessmentHistory, [subCriterionId]: evHist.filter((_, i) => i !== at) },
+            // The summary goes with the full run: a timeline entry left behind
+            // for a run the user deleted is the run still being there.
+            ppdRunLog: { ...st.ppdRunLog, [subCriterionId]: (st.ppdRunLog[subCriterionId] ?? []).filter((_, i) => i !== index) },
+            evidenceRunLog: { ...st.evidenceRunLog, [subCriterionId]: (st.evidenceRunLog[subCriterionId] ?? []).filter((_, i) => i !== index) },
           };
         });
       },
@@ -1396,6 +1399,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set((st) => ({
           ppdReviewHistory: { ...st.ppdReviewHistory, [subCriterionId]: [] },
           evidenceAssessmentHistory: { ...st.evidenceAssessmentHistory, [subCriterionId]: [] },
+          // Position 0 is the current run's own summary and stays, exactly as
+          // the current result does.
+          ppdRunLog: { ...st.ppdRunLog, [subCriterionId]: (st.ppdRunLog[subCriterionId] ?? []).slice(0, 1) },
+          evidenceRunLog: { ...st.evidenceRunLog, [subCriterionId]: (st.evidenceRunLog[subCriterionId] ?? []).slice(0, 1) },
         }));
       },
 
@@ -1496,6 +1503,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[], contradictions?: PPDContradiction[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
+          const runAtIso = new Date().toISOString();
           // Sub-criterion roll-up, derived deterministically from the rows.
           // "Not assessed" lines (stopped/failed before review) are counted
           // separately and never counted as gaps.
@@ -1542,11 +1550,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.ppdReviewResults[subCriterionId] : undefined;
             return {
               ppdReviewResults: rows
-                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs } }
+                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs } }
                 : st.ppdReviewResults,
               ppdReviewHistory: prev
                 ? { ...st.ppdReviewHistory, [subCriterionId]: [prev, ...(st.ppdReviewHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
                 : st.ppdReviewHistory,
+              // The summary is written for the run that just FINISHED, at the
+              // same moment its predecessor is archived, so the log mirrors
+              // the history position for position and keeps going after the
+              // full runs age out. Only a run that produced rows is logged: a
+              // failed pass has nothing to compare.
+              ppdRunLog: rows && rows.length > 0
+                ? { ...st.ppdRunLog, [subCriterionId]: appendRunSummary(st.ppdRunLog[subCriterionId], summariseRun(runAtIso, Date.now() - startedAtMs, rows, "procedure")) }
+                : st.ppdRunLog,
               aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
               // Guarded: a timed-out run's late finish must not clear the NEXT
               // run's busy flag (the full-audit sweep may already have moved on).
@@ -1969,6 +1985,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const startedAtMs = Date.now();
         const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, coverageNote?: string, fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
+          const runAtIso = new Date().toISOString();
           const notAssessedCount = rows ? rows.filter((r) => r.verdict === "Not assessed").length : 0;
           const summary = rows
             ? `Evidence assessment${notAssessedCount > 0 ? " (PARTIAL)" : ""}: ${rows.filter((r) => r.verdict === "Met").length} Met, ${rows.filter((r) => r.verdict === "Partial").length} Partial, ${rows.filter((r) => r.verdict === "Not met").length} Not met${notAssessedCount > 0 ? `, ${notAssessedCount} Not assessed` : ""} (assessed ${rows.length - notAssessedCount} of ${rows.length} lines).${coverageNote ? `\n⚠ ${coverageNote}` : ""}`
@@ -1998,11 +2015,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.evidenceAssessments[subCriterionId] : undefined;
             return {
               evidenceAssessments: rows
-                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: new Date().toISOString(), live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs } }
+                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs } }
                 : st.evidenceAssessments,
               evidenceAssessmentHistory: prev
                 ? { ...st.evidenceAssessmentHistory, [subCriterionId]: [prev, ...(st.evidenceAssessmentHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
                 : st.evidenceAssessmentHistory,
+              evidenceRunLog: rows && rows.length > 0
+                ? { ...st.evidenceRunLog, [subCriterionId]: appendRunSummary(st.evidenceRunLog[subCriterionId], summariseRun(runAtIso, Date.now() - startedAtMs, rows, "records")) }
+                : st.evidenceRunLog,
               aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
               // Guarded — see runPPDReview's finish.
               busy: st.busy === "evidenceassess" + subCriterionId ? null : st.busy,
