@@ -1033,6 +1033,12 @@ export type PPDReviewResult = {
   // a later run overwrites the live AIReviewLog entry it came from. Undefined
   // on runs from before this field existed.
   model?: string;
+  // Wall-clock milliseconds this pass took, start of the run to the write of
+  // this result. Recorded so repeat runs on the same area can be compared:
+  // a run that suddenly takes twice as long usually means the folder grew or
+  // files stopped being served from cache. Undefined on runs from before this
+  // field existed, which must render as "not recorded" rather than as zero.
+  durationMs?: number;
 };
 
 // ─── Evidence Assessment (Option A, Evidence tab) ───────────────────────────
@@ -1113,6 +1119,8 @@ export type EvidenceAssessmentResult = {
   // Undefined when derivedFromAudit (no fresh AI call happened here) or on
   // runs from before this field existed.
   model?: string;
+  // Wall-clock milliseconds for this pass — see PPDReviewResult.durationMs.
+  durationMs?: number;
 };
 
 // ─── Clarification round (batch re-check) ───────────────────────────────────

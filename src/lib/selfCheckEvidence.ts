@@ -380,3 +380,81 @@ export function mergeQuotes(citations: Citation[], fromProse: { quote: string; c
   }
   return out;
 }
+
+// ── 5. What ONE pass read, per tab ───────────────────────────────────────
+//
+// toFileRows above deliberately MERGES the two ledgers into one list, because
+// the overall tab answers "what did this check read" and a file listed twice
+// made the run look like it had read twice as many documents as it did.
+//
+// A per-tab table asks a different question: "did the procedure pass read
+// everything in my procedure folder". Merging there would be the same class of
+// error as merging the two passes' chunk maps — a file the records pass read
+// would appear as proof the procedure pass read it. So this never merges, and
+// the two functions stay separate on purpose.
+//
+// `cited` here means quoted in a result ON THIS TAB, taken from the run's own
+// auditStatus, which each pass sets to "cited" for the chunks its verdicts
+// relied on.
+export function passFileRows(ledger: AuditFileRecord[] | undefined): SelfCheckFileRow[] {
+  return (ledger ?? []).map(toFileRow);
+}
+
+// The tick column. Three states rather than two, because "read but nothing in
+// it was quoted" is not a failure and must not read as one: plenty of files
+// are in a folder without bearing on the requirement lines being checked.
+export type FileCheckMark = { mark: string; label: string; tone: FileOutcome };
+
+export function fileCheckMark(row: SelfCheckFileRow): FileCheckMark {
+  if (row.outcome === "unreadable") return { mark: "✗", label: "Not read", tone: "unreadable" };
+  if (row.outcome === "check") return { mark: "!", label: "Check this one", tone: "check" };
+  return { mark: "✓", label: "Read", tone: "read" };
+}
+
+// ── 6. The same folder pasted into both fields ───────────────────────────
+//
+// Established live on 2026-09-17, not inferred: with one link in both fields
+// and a folder holding the documented "1. Policy & Procedure" and "2. Actual
+// Evidence" subfolders, BOTH passes take every file.
+//
+// The subfolder split is skipped because each pass only applies
+// classifyFileBucket when its OWN link is empty and it fell back to the other
+// (useWorkspaceStore.ts:1547 and :2054). Fill both and both links are
+// "dedicated", so the procedure pass reads the evidence report as procedure
+// and the records pass reads the procedure as a record. Every line then came
+// back "documented AND evidenced", satisfied by the policy quoting itself.
+//
+// Display-only warning: the bucketing lives in the engine and is not changed
+// here. It is not a count problem, so it is not solved by counting.
+export const SAME_LINK_WARNING =
+  "Both boxes above hold the SAME folder link, so every document in it was treated as your written procedure AND as your records. A requirement can then look evidenced because your procedure says it happens, not because a record shows it happening. Put your policy documents in one folder and your records in another, paste the two different links, and run the check again before relying on this result.";
+
+// The SAME regex driveClient.parseFolderId uses, inlined rather than imported:
+// driveClient instantiates a pdfjs Worker at module load and cannot be pulled
+// into a Vitest file, and every consumer of this module is tested. Comparing
+// folder IDs rather than strings is the point — two links to one folder differ
+// by ?usp=sharing, a trailing slash or a /view suffix and are still one folder,
+// and comparing normalised URLs got "different folder" wrong the first time.
+function folderIdOf(link: string | undefined): string {
+  const m = (link || "").match(/\/folders\/([a-zA-Z0-9_-]+)/) || (link || "").match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  return m ? m[1] : "";
+}
+
+export function sameFolderLink(policyLink: string | undefined, evidenceLink: string | undefined): boolean {
+  const a = folderIdOf(policyLink), b = folderIdOf(evidenceLink);
+  return !!a && a === b;
+}
+
+// "2 minutes 14 seconds", and honestly nothing at all when the run predates
+// the field. A stored 0 would read as an instant run rather than as no record.
+export function runDuration(ms: number | undefined): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return "";
+  // A real run takes minutes. A sub-second one is a cached or stubbed pass, and
+  // rounding it to "0 seconds" reads as a broken clock rather than as a fast
+  // run, so it says what it is.
+  if (ms < 1000) return "under a second";
+  const total = Math.round(ms / 1000);
+  const m = Math.floor(total / 60), sec = total % 60;
+  if (m === 0) return `${sec} second${sec === 1 ? "" : "s"}`;
+  return `${m} minute${m === 1 ? "" : "s"} ${sec} second${sec === 1 ? "" : "s"}`;
+}

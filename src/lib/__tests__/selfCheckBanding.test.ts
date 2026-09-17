@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, SCREEN_BAND_PALETTE, PRINT_BAND_PALETTE, TWO_DIMENSIONS_NOTE, ROWS_DO_NOT_SUM_NOTE, DIMENSION_SOURCE, BAND_LADDER } from "../selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, PRINT_BAND_PALETTE, TWO_DIMENSIONS_NOTE, ROWS_DO_NOT_SUM_NOTE, DIMENSION_SOURCE, BAND_LADDER } from "../selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "../selfCheckImprove";
 import { VERDICT_LEGEND, PLAIN_VERDICT, PPD_PLAIN_VERDICT, RECORDS_PLAIN_VERDICT, bandLineOf, NO_BAND_LINE, buildSelfCheckHtml, buildSelfCheckCsv, toSelfCheckRows, countSelfCheck } from "../selfCheck";
 import type { EvidenceAssessmentRow } from "../../types";
@@ -365,6 +365,14 @@ describe("one drawing, two surfaces", () => {
     expect(print).toContain("#");
     // The screen version DOES use them, which is how its dark mode works.
     expect(bandGraphicSvg(g, SCREEN_BAND_PALETTE)).toContain("var(--g-ink)");
+  });
+
+  // A 470-wide drawing at width:100% in a 1400px card renders its 11px labels
+  // at about 33px, which is bigger than any heading on the page and made the
+  // panel taller than several findings rows.
+  it("never scales itself up past its own width", () => {
+    expect(bandGraphicSvg(g, PRINT_BAND_PALETTE)).toMatch(/max-width:\d+px/);
+    expect(tallyBarSvg([{ label: "complies", n: 2, tone: "good" }], PRINT_BAND_PALETTE)).toMatch(/max-width:\d+px/);
   });
 
   it("keeps a readable minimum width on screen and lets print size itself", () => {

@@ -214,17 +214,21 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
   // pictures them, so on a phone the part that scrolls off the right edge is
   // the decoration rather than the meaning. With the bar last the drawing was
   // also unreadable at a phone's width when the words sat beyond it.
-  const VX = 144, AX = 302, TW = 170, ROW = 24, TOP = 48, BARH = 13;
-  const W = AX + TW + (opts.feeds ? 74 : 10);
-  const H = TOP + g.segments.length * ROW + 6;
+  // Deliberately small. These two pictures orient the auditor; the findings
+  // table is the content, and at the previous size the panel pushed it below
+  // the fold. The type sits at the page's own scale (11px/10px) rather than
+  // above every other heading on it.
+  const VX = 132, AX = 280, TW = 140, ROW = 17, TOP = 34, BARH = 9;
+  const W = AX + TW + (opts.feeds ? 66 : 8);
+  const H = TOP + g.segments.length * ROW + 4;
   const hatchId = `scHatch${opts.idSuffix ?? ""}`;
   const t = (xx: number, yy: number, cls: string, txt: string) => `<text x="${xx}" y="${yy}" style="${cls}">${esc(txt)}</text>`;
-  const TITLE = `font-size:12.5px;font-weight:700;fill:${p.ink}`;
-  const NAME = `font-size:11.5px;fill:${p.ink}`;
-  const SMALL = `font-size:10.5px;fill:${p.mute}`;
+  const TITLE = `font-size:11px;font-weight:700;fill:${p.ink}`;
+  const NAME = `font-size:10.5px;fill:${p.ink}`;
+  const SMALL = `font-size:10px;fill:${p.mute}`;
   const max = g.segments[0]?.max ?? 25;
 
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;${opts.minWidth ? `min-width:${opts.minWidth}px;` : ""}height:auto;font-family:inherit"
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;max-width:${W}px;${opts.minWidth ? `min-width:${opts.minWidth}px;` : ""}height:auto;font-family:inherit"
   aria-label="${opts.feeds ? `Which dimension this tab feeds: ${esc(g.segments.find((s) => s.key === opts.feeds!.key)?.label ?? "")}. ${esc(opts.feeds.caption)} ` : "What this check assessed, by dimension. "}${esc(g.segments.map((s) => `${s.label}: ${segmentText(s)}`).join(". "))}. No overall band is given.">
   <rect x="0" y="0" width="${W}" height="${H}" rx="8" style="fill:${p.surface};stroke:${p.edge}"/>
   <defs>
@@ -233,8 +237,8 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
       <line x1="0" y1="0" x2="0" y2="7" style="stroke:${p.hatchLine}" stroke-width="3"/>
     </pattern>
   </defs>
-  ${t(12, 19, TITLE, opts.feeds ? `Each dimension on its own, and which one this tab feeds` : "Each dimension on its own")}
-  ${t(12, 34, SMALL, `out of the ${max}% it can earn · they are not added up into a band here`)}
+  ${t(10, 14, TITLE, opts.feeds ? "Each dimension on its own, and which one this tab feeds" : "Each dimension on its own")}
+  ${t(10, 27, SMALL, `out of the ${max}% it can earn · they are not added up into a band here`)}
   ${g.segments.map((seg, i) => {
     const y = TOP + i * ROW;
     // Unassessed: the WHOLE track is hatched, which reads as unknown. An empty
@@ -245,11 +249,11 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
     // The marker is a word as well as a position, so which dimension the tab
     // feeds survives greyscale and a screen reader.
     const fed = opts.feeds?.key === seg.key;
-    return `${t(12, y + 10, fed ? `${NAME};font-weight:700` : NAME, seg.label)}
-      ${t(VX, y + 10, SMALL, segmentText(seg))}
+    return `${t(10, y + 8, fed ? `${NAME};font-weight:700` : NAME, seg.label)}
+      ${t(VX, y + 8, SMALL, segmentText(seg))}
       <rect x="${AX}" y="${y}" width="${TW}" height="${BARH}" rx="2" style="fill:${p.track}"/>
       ${fill}
-      ${fed ? t(AX + TW + 7, y + 10, `font-size:10.5px;font-weight:700;fill:${p.ink}`, "\u2190 this tab") : ""}`;
+      ${fed ? t(AX + TW + 6, y + 8, `font-size:10px;font-weight:700;fill:${p.ink}`, "\u2190 this tab") : ""}`;
   }).join("")}
 </svg>`;
 }
@@ -277,22 +281,22 @@ export function tallyBarSvg(slices: TallySlice[], p: BandPalette): string {
   const shown = slices.filter((s) => s.n > 0);
   const total = shown.reduce((n, s) => n + s.n, 0);
   if (total === 0) return "";
-  const W = 470, BX = 12, BW = W - 24, BARY = 22, BARH = 18, ROW = 15;
-  const H = BARY + BARH + 10 + shown.length * ROW;
+  const W = 470, BX = 10, BW = W - 20, BARY = 18, BARH = 12, ROW = 13;
+  const H = BARY + BARH + 8 + shown.length * ROW;
   let run = 0;
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;min-width:300px;height:auto;font-family:inherit"
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;max-width:${W}px;min-width:300px;height:auto;font-family:inherit"
   aria-label="${esc(shown.map((s) => `${s.n} ${s.label}`).join(", "))}, out of ${total}.">
   <rect x="0" y="0" width="${W}" height="${H}" rx="8" style="fill:${p.surface};stroke:${p.edge}"/>
-  ${`<text x="${BX}" y="16" style="font-size:11.5px;font-weight:700;fill:${p.ink}">The shape of this tab, ${total} requirement line${total === 1 ? "" : "s"}</text>`}
+  ${`<text x="${BX}" y="12" style="font-size:11px;font-weight:700;fill:${p.ink}">The shape of this tab, ${total} requirement line${total === 1 ? "" : "s"}</text>`}
   ${shown.map((s) => {
     const x = BX + (run / total) * BW, w = (s.n / total) * BW;
     run += s.n;
     return `<rect x="${x}" y="${BARY}" width="${Math.max(1, w - 1)}" height="${BARH}" style="fill:${TALLY_FILL[s.tone]}"/>`;
   }).join("")}
   ${shown.map((s, i) => {
-    const y = BARY + BARH + 10 + i * ROW;
-    return `<rect x="${BX}" y="${y}" width="9" height="9" rx="2" style="fill:${TALLY_FILL[s.tone]}"/>
-      <text x="${BX + 15}" y="${y + 9}" style="font-size:11px;fill:${p.mute}"><tspan style="font-weight:700;fill:${p.ink}">${s.n}</tspan> ${esc(s.label)}</text>`;
+    const y = BARY + BARH + 8 + i * ROW;
+    return `<rect x="${BX}" y="${y}" width="8" height="8" rx="2" style="fill:${TALLY_FILL[s.tone]}"/>
+      <text x="${BX + 13}" y="${y + 8}" style="font-size:10px;fill:${p.mute}"><tspan style="font-weight:700;fill:${p.ink}">${s.n}</tspan> ${esc(s.label)}</text>`;
   }).join("")}
 </svg>`;
 }

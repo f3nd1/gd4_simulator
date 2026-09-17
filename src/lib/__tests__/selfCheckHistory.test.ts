@@ -1,0 +1,181 @@
+import { describe, it, expect } from "vitest";
+import { selfCheckRuns, diffRuns, diffSummary, runTimingNote } from "../selfCheckHistory";
+import { runDuration, sameFolderLink, SAME_LINK_WARNING, passFileRows, fileCheckMark, toFileRows } from "../selfCheckEvidence";
+import { buildSelfCheckCsv, buildSelfCheckHtml, toSelfCheckRows, countSelfCheck, SELF_CHECK_FILE_HEADERS } from "../selfCheck";
+import type { AuditFileRecord, EvidenceAssessmentResult, PPDReviewResult } from "../../types";
+
+const ev = (over: Partial<EvidenceAssessmentResult> = {}): EvidenceAssessmentResult => ({
+  subCriterionId: "6.1", rows: [], runAt: "2026-09-17T02:00:00.000Z", live: true, ...over,
+} as EvidenceAssessmentResult);
+const ppd = (over: Partial<PPDReviewResult> = {}): PPDReviewResult => ({
+  subCriterionId: "6.1", rows: [], runAt: "2026-09-17T02:00:00.000Z", live: true, ...over,
+} as PPDReviewResult);
+const row = (gdRef: string, verdict: string) => ({ gdRef, verdict });
+
+describe("previous runs are kept, and it is obvious which one you are looking at", () => {
+  it("lists the current run first and the stored history behind it", () => {
+    const runs = selfCheckRuns(
+      ev({ runAt: "2026-09-17T05:00:00.000Z", durationMs: 74_000 }),
+      [ev({ runAt: "2026-08-10T05:00:00.000Z", durationMs: 120_000 })],
+      ppd({ runAt: "2026-09-17T04:58:00.000Z", durationMs: 60_000 }),
+      [ppd({ runAt: "2026-08-10T04:57:00.000Z", durationMs: 30_000 })],
+    );
+    expect(runs.map((r) => [r.index, r.current])).toEqual([[0, true], [1, false]]);
+    // A run is BOTH passes, so the headline figure is their sum.
+    expect(runs[0].duration).toBe("2 minutes 14 seconds");
+    expect(runs[1].duration).toBe("2 minutes 30 seconds");
+    expect(runs[0].procedureDuration).toBe("1 minute 0 seconds");
+    expect(runs[0].recordsDuration).toBe("1 minute 14 seconds");
+  });
+
+  // The two passes finish seconds apart and are pushed to their own arrays by
+  // the same run, so they pair by POSITION. Pairing by timestamp would drift.
+  it("pairs the two passes by position, not by matching timestamps", () => {
+    const runs = selfCheckRuns(
+      ev({ runAt: "2026-09-17T05:00:09.000Z", durationMs: 1000 }), [],
+      ppd({ runAt: "2026-09-17T04:58:41.000Z", durationMs: 2000 }), [],
+    );
+    expect(runs).toHaveLength(1);
+    expect(runs[0].procedureDuration).toBe("2 seconds");
+    expect(runs[0].recordsDuration).toBe("1 second");
+  });
+
+  it("handles a procedure-only history, where there is no evidence result at all", () => {
+    const runs = selfCheckRuns(undefined, undefined, ppd({ durationMs: 5000 }), [ppd({ runAt: "2026-08-01T00:00:00.000Z" })]);
+    expect(runs).toHaveLength(2);
+    expect(runs[0].duration).toBe("5 seconds");
+  });
+
+  // A run from before durations were recorded must say so, not show zero.
+  it("says a time was not recorded rather than showing an instant run", () => {
+    expect(runDuration(undefined)).toBe("");
+    expect(runDuration(0)).toBe("");
+    expect(runDuration(-5)).toBe("");
+    expect(runDuration(Number.NaN)).toBe("");
+    expect(selfCheckRuns(ev(), [], ppd(), [])[0].duration).toBe("");
+  });
+
+  it("reports the previous run's time as a benchmark, and judges nothing", () => {
+    const runs = selfCheckRuns(ev({ durationMs: 10_000 }), [ev({ runAt: "2026-08-01T00:00:00.000Z", durationMs: 90_000 })], undefined, undefined);
+    expect(runTimingNote(runs, 0)).toBe("The run before this one took 1 minute 30 seconds.");
+    expect(runTimingNote(runs, 1)).toBe("");
+    expect(runTimingNote(runs, 0)).not.toMatch(/slow|worse|better|degrad/i);
+  });
+});
+
+describe("what changed between two runs", () => {
+  const here = [row("6.1.1.DS1", "Met"), row("6.1.1.DS2", "Not met"), row("6.1.1.DS3", "Partial"), row("6.1.1.DS4", "Met")];
+  const there = [row("6.1.1.DS1", "Partial"), row("6.1.1.DS2", "Partial"), row("6.1.1.DS3", "Partial"), row("6.1.1.DS5", "Met")];
+
+  it("counts improvements and regressions from the runs' own verdicts", () => {
+    const d = diffRuns(here, there);
+    expect(d.improved.map((c) => c.ref)).toEqual(["6.1.1.DS1"]);
+    expect(d.worsened.map((c) => c.ref)).toEqual(["6.1.1.DS2"]);
+    expect(d.unchanged).toBe(1);
+    expect(d.onlyHere).toEqual(["6.1.1.DS4"]);
+    expect(d.onlyThere).toEqual(["6.1.1.DS5"]);
+    expect(diffSummary(d)).toBe("1 improved · 1 went backwards · 1 unchanged · 1 only in this run · 1 only in the earlier run");
+  });
+
+  // "Not assessed" is neither a pass nor a fail, so a move to or from it has no
+  // direction and must never be reported as an improvement or a regression.
+  it("refuses to call a move to or from Not assessed a direction", () => {
+    const d = diffRuns([row("a", "Met")], [row("a", "Not assessed")]);
+    expect(d.improved).toEqual([]);
+    expect(d.worsened).toEqual([]);
+    expect(d.unchanged).toBe(1);
+    const e = diffRuns([row("a", "Not assessed")], [row("a", "Not met")]);
+    expect(e.improved).toEqual([]);
+    expect(e.worsened).toEqual([]);
+  });
+
+  it("is empty rather than wrong when a run is missing", () => {
+    expect(diffRuns(undefined, undefined)).toEqual({ improved: [], worsened: [], unchanged: 0, onlyHere: [], onlyThere: [] });
+  });
+});
+
+describe("every file a pass read, tickable", () => {
+  const rec = (over: Partial<AuditFileRecord> = {}): AuditFileRecord => ({
+    name: "Procedure.docx", bucket: "policy", readStatus: "read", auditStatus: "pending", charCount: 1200, ...over,
+  } as AuditFileRecord);
+
+  // Merging the two ledgers here would be the same class of error as merging
+  // the two passes' chunk maps: a file the records pass read is not evidence
+  // the procedure pass read it.
+  it("never merges the two passes, unlike the overall list which deliberately does", () => {
+    const policy = [rec({ name: "Shared.docx", bucket: "policy" })];
+    const evidence = [rec({ name: "Shared.docx", bucket: "evidence" })];
+    expect(toFileRows(policy, evidence)).toHaveLength(1);
+    expect(toFileRows(policy, evidence)[0].bucket).toBe("Both folders");
+    expect(passFileRows(policy)).toHaveLength(1);
+    expect(passFileRows(evidence)).toHaveLength(1);
+    expect(passFileRows(policy)[0].bucket).toBe("Written procedure");
+    expect(passFileRows(evidence)[0].bucket).toBe("Records");
+  });
+
+  it("gives every row a tick, a cross or a flag, never colour alone", () => {
+    expect(fileCheckMark(passFileRows([rec()])[0])).toMatchObject({ mark: "✓", label: "Read" });
+    expect(fileCheckMark(passFileRows([rec({ readStatus: "failed", failReason: "x" })])[0])).toMatchObject({ mark: "✗", label: "Not read" });
+    expect(fileCheckMark(passFileRows([rec({ readMethod: "vision" })])[0])).toMatchObject({ mark: "!", label: "Check this one" });
+  });
+
+  it("carries the tick column into both exports", () => {
+    expect(SELF_CHECK_FILE_HEADERS[0]).toBe("Read?");
+    const rows = toSelfCheckRows([]);
+    const files = passFileRows([rec({ name: "Broken.pdf", readStatus: "failed", failReason: "Drive read error" }), rec()]);
+    const csv = buildSelfCheckCsv("6.1", rows, { kind: "none" }, "procedure", files);
+    expect(csv).toContain("Every file this tab read");
+    expect(csv).toContain("✗,Broken.pdf");
+    expect(csv).toContain("✓,Procedure.docx");
+    const html = buildSelfCheckHtml({
+      areaLabel: "6.1", areaDescription: "d", counts: countSelfCheck(rows),
+      band: { kind: "none" }, rows, ranAt: "x", view: "procedure", files,
+    });
+    expect(html).toContain("Every file this tab read");
+    expect(html).toContain("<th>Read?</th>");
+    expect(html).toContain("<td><b>✗</b></td>");
+  });
+});
+
+describe("the same folder link in both boxes", () => {
+  // Established by running it, not by reading: with one link in both boxes and
+  // a folder holding the documented subfolders, BOTH passes take every file,
+  // so the procedure is read as a record and the record as a procedure.
+  it("is detected on the pasted links and on the stored folder", () => {
+    const L = "https://drive.google.com/drive/folders/1ABC";
+    expect(sameFolderLink(L, L)).toBe(true);
+    expect(sameFolderLink(` ${L}/ `, `${L}?usp=sharing`)).toBe(true);
+    expect(sameFolderLink(L, "https://drive.google.com/drive/folders/1XYZ")).toBe(false);
+    expect(sameFolderLink("", "")).toBe(false);
+    expect(sameFolderLink(undefined, L)).toBe(false);
+    // Two links to ONE folder differ by a share suffix, a trailing slash or a
+    // /view, and are still one folder. Comparing normalised URLs instead of
+    // folder ids got "different folder" wrong and would have warned on every
+    // run: caught by this test before it reached a screen.
+    expect(sameFolderLink(`${L}/view`, `${L}?usp=drive_link`)).toBe(true);
+    expect(sameFolderLink("https://drive.google.com/open?id=1ABC", L)).toBe(true);
+    expect(sameFolderLink("not a link", "also not a link")).toBe(false);
+  });
+
+  it("warns in words that name the consequence, not just the fact", () => {
+    expect(SAME_LINK_WARNING).toMatch(/SAME folder link/);
+    expect(SAME_LINK_WARNING).toMatch(/written procedure AND as your records/);
+    expect(SAME_LINK_WARNING).toMatch(/not because a record shows it happening/);
+  });
+
+  it("rides into both exports, above the file list", () => {
+    const rows = toSelfCheckRows([]);
+    const files = passFileRows([{ name: "Policy.docx", bucket: "policy", readStatus: "read", auditStatus: "pending", charCount: 10 } as AuditFileRecord]);
+    const csv = buildSelfCheckCsv("6.1", rows, { kind: "none" }, "overview", files, undefined, undefined, [], "12 seconds", true);
+    expect(csv).toContain("SAME folder link");
+    expect(csv).toContain("This check took 12 seconds.");
+    const html = buildSelfCheckHtml({
+      areaLabel: "6.1", areaDescription: "d", counts: countSelfCheck(rows),
+      band: { kind: "none" }, rows, ranAt: "x", view: "overview", files, timing: "12 seconds", sameLink: true,
+    });
+    expect(html).toContain("SAME folder link");
+    expect(html).toContain("took 12 seconds");
+    // Silent when the two links differ, which is the normal case.
+    expect(buildSelfCheckCsv("6.1", rows, { kind: "none" }, "overview", files)).not.toContain("SAME folder link");
+  });
+});

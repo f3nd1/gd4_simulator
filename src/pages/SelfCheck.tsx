@@ -25,7 +25,8 @@ import {
   citedText, missingText, expectedEvidenceGroups, VERDICT_LEGEND, tallySlices, feedsFor, SUMMARY_LABEL,
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
-import { toFileRows, countFileRows, unreadableWarning, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
+import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
+import { selfCheckRuns, diffRuns, diffSummary, runTimingNote } from "../lib/selfCheckHistory";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "../lib/selfCheckImprove";
 import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, type BandWorking } from "../lib/selfCheckBanding";
 
@@ -73,6 +74,8 @@ export function SelfCheck() {
   const evProgress = useWorkspaceStore((s) => s.evidenceAssessmentProgress);
   const ppdProgress = useWorkspaceStore((s) => s.ppdReviewProgress);
   const ppdResults = useWorkspaceStore((s) => s.ppdReviewResults);
+  const evHistory = useWorkspaceStore((s) => s.evidenceAssessmentHistory);
+  const ppdHistory = useWorkspaceStore((s) => s.ppdReviewHistory);
   const cycleStatus = useWorkspaceStore((s) => s.cycle.status);
   const auditors = useWorkspaceStore((s) => s.auditors);
   const checklistEntries = useChecklistModuleStore((s) => s.entries);
@@ -93,6 +96,10 @@ export function SelfCheck() {
   // auditor's committed band on the card, and the dimension panel below it.
   const [bandCoverage, setBandCoverage] = useState("");
   const [dimensionCoverage, setDimensionCoverage] = useState("");
+  // Which stored run is being viewed. Reset to the latest whenever the area
+  // changes or a new run finishes, so "you are looking at an old result" can
+  // never be a state somebody arrives in without choosing it.
+  const [runIndex, setRunIndex] = useState(0);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -130,7 +137,17 @@ export function SelfCheck() {
   );
   const area = areas.find((a) => a.scope === scope);
   const folder = folders.find((f) => folderScopeId(f) === scope);
-  const existing = scope ? evidenceAssessments[scope] : undefined;
+  // Which run is on screen: 0 is the latest, 1.. are the stored earlier runs.
+  // The history is the workspace store's OWN, kept since before this page
+  // existed and never read here; no new store and no new storage.
+  const runs = useMemo(
+    () => (scope ? selfCheckRuns(evidenceAssessments[scope], evHistory[scope], ppdResults[scope], ppdHistory[scope]) : []),
+    [scope, evidenceAssessments, evHistory, ppdResults, ppdHistory],
+  );
+  const viewingRun = Math.min(runIndex, Math.max(0, runs.length - 1));
+  const atRun = <T,>(cur: T | undefined, hist: T[] | undefined): T | undefined =>
+    viewingRun === 0 ? cur : (hist ?? [])[viewingRun - 1];
+  const existing = scope ? atRun(evidenceAssessments[scope], evHistory[scope]) : undefined;
 
   useEffect(() => {
     if (!driveClientId || driveToken || triedConnect.current) return;
@@ -195,11 +212,11 @@ export function SelfCheck() {
   // procedure-only run while a link they clearly meant to paste is still wrong.
   const ready = !!area && plan.canRun && procState !== "bad" && evState !== "bad" && block.canRun && !running;
 
-  const ppdExisting = scope ? ppdResults[scope] : undefined;
+  const ppdExisting = scope ? atRun(ppdResults[scope], ppdHistory[scope]) : undefined;
   // What this particular run would actually overwrite. A procedure-only run
   // rewrites the procedure result and leaves the full result alone, so warning
   // about the full one would be a claim about something that will not happen.
-  const resultAtRisk = plan.kind === "procedure-only" ? !!ppdExisting : !!existing;
+  const resultAtRisk = plan.kind === "procedure-only" ? !!(scope && ppdResults[scope]) : !!(scope && evidenceAssessments[scope]);
 
   // The audit lead links this area's folders on the Evidence Folder page, often
   // as two separate subfolder links. One pasted link here replaces both. That
@@ -250,12 +267,34 @@ export function SelfCheck() {
     () => toFileRows(ppdExisting?.fileLedger, procedureOnlyResult ? undefined : existing?.fileLedger),
     [ppdExisting, existing, procedureOnlyResult],
   );
-  const fileCounts = useMemo(() => countFileRows(fileRows), [fileRows]);
+  // Established live, not inferred: one link in both boxes makes BOTH passes
+  // take every file in the folder, because each pass only applies the
+  // subfolder split when its own link is empty. The procedure is then read as
+  // a record and the record as a procedure.
+  const sameLink = sameFolderLink(procLink, evLink) || sameFolderLink(folder?.policyLink, folder?.folderLink);
+  // The files THIS tab's pass read. Per pass, never merged: a file the records
+  // pass read is not evidence the procedure pass read it.
+  const tabFileRows = useMemo(
+    () => (view === "procedure" || view === "procedure-only" ? passFileRows(ppdExisting?.fileLedger)
+      : view === "records" ? passFileRows(existing?.fileLedger)
+      : fileRows),
+    [view, ppdExisting, existing, fileRows],
+  );
+  const tabFileCounts = useMemo(() => countFileRows(tabFileRows), [tabFileRows]);
   const expectedGroups = useMemo(() => expectedEvidenceGroups(rows), [rows]);
   // The run's own reported gaps, gathered for the improvement section. Nothing
   // new is written: these are the strings already on the rows.
   const runGaps = useMemo(() => runNamedGaps(rows), [rows]);
   const counts = useMemo(() => countSelfCheck(rows), [rows]);
+  const shownRun = runs[viewingRun];
+  // What changed since the check before the one on screen. Counted from the
+  // two runs' own stored verdicts; nothing is re-judged.
+  const runDiff = useMemo(() => {
+    if (!scope) return null;
+    const older = viewingRun === 0 ? (evHistory[scope] ?? [])[0] : (evHistory[scope] ?? [])[viewingRun];
+    if (!older || !existing) return null;
+    return diffRuns(existing.rows, older.rows);
+  }, [scope, viewingRun, evHistory, existing]);
   const combos = useMemo(() => (existing ? countCombinations(existing.rows) : null), [existing]);
   // Off the stored result, not off `rows`: switching to a tab that happens to
   // be empty must not make the whole result section disappear.
@@ -310,6 +349,7 @@ export function SelfCheck() {
       // something about their records that was never checked.
       if (procedureOnly) {
         setRanAt(new Date().toLocaleString("en-SG"));
+        setRunIndex(0);
         setPhase("done");
         return;
       }
@@ -369,6 +409,10 @@ export function SelfCheck() {
         }
       }
       setRanAt(new Date().toLocaleString("en-SG"));
+      // A finished run is always the one you are shown. Landing on an old
+      // result after pressing "Check my area" would be the worst possible
+      // default.
+      setRunIndex(0);
       setPhase("done");
     } catch (e) {
       if (stale()) return;
@@ -422,6 +466,12 @@ export function SelfCheck() {
     if (!ok) setNote(POPUP_BLOCKED_MESSAGE);
   }
 
+  // The file list in a download is the one on screen: a procedure-tab export
+  // that carried the records pass's files would be the same merge the per-tab
+  // table refuses.
+  const exportFiles = tabFileRows;
+  const exportTiming = shownRun?.duration ?? "";
+
   function onCsv() {
     if (!area) return;
     // The tab you are looking at is the tab you get, named on the file so two
@@ -429,14 +479,15 @@ export function SelfCheck() {
     // bandWorking rides on EVERY view now: the two half-tabs use it to draw
     // which dimension their own verdicts feed. Only the overall view prints the
     // full dimension panel and the coverage note.
-    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, fileRows, bandWorking ?? undefined, view === "overview" ? bandCoverage : undefined, itemIdsForScope(area.scope)), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
+    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, exportFiles, bandWorking ?? undefined, view === "overview" ? bandCoverage : undefined, itemIdsForScope(area.scope), exportTiming, sameLink), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
   }
   function onPdf() {
     if (!area) return;
     const ok = printHtmlInNewTab(
       `<style>${PRINTABLE_DOC_CSS}</style>${buildSelfCheckHtml({
         areaLabel: `${area.scope} ${area.title}`, areaDescription: area.description,
-        counts, band, rows, ranAt, view, files: fileRows,
+        counts, band, rows, ranAt: shownRun?.label || ranAt, view, files: exportFiles,
+        timing: exportTiming, sameLink,
         bandWorking: bandWorking ?? undefined,
         bandCoverage: view === "overview" ? bandCoverage : undefined,
         itemIds: itemIdsForScope(area.scope),
@@ -556,7 +607,7 @@ export function SelfCheck() {
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
             <span style={stepNum}>1</span><h2 style={h2}>Which area do you look after?</h2>
           </div>
-          <select value={scope} onChange={(e) => { setScope(e.target.value); setPhase("idle"); setError(null); setConfirmOverwrite(false); }}
+          <select value={scope} onChange={(e) => { setScope(e.target.value); setRunIndex(0); setPhase("idle"); setError(null); setConfirmOverwrite(false); }}
             style={{ ...input, cursor: "pointer" }} disabled={running}>
             <option value="">Choose your area…</option>
             {[...new Set(areas.map((a) => a.criterionId))].map((cid) => (
@@ -576,8 +627,9 @@ export function SelfCheck() {
             <span style={stepNum}>2</span><h2 style={h2}>Where are your documents?</h2>
           </div>
           <p style={{ ...muted, marginTop: 0 }}>
-            Two folders, because they answer two different questions. If you keep everything in one folder,
-            paste the same link into both.
+            Two folders, because they answer two different questions. They must be two DIFFERENT folders:
+            one link in both boxes makes every document count as your written procedure and as your records
+            at the same time, and a requirement then looks proved because your procedure says it happens.
           </p>
           <div style={{ height: 6 }} />
 
@@ -599,6 +651,17 @@ export function SelfCheck() {
 
           {/* What will and will not be checked, said before the button rather
               than discovered afterwards. */}
+          {/* BEFORE the run, not only after it. The result-side warning still
+              prints, but by then the check has already read the procedure as
+              its own record and the auditor has a result they should not
+              file. */}
+          {sameLink && (
+            <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px", margin: "8px 0 0" }}>
+              <b>Both boxes hold the same folder.</b> Every document in it will be treated as your written procedure
+              AND as your records, so a requirement can come back proved because your procedure says it happens rather
+              than because a record shows it happening. Point the two boxes at two different folders before running.
+            </p>
+          )}
           {plan.note && (
             <p style={{
               ...muted, marginBottom: 0, marginTop: 14, padding: "9px 11px", borderRadius: 8,
@@ -784,8 +847,58 @@ export function SelfCheck() {
               <span style={stepNum}>4</span><h2 style={h2}>Your result</h2>
             </div>
             <p style={{ ...muted, marginTop: 0 }}>
-              {area.scope} {area.title} · {procedureOnlyResult ? "written procedure only" : "procedure and records"} · checked {ranAt}
+              {area.scope} {area.title} · {procedureOnlyResult ? "written procedure only" : "procedure and records"} · checked {shownRun?.label || ranAt}
+              {shownRun?.duration && ` · took ${shownRun.duration}`}
             </p>
+
+            {/* Which run is on screen, and how long each took. The history is
+                the workspace store's own, kept since long before this page and
+                simply never read here, so nothing new is stored beyond one
+                number per run. Viewing an earlier run is pure display: it
+                re-renders the rows that run recorded and never re-runs, never
+                re-bands and never writes. */}
+            {runs.length > 1 && (
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", margin: "10px 0 0", background: viewingRun === 0 ? "#fbfcfe" : "#fffbeb", borderColor: viewingRun === 0 ? "#e2e8f0" : "#fde68a" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 13 }}>{runs.length} checks of this area</b>
+                  <span style={{ ...muted }}>Newest first. Choosing an earlier one shows what it recorded at the time.</span>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                  {runs.map((r) => (
+                    <button
+                      key={`${r.index}-${r.runAt}`} type="button" onClick={() => setRunIndex(r.index)}
+                      style={{
+                        border: "1px solid", borderColor: r.index === viewingRun ? INK : "#cbd5e1",
+                        background: r.index === viewingRun ? INK : "#fff", color: r.index === viewingRun ? "#fff" : INK,
+                        borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", textAlign: "left",
+                      }}
+                    >
+                      {r.current ? "Latest" : `#${runs.length - r.index}`}
+                      <div style={{ fontWeight: 400, fontSize: 11, marginTop: 2 }}>{r.label}</div>
+                      <div style={{ fontWeight: 400, fontSize: 11, opacity: 0.85 }}>{r.duration || "time not recorded"}</div>
+                    </button>
+                  ))}
+                </div>
+                {viewingRun > 0 && (
+                  <p style={{ ...muted, color: "#92400e", margin: "8px 0 0", fontWeight: 700 }}>
+                    You are looking at an earlier check, not your latest one. Nothing here can be re-run or changed; choose Latest to go back.
+                  </p>
+                )}
+                {shownRun && (shownRun.procedureDuration || shownRun.recordsDuration) && (
+                  <p style={{ ...muted, margin: "6px 0 0" }}>
+                    Written procedure pass {shownRun.procedureDuration || "not recorded"} · records pass {shownRun.recordsDuration || "not recorded"}.
+                    {" "}{runTimingNote(runs, viewingRun)}
+                  </p>
+                )}
+                {runDiff && (
+                  <p style={{ ...muted, margin: "6px 0 0" }}>
+                    <b>Against the check before it:</b> {diffSummary(runDiff)}.
+                    {runDiff.improved.length > 0 && ` Improved: ${runDiff.improved.slice(0, 6).map((c) => c.ref).join(", ")}${runDiff.improved.length > 6 ? ", and others" : ""}.`}
+                    {runDiff.worsened.length > 0 && ` Went backwards: ${runDiff.worsened.slice(0, 6).map((c) => c.ref).join(", ")}${runDiff.worsened.length > 6 ? ", and others" : ""}.`}
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* The check asks two separate questions and they fail
                 independently: your procedure can be silent while your records
@@ -877,66 +990,36 @@ export function SelfCheck() {
             </div>
             )}
 
-            {/* What was actually read, before any verdict. An auditor cannot
-                otherwise tell "you genuinely have no evidence for this" from
-                "your evidence exists but the file could not be read", and those
-                two demand completely different actions. Read from the two
-                passes' own file ledgers — no new tracking. */}
-            {fileRows.length > 0 && (
-              <details open={fileCounts.unreadable > 0} style={{ border: "1px solid #e2e8f0", borderRadius: 10, margin: "12px 0", background: "#fff" }}>
-                <summary style={{ padding: "11px 13px", cursor: "pointer", fontSize: 13.5, fontWeight: 700, color: INK }}>
-                  What was read: {fileCounts.read} read
-                  {fileCounts.check > 0 && ` · ${fileCounts.check} worth checking`}
-                  {fileCounts.unreadable > 0 && ` · ${fileCounts.unreadable} could not be read`}
-                </summary>
-                <div style={{ padding: "0 13px 13px" }}>
-                  {fileCounts.unreadable > 0 && (
-                    <p style={{ ...muted, background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "9px 11px", marginTop: 0 }}>
-                      {unreadableWarning(fileCounts)}
-                    </p>
-                  )}
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-                    <thead>
-                      <tr style={{ textAlign: "left", background: "#f8fafc" }}>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0" }}>File</th>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "16%" }}>Folder</th>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "16%" }}>Was it read?</th>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "22%" }}>Detail</th>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "28%" }}>What to do about it</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {fileRows.map((f, i) => (
-                        <tr key={`${f.bucket}-${f.name}-${i}`} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top", background: f.outcome === "unreadable" ? "#fef2f2" : undefined }}>
-                          <td style={{ padding: "8px 9px" }}>
-                            {f.name}
-                            {f.cited && <div style={{ ...muted, fontSize: 11 }}>quoted in a result</div>}
-                          </td>
-                          <td style={{ padding: "8px 9px", color: "#475569" }}>{f.bucket}</td>
-                          <td style={{ padding: "8px 9px" }}>
-                            <span style={{ ...TONE_BG[FILE_TONE[f.outcome]], padding: "2px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, display: "inline-block" }}>{f.label}</span>
-                          </td>
-                          <td style={{ padding: "8px 9px", color: "#475569" }}>{f.detail || "—"}</td>
-                          <td style={{ padding: "8px 9px", color: "#334155" }}>{f.action || "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </details>
+            {/* Two warnings that change how every verdict below them reads, so
+                they print ABOVE the verdicts even though the file list they
+                come from sits below. A gap reported against a file that could
+                not be read is not a real gap, and a "documented AND evidenced"
+                reached by reading the procedure as its own record is not a
+                real pass. Both link down to the list. */}
+            {sameLink && (
+              <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
+                <b>{SAME_LINK_WARNING}</b>
+              </p>
+            )}
+            {tabFileCounts.unreadable > 0 && (
+              <p style={{ ...muted, background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "9px 11px" }}>
+                {unreadableWarning(tabFileCounts)} See "Every file this tab read" below the results.
+              </p>
             )}
 
             {/* The shape of the tab before a single row is read, and which
                 dimension this tab's own verdicts feed. Both were on the overall
                 tab only, and the procedure and records tabs are where the
                 reading time actually goes. */}
-            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fff" }}>
-              <Svg html={tallyBarSvg(tallySlices(counts, view), SCREEN_BAND_PALETTE)} />
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "9px 11px", margin: "10px 0", background: "#fff", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-start" }}>
+              <div style={{ flex: "1 1 400px", minWidth: 0 }}>
+                <Svg html={tallyBarSvg(tallySlices(counts, view), SCREEN_BAND_PALETTE)} />
+              </div>
               {feedsFor(view) && bandWorking && (
-                <>
-                  <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, { minWidth: 500, feeds: feedsFor(view) })} />
-                  <p style={{ ...muted, margin: "6px 0 0" }}>{feedsFor(view)!.caption}</p>
-                </>
+                <div style={{ flex: "1 1 460px", minWidth: 0 }}>
+                  <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, { feeds: feedsFor(view) })} />
+                  <p style={{ ...muted, margin: "4px 0 0", fontSize: 11.5 }}>{feedsFor(view)!.caption}</p>
+                </div>
               )}
             </div>
 
@@ -945,7 +1028,7 @@ export function SelfCheck() {
                 each tab settles half the question. */}
             <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fff" }}>
               <b style={{ fontSize: 13 }}>What each result means on this tab</b>
-              <div style={{ display: "grid", gap: 5, marginTop: 7 }}>
+              <div style={{ display: "grid", gap: 5, marginTop: 7, gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))" }}>
                 {VERDICT_LEGEND[view].map((l) => (
                   <div key={l.label} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
                     <span style={{ ...TONE_BG[LEGEND_TONE[l.icon]], padding: "1px 8px", borderRadius: 999, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>{l.icon} {l.label}</span>
@@ -994,6 +1077,23 @@ export function SelfCheck() {
                 </tbody>
               </table>
             </div>
+
+            {/* Every file THIS TAB's pass read, open by default and tickable
+                down the list. It used to be a closed disclosure that only
+                opened itself when something was unreadable, so on a clean run
+                an auditor saw one line and had to know to click it.
+
+                It sits BELOW the verdicts it backs: open and above them it put
+                the findings table a full screen down the page, which is what
+                the last redesign was for. The unreadable-files warning still
+                prints above the verdicts, because it changes how they read.
+
+                Per pass, never merged: a file the records pass read is not
+                evidence the procedure pass read it, and merging the two would
+                be the same class of error as merging their chunk maps. The
+                overall tab keeps the merged view, which answers the different
+                question of what the whole check opened. */}
+            <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} />
 
             {/* The two dimensions this check can defend, and the two it leaves
                 alone. It shows no overall band: scoring Systems & Outcomes and
@@ -1263,6 +1363,76 @@ function WhyCell({ row }: { row: SelfCheckRow }) {
           <span style={{ color: "#475569" }}>{otherMissing}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+// What one pass read, as a list an auditor can tick down.
+//
+// Open by default and never self-closing: the point is to confirm Drive
+// actually opened everything, which cannot be done behind a disclosure
+// triangle. Unreadable rows carry a tint AND a word AND a cross, because a gap
+// reported against an unreadable file is not a real gap.
+function FileTable({ rows, perPass, sameLink }: { rows: SelfCheckFileRow[]; perPass: boolean; sameLink: boolean }) {
+  if (rows.length === 0) return null;
+  const counts = countFileRows(rows);
+  return (
+    <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, margin: "12px 0", background: "#fff" }}>
+      <div style={{ padding: "10px 13px 0", fontSize: 13.5, fontWeight: 700, color: INK }}>
+        {perPass ? "Every file this tab read" : "Every file this check read"}
+        <span style={{ ...muted, fontWeight: 400, marginLeft: 8 }}>
+          {counts.read} read{counts.check > 0 && ` · ${counts.check} worth checking`}{counts.unreadable > 0 && ` · ${counts.unreadable} could not be read`}
+        </span>
+      </div>
+      <div style={{ padding: "8px 13px 13px" }}>
+        {sameLink && (
+          <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px", marginTop: 0 }}>
+            {SAME_LINK_WARNING}
+          </p>
+        )}
+        {counts.unreadable > 0 && (
+          <p style={{ ...muted, background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "9px 11px", marginTop: 0 }}>
+            {unreadableWarning(counts)}
+          </p>
+        )}
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ textAlign: "left", background: "#f8fafc" }}>
+                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: 34 }} aria-label="Read" />
+                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0" }}>File</th>
+                {!perPass && <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "14%" }}>Folder</th>}
+                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "15%" }}>Was it read?</th>
+                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "18%" }}>What came out</th>
+                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "10%" }}>Quoted</th>
+                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "26%" }}>What to do about it</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((f, i) => {
+                const m = fileCheckMark(f);
+                return (
+                  <tr key={`${f.bucket}-${f.name}-${i}`} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top", background: f.outcome === "unreadable" ? "#fef2f2" : undefined }}>
+                    <td style={{ padding: "8px 9px", textAlign: "center" }}>
+                      <span title={m.label} style={{ ...TONE_BG[FILE_TONE[m.tone]], display: "inline-block", width: 21, height: 21, lineHeight: "21px", borderRadius: 5, fontWeight: 800, fontSize: 13 }}>{m.mark}</span>
+                    </td>
+                    <td style={{ padding: "8px 9px" }}>{f.name}</td>
+                    {!perPass && <td style={{ padding: "8px 9px", color: "#475569" }}>{f.bucket}</td>}
+                    <td style={{ padding: "8px 9px" }}>
+                      <span style={{ ...TONE_BG[FILE_TONE[f.outcome]], padding: "2px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, display: "inline-block" }}>{f.label}</span>
+                    </td>
+                    <td style={{ padding: "8px 9px", color: "#475569" }}>{f.detail || "—"}</td>
+                    {/* "no" is not a fault: plenty of files in a folder have
+                        nothing to say about the lines being checked. */}
+                    <td style={{ padding: "8px 9px", color: f.cited ? "#166534" : "#94a3b8", fontWeight: f.cited ? 700 : 400 }}>{f.cited ? "yes" : "no"}</td>
+                    <td style={{ padding: "8px 9px", color: "#334155" }}>{f.action || "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

@@ -157,7 +157,7 @@ describe("the working is filed with the result, in both exports", () => {
     expect(csv).toContain("The internal assessment was completed in March.");
     expect(csv).toContain("Assessors are independent of the area assessed");
     expect(csv).toContain("Internal assessment reports");
-    expect(csv).toContain("What was read");
+    expect(csv).toContain("Every file this check read");
     expect(csv).toContain("Scan.pdf");
   });
 
@@ -174,7 +174,7 @@ describe("the working is filed with the result, in both exports", () => {
     expect(html).toContain('<ul class="sc-missing">');
     expect(html).toContain("What a passing record contains");
     expect(html).toContain("Internal assessment reports");
-    expect(html).toContain("What was read");
+    expect(html).toContain("Every file this check read");
     expect(html).toContain("NOT READ");
   });
 

@@ -14,7 +14,7 @@ import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
 import { ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, tallyBarSvg, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, IMPROVE_HEADLINE, IMPROVE_WHY } from "./selfCheckImprove";
-import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
+import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
 
 // The disclaimer the rest of the app carries, repeated verbatim in every
@@ -606,7 +606,9 @@ export const SELF_CHECK_HEADERS = [
   "Evidence quoted", "What is missing", "Official expected evidence",
 ];
 
-export const SELF_CHECK_FILE_HEADERS = ["File", "Folder", "Was it read?", "Detail", "What to do about it", "Quoted in a result"];
+// The leading tick is what makes the list checkable at a glance in a
+// spreadsheet as well as on screen.
+export const SELF_CHECK_FILE_HEADERS = ["Read?", "File", "Folder", "Was it read?", "What came out", "What to do about it", "Quoted in a result"];
 
 // One place both exports turn a row's working into flat text, so the CSV and
 // the printable page can never describe the same row differently.
@@ -662,13 +664,20 @@ export function buildSelfCheckCsv(
   bandCoverage?: string,
   // The scope's requirement items, for the official expected-evidence filter.
   itemIds: string[] = [],
+  // How long the run took, already formatted, and whether both folder boxes
+  // held the same link. Empty/false on an older result that recorded neither.
+  timing: string = "",
+  sameLink = false,
 ): string {
   const pad = (cells: string[]) => [...cells, ...Array(Math.max(0, SELF_CHECK_HEADERS.length - cells.length)).fill("")];
   const blank = pad([]);
   // Only the overall view carries a band: one pass on its own was never banded,
   // and printing the area's band on top of half the answer would read as though
   // that half produced it.
-  const trailer = view === "overview" ? [bandLineOf(band)] : [VIEW_NOTE[view]];
+  const trailer = [
+    ...(view === "overview" ? [bandLineOf(band)] : [VIEW_NOTE[view]]),
+    ...(timing ? [`This check took ${timing}.`] : []),
+  ];
   // The drawn shape, as rows. A spreadsheet cannot carry the picture, so it
   // carries the same four numbers the picture is drawn from.
   const tally = countSelfCheck(rows);
@@ -686,10 +695,11 @@ export function buildSelfCheckCsv(
   // two separate downloads get separated.
   const fileBlock = files.length === 0 ? [] : [
     blank,
-    pad([`What was read (${counts.total} file${counts.total === 1 ? "" : "s"}: ${counts.read} read, ${counts.check} to check, ${counts.unreadable} unreadable)`]),
+    pad([`Every file this ${view === "overview" ? "check" : "tab"} read (${counts.total} file${counts.total === 1 ? "" : "s"}: ${counts.read} read, ${counts.check} to check, ${counts.unreadable} unreadable)`]),
+    ...(sameLink ? [pad([SAME_LINK_WARNING])] : []),
     ...(warning ? [pad([warning])] : []),
     pad(SELF_CHECK_FILE_HEADERS),
-    ...files.map((f) => pad([f.name, f.bucket, f.label, f.detail, f.action, f.cited ? "yes" : "no"])),
+    ...files.map((f) => pad([fileCheckMark(f).mark, f.name, f.bucket, f.label, f.detail, f.action, f.cited ? "yes" : "no"])),
   ];
   // The legend travels with the file: a spreadsheet forwarded to an external
   // assessor has to explain its own state names.
@@ -766,9 +776,13 @@ export function buildSelfCheckHtml(opts: {
   files?: SelfCheckFileRow[];
   bandWorking?: BandWorking;
   bandCoverage?: string;
+  // How long the run took, already formatted, and whether both folder boxes
+  // held one link. Both empty/false on a result that recorded neither.
+  timing?: string;
+  sameLink?: boolean;
   itemIds?: string[];
 }): string {
-  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [], bandWorking, bandCoverage, itemIds = [] } = opts;
+  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [], bandWorking, bandCoverage, itemIds = [], timing = "", sameLink = false } = opts;
   const gaps = runNamedGaps(rows);
   const legendHtml = `
     <h2>What each result means</h2>
@@ -828,13 +842,15 @@ export function buildSelfCheckHtml(opts: {
   // only a colour.
   const OUTCOME_MARK: Record<SelfCheckFileRow["outcome"], string> = { read: "", check: "CHECK — ", unreadable: "NOT READ — " };
   const filesTable = files.length === 0 ? "" : `
-    <h2>What was read</h2>
+    <h2>Every file this ${view === "overview" ? "check" : "tab"} read</h2>
+    ${sameLink ? `<p><b>${escapeHtml(SAME_LINK_WARNING)}</b></p>` : ""}
     ${fileWarning ? `<p><b>${escapeHtml(fileWarning)}</b></p>` : ""}
     <p class="muted">${fileCounts.read} read · ${fileCounts.check} read but worth checking · ${fileCounts.unreadable} could not be read</p>
     <table>
-      <thead><tr><th>File</th><th>Folder</th><th>Was it read?</th><th>Detail</th><th>What to do about it</th><th>Quoted</th></tr></thead>
+      <thead><tr><th>Read?</th><th>File</th><th>Folder</th><th>Was it read?</th><th>What came out</th><th>What to do about it</th><th>Quoted</th></tr></thead>
       <tbody>
         ${files.map((f) => `<tr>
+          <td><b>${escapeHtml(fileCheckMark(f).mark)}</b></td>
           <td>${escapeHtml(f.name)}</td>
           <td>${escapeHtml(f.bucket)}</td>
           <td>${escapeHtml(OUTCOME_MARK[f.outcome] + f.label)}</td>
@@ -890,7 +906,7 @@ export function buildSelfCheckHtml(opts: {
   return `
     <h1>Self-check: ${escapeHtml(areaLabel)}${view === "procedure-only" ? " (written procedure only)" : view === "overview" ? "" : ` — ${escapeHtml(VIEW_LABEL[view])}`}</h1>
     <p class="muted">${escapeHtml(areaDescription)}</p>
-    <p class="muted">Checked on ${escapeHtml(ranAt)}</p>
+    <p class="muted">Checked on ${escapeHtml(ranAt)}${timing ? ` · took ${escapeHtml(timing)}` : ""}</p>
     <p><b>${counts.complies} ${words.complies}${words.partly ? ` · ${counts.partly} ${words.partly}` : ""} · ${counts.doesNot} ${words.doesNot} · ${counts.couldNotCheck} could not check</b></p>
     <p>${escapeHtml(bandLine)}</p>
     ${unjudgedNote ? `<p class="muted">${escapeHtml(unjudgedNote)}</p>` : ""}
