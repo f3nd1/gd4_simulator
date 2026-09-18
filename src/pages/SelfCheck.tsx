@@ -50,6 +50,12 @@ const INK = "#1f2733";
 const card: React.CSSProperties = { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, padding: 20, marginBottom: 16 };
 const stepNum: React.CSSProperties = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: "50%", background: INK, color: "#fff", fontSize: 13, fontWeight: 800, flexShrink: 0 };
 const h2: React.CSSProperties = { fontSize: 17, fontWeight: 700, margin: 0, color: INK };
+// Steps 1 to 3 share one card, so their headings are a size down from step 4's
+// and separated by a hairline rather than by a card gap.
+const stepHead: React.CSSProperties = { display: "flex", gap: 9, alignItems: "center", marginBottom: 9 };
+const stepDot: React.CSSProperties = { ...stepNum, width: 22, height: 22, fontSize: 12 };
+const stepTitle: React.CSSProperties = { ...h2, fontSize: 15 };
+const stepGroup: React.CSSProperties = { marginTop: 16, paddingTop: 14, borderTop: "1px solid #eef2f7" };
 const muted: React.CSSProperties = { fontSize: 13, color: "#64748b", lineHeight: 1.55 };
 const input: React.CSSProperties = { width: "100%", boxSizing: "border-box", padding: "11px 12px", fontSize: 14, border: "1px solid #cbd5e1", borderRadius: 9, background: "#fff" };
 const bigBtn: React.CSSProperties = { border: "none", borderRadius: 10, padding: "13px 26px", fontSize: 15, fontWeight: 800, cursor: "pointer", background: "#7c3aed", color: "#fff" };
@@ -809,10 +815,17 @@ export function SelfCheck() {
           </div>
         )}
 
-        {/* 1 — pick the area, by name */}
+        {/* Steps 1 to 3 are ONE card, because they are one short form: pick an
+            area, paste two links, press the button. They were three cards, and
+            three sets of border, padding and gap cost 158px of chrome for
+            three lines of work that the user sees on every single run. The
+            numbers stay, because they still say what order to do things in,
+            but they now read as three lines of one panel rather than three
+            panels. Step 4 keeps its own card and its full-size heading: it is
+            the result, not another instruction. */}
         <section style={card}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
-            <span style={stepNum}>1</span><h2 style={h2}>Which area do you look after?</h2>
+          <div style={stepHead}>
+            <span style={stepDot}>1</span><h2 style={stepTitle}>Which area do you look after?</h2>
           </div>
           <select value={scope} onChange={(e) => { setScope(e.target.value); setRunIndex(0); setConfirmDelete(null); setAllRuns(false); setPhase("idle"); setError(null); setConfirmOverwrite(false); }}
             style={{ ...input, cursor: "pointer" }} disabled={running}>
@@ -839,12 +852,13 @@ export function SelfCheck() {
               runDiff={runDiff} shownRun={shownRun}
             />
           )}
-        </section>
 
-        {/* 2 — two links, because the engine reads the two folders differently */}
-        <section style={{ ...card, opacity: area ? 1 : 0.55 }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
-            <span style={stepNum}>2</span><h2 style={h2}>Where are your documents?</h2>
+          {/* 2 — two links, because the engine reads the two folders differently.
+              The dimming that used to belong to the card belongs to this group
+              now, so an unpicked area still greys the fields it blocks. */}
+          <div style={{ ...stepGroup, opacity: area ? 1 : 0.55 }}>
+          <div style={stepHead}>
+            <span style={stepDot}>2</span><h2 style={stepTitle}>Where are your documents?</h2>
           </div>
           {/* Four blocks used to stand here before the first box: an intro
               paragraph, this warning box, and a full paragraph under each
@@ -947,12 +961,12 @@ export function SelfCheck() {
               {plan.kind === "full" && " I will then read the same documents again looking for results and review records, and report what they show for the two areas this check used to leave alone."}
             </p>
           )}
-        </section>
+          </div>
 
-        {/* 3 — one button */}
-        <section style={{ ...card, opacity: ready || running ? 1 : 0.55 }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
-            <span style={stepNum}>3</span><h2 style={h2}>Run the check</h2>
+          {/* 3 — one button, in the same card as the fields it runs on */}
+          <div style={{ ...stepGroup, opacity: ready || running ? 1 : 0.55 }}>
+          <div style={stepHead}>
+            <span style={stepDot}>3</span><h2 style={stepTitle}>Run the check</h2>
           </div>
 
           {confirmOverwrite && (
@@ -1104,6 +1118,7 @@ export function SelfCheck() {
               <p style={{ ...muted, margin: "6px 0 0", color: "#7f1d1d" }}>{error}</p>
             </div>
           )}
+          </div>
         </section>
 
         {/* 4 — the result */}
