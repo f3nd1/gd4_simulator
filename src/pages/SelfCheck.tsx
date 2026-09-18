@@ -846,37 +846,64 @@ export function SelfCheck() {
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
             <span style={stepNum}>2</span><h2 style={h2}>Where are your documents?</h2>
           </div>
-          <p style={{ ...muted, marginTop: 0 }}>
-            Two folders are needed, because they answer two different questions: what you say you do, and what you
-            actually did. They must be two DIFFERENT folders: one link in both boxes makes every document count as
-            your written procedure and as your records at the same time, and a requirement then looks proved because
-            your procedure says it happens.
-          </p>
-          {/* The check cannot tell a swapped pair from an honest "documented
-              but no records" result: both were run, and both produce the same
-              evidence-side signature down to the same comment. So the only
-              honest help is at the point of entry, and this says what the two
-              boxes mean in four words each and what going wrong looks like. */}
-          <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", margin: "8px 0 0" }}>
-            <b>Getting these the wrong way round is easy to do and hard to spot.</b> The check reads the first
-            box looking for what you promise and the second looking for proof it happened, and it cannot tell a
-            swapped pair from an area with no records yet. If almost every line comes back the same way and the
-            reasons keep saying the records were policy wording, check the two boxes before you believe the result.
-          </p>
-          <div style={{ height: 6 }} />
+          {/* Four blocks used to stand here before the first box: an intro
+              paragraph, this warning box, and a full paragraph under each
+              field. All of it was true, and stacked it was 323px of reading
+              before a link could be pasted. What is needed at the moment of
+              pasting is the two-line distinction and the swap warning; the
+              rest is read once, so it is folded away.
+
+              The swap warning stays VISIBLE and is not folded: the check
+              cannot tell a swapped pair from an honest "documented but no
+              records" result, because both were run and both produce the same
+              evidence-side signature down to the same comment. There is no
+              honest detector, so this sentence is the only defence.
+
+              A plain native <details> is safe here where the run-history one
+              was not: this section always renders, so the element is never
+              unmounted and keeps its own open state. */}
+          <div style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", margin: 0 }}>
+            <b>First box: what you SAY you do. Second box: what you actually DID.</b> They must be two
+            different folders, and getting them the wrong way round is easy to do and hard to spot.
+            <details style={{ marginTop: 6 }}>
+              <summary style={{ cursor: "pointer", listStyle: "revert", fontWeight: 700, color: INK }}>What goes in each box</summary>
+              <p style={{ margin: "7px 0 0" }}>
+                <b>Where is your written procedure?</b> The document that sets out how this area is meant to
+                work: your policy, your procedure, your handbook or your terms of reference. Not minutes,
+                registers, logs or reports, even when they are about this area: those go in the second box.
+              </p>
+              <p style={{ margin: "7px 0 0" }}>
+                <b>Where is your evidence?</b> The records that show it happening: minutes, forms, logs,
+                registers, signed copies, reports and emails. Not your policy or procedure documents, even
+                when their names mention records: those go in the first box.
+              </p>
+              <p style={{ margin: "7px 0 0" }}>
+                <b>Why two different folders.</b> One link in both boxes makes every document count as your
+                written procedure and as your records at the same time, and a requirement then looks proved
+                because your procedure says it happens.
+              </p>
+              <p style={{ margin: "7px 0 0" }}>
+                <b>What a swapped pair looks like.</b> The check reads the first box looking for what you
+                promise and the second looking for proof it happened, and it cannot tell a swapped pair from
+                an area with no records yet. If almost every line comes back the same way and the reasons keep
+                saying the records were policy wording, check the two boxes before you believe the result.
+              </p>
+            </details>
+          </div>
+          <div style={{ height: 10 }} />
 
           <LinkField
             label="Where is your written procedure?"
-            help="What you SAY you do. The document that sets out how this area is meant to work: your policy, your procedure, your handbook or your terms of reference. Not minutes, registers, logs or reports, even when they are about this area: those go in the second box."
+            help="What you SAY you do: policy, procedure, handbook or terms of reference."
             value={procLink} onChange={setProcLink} state={procState} disabled={!area || running}
             onEdit={() => { setError(null); setConfirmOverwrite(false); }}
           />
 
-          <div style={{ height: 18 }} />
+          <div style={{ height: 14 }} />
 
           <LinkField
             label="Where is your evidence?"
-            help="What you actually DID. The records that show it happening: minutes, forms, logs, registers, signed copies, reports and emails. Not your policy or procedure documents, even when their names mention records: those go in the first box."
+            help="What you actually DID: minutes, forms, logs, registers, signed copies, reports and emails."
             value={evLink} onChange={setEvLink} state={evState} disabled={!area || running}
             onEdit={() => { setError(null); setConfirmOverwrite(false); }}
           />
