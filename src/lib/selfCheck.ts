@@ -1090,3 +1090,16 @@ export function plainRunError(raw: string | undefined): string | undefined {
   }
   return raw;
 }
+
+// The verdict/comment consistency guard writes its warning INTO the comment
+// (agentRuntime.ts, "⚠ Verdict/comment mismatch"), so it arrives on the row as
+// a trailing paragraph of the reasoning. The result card lifts it out into its
+// own banner, because a warning that the model contradicted itself is not
+// supporting detail: it is the reason not to trust the row above it, and folded
+// into the bottom of a closed disclosure nobody meets it. Nothing is dropped —
+// the rest of the comment comes back as `why`.
+export function splitMismatchWarning(why: string): { why: string; warning: string } {
+  const at = why.indexOf("⚠ Verdict/comment mismatch");
+  if (at < 0) return { why, warning: "" };
+  return { why: why.slice(0, at).trim(), warning: why.slice(at).replace(/^⚠\s*/, "").trim() };
+}

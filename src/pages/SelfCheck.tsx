@@ -22,6 +22,7 @@ import {
   SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE, NO_BAND_LINE,
   VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, TABS_EXPLAINED, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
   citedText, missingText, expectedEvidenceGroups, VERDICT_LEGEND, tallySlices, feedsFor, SUMMARY_LABEL,
+  splitMismatchWarning,
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
@@ -132,11 +133,12 @@ export function SelfCheck() {
   // historyOpen is: the panel is not rendered at all on a tab with no files, so
   // the element's own state would be lost on the way there and back.
   const [filesOpen, setFilesOpen] = useState(false);
-  // Which requirement the workspace is showing. Held by REF, not by index: the
-  // three tabs return the same refs in the same order, so switching tab keeps
-  // the reader on the requirement they were reading rather than throwing them
-  // back to the top.
-  const [selectedRef, setSelectedRef] = useState<string>("");
+  // Which requirements the list is showing. Both reset on a tab switch, the
+  // way the supplied design does it: a filter left over from Overall would
+  // silently hide lines on Procedure, and a reader who did not notice would
+  // read a short list as the whole tab.
+  const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -385,6 +387,34 @@ export function SelfCheck() {
   // verdicts, same words as the table above; no judgement is added here.
   const reviewRows = useMemo(() => reviewShapedRows(rows), [rows]);
   const counts = useMemo(() => countSelfCheck(rows), [rows]);
+  // The filter chips, in the tab's own vocabulary, dropped when they would
+  // read "0". "Needs action" is the two tones a person has to do something
+  // about, which is the one grouping the counts do not already give.
+  const filterDefs = useMemo(() => {
+    const w = VIEW_TALLY[view];
+    // The tally words are written lower case for the stat tiles, where they
+    // follow a number; as a chip each one starts a label of its own.
+    const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+    const action = counts.doesNot + counts.partly;
+    return [
+      { key: "all", label: `All ${counts.total}`, n: counts.total },
+      { key: "action", label: `Needs action ${action}`, n: action },
+      { key: "critical", label: `${cap(w.doesNot)} ${counts.doesNot}`, n: counts.doesNot },
+      { key: "neutral", label: `Could not check ${counts.couldNotCheck}`, n: counts.couldNotCheck },
+      { key: "good", label: `${cap(w.complies)} ${counts.complies}`, n: counts.complies },
+    ].filter((f) => f.key === "all" || f.n > 0);
+  }, [counts, view]);
+  // Text search over what the card actually shows, so a hit is always visible
+  // on the row it matched.
+  const visibleRows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return rows.filter((r) => {
+      const byStatus = filter === "all" || r.tone === filter
+        || (filter === "action" && (r.tone === "critical" || r.tone === "medium"));
+      const byText = !q || `${r.ref} ${r.requirement} ${r.summary} ${r.fix} ${r.why}`.toLowerCase().includes(q);
+      return byStatus && byText;
+    });
+  }, [rows, filter, query]);
   const shownRun = runs[viewingRun];
   // What changed since the check before the one on screen. Counted from the
   // two runs' own stored verdicts; nothing is re-judged.
@@ -711,32 +741,82 @@ export function SelfCheck() {
         // A list to choose from and one requirement in full, in place of four
         // narrow columns carrying requirement wording, reasoning, quotes,
         // source files, missing elements and remediation all at once.
-        ".sc-view-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:14px 0 10px}",
-        ".sc-view-tab{border:1px solid;border-radius:10px;padding:9px 12px;text-align:left;cursor:pointer;font:inherit}",
-        ".sc-view-tab strong{display:block;font-size:13.5px;line-height:1.2}",
-        ".sc-view-tab span{display:block;font-size:11.5px;margin-top:3px;line-height:1.35}",
-        ".sc-workspace{display:grid;grid-template-columns:minmax(210px,248px) minmax(0,1fr);gap:14px;align-items:start;margin:12px 0}",
-        // The list scrolls on its own and stays put while a long requirement is
-        // read, so choosing the next one never means scrolling back up.
-        ".sc-req-nav{border:1px solid #e2e8f0;border-radius:10px;background:#fff;position:sticky;top:12px;max-height:calc(100vh - 40px);display:flex;flex-direction:column;overflow:hidden}",
-        ".sc-req-nav-head{padding:9px 11px;border-bottom:1px solid #e2e8f0;font-size:12px;font-weight:800;color:#0f172a;background:#f8fafc}",
-        ".sc-req-nav-list{overflow-y:auto;padding:5px}",
-        ".sc-req-link{display:grid;grid-template-columns:9px minmax(0,1fr);gap:1px 8px;align-items:center;width:100%;text-align:left;border:1px solid transparent;border-radius:8px;padding:7px 8px;cursor:pointer;font:inherit}",
+        // ── The result, to the supplied HTML design ──────────────────────
+        // A 250px sticky sidebar (jump list + exports) beside a column of one
+        // card per requirement, which is the shape of the mock this page was
+        // asked to follow. It replaces a sidebar plus ONE card showing one
+        // requirement at a time: that hid seven of eight lines behind a click
+        // and cannot be read straight through, printed or scrolled.
+        ".sc-results-layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:18px;align-items:start;margin-top:12px}",
+        ".sc-side{position:sticky;top:14px;display:flex;flex-direction:column;gap:12px}",
+        ".sc-side-card{border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:12px}",
+        ".sc-side-card h3{font-size:13px;margin:0 0 6px;color:#0f172a}",
+        ".sc-side-list{max-height:calc(100vh - 260px);overflow-y:auto;margin:0 -4px}",
+        ".sc-main{min-width:0}",
+        ".sc-hero{border:1px solid #e2e8f0;border-radius:13px;background:#fff;padding:15px 17px}",
+        ".sc-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:11px}",
+        // The tabs and the filters travel with the reader: on a long result the
+        // Overall/Procedure/Records choice used to scroll away, and switching
+        // meant scrolling back to the top to find it.
+        ".sc-toolbar{position:sticky;top:0;z-index:5;background:rgba(244,246,250,.95);backdrop-filter:blur(8px);padding:9px 0;margin-top:10px}",
+        ".sc-filters{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:7px}",
+        ".sc-filter{border:1px solid #cbd5e1;background:#fff;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer;color:#334155;font-family:inherit}",
+        ".sc-filter[data-on]{background:#172033;color:#fff;border-color:#172033}",
+        ".sc-search{margin-left:auto;min-width:230px;height:32px;border:1px solid #cbd5e1;border-radius:9px;padding:0 10px;font:inherit;font-size:12.5px;background:#fff}",
+        ".sc-view-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}",
+        ".sc-view-tab{border:1px solid;border-radius:10px;padding:7px 11px;text-align:left;cursor:pointer;font:inherit;display:flex;gap:7px;align-items:baseline;min-width:0}",
+        ".sc-view-tab strong{font-size:13px;line-height:1.2;flex-shrink:0}",
+        ".sc-view-tab span{font-size:11px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+        ".sc-findings{display:grid;gap:11px;margin-top:11px}",
+        // 96px, because the sticky toolbar above would otherwise cover the head
+        // of the card a jump link lands on.
+        ".sc-finding{border:1px solid #e2e8f0;border-radius:13px;background:#fff;overflow:hidden;scroll-margin-top:96px;min-width:0}",
+        ".sc-finding-head{padding:13px 15px 11px;display:flex;justify-content:space-between;gap:14px;border-bottom:1px solid #eef2f7}",
+        ".sc-finding-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}",
+        ".sc-status-badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 9px;font-size:11.5px;font-weight:800;border:1px solid}",
+        ".sc-code{font:800 11.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:#64748b}",
+        ".sc-finding-title{font-size:15.5px;line-height:1.35;margin:0;font-weight:700;color:#1f2733}",
+        ".sc-top-link{background:none;border:0;padding:0;font:inherit;font-size:11.5px;color:#64748b;cursor:pointer;white-space:nowrap;text-decoration:underline}",
+        ".sc-consistency{margin:11px 15px 0;background:#fff8e8;border:1px solid #f2ce80;border-radius:9px;padding:8px 10px;font-size:12.5px;color:#7b4b00}",
+        ".sc-consistency strong{display:block}",
+        ".sc-finding-summary{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr)}",
+        ".sc-summary-block{padding:12px 15px 13px}",
+        ".sc-summary-block+.sc-summary-block{border-left:1px solid #eef2f7;background:#fbfcfe}",
+        ".sc-summary-block p{margin:0;color:#334155;font-size:13.5px;line-height:1.6}",
+        ".sc-eyebrow{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#64748b;margin-bottom:4px}",
+        // Three columns of supporting detail, as the mock has them. WhyCell
+        // keeps its own wrapper for the inherited type size, and display:
+        // contents lets each disclosure inside it be a column of this grid
+        // rather than all of them stacking in one.
+        ".sc-detail-grid{border-top:1px solid #eef2f7;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:start}",
+        ".sc-detail-items{display:contents}",
+        ".sc-detail-grid>details,.sc-detail-grid>.sc-detail-items>*{padding:10px 13px;border-left:1px solid #eef2f7;margin:0;min-width:0}",
+        ".sc-detail-grid>details>summary{font-size:12px}",
+        ".sc-req-link{display:grid;grid-template-columns:9px minmax(0,1fr);gap:1px 8px;align-items:center;width:100%;text-align:left;border:1px solid transparent;border-radius:8px;padding:6px 8px;cursor:pointer;font:inherit;background:none}",
         ".sc-req-link:hover{background:#f8fafc}",
         ".sc-req-dot{width:9px;height:9px;border-radius:50%;grid-row:1/3}",
         ".sc-req-code{font-size:12px;font-weight:800;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
         ".sc-req-state{font-size:11px;font-weight:700}",
-        ".sc-req-card{border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:15px 17px;min-width:0}",
-        ".sc-req-summary{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:16px;margin-top:12px}",
-        ".sc-req-eyebrow{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#64748b;margin-bottom:4px}",
-        // One column below the width where two make the prose too narrow, and
-        // the list becomes a short scrolling strip above the card rather than a
-        // sidebar pushed off-screen.
-        "@media (max-width: 900px){",
-        ".sc-view-tabs{grid-template-columns:1fr}",
-        ".sc-workspace{grid-template-columns:1fr}",
-        ".sc-req-nav{position:static;max-height:230px}",
-        ".sc-req-summary{grid-template-columns:1fr;gap:12px}",
+        // The mock's own breakpoint: below it the sidebar has nowhere to sit,
+        // so the jump list and the duplicate export buttons go (both exist
+        // again in the page body) and every split column becomes one.
+        "@media (max-width: 980px){",
+        ".sc-results-layout{grid-template-columns:1fr}",
+        ".sc-side{display:none}",
+        ".sc-finding-summary{grid-template-columns:1fr}",
+        ".sc-summary-block+.sc-summary-block{border-left:0;border-top:1px solid #eef2f7}",
+        ".sc-detail-grid{grid-template-columns:1fr}",
+        ".sc-detail-grid>details,.sc-detail-grid>.sc-detail-items>*{border-left:0;border-top:1px solid #eef2f7}",
+        "}",
+        "@media (max-width: 640px){",
+        ".sc-view-tabs{grid-template-columns:1fr;gap:6px}",
+        ".sc-view-tab{padding:6px 10px}",
+        ".sc-stats{grid-template-columns:1fr 1fr}",
+        // Three stacked tabs plus a filter row would pin a third of a phone
+        // screen, so below this width the toolbar scrolls with the page.
+        ".sc-toolbar{position:static;background:none;backdrop-filter:none}",
+        ".sc-search{margin-left:0;width:100%;min-width:0}",
+        ".sc-finding{scroll-margin-top:12px}",
         "}",
         // The delete control is quiet until it is pointed at. Nine red words
         // down a dense list would compete with the counts, which are the whole
@@ -1141,6 +1221,54 @@ export function SelfCheck() {
               {shownRun?.duration && ` · took ${shownRun.duration}`}
             </p>
 
+            {/* The supplied design: a sticky sidebar of jump links and exports
+                beside a column of one card per requirement. The sidebar is the
+                only part that is duplicated — its two export buttons are the
+                same handlers as the pair at the foot of the result, because the
+                sidebar is hidden below 980px. */}
+            <div className="sc-results-layout">
+              <aside className="sc-side">
+                <div className="sc-side-card">
+                  <h3>Requirements <span style={{ ...muted, fontWeight: 400 }}>({rows.length})</span></h3>
+                  <p style={{ ...muted, margin: "0 0 6px", fontSize: 11.5 }}>Jump straight to one without scrolling the whole result.</p>
+                  <div className="sc-side-list">
+                    {rows.map((r) => (
+                      <button
+                        key={r.ref} type="button" className="sc-req-link"
+                        onClick={() => {
+                          // A filtered-out card has no element to scroll to, so
+                          // the jump clears the filter first and scrolls after
+                          // React has put the card back on the page.
+                          setFilter("all"); setQuery("");
+                          const id = findingId(view, r.ref);
+                          setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+                        }}
+                      >
+                        <span aria-hidden className="sc-req-dot" style={{ background: TONE_BG[r.tone].fg }} />
+                        <span className="sc-req-code" style={{ color: INK }}>{r.ref}</span>
+                        <span className="sc-req-state" style={{ color: TONE_BG[r.tone].fg }}>{r.icon} {r.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="sc-side-card">
+                  <h3>Export</h3>
+                  <div style={{ display: "grid", gap: 7 }}>
+                    <button type="button" onClick={onPdf} style={{ ...bigBtn, fontSize: 12.5, padding: "8px 11px", textAlign: "left" }}>⬇ Download PDF</button>
+                    <button type="button" onClick={onCsv} style={{ ...bigBtn, fontSize: 12.5, padding: "8px 11px", textAlign: "left", background: "#fff", color: INK, border: "1px solid #cbd5e1" }}>⬇ Download CSV</button>
+                  </div>
+                </div>
+              </aside>
+
+              <div className="sc-main">
+                <div className="sc-hero">
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+                    <b style={{ fontSize: 14, color: INK }}>{tab === "overview" || procedureOnlyResult ? "This area, requirement by requirement" : `${VIEW_LABEL[tab]}, requirement by requirement`}</b>
+                    <span style={{ ...TONE_BG.neutral, borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
+                      {counts.total} requirement {counts.total === 1 ? "line" : "lines"}
+                    </span>
+                  </div>
+
             {/* AT THE TOP, before a single verdict. This used to sit below the
                 export buttons, at 99% of the page: by the time a reader met it
                 they had already read and believed the whole result.
@@ -1183,49 +1311,102 @@ export function SelfCheck() {
                 independently: your procedure can be silent while your records
                 are full, and the other way round. Blended into one verdict that
                 difference was invisible, and the fix for each is different. */}
-            {/* Each tab carries its own one-line hint, so all three meanings
-                are readable whichever one is open, and the active tab's fuller
-                sentence follows as the subheader. A reader could previously see
-                three tabs and not know what Overall was for. */}
-            {!procedureOnlyResult && (
-              <div className="sc-view-tabs">
-                {(["overview", "procedure", "records"] as const).map((k) => (
-                  <button
-                    key={k} type="button" onClick={() => setTab(k)} aria-pressed={tab === k}
-                    className="sc-view-tab"
-                    style={{
-                      borderColor: tab === k ? INK : "#cbd5e1", background: tab === k ? INK : "#fff",
-                      color: tab === k ? "#fff" : INK,
-                    }}
-                  >
-                    <strong>{k === "overview" ? "Overall" : VIEW_LABEL[k]}</strong>
-                    <span style={{ color: tab === k ? "#dbe3ef" : "#64748b" }}>{TABS_EXPLAINED[k].hint}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+                {/* A procedure-only result answers "is it written down?", so it is
+                    counted in those words. "Complies" on a run that never opened a
+                    record would be a claim nobody made. */}
+                <div className="sc-stats">
+                  <Tally n={counts.complies} label={VIEW_TALLY[view].complies} tone="good" />
+                  {VIEW_TALLY[view].partly && <Tally n={counts.partly} label={VIEW_TALLY[view].partly!} tone="medium" />}
+                  <Tally n={counts.doesNot} label={VIEW_TALLY[view].doesNot} tone="critical" />
+                  <Tally n={counts.couldNotCheck} label="could not check" tone="neutral" />
+                </div>
+                <Svg html={tallyBarSvg(tallySlices(counts, view), SCREEN_BAND_PALETTE)} />
+                </div>
 
-            {!procedureOnlyResult && (
-              <p style={{ ...muted, margin: "0 0 10px" }}>
-                <b style={{ color: INK }}>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
+                {/* STICKY. The tab choice and the filters follow the reader down
+                    a result that runs to several screens; scrolling back to the
+                    top to change tab was the complaint that put them here.
+                    Each tab carries its own one-line hint, so all three meanings
+                    are readable whichever one is open, and the active tab's fuller
+                    sentence follows as the subheader. */}
+                <div className="sc-toolbar">
+                  {!procedureOnlyResult && (
+                    <div className="sc-view-tabs">
+                      {(["overview", "procedure", "records"] as const).map((k) => (
+                        <button
+                          key={k} type="button" aria-pressed={tab === k}
+                          onClick={() => { setTab(k); setFilter("all"); setQuery(""); }}
+                          className="sc-view-tab"
+                          style={{
+                            borderColor: tab === k ? INK : "#cbd5e1", background: tab === k ? INK : "#fff",
+                            color: tab === k ? "#fff" : INK,
+                          }}
+                        >
+                          <strong>{k === "overview" ? "Overall" : VIEW_LABEL[k]}</strong>
+                          <span style={{ color: tab === k ? "#dbe3ef" : "#64748b" }}>{TABS_EXPLAINED[k].hint}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="sc-filters">
+                    {filterDefs.map((f) => (
+                      <button key={f.key} type="button" className="sc-filter" data-on={filter === f.key || undefined}
+                        onClick={() => setFilter(f.key)}>{f.label}</button>
+                    ))}
+                    <input
+                      className="sc-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)}
+                      placeholder="Search code, requirement or finding" aria-label="Search requirements"
+                    />
+                  </div>
+                </div>
+
+                {!procedureOnlyResult && (
+                  <p style={{ ...muted, margin: "2px 0 0" }}>
+                    <b style={{ color: INK }}>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
+                  </p>
+                )}
+
+                {VIEW_NOTE[view] && (
+                  <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
+                    {VIEW_NOTE[view]}
+                  </p>
+                )}
+
+            {counts.couldNotCheck > 0 && !mostlyUnchecked(counts) && (
+              <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px" }}>
+                {COULD_NOT_CHECK_NOTE}
               </p>
             )}
 
-            {/* A procedure-only result answers "is it written down?", so it is
-                counted in those words. "Complies" on a run that never opened a
-                record would be a claim nobody made. */}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0" }}>
-              <Tally n={counts.complies} label={VIEW_TALLY[view].complies} tone="good" />
-              {VIEW_TALLY[view].partly && <Tally n={counts.partly} label={VIEW_TALLY[view].partly!} tone="medium" />}
-              <Tally n={counts.doesNot} label={VIEW_TALLY[view].doesNot} tone="critical" />
-              <Tally n={counts.couldNotCheck} label="could not check" tone="neutral" />
-            </div>
-
-            {VIEW_NOTE[view] && (
-              <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
-                {VIEW_NOTE[view]}
+            {mostlyUnchecked(counts) && (
+              <p style={{ ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af", borderRadius: 8, padding: "9px 11px" }}>
+                {MOSTLY_UNCHECKED_NOTE}
               </p>
             )}
+
+                {/* THE REQUIREMENTS THEMSELVES, one card each, straight after
+                    the counts and the warnings that change how they read.
+                    Everything that used to stand between the tabs and the
+                    verdicts now follows below them: none of it is gone, it is
+                    simply no longer in front of the thing it supports.
+
+                    The rows are the SAME rows the table had, and they are
+                    already per-tab: toSelfCheckRows / toProcedureRows /
+                    toRecordsRows. Switching tab rebuilds the list, the jump
+                    links and every card, with no new assessment logic. */}
+                <div className="sc-findings">
+                  {visibleRows.map((r) => (
+                    <FindingCard
+                      key={r.ref} row={r} view={view} id={findingId(view, r.ref)}
+                      onTop={() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                    />
+                  ))}
+                  {visibleRows.length === 0 && (
+                    <p style={{ ...muted, border: "1px dashed #cbd5e1", borderRadius: 12, padding: 20, textAlign: "center", margin: 0 }}>
+                      Nothing matches this filter. This tab checked {rows.length} requirement {rows.length === 1 ? "line" : "lines"}.
+                    </p>
+                  )}
+                </div>
 
             {/* The four combinations, counted, on the overall tab only: it is
                 the one place both halves are in view at once. */}
@@ -1245,18 +1426,6 @@ export function SelfCheck() {
                   Documented but no records means the procedure is fine and the proof is missing. Records but nothing documented means it happens but the procedure does not say so. The Procedure and Records tabs show which requirement is which.
                 </p>
               </div>
-            )}
-
-            {counts.couldNotCheck > 0 && !mostlyUnchecked(counts) && (
-              <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px" }}>
-                {COULD_NOT_CHECK_NOTE}
-              </p>
-            )}
-
-            {mostlyUnchecked(counts) && (
-              <p style={{ ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af", borderRadius: 8, padding: "9px 11px" }}>
-                {MOSTLY_UNCHECKED_NOTE}
-              </p>
             )}
 
             {/* THE BAND, and the one condition for showing one: all four
@@ -1326,21 +1495,15 @@ export function SelfCheck() {
                 question of what the whole check opened. */}
             <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} open={filesOpen} setOpen={setFilesOpen} />
 
-            {/* The shape of the tab before a single row is read, and which
-                dimension this tab's own verdicts feed. Both were on the overall
-                tab only, and the procedure and records tabs are where the
-                reading time actually goes. */}
-            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "9px 11px", margin: "10px 0", background: "#fff", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-start" }}>
-              <div style={{ flex: "1 1 400px", minWidth: 0 }}>
-                <Svg html={tallyBarSvg(tallySlices(counts, view), SCREEN_BAND_PALETTE)} />
+            {/* The tally bar itself moved into the hero, above the cards it
+                counts. What stays here is which dimension THIS tab's own
+                verdicts feed, which is not a count of anything. */}
+            {feedsFor(view) && bandWorking && (
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "9px 11px", margin: "10px 0", background: "#fff" }}>
+                <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, { feeds: feedsFor(view) })} />
+                <p style={{ ...muted, margin: "4px 0 0", fontSize: 11.5 }}>{feedsFor(view)!.caption}</p>
               </div>
-              {feedsFor(view) && bandWorking && (
-                <div style={{ flex: "1 1 460px", minWidth: 0 }}>
-                  <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, { feeds: feedsFor(view) })} />
-                  <p style={{ ...muted, margin: "4px 0 0", fontSize: 11.5 }}>{feedsFor(view)!.caption}</p>
-                </div>
-              )}
-            </div>
+            )}
 
             {/* Read BEFORE the table. An auditor could not tell whether
                 "Written down" meant compliant, and the honest answer is that
@@ -1357,29 +1520,6 @@ export function SelfCheck() {
               </div>
             </div>
 
-            {/* THE REQUIREMENT WORKSPACE, in place of the four-column table.
-                The table put requirement wording, verdict, reasoning, quoted
-                passages, source files, missing elements and remediation into
-                four narrow columns, which made rows hundreds of pixels tall and
-                forced horizontal scanning across every one of them. One
-                requirement is now read at a time, chosen from a list that can
-                be scanned in a glance.
-
-                The rows are the SAME rows the table had, and they are already
-                per-tab: toSelfCheckRows / toProcedureRows / toRecordsRows. So
-                switching tab rebuilds the list, every sidebar status, the
-                selected requirement's status and everything in the card, with
-                no new assessment logic anywhere. */}
-            {/* No key on the view: remounting per tab threw the reader back to
-                the first requirement every time they switched, which defeats
-                the whole point of being able to see which layer has the
-                problem on ONE line. The selection is held by ref instead. */}
-            <RequirementWorkspace
-              rows={rows}
-              selectedRef={selectedRef}
-              setSelectedRef={setSelectedRef}
-              view={view}
-            />
 
             {/* The two dimensions this check can defend, and the two it leaves
                 alone. It shows no overall band: scoring Systems & Outcomes and
@@ -1654,6 +1794,8 @@ export function SelfCheck() {
               <button type="button" onClick={onCsv} style={{ ...bigBtn, fontSize: 13.5, padding: "10px 18px", background: "#fff", color: INK, border: "1px solid #cbd5e1" }}>⬇ Download as spreadsheet (CSV)</button>
             </div>
             {note && <p style={{ ...muted, color: "#92400e", marginBottom: 0 }}>{note}</p>}
+              </div>
+            </div>
           </section>
         )}
       </div>
@@ -1693,94 +1835,74 @@ function Disclosure({ summary, children, open }: { summary: string; children: Re
   );
 }
 
-// One requirement at a time: a list to choose from, and the chosen one in full.
+// One card per requirement, stacked, to the supplied design: status stripe and
+// badge, the requirement in full, what was found beside what to do, and the
+// supporting detail in three folded columns.
 //
 // Everything here comes off the SelfCheckRow the table already had. Nothing is
 // re-judged, re-worded or re-counted, and the supporting detail is the existing
 // WhyCell verbatim, so the disclosures, the quote de-duplication and the
 // "show all N missing" control behave exactly as they did.
-function RequirementWorkspace({ rows, selectedRef, setSelectedRef, view }: {
-  rows: SelfCheckRow[];
-  selectedRef: string;
-  setSelectedRef: (r: string) => void;
-  view: SelfCheckView;
+function FindingCard({ row, view, id, onTop }: {
+  row: SelfCheckRow; view: SelfCheckView; id: string; onTop: () => void;
 }) {
-  // The chosen row, or the first one. Falling back rather than showing nothing
-  // matters on a tab switch and on a rerun, where the stored ref may not exist
-  // in the new list.
-  const selected = rows.find((r) => r.ref === selectedRef) ?? rows[0];
-  if (!selected) return null;
+  const t = TONE_BG[row.tone];
+  // The consistency guard's warning arrives inside the comment; it is shown as
+  // its own banner rather than at the end of a folded reasoning block.
+  const { why, warning } = splitMismatchWarning(row.why);
   const fixLabel = view === "procedure" ? "What to write" : "What to do";
   return (
-    <div className="sc-workspace">
-      <nav className="sc-req-nav" aria-label="Requirements">
-        <div className="sc-req-nav-head">Requirements <span style={{ ...muted, fontWeight: 400 }}>({rows.length})</span></div>
-        <div className="sc-req-nav-list">
-          {rows.map((r) => {
-            const here = r.ref === selected.ref;
-            return (
-              <button
-                key={r.ref} type="button" onClick={() => setSelectedRef(r.ref)} aria-current={here || undefined}
-                className="sc-req-link"
-                style={{ background: here ? "#eef2ff" : undefined, borderColor: here ? "#c7d2fe" : "transparent" }}
-              >
-                {/* The state travels as a glyph AND a word AND a colour, the
-                    same three ways it does on the card. */}
-                <span aria-hidden className="sc-req-dot" style={{ background: TONE_BG[r.tone].fg }} />
-                <span className="sc-req-code" style={{ color: INK }}>{r.ref}</span>
-                <span className="sc-req-state" style={{ color: TONE_BG[r.tone].fg }}>{r.icon} {r.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </nav>
-
-      <article className="sc-req-card" style={{ borderLeft: `5px solid ${TONE_BG[selected.tone].fg}` }}>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span
-            style={{ ...TONE_BG[selected.tone], border: `2px solid ${TONE_BG[selected.tone].fg}`, padding: "5px 11px", borderRadius: 8, fontSize: 13.5, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7, lineHeight: 1.25 }}
-          >
-            <span aria-hidden style={{ fontSize: 17, lineHeight: 1 }}>{selected.icon}</span>{selected.label}
-          </span>
-          <span style={{ ...muted, fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{selected.ref}</span>
-        </div>
-        <h3 style={{ fontSize: 16.5, lineHeight: 1.4, margin: "10px 0 0", color: INK, fontWeight: 700 }}>{selected.requirement}</h3>
-
-        <div className="sc-req-summary">
-          <div>
-            <div className="sc-req-eyebrow">{SUMMARY_LABEL[selected.summaryKind] || "What was found"}</div>
-            {/* The summary ONLY. Where the engine wrote none, WhyCell below
-                prints the full reasoning open, exactly as it always did; both
-                printing it would show the same prose twice. */}
-            <p style={{ margin: 0, color: "#334155", fontSize: 13.5, lineHeight: 1.62 }}>
-              {selected.summary || <span style={muted}>{selected.why ? "No short summary was written. The full reasoning is below." : "No reason recorded."}</span>}
-            </p>
+    <article id={id} className="sc-finding" style={{ borderLeft: `5px solid ${t.fg}` }}>
+      <div className="sc-finding-head">
+        <div style={{ minWidth: 0 }}>
+          <div className="sc-finding-meta">
+            {/* The state travels as a glyph AND a word AND a colour, never colour alone. */}
+            <span className="sc-status-badge" style={{ ...t, borderColor: t.fg }}>
+              <span aria-hidden>{row.icon}</span>{row.label}
+            </span>
+            <span className="sc-code">{row.ref}</span>
           </div>
-          <div>
-            <div className="sc-req-eyebrow">{fixLabel}</div>
-            <p style={{ margin: 0, color: "#334155", fontSize: 13.5, lineHeight: 1.62 }}>
-              {selected.fix || <span style={muted}>{selected.tone === "good" || selected.tone === "neutral" ? "Nothing to do for this one." : "The check did not suggest anything specific here. Ask your audit lead what would close it."}</span>}
-            </p>
-          </div>
+          <h3 className="sc-finding-title">{row.requirement}</h3>
         </div>
+        <button type="button" className="sc-top-link" onClick={onTop}>Back to summary</button>
+      </div>
 
-        {/* The reasoning gets its own labelled section rather than trailing
-            under the summary with nothing to say what it is, and folds like
-            every other piece of supporting detail. */}
-        <div style={{ borderTop: "1px solid #eef2f7", marginTop: 12, paddingTop: 6 }}>
-          {selected.why && (
-            <Disclosure summary="Why this verdict">
-              <span style={{ color: "#334155" }}>{selected.why}</span>
-            </Disclosure>
-          )}
-          {/* Everything else, unchanged: the same component the table cell used,
-              so every disclosure stays shut by default and every quote is still
-              shown once. */}
-          <WhyCell key={`${view}-${selected.ref}`} row={selected} showProse={false} />
+      {warning && (
+        <div className="sc-consistency">
+          <strong>Assessment consistency warning</strong>
+          <span>{warning}</span>
         </div>
-      </article>
-    </div>
+      )}
+
+      <div className="sc-finding-summary">
+        <section className="sc-summary-block">
+          <div className="sc-eyebrow">{SUMMARY_LABEL[row.summaryKind] || "What was found"}</div>
+          {/* The summary ONLY. Where the engine wrote none, the reasoning column
+              carries the full prose; both printing it would show it twice. */}
+          <p>{row.summary || <span style={muted}>{why ? "No short summary was written. The full reasoning is below." : "No reason recorded."}</span>}</p>
+        </section>
+        <section className="sc-summary-block">
+          <div className="sc-eyebrow">{fixLabel}</div>
+          <p>{row.fix || <span style={muted}>{row.tone === "good" || row.tone === "neutral" ? "Nothing to do for this one." : "The check did not suggest anything specific here. Ask your audit lead what would close it."}</span>}</p>
+        </section>
+      </div>
+
+      <div className="sc-detail-grid">
+        {why && (
+          <Disclosure summary="Why this verdict">
+            <span style={{ color: "#334155" }}>{why}</span>
+          </Disclosure>
+        )}
+        <WhyCell key={`${view}-${row.ref}`} row={row} showProse={false} />
+      </div>
+    </article>
   );
+}
+
+// The id a jump link and its card agree on. Prefixed by view, because the same
+// refs appear on all three tabs and a bare ref would be three elements.
+function findingId(view: SelfCheckView, ref: string) {
+  return `sc-${view}-${ref.replace(/[^A-Za-z0-9._-]/g, "-")}`;
 }
 
 // `showProse: false` leaves out the summary and the reasoning, which the
@@ -1801,7 +1923,7 @@ function WhyCell({ row, showProse = true }: { row: SelfCheckRow; showProse?: boo
   const shown = allMissing ? missing : missing.slice(0, MISSING_SHOWN);
   const reasoning = row.why || "";
   return (
-    <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+    <div className="sc-detail-items" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
       {showProse && row.summary && (
         <div style={{ marginBottom: 5 }}>
           <span style={{ fontWeight: 700, color: "#0f172a" }}>{SUMMARY_LABEL[row.summaryKind]}: </span>
