@@ -143,6 +143,9 @@ export function SelfCheck() {
   // open state before anybody had clicked anything and left the form standing
   // over every result (found by probing the live page, not by reading it).
   const [inputsOpen, setInputsOpen] = useState(true);
+  // Whether the tab's "what this does not answer" line is open. Shut by
+  // default: it is read once, not on every visit.
+  const [viewNoteOpen, setViewNoteOpen] = useState(false);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   // Which requirement the stage is showing. Held by REF, not by index: the
@@ -1043,7 +1046,11 @@ export function SelfCheck() {
                 style={{ opacity: ready && !running ? 1 : 0.45, cursor: ready && !running ? "pointer" : "not-allowed" }}
                 disabled={!ready || running || confirmOverwrite} onClick={() => void run()}
               >
-                {running ? "Checking…" : plan.canRun ? plan.button : "Check my area"}
+                {/* NEVER a dead grey button: pressing it with a result already
+                    stored opens the confirmation, and the label has to say that
+                    rather than just going flat, which is what "clicking it does
+                    nothing" looked like. */}
+                {running ? "Checking…" : confirmOverwrite ? "Confirm below ↓" : plan.canRun ? plan.button : "Check my area"}
               </button>
             </div>
           </div>
@@ -1053,6 +1060,45 @@ export function SelfCheck() {
               before, which folder goes in which box, and what this run will and
               will not do. */}
           <div className="sc-inputs-more">
+            {/* FIRST in this block, directly under the button that raises it.
+                It used to sit below the area description, the earlier checks
+                and the folder guidance, so pressing "Check my area" on an area
+                that already has a result greyed the button and put the only
+                thing you could do next off the bottom of the card. */}
+          {confirmOverwrite && (
+            <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 9, padding: 12, marginBottom: 12 }}>
+              <b style={{ fontSize: 13.5, color: "#92400e" }}>
+                {resultAtRisk ? "This area has already been checked." : "Your audit lead has already set up this area."}
+              </b>
+              <p style={{ ...muted, margin: "6px 0 10px" }}>
+                {resultAtRisk && `The check you have now stays: it moves into the list of earlier checks on the result below, and you can open it whenever you like. What changes is which one counts as the current ${plan.kind === "procedure-only" ? "written procedure check" : "result"} for this area, and the current one is what your audit lead sees. ${runs.length >= OPTION_A_RUN_HISTORY_CAP + 1 ? `This area is already keeping ${runs.length} checks, which is the most it holds, so the oldest one drops off. ` : ""}`}
+                {linkClash && `It also replaces the ${clashes.length === 2 ? "written procedure and records folders" : `${clashes[0]} folder`} your audit lead recorded for this area with what you pasted above. If you are not sure that is right, check with them first.`}
+              </p>
+              <button type="button" style={{ ...bigBtn, fontSize: 13.5, padding: "9px 16px" }} onClick={() => void run()}>Yes, check it again</button>
+              <button type="button" onClick={() => setConfirmOverwrite(false)}
+                style={{ marginLeft: 8, fontSize: 13.5, padding: "9px 16px", borderRadius: 10, border: "1px solid #cbd5e1", background: "#fff", cursor: "pointer" }}>Cancel</button>
+
+              {/* Deliberately smaller, plainer and on their own row, so they read
+                  as "take a copy first" rather than as the decision. Neither
+                  dismisses the dialog: the choice above is still open after a
+                  download. Hidden entirely when no previous result can be
+                  retrieved, rather than offering a control that would fail. */}
+              {previous && (
+                <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #fde68a" }}>
+                  <span style={{ ...muted, color: "#92400e", marginRight: 8 }}>Keep a copy of the earlier check:</span>
+                  <button type="button" onClick={onPreviousPdf}
+                    style={{ fontSize: 12.5, padding: "5px 11px", borderRadius: 8, border: "1px solid #d6bc8a", background: "#fff", color: "#92400e", cursor: "pointer", marginRight: 6 }}>
+                    ⬇ Download PDF
+                  </button>
+                  <button type="button" onClick={onPreviousCsv}
+                    style={{ fontSize: 12.5, padding: "5px 11px", borderRadius: 8, border: "1px solid #d6bc8a", background: "#fff", color: "#92400e", cursor: "pointer" }}>
+                    ⬇ Download CSV
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {area && <p style={{ ...muted, marginTop: 10, marginBottom: 0 }}>{area.description}</p>}
           {/* Whether this area has been checked before, as soon as it is
               picked. It answers the returning user's first question without
@@ -1154,40 +1200,6 @@ export function SelfCheck() {
             </p>
           )}
 
-
-          {confirmOverwrite && (
-            <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 9, padding: 12, marginBottom: 12 }}>
-              <b style={{ fontSize: 13.5, color: "#92400e" }}>
-                {resultAtRisk ? "This area has already been checked." : "Your audit lead has already set up this area."}
-              </b>
-              <p style={{ ...muted, margin: "6px 0 10px" }}>
-                {resultAtRisk && `The check you have now stays: it moves into the list of earlier checks on the result below, and you can open it whenever you like. What changes is which one counts as the current ${plan.kind === "procedure-only" ? "written procedure check" : "result"} for this area, and the current one is what your audit lead sees. ${runs.length >= OPTION_A_RUN_HISTORY_CAP + 1 ? `This area is already keeping ${runs.length} checks, which is the most it holds, so the oldest one drops off. ` : ""}`}
-                {linkClash && `It also replaces the ${clashes.length === 2 ? "written procedure and records folders" : `${clashes[0]} folder`} your audit lead recorded for this area with what you pasted above. If you are not sure that is right, check with them first.`}
-              </p>
-              <button type="button" style={{ ...bigBtn, fontSize: 13.5, padding: "9px 16px" }} onClick={() => void run()}>Yes, check it again</button>
-              <button type="button" onClick={() => setConfirmOverwrite(false)}
-                style={{ marginLeft: 8, fontSize: 13.5, padding: "9px 16px", borderRadius: 10, border: "1px solid #cbd5e1", background: "#fff", cursor: "pointer" }}>Cancel</button>
-
-              {/* Deliberately smaller, plainer and on their own row, so they read
-                  as "take a copy first" rather than as the decision. Neither
-                  dismisses the dialog: the choice above is still open after a
-                  download. Hidden entirely when no previous result can be
-                  retrieved, rather than offering a control that would fail. */}
-              {previous && (
-                <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #fde68a" }}>
-                  <span style={{ ...muted, color: "#92400e", marginRight: 8 }}>Keep a copy of the earlier check:</span>
-                  <button type="button" onClick={onPreviousPdf}
-                    style={{ fontSize: 12.5, padding: "5px 11px", borderRadius: 8, border: "1px solid #d6bc8a", background: "#fff", color: "#92400e", cursor: "pointer", marginRight: 6 }}>
-                    ⬇ Download PDF
-                  </button>
-                  <button type="button" onClick={onPreviousCsv}
-                    style={{ fontSize: 12.5, padding: "5px 11px", borderRadius: 8, border: "1px solid #d6bc8a", background: "#fff", color: "#92400e", cursor: "pointer" }}>
-                    ⬇ Download CSV
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
 
           {running && (
             <div>
@@ -1387,14 +1399,23 @@ export function SelfCheck() {
                     <div className="sc-view-subheader">
                       <b>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
                       {/* What this tab does NOT settle. It was a yellow box of
-                          its own under the counts; here it is one character
-                          with the same sentence on hover and on focus, and the
-                          sentence still prints in full in the PDF and the CSV. */}
+                          its own under the counts. A title attribute was tried
+                          and was no better than nothing: it needs a steady
+                          hover, never fires on a click or a touch, and the user
+                          reported exactly that. This is a real button that
+                          opens the sentence in place, so it works on click, on
+                          keyboard and on a phone. The sentence still prints in
+                          full in the PDF and the CSV. */}
                       {VIEW_NOTE[view] && (
-                        <span tabIndex={0} title={VIEW_NOTE[view]} aria-label={VIEW_NOTE[view]}
-                          style={{ marginLeft: 6, cursor: "help", fontWeight: 800, color: "#92400e", borderBottom: "1px dotted #92400e" }}>
-                          &#9432;
-                        </span>
+                        <>
+                          <button type="button" onClick={() => setViewNoteOpen((v) => !v)} aria-expanded={viewNoteOpen}
+                            style={{ marginLeft: 6, cursor: "pointer", font: "inherit", fontWeight: 800, color: "#92400e", background: "none", border: "none", padding: 0, textDecoration: "underline" }}>
+                            &#9432; {viewNoteOpen ? "Hide" : "What this tab does not answer"}
+                          </button>
+                          {viewNoteOpen && (
+                            <span style={{ display: "block", marginTop: 6, color: "#92400e" }}>{VIEW_NOTE[view]}</span>
+                          )}
+                        </>
                       )}
                     </div>
                   )}
@@ -1963,10 +1984,11 @@ const LONG_REASONING = 320;
 function Disclosure({ summary, children, open }: { summary: string; children: React.ReactNode; open?: boolean }) {
   return (
     <details open={open} style={{ marginTop: 6 }}>
-      {/* 13.5px: the size of the prose it heads. At 12 it read as a footnote
-          on a card whose body is 13.5. */}
+      {/* 13.5px on BOTH the heading and the body. The body carried no size of
+          its own, so the reasoning under "Why this verdict" inherited the
+          browser's 16px default — measured in the page, not assumed. */}
       <summary style={{ cursor: "pointer", fontSize: 13.5, fontWeight: 700, color: "#475569" }}>{summary}</summary>
-      <div style={{ marginTop: 5 }}>{children}</div>
+      <div style={{ marginTop: 5, fontSize: 13.5, lineHeight: 1.6 }}>{children}</div>
     </details>
   );
 }
@@ -2063,7 +2085,7 @@ function WhyCell({ row, showProse = true }: { row: SelfCheckRow; showProse?: boo
   const shown = allMissing ? missing : missing.slice(0, MISSING_SHOWN);
   const reasoning = row.why || "";
   return (
-    <div className="sc-detail-items" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+    <div className="sc-detail-items" style={{ fontSize: 13.5, lineHeight: 1.55 }}>
       {showProse && row.summary && (
         <div style={{ marginBottom: 5 }}>
           <span style={{ fontWeight: 700, color: "#0f172a" }}>{SUMMARY_LABEL[row.summaryKind]}: </span>
