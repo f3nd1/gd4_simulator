@@ -68,8 +68,8 @@ export const DIMENSION_SOURCE: Record<BandDimensionRow["key"], string> = {
 // deliberately not taken by this page — but "not assessed" would be untrue once
 // the pass has read a folder and reported what it found.
 export const DIMENSION_SOURCE_CHECKED: Partial<Record<BandDimensionRow["key"], string>> = {
-  systemsOutcomes: "Checked against your results and review folder. What it found is below. It is not turned into a band here.",
-  review: "Checked against your results and review folder. What it found is below. It is not turned into a band here.",
+  systemsOutcomes: "Checked against your own documents for results and review records. What it found is below. It is not turned into a band here.",
+  review: "Checked against your own documents for results and review records. What it found is below. It is not turned into a band here.",
 };
 
 export type BandWorking = {
@@ -120,7 +120,7 @@ export const ROWS_DO_NOT_SUM_NOTE =
 
 // The counterpart to TWO_DIMENSIONS_NOTE for a run that read the third folder.
 export const THREE_FOLDERS_NOTE =
-  "This check read your written procedure, your records, and your results and review records. It still gives no overall band: turning four dimensions into one band is your audit lead's judgement, not this page's. What the results and review check found is reported below, requirement by requirement for Review, and as a whole for Systems & Outcomes.";
+  "This check read your written procedure and your records, then read the same documents again looking for results and review records. It still gives no overall band: turning four dimensions into one band is your audit lead's judgement, not this page's. What that second look found is reported below, requirement by requirement for Review, and as a whole for Systems & Outcomes.";
 
 export const TWO_DIMENSIONS_NOTE =
   "This check reads a written procedure and a set of records, so it can only assess Approach and Processes. It gives no overall band. Systems & Outcomes and Review are not assessed here, and scoring them low for not having been looked at would have understated a well-run area by one to two bands. Your audit lead assesses all four and sets the band.";

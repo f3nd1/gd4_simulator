@@ -10,6 +10,7 @@
 // holistic banding produced; this module never derives one.
 
 import { toCsv } from "./auditCsvExport";
+import { buildStamp } from "./buildInfo";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
 import { ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
@@ -677,6 +678,9 @@ export function buildSelfCheckCsv(
   const trailer = [
     ...(view === "overview" ? [bandLineOf(band)] : [VIEW_NOTE[view]]),
     ...(timing ? [`This check took ${timing}.`] : []),
+    // Which build produced this file. A filed working paper that cannot say
+    // which version of the tool wrote it cannot be reconciled with a later one.
+    buildStamp(),
   ];
   // The drawn shape, as rows. A spreadsheet cannot carry the picture, so it
   // carries the same four numbers the picture is drawn from.
@@ -922,7 +926,7 @@ export function buildSelfCheckHtml(opts: {
   return `
     <h1>Self-check: ${escapeHtml(areaLabel)}${view === "procedure-only" ? " (written procedure only)" : view === "overview" ? "" : ` — ${escapeHtml(VIEW_LABEL[view])}`}</h1>
     <p class="muted">${escapeHtml(areaDescription)}</p>
-    <p class="muted">Checked on ${escapeHtml(ranAt)}${timing ? ` · took ${escapeHtml(timing)}` : ""}</p>
+    <p class="muted">Checked on ${escapeHtml(ranAt)}${timing ? ` · took ${escapeHtml(timing)}` : ""} · ${escapeHtml(buildStamp())}</p>
     <p><b>${counts.complies} ${words.complies}${words.partly ? ` · ${counts.partly} ${words.partly}` : ""} · ${counts.doesNot} ${words.doesNot} · ${counts.couldNotCheck} could not check</b></p>
     <p>${escapeHtml(bandLine)}</p>
     ${unjudgedNote ? `<p class="muted">${escapeHtml(unjudgedNote)}</p>` : ""}

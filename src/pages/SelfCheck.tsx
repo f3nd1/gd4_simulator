@@ -29,6 +29,7 @@ import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMa
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef, type RunDiff } from "../lib/selfCheckHistory";
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
+import { buildLabel } from "../lib/buildInfo";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
 import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, THREE_FOLDERS_NOTE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, DIMENSION_SOURCE_CHECKED, type BandWorking } from "../lib/selfCheckBanding";
 
@@ -96,10 +97,6 @@ export function SelfCheck() {
   const [scope, setScope] = useState("");
   const [procLink, setProcLink] = useState("");
   const [evLink, setEvLink] = useState("");
-  // The optional third folder. Empty is a first-class answer: with no link the
-  // two dimensions it feeds stay NOT ASSESSED, exactly as before this box
-  // existed. Never blank on its own.
-  const [outLink, setOutLink] = useState("");
   // Which half the result on screen came from. A procedure-only result answers
   // a different question and must never be dressed as a full one.
   const [mode, setMode] = useState<"full" | "procedure-only">("full");
@@ -229,13 +226,10 @@ export function SelfCheck() {
   const stateOf = (v: string): "empty" | "bad" | "ok" => (!v.trim() ? "empty" : parseFolderId(v) ? "ok" : "bad");
   const procState = stateOf(procLink);
   const evState = stateOf(evLink);
-  // Optional, so "empty" never blocks — but a mistyped link is still not "they
-  // left it out", same reasoning as the two above.
-  const outState = stateOf(outLink);
   const plan = planFor(procState === "ok", evState === "ok");
   // A half-typed or mistyped link is not "they left it out" — never offer a
   // procedure-only run while a link they clearly meant to paste is still wrong.
-  const ready = !!area && plan.canRun && procState !== "bad" && evState !== "bad" && outState !== "bad" && block.canRun && !running;
+  const ready = !!area && plan.canRun && procState !== "bad" && evState !== "bad" && block.canRun && !running;
 
   const ppdExisting = scope ? atRun(ppdResults[scope], ppdHistory[scope]) : undefined;
   // What this particular run would actually overwrite. A procedure-only run
@@ -254,9 +248,6 @@ export function SelfCheck() {
     folder?.policyLink && folder.policyLink !== procLink.trim() ? "written procedure" : null,
     // A procedure-only run leaves folderLink alone, so it cannot clash.
     plan.kind === "full" && folder?.folderLink && folder.folderLink !== evLink.trim() ? "records" : null,
-    // Only when this run would actually replace it — an empty third box leaves
-    // the stored link alone, so there is nothing to warn about.
-    plan.kind === "full" && outLink.trim() && folder?.outcomeLink && folder.outcomeLink !== outLink.trim() ? "results and review" : null,
   ].filter(Boolean) as string[];
   const linkClash = clashes.length > 0;
 
@@ -376,11 +367,6 @@ export function SelfCheck() {
     // so blanking the lead's records folder would destroy their link for
     // nothing.
     if (!procedureOnly) setFolderField(folder.id, "folderLink", evLink.trim());
-    // Written only when the box HOLDS something. The other two are required,
-    // so an empty box there means the run cannot proceed; this one is optional,
-    // and a process owner who leaves it empty has not asked for their audit
-    // lead's results folder to be unlinked.
-    if (!procedureOnly && outLink.trim()) setFolderField(folder.id, "outcomeLink", outLink.trim());
 
     try {
       setPhase("policy");
@@ -415,17 +401,14 @@ export function SelfCheck() {
         return;
       }
 
-      // The optional third pass. Runs ONLY when a results-and-review folder was
-      // linked; with no link the two dimensions it feeds stay not assessed,
-      // which is what this page said before the box existed. The store gates
-      // it again on whether anything in that folder was actually read
-      // (lib/selfCheckOutcome.ts) — an unreadable folder must never become a
-      // "Not evident", which is Band 1 downstream.
-      if (outState === "ok") {
-        setPhase("outcomes");
-        await useWorkspaceStore.getState().runOutcomeReviewPass(area.scope);
-        if (stale()) return;
-      }
+      // The third pass, over the SAME documents the two above already read —
+      // which is how Option B's full audit has always assessed these two
+      // dimensions. The store gates it on whether any of the records could
+      // actually be read (lib/selfCheckOutcome.ts): unread records must never
+      // become a "Not evident", which is Band 1 downstream.
+      setPhase("outcomes");
+      await useWorkspaceStore.getState().runOutcomeReviewPass(area.scope);
+      if (stale()) return;
 
       setPhase("band");
       // No band is derived from this check. The auditor's committed band shows
@@ -592,11 +575,9 @@ export function SelfCheck() {
     const records = fileStageSummary(evProgress?.filesFound);
     if (records) setDoneSummaries((d) => (d.records === records ? d : { ...d, records }));
   }, [ppdProgress, evProgress]);
-  // The third stage only exists when a third folder was linked. Showing it
-  // greyed on every run would advertise a step most runs never take.
   const visibleSteps = procedureOnlyResult
     ? STEPS.filter((s) => s.key !== "records" && s.key !== "outcomes" && s.key !== "band")
-    : outState === "ok" ? STEPS : STEPS.filter((s) => s.key !== "outcomes");
+    : STEPS;
   const activeIdx = visibleSteps.findIndex((s) => s.key === phase);
 
   return (
@@ -673,6 +654,16 @@ export function SelfCheck() {
           <p style={{ ...muted, margin: 0, fontSize: 14 }}>
             A practice run on your own documents, so you can fix things before the real audit. It takes a few minutes.
           </p>
+          {/* Which build this is. Not a number anybody maintains: it comes from
+              the commit the bundle was built from (lib/buildInfo.ts). Two of
+              the three "the fix did not work" reports on this project were a
+              browser holding the previous bundle, and there was no way to see
+              that from the page. Quiet, but on the first screen rather than
+              behind a developer toggle, because the person who needs it is the
+              one reporting the problem. */}
+          <p style={{ ...muted, margin: "6px 0 0", fontSize: 11.5 }} title="The version of this page you are looking at. Quote it if you report a problem.">
+            Build <span style={{ fontFamily: "ui-monospace,monospace" }}>{buildLabel()}</span>
+          </p>
           <p style={{ ...muted, marginTop: 8, background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", borderRadius: 8, padding: "8px 11px", fontSize: 12.5 }}>
             {SELF_CHECK_DISCLAIMER}
           </p>
@@ -747,7 +738,7 @@ export function SelfCheck() {
             Two folders are needed, because they answer two different questions: what you say you do, and what you
             actually did. They must be two DIFFERENT folders: one link in both boxes makes every document count as
             your written procedure and as your records at the same time, and a requirement then looks proved because
-            your procedure says it happens. A third folder is optional and adds two more areas to the check.
+            your procedure says it happens.
           </p>
           {/* The check cannot tell a swapped pair from an honest "documented
               but no records" result: both were run, and both produce the same
@@ -778,19 +769,20 @@ export function SelfCheck() {
             onEdit={() => { setError(null); setConfirmOverwrite(false); }}
           />
 
-          <div style={{ height: 18 }} />
-
-          {/* The third folder, and the only optional one. Leaving it empty is a
-              real answer: the two dimensions it feeds then stay not assessed,
-              exactly as they were before this box existed. The help text says
-              so, because a box that looks required and is left empty is how a
-              user ends up believing a gap was found. */}
-          <LinkField
-            label="Where are your results and review records? (optional)"
-            help="What the process PRODUCED and how you checked it: performance figures, KPI or survey results, trend or benchmark data, management review minutes, internal audit reports, and improvement or corrective action logs. Leave this empty if you do not have one. The check will then say these two areas were not assessed. It will not mark them down."
-            value={outLink} onChange={setOutLink} state={outState} disabled={!area || running}
-            onEdit={() => { setError(null); setConfirmOverwrite(false); }}
-          />
+          {/* A third box for a separate results-and-review folder was here for
+              one commit. It was removed because this folder already holds what
+              it asked for: internal audit reports, review minutes, CAP logs and
+              KPI data are records. Asking for them again meant splitting one
+              folder in two or pasting the same link twice, which is the mistake
+              the paragraph above warns about. A stored link from that commit is
+              not silently ignored. */}
+          {folder?.outcomeLink && (
+            <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", margin: "12px 0 0" }}>
+              A separate results and review folder was linked here before. It is no longer needed and is not read:
+              this check now looks for your results and review records in the records folder above, which is where
+              they usually live.
+            </p>
+          )}
 
           {/* What will and will not be checked, said before the button rather
               than discovered afterwards. */}
@@ -813,9 +805,7 @@ export function SelfCheck() {
               color: plan.canRun ? (plan.kind === "full" ? "#166534" : "#92400e") : "#991b1b",
             }}>
               {plan.note}
-              {plan.kind === "full" && (outState === "ok"
-                ? " I will also read your results and review records, and report what they show for the two areas this check normally leaves alone."
-                : " Your results and review records are not part of this run, so those two areas will be reported as not assessed.")}
+              {plan.kind === "full" && " I will then read the same documents again looking for results and review records, and report what they show for the two areas this check used to leave alone."}
             </p>
           )}
         </section>
@@ -1229,89 +1219,6 @@ export function SelfCheck() {
                   {outcomeState.state === "assessed" ? THREE_FOLDERS_NOTE : TWO_DIMENSIONS_NOTE}
                 </p>
 
-                {/* The optional third folder. Three states, and only one of
-                    them licenses a negative finding: a folder that was linked
-                    and read. The other two name the reason instead, because
-                    "Not evident" is the bottom of the scale downstream and an
-                    unlooked-at dimension must never land there.
-
-                    The two dimensions are reported DIFFERENTLY on purpose.
-                    Review has an official spine: 42 of the 200 Describe/Show
-                    lines ask whether a process is reviewed, and all 31
-                    requirement items carry one, so its result is per line.
-                    Systems & Outcomes has none: an outcome-word filter over the
-                    same 200 lines is wrong about 9 of the 11 it catches, so
-                    there is no list to check against and its result is reported
-                    for the scope as a whole, against the official descriptors
-                    alone. Forcing the two into the same shape would mean
-                    inventing the list this page has twice refused to invent. */}
-                <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 14px", margin: "12px 0", background: "#fff" }}>
-                  <b style={{ fontSize: 13.5 }}>Your results and review records</b>
-                  {outcomeState.state !== "assessed" ? (
-                    <p style={{ ...muted, margin: "6px 0 0" }}>{outcomeState.reason}</p>
-                  ) : (
-                    <>
-                      <p style={{ ...muted, margin: "6px 0 10px" }}>
-                        {outcomeShown?.outcomeFilesRead ?? 0} of {outcomeShown?.outcomeFilesListed ?? 0}{" "}
-                        {(outcomeShown?.outcomeFilesListed ?? 0) === 1 ? "file" : "files"} in that folder were read, alongside the documents this check had already opened.
-                        {" "}{outcomeTally.total} {outcomeTally.total === 1 ? "point" : "points"} of the official requirement were checked for both.
-                      </p>
-
-                      <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 9 }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>Review, requirement by requirement</div>
-                        <p style={{ ...muted, margin: "3px 0 7px" }}>
-                          These are the official GD4 lines asking whether a process is reviewed for continual improvement.
-                          A tick means a record of a review having happened was found and quoted. A procedure that says a review will happen is not one.
-                        </p>
-                        {outcomeReviewLines.length === 0 ? (
-                          <p style={{ ...muted, margin: 0 }}>This area&rsquo;s review lines were not among the ones the pass judged, so there is nothing to report here.</p>
-                        ) : (
-                          <div style={{ display: "grid", gap: 5 }}>
-                            {outcomeReviewLines.map((r) => (
-                              <div key={r.ref} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
-                                <span style={{
-                                  // "critical", not "bad": TONE_BG is keyed by
-                                  // the row tones this page already uses, and a
-                                  // missing key reads back undefined and throws
-                                  // on .fg, blanking the whole result.
-                                  ...TONE_BG[r.reviewEvident ? "good" : "critical"], border: `1px solid ${TONE_BG[r.reviewEvident ? "good" : "critical"].fg}`,
-                                  padding: "1px 8px", borderRadius: 6, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0,
-                                }}>
-                                  {r.reviewEvident ? "✓ record found" : "✗ none found"}
-                                </span>
-                                <span style={{ color: "#334155" }}>
-                                  {r.pointText}
-                                  <span style={{ ...muted, marginLeft: 6 }}>{r.ref}</span>
-                                  {r.note && <div style={{ ...muted, fontSize: 11.5 }}>{r.note}</div>}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 9, marginTop: 9 }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>Systems &amp; Outcomes, for this area as a whole</div>
-                        <p style={{ ...muted, margin: "3px 0 7px" }}>
-                          Outcome data means real figures, results or trends covering the period, not a statement that outcomes will be tracked.
-                          It was found for <b>{outcomeTally.withOutcome} of the {outcomeTally.total}</b> points checked.
-                          This is reported for the area as a whole rather than line by line: the official requirement text for this area does not itemise what outcome evidence should look like, so there is no official list to tick off, and inventing one would be fabricating an official expectation.
-                        </p>
-                      </div>
-
-                      {(outcomeShown?.outcomeLedger?.length ?? 0) > 0 && (
-                        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 9, marginTop: 9 }}>
-                          <div style={{ ...muted, fontWeight: 700, color: "#475569" }}>What it read</div>
-                          <ul style={{ ...muted, margin: "3px 0 0", paddingLeft: 17 }}>
-                            {outcomeShown!.outcomeLedger!.map((f) => (
-                              <li key={f.path}>{f.readStatus === "read" ? "✓" : "✗"} {f.name}{f.readStatus === "read" ? "" : `: could not be read${f.failReason ? `. ${f.failReason}` : ""}`}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
 
                 {/* What the other two dimensions need. Every line below is
                     either the Guidance Document's own wording, the official
@@ -1411,6 +1318,96 @@ export function SelfCheck() {
                 </details>
                 <p style={{ ...muted, marginBottom: 0, marginTop: 8 }}>{INFERRED_THRESHOLDS_NOTE}</p>
               </div>
+            )}
+
+            {/* OUTSIDE the band panel above, deliberately. That panel only renders
+                when the run judged something, and a run where nothing could be read
+                judges nothing — which is exactly when this block's reason needs
+                to be on screen. Nested inside it, the reason was invisible in
+                the one case it exists for.
+
+                Three states, and only one of
+                    them licenses a negative finding: a folder that was linked
+                    and read. The other two name the reason instead, because
+                    "Not evident" is the bottom of the scale downstream and an
+                    unlooked-at dimension must never land there.
+
+                    The two dimensions are reported DIFFERENTLY on purpose.
+                    Review has an official spine: 42 of the 200 Describe/Show
+                    lines ask whether a process is reviewed, and all 31
+                    requirement items carry one, so its result is per line.
+                    Systems & Outcomes has none: an outcome-word filter over the
+                    same 200 lines is wrong about 9 of the 11 it catches, so
+                    there is no list to check against and its result is reported
+                    for the scope as a whole, against the official descriptors
+                    alone. Forcing the two into the same shape would mean
+                    inventing the list this page has twice refused to invent. */}
+            {view === "overview" && (
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 14px", margin: "12px 0", background: "#fff" }}>
+                  <b style={{ fontSize: 13.5 }}>Your results and review records</b>
+                  {outcomeState.state !== "assessed" ? (
+                    <p style={{ ...muted, margin: "6px 0 0" }}>{outcomeState.reason}</p>
+                  ) : (
+                    <>
+                      <p style={{ ...muted, margin: "6px 0 10px" }}>
+                        Read from the same documents listed at the top of this result, looked at a second time for results and review records.
+                        {" "}{outcomeTally.total} {outcomeTally.total === 1 ? "point" : "points"} of the official requirement were checked for both.
+                      </p>
+
+                      <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 9 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>Review, requirement by requirement</div>
+                        <p style={{ ...muted, margin: "3px 0 7px" }}>
+                          These are the official GD4 lines asking whether a process is reviewed for continual improvement.
+                          A tick means a record of a review having happened was found and quoted. A procedure that says a review will happen is not one.
+                        </p>
+                        {outcomeReviewLines.length === 0 ? (
+                          <p style={{ ...muted, margin: 0 }}>This area&rsquo;s review lines were not among the ones the pass judged, so there is nothing to report here.</p>
+                        ) : (
+                          <div style={{ display: "grid", gap: 5 }}>
+                            {outcomeReviewLines.map((r) => (
+                              <div key={r.ref} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
+                                <span style={{
+                                  // "critical", not "bad": TONE_BG is keyed by
+                                  // the row tones this page already uses, and a
+                                  // missing key reads back undefined and throws
+                                  // on .fg, blanking the whole result.
+                                  ...TONE_BG[r.reviewEvident ? "good" : "critical"], border: `1px solid ${TONE_BG[r.reviewEvident ? "good" : "critical"].fg}`,
+                                  padding: "1px 8px", borderRadius: 6, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0,
+                                }}>
+                                  {r.reviewEvident ? "✓ record found" : "✗ none found"}
+                                </span>
+                                <span style={{ color: "#334155" }}>
+                                  {r.pointText}
+                                  <span style={{ ...muted, marginLeft: 6 }}>{r.ref}</span>
+                                  {r.note && <div style={{ ...muted, fontSize: 11.5 }}>{r.note}</div>}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 9, marginTop: 9 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>Systems &amp; Outcomes, for this area as a whole</div>
+                        <p style={{ ...muted, margin: "3px 0 7px" }}>
+                          Outcome data means real figures, results or trends covering the period, not a statement that outcomes will be tracked.
+                          It was found for <b>{outcomeTally.withOutcome} of the {outcomeTally.total}</b> points checked.
+                          This is reported for the area as a whole rather than line by line: the official requirement text for this area does not itemise what outcome evidence should look like, so there is no official list to tick off, and inventing one would be fabricating an official expectation.
+                        </p>
+                      </div>
+
+                      {(outcomeShown?.runWarnings?.length ?? 0) > 0 && (
+                        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 9, marginTop: 9 }}>
+                          {/* Files this pass could not get text for. Named, not
+                              counted into a silent absence. */}
+                          {outcomeShown!.runWarnings!.map((w, i) => (
+                            <p key={i} style={{ ...muted, margin: "2px 0 0", color: "#92400e" }}>{w}</p>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
             )}
 
             {/* What good looks like, from the official published list and

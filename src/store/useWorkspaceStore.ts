@@ -2593,96 +2593,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const missing: string[] = [];
           let chunkCounter = 0;
           let readToken: string | null | undefined; // fetched once, on first cache miss
-
-          // ── The dedicated results-and-review folder, when one is linked ────
-          // Read FRESH (its files have never been opened by any pass, so the
-          // text cache cannot hold them) and added to the run's own documents
-          // rather than replacing them: review minutes filed in the records
-          // folder still count, which is how Option B's third pass behaves and
-          // why its prompt reads "ALL documents (policy and evidence
-          // combined)". Its files carry bucket "outcome", so the policy and
-          // evidence reads can never pick them up and no Approach or Processes
-          // verdict changes because this folder was linked.
-          const outcomeFolder = get().folders.find((f) => folderScopeId(f) === subCriterionId);
-          const outcomeFolderId = parseFolderId(outcomeFolder?.outcomeLink);
-          let outcomeLedger: AuditFileRecord[] | undefined;
-          let outcomeFilesListed: number | undefined;
-          let outcomeFilesRead: number | undefined;
-          if (outcomeFolderId) {
-            set({ outcomeReviewProgress: { subCriterionId, detail: "Listing your results and review folder…" } });
-            readToken = await useGoogleDriveStore.getState().getFreshToken();
-            if (!readToken) { finish(null, DRIVE_EXPIRED_MID_RUN); return; }
-            let listed: Awaited<ReturnType<typeof listFolderFilesRecursive>> = [];
-            try {
-              listed = orderBySizeForVisionBudget(
-                await listFolderFilesRecursive(outcomeFolderId, readToken, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS))
-              );
-            } catch (err) {
-              finish(null, `The results and review folder could not be opened: ${err instanceof Error ? err.message : String(err)}`);
-              return;
-            }
-            outcomeFilesListed = listed.length;
-            set((st) => ({ folders: st.folders.map((f) => f.id === outcomeFolder!.id ? { ...f, outcomeFileCount: listed.length, fileCountAt: new Date().toISOString() } : f) }));
-            const visionAi = useAISettingsStore.getState();
-            // The SAME three-tier read the other passes use (typed text →
-            // scanned-page vision → image vision), via the shared helper. A
-            // path that silently read less would report a folder as empty when
-            // it is only scanned, and this pass's whole job is to decide
-            // whether something is there.
-            const outcomeVisionCtx: VisionReadCtx = {
-              canDescribeImages: visionAi.enabled && !!visionAi.apiKey,
-              visionSettings: effectiveSettings(visionAi, { purpose: "vision", context: composeSchoolContext(get().schoolContext) }),
-              visionModelId: effectiveSettings(visionAi, { purpose: "vision" }).model,
-              budget: { count: 0, max: DEFAULT_VISION_IMAGE_BUDGET },
-              maxPerFile: 5,
-            };
-            const ledger: AuditFileRecord[] = [];
-            const failed: string[] = [];
-            let read = 0;
-            for (const file of listed) {
-              if (runAbort.signal.aborted) { finish(null, "Run cancelled."); return; }
-              const name = file.path.split("/").pop() || file.path;
-              set({ outcomeReviewProgress: { subCriterionId, detail: `Reading ${name}…` } });
-              let body: string | null = null;
-              let readMethod: "text" | "vision" = "text";
-              let failReason: string | undefined;
-              try {
-                const r = await readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), outcomeVisionCtx);
-                body = r.text;
-                readMethod = r.readMethod;
-              } catch (err) {
-                failReason = err instanceof Error ? err.message : String(err);
-              }
-              const got = !!body && !!body.trim();
-              if (got) {
-                read++;
-                const totalParts = Math.ceil(body!.length / MAX_PART_CHARS) || 1;
-                const ids: string[] = [];
-                for (let pi = 0; pi < totalParts; pi++) {
-                  const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
-                  ids.push(chunkId);
-                  chunkFileNames[chunkId] = name;
-                  parts.push(`[CHUNK:${chunkId}] --- ${file.path}${totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : ""} [results/review] ---\n${body!.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS)}`);
-                }
-                ledger.push({ path: file.path, name, mimeType: file.mimeType, fileKind: file.mimeType, bucket: "outcome", readStatus: "read", auditStatus: "pending", charCount: body!.length, chunkIds: ids, driveFileId: file.id, driveModifiedTime: file.modifiedTime, readMethod });
-              } else {
-                failed.push(name);
-                ledger.push({ path: file.path, name, mimeType: file.mimeType, fileKind: file.mimeType, bucket: "outcome", readStatus: "failed", auditStatus: "not_used", failReason: failReason ?? "No text could be extracted from this file.", driveFileId: file.id, driveModifiedTime: file.modifiedTime });
-              }
-            }
-            outcomeLedger = ledger;
-            outcomeFilesRead = read;
-            // THE guard. Not a warning and not a partial run: with nothing read
-            // there is nothing to judge, and a pass that judges nothing returns
-            // "Not evident" on every line, which is Band 1 (see
-            // lib/selfCheckOutcome.ts for why this cannot be softened).
-            const gate = outcomePassGate(outcomeFolderId, { listed: listed.length, read, failed });
-            if (!gate.run) {
-              finish({ subCriterionId, rows: [], runAt: new Date().toISOString(), runId, chunkFileNames: {}, outcomeLedger: ledger, outcomeFilesListed: listed.length, outcomeFilesRead: read, skippedReason: gate.reason });
-              return;
-            }
-          }
-
+          // The gate's numerator and denominator (see lib/selfCheckOutcome.ts).
+          // RECORDS side only: outcome data and review records ARE records, so a
+          // run that read the written procedure and none of the records has not
+          // looked at what these two dimensions are judged on, whatever the
+          // policy folder happened to yield.
+          //
+          // Taken from the EVIDENCE run's own ledger by file key, not from
+          // `files[].bucket`. `files` is the two ledgers concatenated and
+          // deduplicated with the policy one first, so when both boxes hold the
+          // same folder every record survives wearing the policy copy's bucket
+          // and a bucket test counted zero records on a folder that was read.
+          const recordKeys = new Set(
+            (ev.fileLedger ?? []).filter((f) => f.bucket === "evidence").map((f) => f.driveFileId || f.path).filter(Boolean)
+          );
+          const isRecord = (rec: AuditFileRecord) => recordKeys.has(rec.driveFileId || rec.path);
+          const recordsListed = files.filter(isRecord).length;
+          const recordsFailed: string[] = [];
+          let recordsRead = 0;
           for (const rec of files) {
             if (runAbort.signal.aborted) { finish(null, "Run cancelled."); return; }
             let text: string | null = null;
@@ -2713,7 +2641,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 } catch { /* falls through to missing */ }
               }
             }
-            if (text == null || !text.trim()) { missing.push(rec.name); continue; }
+            if (text == null || !text.trim()) {
+              missing.push(rec.name);
+              if (isRecord(rec)) recordsFailed.push(rec.name);
+              continue;
+            }
+            if (isRecord(rec)) recordsRead++;
             const totalParts = Math.ceil(text.length / MAX_PART_CHARS) || 1;
             for (let pi = 0; pi < totalParts; pi++) {
               const chunkBody = text.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
@@ -2722,6 +2655,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
               parts.push(`[CHUNK:${chunkId}] --- ${rec.path}${partLabel} [${rec.fileKind}] ---\n${chunkBody}`);
             }
+          }
+          // THE guard. Not a warning and not a partial run: with none of the
+          // records readable there is nothing to judge, and a pass that judges
+          // nothing returns "Not evident" on every line, which is Band 1 (see
+          // lib/selfCheckOutcome.ts for why this cannot be softened). Stored as
+          // a refusal with its reason, never as a result with empty rows.
+          const gate = outcomePassGate({ listed: recordsListed, read: recordsRead, failed: recordsFailed });
+          if (!gate.run) {
+            finish({ subCriterionId, rows: [], runAt: new Date().toISOString(), runId, chunkFileNames: {}, skippedReason: gate.reason });
+            return;
           }
           if (parts.length === 0) { finish(null, "None of the run's documents could be read (the session text cache is empty and Drive re-read failed) — re-run the Option A assessment first."); return; }
 
@@ -2742,7 +2685,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ...(result.windowErrors ?? []),
           ];
           finish(
-            { subCriterionId, rows: result.rows, runAt: new Date().toISOString(), runId, promptSent: result.promptSent, chunkFileNames, runWarnings: runWarnings.length > 0 ? runWarnings : undefined, model: result.usage?.model, outcomeLedger, outcomeFilesListed, outcomeFilesRead },
+            { subCriterionId, rows: result.rows, runAt: new Date().toISOString(), runId, promptSent: result.promptSent, chunkFileNames, runWarnings: runWarnings.length > 0 ? runWarnings : undefined, model: result.usage?.model },
             undefined,
             result.promptSent,
             result.usage

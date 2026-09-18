@@ -627,12 +627,12 @@ export type EvidenceFolder = {
   // files from each into the matching bucket.
   folderLink?: string;
   policyLink?: string;
-  // The optional THIRD folder: results and review records (performance
-  // figures, KPI/survey results, trend data, management review minutes,
-  // internal audit reports, improvement/CAP logs). Read only by the Outcomes
-  // & Review pass, never by the policy or evidence reads, so linking it can
-  // never change an Approach or Processes verdict. Left unset means those two
-  // dimensions stay NOT ASSESSED — an unset link is never scored as a gap.
+  // RETIRED (2026-09-18). Briefly a third link for a separate results-and-review
+  // folder. The Outcomes & Review pass now reads the records folder, which is
+  // where a school already files internal audit reports, review minutes, CAP
+  // logs and KPI data, so asking for the same folder twice was the very mistake
+  // the page warns about. Kept on the type so a stored value is not orphaned:
+  // nothing reads it for a run, and the self-check says so when one is present.
   outcomeLink?: string;
   owner: string;
   status: FolderStatus;
@@ -651,7 +651,6 @@ export type EvidenceFolder = {
   // count (count x per-file seconds), never a stale or historical guess.
   policyFileCount?: number;
   evidenceFileCount?: number;
-  outcomeFileCount?: number;
   fileCountAt?: string;
   // "Run audit" results: real Drive file text was read and scored against
   // this sub-criterion's Sub-Criterion Checklist lines, which were updated
@@ -692,11 +691,7 @@ export type AuditFileRecord = {
   name: string;
   mimeType: string;
   fileKind: string;
-  // "outcome" = read from the dedicated results-and-review folder by the
-  // Outcomes & Review pass. It is a separate bucket rather than an evidence
-  // file so the records pass can never pick it up: routing outcome documents
-  // into the evidence read would change Processes verdicts as a side effect.
-  bucket: "policy" | "evidence" | "outcome" | "auto";
+  bucket: "policy" | "evidence" | "auto";
   readStatus: "found" | "reading" | "read" | "condensed" | "skipped" | "failed";
   auditStatus: "pending" | "audited" | "cited" | "not_used";
   charCount?: number;
@@ -1193,19 +1188,11 @@ export type OutcomeReviewPassResult = {
   // Stamped by the explicit "Apply to checklist" click.
   appliedAt?: string;
   appliedLineCount?: number;
-  // ── The dedicated results-and-review folder (EvidenceFolderRecord.outcomeLink)
-  // Present only when that folder was linked. The pass reads it fresh and adds
-  // its text to the run's own documents, so review minutes filed in the records
-  // folder still count.
-  outcomeLedger?: AuditFileRecord[];
-  outcomeFilesListed?: number;
-  outcomeFilesRead?: number;
-  // Set INSTEAD of rows when the folder was linked but nothing in it could be
-  // read. The pass is then not run at all and `rows` is empty: "Not evident"
-  // maps to Band 1 downstream (buildStagedApsr), so letting a pass run over a
-  // folder it could not read would turn "I did not look" into "you have
-  // nothing". The reason is stored so the page can name it instead of showing
-  // a silent absence.
+  // Set INSTEAD of rows when none of the run's records could be read. The pass
+  // is then not run at all and `rows` is empty: "Not evident" maps to Band 1
+  // downstream (buildStagedApsr), so letting a pass run over documents it could
+  // not read would turn "I did not look" into "you have nothing". The reason is
+  // stored so the page can name it instead of showing a silent absence.
   skippedReason?: string;
 };
 
