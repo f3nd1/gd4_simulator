@@ -582,6 +582,42 @@ export function SelfCheck() {
         // app has a theme it does not have. The printed copy passes literal
         // colours instead (PRINT_BAND_PALETTE), so no dark-mode media query can
         // reach paper. Every other rule the SVG needs is an inline style.
+        // The run history: one row per check, and the four count columns are a
+        // FIXED width anchored from the right, so they line up down the list
+        // and a reader can see a trend without opening anything. That is the
+        // whole reason this is a list and not the card grid it used to be:
+        // ten cards took 425px and showed four, with the counts wrapping.
+        //
+        // Each row is its OWN grid rather than the list being one big grid,
+        // because that is what lets a row reflow on a phone independently
+        // while the fixed right-hand columns still align on a wide screen.
+        ".sc-run-row{display:grid;grid-template-columns:minmax(0,1fr) 62px 124px 58px;align-items:center;column-gap:8px;line-height:17px}",
+        ".sc-run-counts{display:grid;grid-template-columns:repeat(4,1fr);text-align:center}",
+        `.sc-runs-box{max-height:${RUNS_BOX_HEIGHT}px;overflow-y:auto}`,
+        // The delete control is quiet until it is pointed at. Nine red words
+        // down a dense list would compete with the counts, which are the whole
+        // reason for the list, and would advertise the one control here that
+        // destroys something.
+        ".sc-run-del button{color:#64748b}",
+        ".sc-run-row[data-here] .sc-run-del button{color:#cbd5e1}",
+        ".sc-run-del button:hover,.sc-run-del button:focus-visible{color:#b91c1c;text-decoration:underline}",
+        ".sc-run-row[data-here] .sc-run-del button:hover,.sc-run-row[data-here] .sc-run-del button:focus-visible{color:#fecaca}",
+        // Below this width a four-column table is unreadable, so the row
+        // becomes two lines: check and date over take and counts, with the
+        // delete control staying top right and away from the row's own
+        // click target.
+        "@media (max-width: 640px){",
+        ".sc-run-row{grid-template-columns:minmax(0,1fr) auto;row-gap:2px;padding:3px 0}",
+        ".sc-run-row>.sc-run-when{grid-column:1;grid-row:1}",
+        ".sc-run-row>.sc-run-del{grid-column:2;grid-row:1;text-align:right}",
+        ".sc-run-row>.sc-run-took{grid-column:1;grid-row:2;text-align:left}",
+        ".sc-run-row>.sc-run-counts{grid-column:2;grid-row:2;width:124px}",
+        ".sc-runs-head{display:none}",
+        // A phone row is two lines, so the same box would hold four runs, which
+        // is the number this redesign exists to beat. Half as much again holds
+        // six and still keeps the panel inside one screen.
+        `.sc-runs-box{max-height:${Math.round(RUNS_BOX_HEIGHT * 1.5)}px}`,
+        "}",
         ".sc-band-graphic{--g-ink:#1f2733;--g-mute:#64748b;--g-track:#e2e8f0;--g-on:#7c3aed;--g-hatch-bg:#f1f5f9;--g-hatch-line:#cbd5e1;--g-surface:#fff;--g-edge:#e2e8f0}",
         "@media (prefers-color-scheme: dark){.sc-band-graphic{--g-ink:#e2e8f0;--g-mute:#94a3b8;--g-track:#334155;--g-on:#a78bfa;--g-hatch-bg:#1e293b;--g-hatch-line:#475569;--g-surface:#0f172a;--g-edge:#334155}}",
       ].join("")}</style>
@@ -1445,9 +1481,13 @@ function FileTable({ rows, perPass, sameLink }: { rows: SelfCheckFileRow[]; perP
   );
 }
 
-// The collapsed run list's height. Two rows of cards on a desktop, two or
-// three on a phone, and it scrolls past that.
-const RUNS_BOX_HEIGHT = 232;
+// Rows are uniform, so the collapsed list is a COUNT expressed in pixels: ten
+// runs, at a measured 22px each (17px line box + 2px above and below + the 1px
+// rule). The same 232px of box used to be a card grid that showed four runs of
+// ten, with each card wrapping its counts onto a second line.
+const RUN_ROW_HEIGHT = 22;
+const RUNS_VISIBLE = 10;
+const RUNS_BOX_HEIGHT = RUN_ROW_HEIGHT * RUNS_VISIBLE;
 
 type DeleteTarget = { kind: "run"; index: number } | { kind: "history" };
 
@@ -1498,59 +1538,83 @@ function RunHistory(props: {
                     : "Newest first. Choosing an earlier one shows what it recorded at the time."}
                 </span>
               </div>
-              {/* Bounded by HEIGHT, not by a count: the timeline runs to 120
-                  entries, and a grid of 120 cards would bury the result under
-                  it. A count worked at 1500px and still filled a phone, where
-                  the cards are one per row, so the collapsed list is a fixed
-                  box that scrolls and behaves the same at every width.
-                  Nothing is hidden: every run is in the box, and the expander
-                  lifts the cap entirely. */}
-              <div style={{
-                display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8,
-                ...(allRuns ? {} : { maxHeight: RUNS_BOX_HEIGHT, overflowY: "auto" as const }),
-              }}>
-                {runs.map((r) => {
-                  const here = r.index === viewingRun;
-                  const words = VIEW_TALLY[r.procedureOnly ? "procedure-only" : "overview"];
-                  return (
-                    <div key={`${r.index}-${r.runAt}`} style={{ border: "1px solid", borderColor: here ? INK : "#cbd5e1", borderRadius: 8, background: here ? INK : r.openable ? "#fff" : "#f8fafc", color: here ? "#fff" : r.openable ? INK : "#64748b", overflow: "hidden" }}>
-                      <button
-                        type="button" disabled={!r.openable} onClick={() => setRunIndex(r.index)}
-                        title={r.openable ? undefined : "Only this run's date, time and counts were kept. The full result is no longer stored."}
-                        style={{ border: "none", background: "transparent", color: "inherit", padding: "6px 10px 5px", fontSize: 12, fontWeight: 700, cursor: r.openable ? "pointer" : "default", textAlign: "left", display: "block", width: "100%" }}
+              {/* One row per check, reading left to right. It was a grid of
+                  cards: ten of them took 425px, showed four, and wrapped each
+                  run's counts onto a second line. A card is the wrong shape
+                  for a chronological list of short, uniform records.
+
+                  Bounded by height with an expander, because the timeline runs
+                  to 120 entries. The bound now holds ten rows rather than four
+                  cards. */}
+              <div style={{ marginTop: 8, fontSize: 12 }}>
+                <div className="sc-run-row sc-runs-head" style={{ ...muted, fontWeight: 700, fontSize: 11, padding: "0 6px 4px", borderBottom: "1px solid #e2e8f0" }}>
+                  <div>Check</div>
+                  <div style={{ textAlign: "right" }}>Took</div>
+                  {/* The same four glyphs the verdicts carry everywhere else on
+                      this page, so the columns need no second vocabulary. */}
+                  <div className="sc-run-counts" title="Complies · partly · does not comply · could not check">
+                    <span>✓</span><span>!</span><span>✗</span><span>?</span>
+                  </div>
+                  <div />
+                </div>
+                <div className={allRuns ? undefined : "sc-runs-box"}>
+                  {runs.map((r) => {
+                    const here = r.index === viewingRun;
+                    const bg = here ? INK : r.openable ? undefined : "#f8fafc";
+                    const fg = here ? "#fff" : r.openable ? INK : "#64748b";
+                    const cell = { background: bg, color: fg, padding: "2px 0" };
+                    return (
+                      <div
+                        key={`${r.index}-${r.runAt}`} data-run-row data-here={here || undefined} className="sc-run-row"
+                        style={{ borderBottom: "1px solid #f1f5f9", background: bg, color: fg }}
                       >
-                        {r.current ? "Latest" : `#${runs.length - r.index}`}{r.procedureOnly ? " · procedure only" : ""}{r.openable ? "" : " · summary only"}
-                        <div style={{ fontWeight: 400, fontSize: 11, marginTop: 2 }}>{r.label}</div>
-                        <div style={{ fontWeight: 400, fontSize: 11, opacity: 0.85 }}>{r.duration || "time not recorded"}</div>
-                        {/* The headline counts, so two runs can be compared
-                            without opening either. */}
-                        <div style={{ fontWeight: 400, fontSize: 11, opacity: 0.85, marginTop: 2 }}>
-                          {r.counts.total === 0 ? "no lines recorded" : [
-                            `${r.counts.complies} ${words.complies}`,
-                            words.partly ? `${r.counts.partly} ${words.partly}` : "",
-                            `${r.counts.doesNot} ${words.doesNot}`,
-                            r.counts.couldNotCheck > 0 ? `${r.counts.couldNotCheck} could not check` : "",
-                          ].filter(Boolean).join(" · ")}
-                        </div>
-                      </button>
-                      {/* Archived runs only. The current result is what the
-                          Evidence Folder and PPD Review pages read, and a
-                          process owner must not be able to remove the result
-                          their audit lead is working from. It is replaced by
-                          running again, never deleted. The store refuses
-                          index 0 as well, so this is not the only guard. */}
-                      {!r.current && r.openable && (
                         <button
-                          type="button" onClick={() => setConfirmDelete({ kind: "run", index: r.index })}
-                          title={`Delete the check from ${r.label}`}
-                          style={{ border: "none", borderTop: "1px solid #e2e8f0", background: "transparent", color: "#991b1b", padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", width: "100%", textAlign: "left" }}
+                          type="button" disabled={!r.openable} onClick={() => setRunIndex(r.index)}
+                          className="sc-run-when"
+                          title={r.openable ? `Open the check from ${r.label}` : "Only this run's date, time and counts were kept. The full result is no longer stored."}
+                          style={{ ...cell, border: "none", background: "transparent", color: "inherit", font: "inherit", textAlign: "left", cursor: r.openable ? "pointer" : "default", paddingLeft: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                         >
-                          Delete this check
+                          <b>{r.current ? "Latest" : `#${runs.length - r.index}`}</b>
+                          <span style={{ opacity: 0.75, marginLeft: 6 }}>{r.label}</span>
+                          {r.procedureOnly && <span style={{ opacity: 0.75, marginLeft: 6 }}>· procedure only</span>}
+                          {!r.openable && <span style={{ opacity: 0.75, marginLeft: 6 }}>· summary only</span>}
                         </button>
-                      )}
-                    </div>
-                  );
-                })}
+                        {/* A dash, not "time not recorded" nine times over: the
+                            column is headed Took, so an empty one says it. The
+                            note under the table explains it once. */}
+                        <div className="sc-run-took" title={r.duration || "This check ran before durations were recorded"} style={{ ...cell, textAlign: "right", whiteSpace: "nowrap", opacity: r.duration ? 0.85 : 0.5 }}>{r.durationShort || "—"}</div>
+                        <div className="sc-run-counts" style={cell}>
+                          {r.counts.total === 0
+                            ? <span style={{ gridColumn: "1 / -1", opacity: 0.6 }}>no lines</span>
+                            : [r.counts.complies, r.counts.partly, r.counts.doesNot, r.counts.couldNotCheck].map((v, i) => (
+                                <span key={i} style={{ opacity: v === 0 ? 0.35 : 1, fontWeight: v > 0 ? 700 : 400 }}>{v}</span>
+                              ))}
+                        </div>
+                        {/* Archived runs only, in its own column with a gutter,
+                            never inside the row's click target. The current
+                            result is what the Evidence Folder and PPD Review
+                            pages read, and the store refuses index 0 too, so
+                            this is not the only guard. */}
+                        <div className="sc-run-del" style={{ ...cell, textAlign: "right", paddingRight: 6 }}>
+                          {!r.current && r.openable && (
+                            <button
+                              type="button" onClick={() => setConfirmDelete({ kind: "run", index: r.index })}
+                              title={`Delete the check from ${r.label}`}
+                              style={{ border: "none", background: "transparent", font: "inherit", fontSize: 11, fontWeight: 700, cursor: "pointer", padding: "0 4px" }}
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {runs.some((r) => !r.duration) && (
+                  <p style={{ ...muted, margin: "6px 0 0", fontSize: 11.5 }}>
+                    A dash under Took means that check ran before this page started recording how long a check takes.
+                  </p>
+                )}
               </div>
 
               {confirmDelete && (
@@ -1567,7 +1631,7 @@ function RunHistory(props: {
                   }}
                 />
               )}
-              {runs.length > 3 && (
+              {runs.length > RUNS_VISIBLE && (
                 <button
                   type="button" onClick={() => setAllRuns((v) => !v)}
                   style={{ marginTop: 8, display: "block", background: "none", border: "none", padding: 0, color: "#1d4ed8", fontSize: 12, fontWeight: 700, cursor: "pointer", textDecoration: "underline" }}

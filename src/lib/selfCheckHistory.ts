@@ -10,7 +10,7 @@
 //
 // So the retention rule is the one already in force, and this adds no storage
 // at all beyond one number per run (durationMs). Nothing here writes.
-import { runDuration } from "./selfCheckEvidence";
+import { runDuration, runDurationShort } from "./selfCheckEvidence";
 import { summariseRun, type SelfCheckRunSummary } from "./selfCheckRunLog";
 import type { EvidenceAssessmentResult, PPDReviewResult } from "../types";
 
@@ -22,6 +22,8 @@ export type SelfCheckRunRef = {
   label: string;
   // "2 minutes 14 seconds", or "" on a run from before durations were kept.
   duration: string;
+  // The same figure as "2m 14s", for the run-history table's Took column.
+  durationShort: string;
   // The two passes are timed separately and a run is both of them, so the
   // headline figure is their sum and the parts are shown beside it.
   procedureDuration: string;
@@ -92,6 +94,7 @@ export function selfCheckRuns(
       runAt,
       label: fmt(runAt),
       duration: runDuration(total),
+      durationShort: runDurationShort(total),
       procedureDuration: runDuration(pMs),
       recordsDuration: runDuration(eMs),
       lines: e?.rows?.length ?? p?.rows?.length ?? es?.n ?? ps?.n ?? 0,

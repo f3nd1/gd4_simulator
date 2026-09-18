@@ -458,3 +458,15 @@ export function runDuration(ms: number | undefined): string {
   if (m === 0) return `${sec} second${sec === 1 ? "" : "s"}`;
   return `${m} minute${m === 1 ? "" : "s"} ${sec} second${sec === 1 ? "" : "s"}`;
 }
+
+// The same figure for a table column: "2m 14s". The long prose form wrapped to
+// two lines in the run-history Took column and made every row 45px instead of
+// 22px, which is what stopped ten runs fitting. The full form is still what
+// prose and tooltips use; this is only for a narrow column.
+export function runDurationShort(ms: number | undefined): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return "";
+  if (ms < 1000) return "<1s";
+  const total = Math.round(ms / 1000);
+  const m = Math.floor(total / 60), sec = total % 60;
+  return m === 0 ? `${sec}s` : `${m}m ${sec}s`;
+}

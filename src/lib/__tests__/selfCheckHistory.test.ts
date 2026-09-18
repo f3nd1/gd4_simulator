@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote } from "../selfCheckHistory";
-import { runDuration, sameFolderLink, SAME_LINK_WARNING, passFileRows, fileCheckMark, toFileRows } from "../selfCheckEvidence";
+import { runDuration, runDurationShort, sameFolderLink, SAME_LINK_WARNING, passFileRows, fileCheckMark, toFileRows } from "../selfCheckEvidence";
 import { buildSelfCheckCsv, buildSelfCheckHtml, toSelfCheckRows, countSelfCheck, tallySlices, SELF_CHECK_FILE_HEADERS } from "../selfCheck";
 import { reviewShapedRows, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO } from "../selfCheckImprove";
 import { buildBandWorking, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PRINT_BAND_PALETTE } from "../selfCheckBanding";
@@ -57,6 +57,23 @@ describe("previous runs are kept, and it is obvious which one you are looking at
     expect(runDuration(-5)).toBe("");
     expect(runDuration(Number.NaN)).toBe("");
     expect(selfCheckRuns(ev(), [], ppd(), [])[0].duration).toBe("");
+  });
+
+  // The table column is 62px wide. "2 minutes 14 seconds" wrapped to two lines
+  // there and made every row 45px instead of 22px, which is what stopped ten
+  // runs fitting in the box.
+  it("gives the table column a form short enough not to wrap", () => {
+    expect(runDurationShort(134_000)).toBe("2m 14s");
+    expect(runDurationShort(45_000)).toBe("45s");
+    expect(runDurationShort(500)).toBe("<1s");
+    expect(runDurationShort(undefined)).toBe("");
+    expect(runDurationShort(0)).toBe("");
+    expect(runDurationShort(Number.NaN)).toBe("");
+    // The same run, both ways: the short form never contradicts the prose one.
+    const runs = selfCheckRuns(ev({ durationMs: 74_000 }), [], ppd({ durationMs: 60_000 }), []);
+    expect(runs[0].duration).toBe("2 minutes 14 seconds");
+    expect(runs[0].durationShort).toBe("2m 14s");
+    for (const r of runs) expect(r.durationShort.length).toBeLessThanOrEqual(8);
   });
 
   it("reports the previous run's time as a benchmark, and judges nothing", () => {
