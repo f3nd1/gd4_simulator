@@ -1598,7 +1598,10 @@ export function SelfCheck() {
                 assessment presented as a judgement. The rows-to-dimension step
                 is a judgement and not arithmetic, and the note says so rather
                 than drawing an arrow that does not exist. */}
-            {view === "overview" && bandWorking && (
+            {/* ON EVERY TAB, not just Overall. The four dimensions describe the
+                RUN, not the tab, and hiding the table on Procedure and Records
+                read as the APSR working having gone missing. */}
+            {bandWorking && (
               <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "13px 15px", margin: "14px 0 0", background: "#fff" }}>
                 <b style={{ fontSize: 14 }}>What this check assessed</b>
                 <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, { minWidth: 430 })} />
@@ -1749,6 +1752,18 @@ export function SelfCheck() {
               </div>
             )}
 
+            {/* A run stored before the dimension working was kept has none, and
+                so does a run where nothing could be read. The panel above then
+                renders nothing at all, which looks exactly like the table
+                having been dropped from the page. Say which it is instead. */}
+            {!bandWorking && (
+              <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "14px 0 0" }}>
+                <b style={{ color: INK }}>No APSR dimension working is stored for this check.</b> The four dimensions,
+                their percentages and the table of official descriptors are kept with the run itself, and checks run
+                before that was added do not carry them. Run the check again for this area and they appear here.
+              </p>
+            )}
+
             {/* OUTSIDE the band panel above, deliberately. That panel only renders
                 when the run judged something, and a run where nothing could be read
                 judges nothing — which is exactly when this block's reason needs
@@ -1771,7 +1786,9 @@ export function SelfCheck() {
                     for the scope as a whole, against the official descriptors
                     alone. Forcing the two into the same shape would mean
                     inventing the list this page has twice refused to invent. */}
-            {view === "overview" && (
+            {/* On every tab, for the same reason as the panel above: this is
+                what the results-and-review pass found for the whole run. */}
+            {(
               <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 14px", margin: "12px 0", background: "#fff" }}>
                   <b style={{ fontSize: 13.5 }}>Your results and review records</b>
                   {outcomeState.state !== "assessed" ? (
