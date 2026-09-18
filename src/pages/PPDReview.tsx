@@ -1401,14 +1401,22 @@ function OutcomeReviewPanel({ selectedId, setLineFeedback }: { selectedId: strin
       </div>
       <p style={{ fontSize: 11.5, color: "#6b7280", margin: "6px 0 0" }}>
         Option A assesses Approach (your policy) and Processes (implementation evidence) only. This on-demand pass re-reads the same documents for
-        outcome data (KPIs, results, trends) and review records, so those two dimensions get a real judgement instead of "not assessed". Where no such
-        evidence exists it honestly reports "Not evident". Review the result below, then apply it — nothing changes on the checklist until you do, and
-        the item's band always stays yours to confirm on the Sub-Criterion Checklist.
+        outcome data (KPIs, results, trends) and review records, so those two dimensions get a real judgement instead of "not assessed". Where a
+        dedicated results-and-review folder is linked on this area it reads that as well, and refuses to run at all if nothing in it can be read.
+        Where no such evidence exists it honestly reports "Not evident". Review the result below, then apply it — nothing changes on the checklist
+        until you do, and the item's band always stays yours to confirm on the Sub-Criterion Checklist.
       </p>
       {isRunning && runDetail && (
         <div style={{ fontSize: 11.5, color: "#6d28d9", marginTop: 6 }}>⏳ {runDetail}</div>
       )}
-      {result && !isRunning && (
+      {result?.skippedReason && !isRunning && (
+        <div style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px", marginTop: 8 }}>
+          {/* Not a zero result: the pass never ran. Showing "0 of 0 audit
+              points" here would read as a clean sweep that found nothing. */}
+          ⚠ Not run: {result.skippedReason}
+        </div>
+      )}
+      {result && !result.skippedReason && !isRunning && (
         <>
           <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 8 }}>
             Run {new Date(result.runAt).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })}

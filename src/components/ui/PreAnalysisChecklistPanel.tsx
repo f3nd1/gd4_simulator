@@ -14,7 +14,10 @@ import { runPreAnalysisChecklist, hasChecklist, type DetectFile, type DetectStat
 // Minimal shared shape both AuditFileRecord[] (a live run's file list) and
 // ProbeFile[] (the pre-flight list) structurally satisfy — this component only
 // ever needs identity + bucket to resolve extracted text and file links.
-export type PreCheckSourceFile = { name: string; path: string; bucket: "policy" | "evidence" | "auto"; driveFileId?: string };
+// Mirrors AuditFileRecord.bucket, which gained "outcome" with the
+// results-and-review folder. The pre-check detectors only ever distinguish
+// policy from everything else, so the extra value needs no new branch.
+export type PreCheckSourceFile = { name: string; path: string; bucket: "policy" | "evidence" | "outcome" | "auto"; driveFileId?: string };
 
 function DriveLink({ driveFileId, name }: { driveFileId?: string; name: string }) {
   if (!driveFileId) return <span style={{ color: "#94a3b8" }}>{name}</span>;

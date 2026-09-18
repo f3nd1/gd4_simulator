@@ -63,6 +63,15 @@ export const DIMENSION_SOURCE: Record<BandDimensionRow["key"], string> = {
   review: "Not assessed by this check. It needs your review and improvement records, which this check does not read.",
 };
 
+// Said INSTEAD when the optional results-and-review folder was linked and read.
+// The dimension still carries no band here — that decision is separate and is
+// deliberately not taken by this page — but "not assessed" would be untrue once
+// the pass has read a folder and reported what it found.
+export const DIMENSION_SOURCE_CHECKED: Partial<Record<BandDimensionRow["key"], string>> = {
+  systemsOutcomes: "Checked against your results and review folder. What it found is below. It is not turned into a band here.",
+  review: "Checked against your results and review folder. What it found is below. It is not turned into a band here.",
+};
+
 export type BandWorking = {
   rows: BandDimensionRow[];
   // The configured ceiling per dimension (25% by default, tunable in
@@ -108,6 +117,10 @@ export const BAND_LADDER = EDUTRUST_BANDS;
 
 export const ROWS_DO_NOT_SUM_NOTE =
   "No single requirement below carries a score into these dimensions. Each row is evidence that a dimension was judged on: your procedure verdicts feed Approach, and your combined verdicts feed Processes. The dimension judgements are made from the rows as a whole, not counted up from them.";
+
+// The counterpart to TWO_DIMENSIONS_NOTE for a run that read the third folder.
+export const THREE_FOLDERS_NOTE =
+  "This check read your written procedure, your records, and your results and review records. It still gives no overall band: turning four dimensions into one band is your audit lead's judgement, not this page's. What the results and review check found is reported below, requirement by requirement for Review, and as a whole for Systems & Outcomes.";
 
 export const TWO_DIMENSIONS_NOTE =
   "This check reads a written procedure and a set of records, so it can only assess Approach and Processes. It gives no overall band. Systems & Outcomes and Review are not assessed here, and scoring them low for not having been looked at would have understated a well-run area by one to two bands. Your audit lead assesses all four and sets the band.";

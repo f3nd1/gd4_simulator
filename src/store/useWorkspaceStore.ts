@@ -79,6 +79,7 @@ function mergeTypedTextWithVision(typed: string, transcribed: string): string {
   return `${transcribed}\n\n--- Text layer extracted directly from the PDF ---\n${t}`;
 }
 import { buildOutcomeReviewLegUpdates } from "../lib/outcomeReviewApply";
+import { outcomePassGate } from "../lib/selfCheckOutcome";
 import { aiRateFor } from "../lib/aiCost";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
@@ -2530,9 +2531,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
         const finish = (result: OutcomeReviewPassResult | null, liveError?: string, promptSent?: string, usage?: AIUsage) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
-          const summary = result
-            ? `Outcomes & Review pass: outcome data found on ${result.rows.filter((r) => r.outcomeEvident).length}, review records on ${result.rows.filter((r) => r.reviewEvident).length} of ${result.rows.length} audit points.${result.runWarnings?.length ? `\n⚠ ${result.runWarnings.join("; ")}` : ""}`
-            : `Outcomes & Review pass failed${liveError ? `: ${liveError}` : "."}`;
+          const summary = result?.skippedReason
+            ? `Outcomes & Review pass NOT RUN: ${result.skippedReason}`
+            : result
+              ? `Outcomes & Review pass: outcome data found on ${result.rows.filter((r) => r.outcomeEvident).length}, review records on ${result.rows.filter((r) => r.reviewEvident).length} of ${result.rows.length} audit points.${result.runWarnings?.length ? `\n⚠ ${result.runWarnings.join("; ")}` : ""}`
+              : `Outcomes & Review pass failed${liveError ? `: ${liveError}` : "."}`;
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
             auditCycleId: s.cycle.id,
@@ -2590,6 +2593,96 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const missing: string[] = [];
           let chunkCounter = 0;
           let readToken: string | null | undefined; // fetched once, on first cache miss
+
+          // ── The dedicated results-and-review folder, when one is linked ────
+          // Read FRESH (its files have never been opened by any pass, so the
+          // text cache cannot hold them) and added to the run's own documents
+          // rather than replacing them: review minutes filed in the records
+          // folder still count, which is how Option B's third pass behaves and
+          // why its prompt reads "ALL documents (policy and evidence
+          // combined)". Its files carry bucket "outcome", so the policy and
+          // evidence reads can never pick them up and no Approach or Processes
+          // verdict changes because this folder was linked.
+          const outcomeFolder = get().folders.find((f) => folderScopeId(f) === subCriterionId);
+          const outcomeFolderId = parseFolderId(outcomeFolder?.outcomeLink);
+          let outcomeLedger: AuditFileRecord[] | undefined;
+          let outcomeFilesListed: number | undefined;
+          let outcomeFilesRead: number | undefined;
+          if (outcomeFolderId) {
+            set({ outcomeReviewProgress: { subCriterionId, detail: "Listing your results and review folder…" } });
+            readToken = await useGoogleDriveStore.getState().getFreshToken();
+            if (!readToken) { finish(null, DRIVE_EXPIRED_MID_RUN); return; }
+            let listed: Awaited<ReturnType<typeof listFolderFilesRecursive>> = [];
+            try {
+              listed = orderBySizeForVisionBudget(
+                await listFolderFilesRecursive(outcomeFolderId, readToken, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS))
+              );
+            } catch (err) {
+              finish(null, `The results and review folder could not be opened: ${err instanceof Error ? err.message : String(err)}`);
+              return;
+            }
+            outcomeFilesListed = listed.length;
+            set((st) => ({ folders: st.folders.map((f) => f.id === outcomeFolder!.id ? { ...f, outcomeFileCount: listed.length, fileCountAt: new Date().toISOString() } : f) }));
+            const visionAi = useAISettingsStore.getState();
+            // The SAME three-tier read the other passes use (typed text →
+            // scanned-page vision → image vision), via the shared helper. A
+            // path that silently read less would report a folder as empty when
+            // it is only scanned, and this pass's whole job is to decide
+            // whether something is there.
+            const outcomeVisionCtx: VisionReadCtx = {
+              canDescribeImages: visionAi.enabled && !!visionAi.apiKey,
+              visionSettings: effectiveSettings(visionAi, { purpose: "vision", context: composeSchoolContext(get().schoolContext) }),
+              visionModelId: effectiveSettings(visionAi, { purpose: "vision" }).model,
+              budget: { count: 0, max: DEFAULT_VISION_IMAGE_BUDGET },
+              maxPerFile: 5,
+            };
+            const ledger: AuditFileRecord[] = [];
+            const failed: string[] = [];
+            let read = 0;
+            for (const file of listed) {
+              if (runAbort.signal.aborted) { finish(null, "Run cancelled."); return; }
+              const name = file.path.split("/").pop() || file.path;
+              set({ outcomeReviewProgress: { subCriterionId, detail: `Reading ${name}…` } });
+              let body: string | null = null;
+              let readMethod: "text" | "vision" = "text";
+              let failReason: string | undefined;
+              try {
+                const r = await readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), outcomeVisionCtx);
+                body = r.text;
+                readMethod = r.readMethod;
+              } catch (err) {
+                failReason = err instanceof Error ? err.message : String(err);
+              }
+              const got = !!body && !!body.trim();
+              if (got) {
+                read++;
+                const totalParts = Math.ceil(body!.length / MAX_PART_CHARS) || 1;
+                const ids: string[] = [];
+                for (let pi = 0; pi < totalParts; pi++) {
+                  const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
+                  ids.push(chunkId);
+                  chunkFileNames[chunkId] = name;
+                  parts.push(`[CHUNK:${chunkId}] --- ${file.path}${totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : ""} [results/review] ---\n${body!.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS)}`);
+                }
+                ledger.push({ path: file.path, name, mimeType: file.mimeType, fileKind: file.mimeType, bucket: "outcome", readStatus: "read", auditStatus: "pending", charCount: body!.length, chunkIds: ids, driveFileId: file.id, driveModifiedTime: file.modifiedTime, readMethod });
+              } else {
+                failed.push(name);
+                ledger.push({ path: file.path, name, mimeType: file.mimeType, fileKind: file.mimeType, bucket: "outcome", readStatus: "failed", auditStatus: "not_used", failReason: failReason ?? "No text could be extracted from this file.", driveFileId: file.id, driveModifiedTime: file.modifiedTime });
+              }
+            }
+            outcomeLedger = ledger;
+            outcomeFilesRead = read;
+            // THE guard. Not a warning and not a partial run: with nothing read
+            // there is nothing to judge, and a pass that judges nothing returns
+            // "Not evident" on every line, which is Band 1 (see
+            // lib/selfCheckOutcome.ts for why this cannot be softened).
+            const gate = outcomePassGate(outcomeFolderId, { listed: listed.length, read, failed });
+            if (!gate.run) {
+              finish({ subCriterionId, rows: [], runAt: new Date().toISOString(), runId, chunkFileNames: {}, outcomeLedger: ledger, outcomeFilesListed: listed.length, outcomeFilesRead: read, skippedReason: gate.reason });
+              return;
+            }
+          }
+
           for (const rec of files) {
             if (runAbort.signal.aborted) { finish(null, "Run cancelled."); return; }
             let text: string | null = null;
@@ -2649,7 +2742,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ...(result.windowErrors ?? []),
           ];
           finish(
-            { subCriterionId, rows: result.rows, runAt: new Date().toISOString(), runId, promptSent: result.promptSent, chunkFileNames, runWarnings: runWarnings.length > 0 ? runWarnings : undefined, model: result.usage?.model },
+            { subCriterionId, rows: result.rows, runAt: new Date().toISOString(), runId, promptSent: result.promptSent, chunkFileNames, runWarnings: runWarnings.length > 0 ? runWarnings : undefined, model: result.usage?.model, outcomeLedger, outcomeFilesListed, outcomeFilesRead },
             undefined,
             result.promptSent,
             result.usage

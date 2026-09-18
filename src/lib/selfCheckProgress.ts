@@ -15,7 +15,10 @@
 // progress indicator must never have.
 import type { AuditFileRecord } from "../types";
 
-export type StageKey = "folder" | "policy" | "records" | "band";
+// "outcomes" is the optional third pass over the results-and-review folder. It
+// emits no per-line progress object of its own, so it falls through to the
+// indeterminate indicator alongside "folder" and "band".
+export type StageKey = "folder" | "policy" | "records" | "outcomes" | "band";
 
 // Only the fields this panel reads, so a test does not have to build a whole
 // PPDReviewProgress/EvidenceAssessmentProgress.
@@ -28,6 +31,9 @@ export type RunProgress = {
   window?: { current: number; total: number };
   lineRefs?: string[];
   lineStatus?: Record<string, "waiting" | "assessing" | "done">;
+  // The Outcomes & Review pass emits only a prose detail line ("Reading X…"),
+  // no file ledger and no per-line map, so that stage shows this verbatim.
+  detail?: string;
 };
 
 // A counted denominator, or null. Null means "show an indeterminate indicator",
@@ -83,6 +89,7 @@ export function fileStageSummary(files: AuditFileRecord[] | undefined): string {
 // the run genuinely cannot say, so the caller falls back to "Still working".
 export function activityLine(stage: StageKey, p: RunProgress | undefined): string {
   if (!p) return "";
+  if (stage === "outcomes") return p.detail ?? "";
   if (stage === "policy" || stage === "records") {
     if (p.currentFile) {
       const done = tallyFiles(p.filesFound);
@@ -113,7 +120,7 @@ function lineCounted(p: RunProgress | undefined): Counted {
 // "Working out your result" have none and must stay indeterminate.
 export function countedFor(stage: StageKey, p: RunProgress | undefined): Counted {
   if (!p) return null;
-  if (stage === "folder" || stage === "band") return null;
+  if (stage === "folder" || stage === "outcomes" || stage === "band") return null;
   if (p.currentFile && p.filesTotal) {
     const t = tallyFiles(p.filesFound);
     return counted(t.read + t.skipped + t.failed, p.filesTotal);
