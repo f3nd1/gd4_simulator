@@ -51,12 +51,9 @@ const INK = "#1f2733";
 const card: React.CSSProperties = { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, padding: 20, marginBottom: 16 };
 const stepNum: React.CSSProperties = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: "50%", background: INK, color: "#fff", fontSize: 13, fontWeight: 800, flexShrink: 0 };
 const h2: React.CSSProperties = { fontSize: 17, fontWeight: 700, margin: 0, color: INK };
-// Steps 1 to 3 share one card, so their headings are a size down from step 4's
-// and separated by a hairline rather than by a card gap.
-const stepHead: React.CSSProperties = { display: "flex", gap: 9, alignItems: "center", marginBottom: 9 };
-const stepDot: React.CSSProperties = { ...stepNum, width: 22, height: 22, fontSize: 12 };
-const stepTitle: React.CSSProperties = { ...h2, fontSize: 15 };
-const stepGroup: React.CSSProperties = { marginTop: 16, paddingTop: 14, borderTop: "1px solid #eef2f7" };
+// The number on each cell of the input row. Small, because it sits inside a
+// field label rather than heading a card of its own.
+const stepDot: React.CSSProperties = { ...stepNum, width: 21, height: 21, fontSize: 11.5 };
 const muted: React.CSSProperties = { fontSize: 13, color: "#64748b", lineHeight: 1.55 };
 const input: React.CSSProperties = { width: "100%", boxSizing: "border-box", padding: "11px 12px", fontSize: 14, border: "1px solid #cbd5e1", borderRadius: 9, background: "#fff" };
 const bigBtn: React.CSSProperties = { border: "none", borderRadius: 10, padding: "13px 26px", fontSize: 15, fontWeight: 800, cursor: "pointer", background: "#7c3aed", color: "#fff" };
@@ -137,6 +134,15 @@ export function SelfCheck() {
   // the way the supplied design does it: a filter left over from Overall would
   // silently hide lines on Procedure, and a reader who did not notice would
   // read a short list as the whole tab.
+  // Whether the input row is open: open while nothing has been checked and
+  // while a check is running, shut once there is a result to read. A click on
+  // the summary wins until one of those two changes again.
+  //
+  // Driven by an effect rather than by "open={pinned ?? auto}": inserting a
+  // <details open> fires a toggle event of its own at mount, which pinned the
+  // open state before anybody had clicked anything and left the form standing
+  // over every result (found by probing the live page, not by reading it).
+  const [inputsOpen, setInputsOpen] = useState(true);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   // Which requirement the stage is showing. Held by REF, not by index: the
@@ -445,6 +451,10 @@ export function SelfCheck() {
   // again, and running again was the one thing that pushed the result you
   // wanted to look at into the archive. Reproduced live before it was fixed.
   const showResult = !running && (procedureOnlyResult ? !!ppdExisting?.rows.length : !!existing?.rows.length);
+  // Open while this area has no result to read (which includes while a check
+  // is running, since showResult is false then), shut once it has one. Keyed
+  // on the area too, so picking an unchecked area opens the form again.
+  useEffect(() => { setInputsOpen(!showResult); }, [showResult, scope]);
 
   async function run() {
     if (!area || !folder || !ready) return;
@@ -757,6 +767,29 @@ export function SelfCheck() {
         // asked to follow. It replaces a sidebar plus ONE card showing one
         // requirement at a time: that hid seven of eight lines behind a click
         // and cannot be read straight through, printed or scrolled.
+        // ── The input row, to the supplied design's "Inputs used for this
+        // check" card: area, written procedure, records and run, left to right
+        // in one row, the whole thing folding away once there is a result.
+        ".sc-inputs{border:1px solid #dfe5ee;border-radius:14px;background:#fff;margin-bottom:16px;overflow:hidden}",
+        ".sc-inputs-summary{list-style:none;cursor:pointer;padding:13px 17px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:750;font-size:14px;color:#172033}",
+        ".sc-inputs-summary::-webkit-details-marker{display:none}",
+        ".sc-inputs-summary:after{content:\"Show\";font-size:12px;color:#6d28d9;font-weight:800;margin-left:auto}",
+        ".sc-inputs[open] .sc-inputs-summary:after{content:\"Hide\"}",
+        ".sc-inputs-pill{display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;background:#f1f5f9;color:#475569;font-size:12px;font-weight:750;white-space:nowrap}",
+        ".sc-inputs-body{border-top:1px solid #eef2f6;padding:16px 17px 4px;display:grid;grid-template-columns:1.05fr 1fr 1fr auto;gap:14px;align-items:start}",
+        ".sc-field{min-width:0}",
+        ".sc-field label{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:800;color:#465268;margin:0 0 6px;min-height:22px}",
+        ".sc-field-help{font-size:11.5px;line-height:1.45;color:#65728a;margin:6px 0 0}",
+        ".sc-run-button{height:42px;border:0;border-radius:9px;background:#7c3aed;color:#fff;font-weight:800;font-size:14px;padding:0 20px;white-space:nowrap;font-family:inherit}",
+        ".sc-inputs-more{padding:8px 17px 16px}",
+        "@media (max-width: 980px){",
+        ".sc-inputs-body{grid-template-columns:1fr 1fr}",
+        ".sc-run-field{grid-column:1/-1}",
+        ".sc-run-button{width:100%}",
+        "}",
+        "@media (max-width: 640px){",
+        ".sc-inputs-body{grid-template-columns:1fr}",
+        "}",
         ".sc-results-layout{display:grid;grid-template-columns:300px minmax(0,1fr);gap:22px;align-items:start;margin-top:12px}",
         // min-width:0, or the horizontal selector strip below 900px sizes the
         // grid track to its own 8 x 190px content and pushes the whole page
@@ -873,7 +906,10 @@ export function SelfCheck() {
         ".sc-band-graphic{--g-ink:#1f2733;--g-mute:#64748b;--g-track:#e2e8f0;--g-on:#7c3aed;--g-hatch-bg:#f1f5f9;--g-hatch-line:#cbd5e1;--g-surface:#fff;--g-edge:#e2e8f0}",
         "@media (prefers-color-scheme: dark){.sc-band-graphic{--g-ink:#e2e8f0;--g-mute:#94a3b8;--g-track:#334155;--g-on:#a78bfa;--g-hatch-bg:#1e293b;--g-hatch-line:#475569;--g-surface:#0f172a;--g-edge:#334155}}",
       ].join("")}</style>
-      <div style={{ maxWidth: 880, margin: "0 auto" }}>
+      {/* The design's page width. The result used to break out of an 880px
+          column with negative margins to get its table readable; with the
+          column this wide it simply fits. */}
+      <div style={{ maxWidth: 1280, margin: "0 auto" }}>
         <header style={{ marginBottom: 18 }}>
           <h1 style={{ fontSize: 25, margin: "0 0 6px", color: INK }}>Check your area before the audit</h1>
           <p style={{ ...muted, margin: 0, fontSize: 14 }}>
@@ -923,29 +959,82 @@ export function SelfCheck() {
           </div>
         )}
 
-        {/* Steps 1 to 3 are ONE card, because they are one short form: pick an
-            area, paste two links, press the button. They were three cards, and
-            three sets of border, padding and gap cost 158px of chrome for
-            three lines of work that the user sees on every single run. The
-            numbers stay, because they still say what order to do things in,
-            but they now read as three lines of one panel rather than three
-            panels. Step 4 keeps its own card and its full-size heading: it is
-            the result, not another instruction. */}
-        <section style={card}>
-          <div style={stepHead}>
-            <span style={stepDot}>1</span><h2 style={stepTitle}>Which area do you look after?</h2>
-          </div>
-          <select value={scope} onChange={(e) => { setScope(e.target.value); setRunIndex(0); setConfirmDelete(null); setAllRuns(false); setPhase("idle"); setError(null); setConfirmOverwrite(false); }}
-            style={{ ...input, cursor: "pointer" }} disabled={running}>
-            <option value="">Choose your area…</option>
-            {[...new Set(areas.map((a) => a.criterionId))].map((cid) => (
-              <optgroup key={cid} label={`Criterion ${cid}`}>
-                {areas.filter((a) => a.criterionId === cid).map((a) => (
-                  <option key={a.scope} value={a.scope}>{a.title} ({a.scope})</option>
+        {/* The four steps run LEFT TO RIGHT in one row, as the supplied design
+            has them: area, written procedure, records, run. Stacked one under
+            another they were a column of headings to scroll through before any
+            work could start, and they are four short fields.
+
+            The whole block folds, the way the design's "Inputs used for this
+            check" card does, so a result is not read past the form that made
+            it. It opens itself while nothing has been run and while a check is
+            running, because that is when the form is the page. */}
+        <details
+          className="sc-inputs"
+          open={inputsOpen}
+          // Only this element's own toggle: React 19 lets a nested <details>
+          // (the run history, "what goes in each box") bubble its toggle up.
+          onToggle={(e) => { if (e.target === e.currentTarget) setInputsOpen(e.currentTarget.open); }}
+        >
+          <summary className="sc-inputs-summary">
+            <span>Inputs used for this check</span>
+            <span className="sc-inputs-pill">{area ? `${area.scope} ${area.title}` : "No area chosen yet"}</span>
+          </summary>
+
+          <div className="sc-inputs-body">
+            <div className="sc-field">
+              <label htmlFor="sc-area"><span style={stepDot}>1</span>Which area do you look after?</label>
+              <select id="sc-area" value={scope} onChange={(e) => { setScope(e.target.value); setRunIndex(0); setConfirmDelete(null); setAllRuns(false); setPhase("idle"); setError(null); setConfirmOverwrite(false); }}
+                style={{ ...input, cursor: "pointer" }} disabled={running}>
+                <option value="">Choose your area…</option>
+                {[...new Set(areas.map((a) => a.criterionId))].map((cid) => (
+                  <optgroup key={cid} label={`Criterion ${cid}`}>
+                    {areas.filter((a) => a.criterionId === cid).map((a) => (
+                      <option key={a.scope} value={a.scope}>{a.title} ({a.scope})</option>
+                    ))}
+                  </optgroup>
                 ))}
-              </optgroup>
-            ))}
-          </select>
+              </select>
+            </div>
+
+            {/* The dimming that used to belong to a whole card belongs to the
+                cell now, so an unpicked area still greys the fields it blocks. */}
+            <div className="sc-field" style={{ opacity: area ? 1 : 0.55 }}>
+              <LinkField
+                step={2}
+                label="Where is your written procedure?"
+                help="What you SAY you do: policy, procedure, handbook or terms of reference."
+                value={procLink} onChange={setProcLink} state={procState} disabled={!area || running}
+                onEdit={() => { setError(null); setConfirmOverwrite(false); }}
+              />
+            </div>
+
+            <div className="sc-field" style={{ opacity: area ? 1 : 0.55 }}>
+              <LinkField
+                step={3}
+                label="Where is your evidence?"
+                help="What you actually DID: minutes, forms, logs, registers, signed copies, reports and emails."
+                value={evLink} onChange={setEvLink} state={evState} disabled={!area || running}
+                onEdit={() => { setError(null); setConfirmOverwrite(false); }}
+              />
+            </div>
+
+            <div className="sc-field sc-run-field" style={{ opacity: ready || running ? 1 : 0.55 }}>
+              <label><span style={stepDot}>4</span>Run the check</label>
+              <button
+                type="button" className="sc-run-button"
+                style={{ opacity: ready && !running ? 1 : 0.45, cursor: ready && !running ? "pointer" : "not-allowed" }}
+                disabled={!ready || running || confirmOverwrite} onClick={() => void run()}
+              >
+                {running ? "Checking…" : plan.canRun ? plan.button : "Check my area"}
+              </button>
+            </div>
+          </div>
+
+          {/* Everything the four fields need said, under the row rather than
+              between the fields: what the area covers, what has been checked
+              before, which folder goes in which box, and what this run will and
+              will not do. */}
+          <div className="sc-inputs-more">
           {area && <p style={{ ...muted, marginTop: 10, marginBottom: 0 }}>{area.description}</p>}
           {/* Whether this area has been checked before, as soon as it is
               picked. It answers the returning user's first question without
@@ -961,13 +1050,6 @@ export function SelfCheck() {
             />
           )}
 
-          {/* 2 — two links, because the engine reads the two folders differently.
-              The dimming that used to belong to the card belongs to this group
-              now, so an unpicked area still greys the fields it blocks. */}
-          <div style={{ ...stepGroup, opacity: area ? 1 : 0.55 }}>
-          <div style={stepHead}>
-            <span style={stepDot}>2</span><h2 style={stepTitle}>Where are your documents?</h2>
-          </div>
           {/* Four blocks used to stand here before the first box: an intro
               paragraph, this warning box, and a full paragraph under each
               field. All of it was true, and stacked it was 323px of reading
@@ -1014,22 +1096,6 @@ export function SelfCheck() {
           </div>
           <div style={{ height: 10 }} />
 
-          <LinkField
-            label="Where is your written procedure?"
-            help="What you SAY you do: policy, procedure, handbook or terms of reference."
-            value={procLink} onChange={setProcLink} state={procState} disabled={!area || running}
-            onEdit={() => { setError(null); setConfirmOverwrite(false); }}
-          />
-
-          <div style={{ height: 14 }} />
-
-          <LinkField
-            label="Where is your evidence?"
-            help="What you actually DID: minutes, forms, logs, registers, signed copies, reports and emails."
-            value={evLink} onChange={setEvLink} state={evState} disabled={!area || running}
-            onEdit={() => { setError(null); setConfirmOverwrite(false); }}
-          />
-
           {/* A third box for a separate results-and-review folder was here for
               one commit. It was removed because this folder already holds what
               it asked for: internal audit reports, review minutes, CAP logs and
@@ -1069,13 +1135,7 @@ export function SelfCheck() {
               {plan.kind === "full" && " I will then read the same documents again looking for results and review records, and report what they show for the two areas this check used to leave alone."}
             </p>
           )}
-          </div>
 
-          {/* 3 — one button, in the same card as the fields it runs on */}
-          <div style={{ ...stepGroup, opacity: ready || running ? 1 : 0.55 }}>
-          <div style={stepHead}>
-            <span style={stepDot}>3</span><h2 style={stepTitle}>Run the check</h2>
-          </div>
 
           {confirmOverwrite && (
             <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 9, padding: 12, marginBottom: 12 }}>
@@ -1109,13 +1169,6 @@ export function SelfCheck() {
                 </div>
               )}
             </div>
-          )}
-
-          {!running && !confirmOverwrite && (
-            <button type="button" style={{ ...bigBtn, opacity: ready ? 1 : 0.45, cursor: ready ? "pointer" : "not-allowed" }}
-              disabled={!ready} onClick={() => void run()}>
-              {plan.canRun ? plan.button : "Check my area"}
-            </button>
           )}
 
           {running && (
@@ -1227,23 +1280,14 @@ export function SelfCheck() {
             </div>
           )}
           </div>
-        </section>
+        </details>
 
-        {/* 4 — the result */}
+        {/* The result */}
         {showResult && area && (
-          // Step 4 alone widens: "Why" and "What to fix" were wrapping to about
-          // 25 characters at the page's reading width. The negative margins pull
-          // it out of the 880px column without moving steps 1 to 3, and the
-          // clamp keeps it from sprawling on a very wide screen. min() rather
-          // than a media query so it simply collapses back to the column width
-          // on a narrow screen.
-          <section
-            style={{ ...card, width: "max(100%, min(80vw, 1400px))", marginLeft: "min(0px, calc(440px - min(40vw, 700px)))", marginRight: "min(0px, calc(440px - min(40vw, 700px)))" }}
-            ref={resultRef}
-          >
-            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 4 }}>
-              <span style={stepNum}>4</span><h2 style={h2}>Your result</h2>
-            </div>
+          <section style={card} ref={resultRef}>
+            {/* No step number: 1 to 4 are the things you DO, and they now run
+                left to right across the input row. This is what came back. */}
+            <h2 style={h2}>Your result</h2>
             <p style={{ ...muted, marginTop: 0 }}>
               {area.scope} {area.title} · {procedureOnlyResult ? "written procedure only" : "procedure and records"} · checked {shownRun?.label || ranAt}
               {shownRun?.duration && ` · took ${shownRun.duration}`}
@@ -2451,13 +2495,14 @@ function WaitingCat() {
 // which folder it means, and per-field validation. Two of these rather than one
 // shared field, because the two folders are read by different passes.
 function LinkField(props: {
-  label: string; help: string; value: string; state: "empty" | "bad" | "ok";
+  step: number; label: string; help: string; value: string; state: "empty" | "bad" | "ok";
   disabled: boolean; onChange: (v: string) => void; onEdit: () => void;
 }) {
   return (
     <div>
-      <label style={{ display: "block", fontSize: 14, fontWeight: 700, color: "#0f172a", margin: "0 0 3px" }}>{props.label}</label>
-      <p style={{ ...muted, margin: "0 0 7px" }}>{props.help}</p>
+      {/* The numbered label is the cell's own heading now: the four steps read
+          left to right across the row rather than as four stacked headings. */}
+      <label><span style={stepDot}>{props.step}</span>{props.label}</label>
       <input
         value={props.value}
         onChange={(e) => { props.onChange(e.target.value); props.onEdit(); }}
@@ -2473,6 +2518,9 @@ function LinkField(props: {
         </p>
       )}
       {props.state === "ok" && <p style={{ ...muted, color: "#166534", margin: "7px 0 0" }}>That looks right.</p>}
+      {/* Under the box rather than above it: in a row of four cells the help
+          line would otherwise push the inputs out of line with each other. */}
+      <p className="sc-field-help">{props.help}</p>
     </div>
   );
 }
