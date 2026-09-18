@@ -115,6 +115,12 @@ export function SelfCheck() {
   // Review page reads the same history and loses it too.
   const [confirmDelete, setConfirmDelete] = useState<DeleteTarget | null>(null);
   const [allRuns, setAllRuns] = useState(false);
+  // Whether the run-history card at step 1 is open. Held HERE rather than left
+  // to the <details> element's own state, because the card is not rendered at
+  // all for an area with no history, so picking an unchecked area and coming
+  // back unmounted the node and shut it again. Deliberately not persisted: it
+  // is a reading position, not a setting, and starts shut on every visit.
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -722,6 +728,7 @@ export function SelfCheck() {
             <RunHistory
               runs={runs} viewingRun={viewingRun} setRunIndex={setRunIndex}
               allRuns={allRuns} setAllRuns={setAllRuns}
+              open={historyOpen} setOpen={setHistoryOpen}
               confirmDelete={confirmDelete} setConfirmDelete={setConfirmDelete}
               scope={scope} deleteSelfCheckRun={deleteSelfCheckRun} clearSelfCheckHistory={clearSelfCheckHistory}
               runDiff={runDiff} shownRun={shownRun}
@@ -1654,6 +1661,8 @@ function RunHistory(props: {
   setRunIndex: (i: number) => void;
   allRuns: boolean;
   setAllRuns: (f: (v: boolean) => boolean) => void;
+  open: boolean;
+  setOpen: (v: boolean) => void;
   confirmDelete: DeleteTarget | null;
   setConfirmDelete: (t: DeleteTarget | null) => void;
   scope: string;
@@ -1662,7 +1671,7 @@ function RunHistory(props: {
   runDiff: RunDiff | null;
   shownRun: SelfCheckRunRef | undefined;
 }) {
-  const { runs, viewingRun, setRunIndex, allRuns, setAllRuns, confirmDelete, setConfirmDelete, scope, runDiff, shownRun, deleteSelfCheckRun, clearSelfCheckHistory } = props;
+  const { runs, viewingRun, setRunIndex, allRuns, setAllRuns, open, setOpen, confirmDelete, setConfirmDelete, scope, runDiff, shownRun, deleteSelfCheckRun, clearSelfCheckHistory } = props;
   const archivedCount = runs.filter((r) => !r.current && r.openable).length;
   const agedOut = runs.filter((r) => !r.openable).length;
   // An area nobody has checked says so, rather than showing nothing and
@@ -1676,16 +1685,37 @@ function RunHistory(props: {
   }
   // Viewing an earlier run is pure display: it re-renders the rows that run
   // recorded and never re-runs, never re-bands and never writes.
+  //
+  // COLLAPSED BY DEFAULT, because step 1 is where an area is picked to run a
+  // FRESH check, and eleven past checks put 435px of history in front of that.
+  // Native <details>, so the keyboard and screen-reader behaviour is the
+  // browser's; the open state is the page's (see historyOpen) so it survives
+  // running a check and switching area.
+  //
+  // The summary carries what the collapsed state has to answer on its own:
+  // that there IS history, how much, and how recent.
   return (
-    <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", margin: "10px 0 0", background: viewingRun === 0 ? "#fbfcfe" : "#fffbeb", borderColor: viewingRun === 0 ? "#e2e8f0" : "#fde68a" }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+    <details
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+      style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", margin: "10px 0 0", background: viewingRun === 0 ? "#fbfcfe" : "#fffbeb", borderColor: viewingRun === 0 ? "#e2e8f0" : "#fde68a" }}
+    >
+              <summary style={{ cursor: "pointer", listStyle: "revert" }}>
                 <b style={{ fontSize: 13 }}>{runs.length} check{runs.length === 1 ? "" : "s"} of this area</b>
-                <span style={{ ...muted }}>
-                  {runs.length === 1
-                    ? "Kept here so you can come back to it. Running again keeps this one and adds a new one."
-                    : "Newest first. Choosing an earlier one shows what it recorded at the time."}
-                </span>
-              </div>
+                <span style={{ ...muted, marginLeft: 8 }}>Latest {runs[0].label}.</span>
+                {/* Stays in the HEADER, not in the body: a warning that only
+                    shows when the panel happens to be open is not a warning. */}
+                {viewingRun > 0 && (
+                  <span style={{ ...muted, color: "#92400e", fontWeight: 700, marginLeft: 8 }}>
+                    You are looking at an earlier check, not your latest one. Choose Latest to go back.
+                  </span>
+                )}
+              </summary>
+              <p style={{ ...muted, margin: "8px 0 0" }}>
+                {runs.length === 1
+                  ? "Kept here so you can come back to it. Running again keeps this one and adds a new one."
+                  : "Newest first. Choosing an earlier one shows what it recorded at the time."}
+              </p>
               {/* One row per check, reading left to right. It was a grid of
                   cards: ten of them took 425px, showed four, and wrapped each
                   run's counts onto a second line. A card is the wrong shape
@@ -1801,11 +1831,6 @@ function RunHistory(props: {
                   This area holds the last {OPTION_A_RUN_HISTORY_CAP + 1} checks in full, and a summary of the {SELF_CHECK_RUN_LOG_CAP} most recent.
                 </p>
               )}
-              {viewingRun > 0 && (
-                <p style={{ ...muted, color: "#92400e", margin: "8px 0 0", fontWeight: 700 }}>
-                  You are looking at an earlier check, not your latest one. Nothing here can be re-run or changed; choose Latest to go back.
-                </p>
-              )}
               {shownRun && (shownRun.procedureDuration || shownRun.recordsDuration) && (
                 <p style={{ ...muted, margin: "6px 0 0" }}>
                   Written procedure pass {shownRun.procedureDuration || "not recorded"} · records pass {shownRun.recordsDuration || "not recorded"}.
@@ -1819,7 +1844,7 @@ function RunHistory(props: {
                   {runDiff.worsened.length > 0 && ` Went backwards: ${runDiff.worsened.slice(0, 6).map((c) => c.ref).join(", ")}${runDiff.worsened.length > 6 ? ", and others" : ""}.`}
                 </p>
               )}
-    </div>
+    </details>
   );
 }
 
