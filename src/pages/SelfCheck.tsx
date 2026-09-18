@@ -817,6 +817,9 @@ export function SelfCheck() {
         ".sc-main{min-width:0}",
         ".sc-hero{border:1px solid #e2e8f0;border-radius:13px;background:#fff;padding:15px 17px}",
         ".sc-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:11px}",
+        // The gap is deliberate: the four counts are one thing to read, the two
+        // pictures under them are another.
+        ".sc-hero-split{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;margin-top:18px}",
         // Filters and search sit above the one requirement they choose, and
         // do not float: with a single requirement on the stage the list is
         // never scrolled past while it is being read.
@@ -847,10 +850,17 @@ export function SelfCheck() {
         // keeps its own wrapper for the inherited type size, and display:
         // contents lets each disclosure inside it be a column of this grid
         // rather than all of them stacking in one.
-        ".sc-detail-grid{border-top:1px solid #eef2f7;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:start}",
+        // Two columns, not three: the reasoning runs long and the quotations
+        // do not, so the reasoning gets two thirds of the card's full width and
+        // anything after the quotations wraps onto the next row.
+        ".sc-detail-grid{border-top:1px solid #eef2f7;display:grid;grid-template-columns:2fr 1fr;align-items:start}",
         ".sc-detail-items{display:contents}",
         ".sc-detail-grid>details,.sc-detail-grid>.sc-detail-items>*{padding:10px 13px;border-left:1px solid #eef2f7;margin:0;min-width:0}",
-        ".sc-detail-grid>details>summary{font-size:12px}",
+        // 13.5px, the size of the prose beside them. They were rendering at the
+        // browser default because the rule only reached a DIRECT child, and the
+        // disclosures inside WhyCell's wrapper are grandchildren.
+        ".sc-detail-grid summary{font-size:13.5px;font-weight:700;color:#475569}",
+        ".sc-detail-grid .sc-detail-items{font-size:13.5px}",
         ".sc-req-link{display:grid;grid-template-columns:10px minmax(0,1fr);gap:1px 8px;align-items:center;width:100%;text-align:left;border:1px solid transparent;border-radius:8px;padding:10px 9px;margin:2px 0;cursor:pointer;font:inherit;background:none}",
         ".sc-req-link:hover{background:#f7f8fb}",
         ".sc-req-dot{width:8px;height:8px;border-radius:99px;grid-row:1/4}",
@@ -878,6 +888,7 @@ export function SelfCheck() {
         ".sc-detail-grid>details,.sc-detail-grid>.sc-detail-items>*{border-left:0;border-top:1px solid #eef2f7}",
         "}",
         "@media (max-width: 640px){",
+        ".sc-hero-split{grid-template-columns:1fr;gap:12px}",
         ".sc-results-layout{gap:12px}",
         ".sc-hero{padding:14px}",
         ".sc-view-tabs{grid-template-columns:1fr}",
@@ -1375,6 +1386,16 @@ export function SelfCheck() {
                   {!procedureOnlyResult && (
                     <div className="sc-view-subheader">
                       <b>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
+                      {/* What this tab does NOT settle. It was a yellow box of
+                          its own under the counts; here it is one character
+                          with the same sentence on hover and on focus, and the
+                          sentence still prints in full in the PDF and the CSV. */}
+                      {VIEW_NOTE[view] && (
+                        <span tabIndex={0} title={VIEW_NOTE[view]} aria-label={VIEW_NOTE[view]}
+                          style={{ marginLeft: 6, cursor: "help", fontWeight: 800, color: "#92400e", borderBottom: "1px dotted #92400e" }}>
+                          &#9432;
+                        </span>
+                      )}
                     </div>
                   )}
 
@@ -1425,14 +1446,25 @@ export function SelfCheck() {
                   <Tally n={counts.doesNot} label={VIEW_TALLY[view].doesNot} tone="critical" />
                   <Tally n={counts.couldNotCheck} label="could not check" tone="neutral" />
                 </div>
-                <Svg html={tallyBarSvg(tallySlices(counts, view), SCREEN_BAND_PALETTE)} />
-                </div>
 
-                {VIEW_NOTE[view] && (
-                  <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
-                    {VIEW_NOTE[view]}
-                  </p>
-                )}
+                {/* Half and half: the coverage bar for this tab on the left,
+                    the ONE APSR graphic this tab gets on the right. There used
+                    to be two of these graphics on the two half-tabs — the
+                    "← this tab" one here and a second, identical one inside
+                    the dimension panel below. The panel keeps its table; the
+                    picture lives here. */}
+                <div className="sc-hero-split">
+                  <div>
+                    <Svg html={tallyBarSvg(tallySlices(counts, view), SCREEN_BAND_PALETTE)} />
+                  </div>
+                  {bandWorking && (
+                    <div>
+                      <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, feedsFor(view) ? { feeds: feedsFor(view) } : { minWidth: 380 })} />
+                      {feedsFor(view) && <p style={{ ...muted, margin: "4px 0 0", fontSize: 11.5 }}>{feedsFor(view)!.caption}</p>}
+                    </div>
+                  )}
+                </div>
+                </div>
 
             {counts.couldNotCheck > 0 && !mostlyUnchecked(counts) && (
               <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px" }}>
@@ -1572,16 +1604,6 @@ export function SelfCheck() {
                 question of what the whole check opened. */}
             <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} open={filesOpen} setOpen={setFilesOpen} />
 
-            {/* The tally bar itself moved into the hero, above the cards it
-                counts. What stays here is which dimension THIS tab's own
-                verdicts feed, which is not a count of anything. */}
-            {feedsFor(view) && bandWorking && (
-              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "9px 11px", margin: "10px 0", background: "#fff" }}>
-                <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, { feeds: feedsFor(view) })} />
-                <p style={{ ...muted, margin: "4px 0 0", fontSize: 11.5 }}>{feedsFor(view)!.caption}</p>
-              </div>
-            )}
-
             {/* Read BEFORE the table. An auditor could not tell whether
                 "Written down" meant compliant, and the honest answer is that
                 each tab settles half the question. */}
@@ -1611,7 +1633,6 @@ export function SelfCheck() {
             {bandWorking && (
               <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "13px 15px", margin: "14px 0 0", background: "#fff" }}>
                 <b style={{ fontSize: 14 }}>What this check assessed</b>
-                <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, { minWidth: 430 })} />
                 {dimensionCoverage && <p style={{ ...muted, margin: "8px 0 2px" }}>{dimensionCoverage}</p>}
                 <div style={{ overflowX: "auto", marginTop: 10 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
@@ -1942,7 +1963,9 @@ const LONG_REASONING = 320;
 function Disclosure({ summary, children, open }: { summary: string; children: React.ReactNode; open?: boolean }) {
   return (
     <details open={open} style={{ marginTop: 6 }}>
-      <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, color: "#475569" }}>{summary}</summary>
+      {/* 13.5px: the size of the prose it heads. At 12 it read as a footnote
+          on a card whose body is 13.5. */}
+      <summary style={{ cursor: "pointer", fontSize: 13.5, fontWeight: 700, color: "#475569" }}>{summary}</summary>
       <div style={{ marginTop: 5 }}>{children}</div>
     </details>
   );
