@@ -162,7 +162,14 @@ export function SelfCheck() {
   // token was perfectly good (found by running the page, not by reading it).
   const [connecting, setConnecting] = useState(false);
   const triedConnect = useRef(false);
-  const running = phase === "folder" || phase === "policy" || phase === "records" || phase === "band";
+  // "outcomes" WAS MISSING from this list, and it is the longest pass of the
+  // three. With it missing the page declared the check finished the moment the
+  // records pass ended: the progress list vanished, the input row folded and
+  // the result appeared, while the results-and-review pass was still running
+  // in the background. Anyone who then reloaded or left the page killed that
+  // pass, and the result said "these two areas were not looked at on this run"
+  // for ever after, with no way to tell that from a pass that failed.
+  const running = phase === "folder" || phase === "policy" || phase === "records" || phase === "outcomes" || phase === "band";
   const resultRef = useRef<HTMLDivElement>(null);
   // Stop has to STICK. cancelBusy aborts the engine, but the awaits already in
   // flight still resolve, and without this every continuation below would
@@ -1759,8 +1766,11 @@ export function SelfCheck() {
             {!bandWorking && (
               <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "14px 0 0" }}>
                 <b style={{ color: INK }}>No APSR dimension working is stored for this check.</b> The four dimensions,
-                their percentages and the table of official descriptors are kept with the run itself, and checks run
-                before that was added do not carry them. Run the check again for this area and they appear here.
+                their percentages and the table of official descriptors come from one more AI call at the end of the
+                run, and this check carries none. Either it was run before that working was kept with the result, or
+                that call did not come back. Which of the two is recorded on the <b>AI Run Log</b> page under
+                &ldquo;Holistic Band Assessor&rdquo;, with the error if there was one. Running the check again is what
+                produces it.
               </p>
             )}
 
@@ -1797,7 +1807,9 @@ export function SelfCheck() {
                     <>
                       <p style={{ ...muted, margin: "6px 0 10px" }}>
                         Read from the same documents listed at the top of this result, looked at a second time for results and review records.
-                        {" "}{outcomeTally.total} {outcomeTally.total === 1 ? "point" : "points"} of the official requirement were checked for both.
+                        {outcomeTally.assessed === 0
+                          ? ` None of the ${outcomeTally.total} points of the official requirement could be judged on this pass.`
+                          : ` ${outcomeTally.assessed} ${outcomeTally.assessed === 1 ? "point" : "points"} of the official requirement ${outcomeTally.assessed === 1 ? "was" : "were"} checked for both.`}
                       </p>
 
                       <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 9 }}>
@@ -1817,10 +1829,16 @@ export function SelfCheck() {
                                   // the row tones this page already uses, and a
                                   // missing key reads back undefined and throws
                                   // on .fg, blanking the whole result.
-                                  ...TONE_BG[r.reviewEvident ? "good" : "critical"], border: `1px solid ${TONE_BG[r.reviewEvident ? "good" : "critical"].fg}`,
+                                  // A point whose AI call failed in every
+                                  // window carries notAssessed: it is not a
+                                  // point with no review record, and printing
+                                  // it as one is the false negative this pass
+                                  // is gated to avoid.
+                                  ...TONE_BG[r.notAssessed ? "neutral" : r.reviewEvident ? "good" : "critical"],
+                                  border: `1px solid ${TONE_BG[r.notAssessed ? "neutral" : r.reviewEvident ? "good" : "critical"].fg}`,
                                   padding: "1px 8px", borderRadius: 6, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0,
                                 }}>
-                                  {r.reviewEvident ? "✓ record found" : "✗ none found"}
+                                  {r.notAssessed ? "? not checked" : r.reviewEvident ? "✓ record found" : "✗ none found"}
                                 </span>
                                 <span style={{ color: "#334155" }}>
                                   {r.pointText}
@@ -1837,7 +1855,15 @@ export function SelfCheck() {
                         <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>Systems &amp; Outcomes, for this area as a whole</div>
                         <p style={{ ...muted, margin: "3px 0 7px" }}>
                           Outcome data means real figures, results or trends covering the period, not a statement that outcomes will be tracked.
-                          It was found for <b>{outcomeTally.withOutcome} of the {outcomeTally.total}</b> points checked.
+                          {outcomeTally.assessed === 0 ? (
+                            <>None of the {outcomeTally.total} points could be judged on this pass, so nothing is reported either way.{" "}</>
+                          ) : (
+                            <>
+                              It was found for <b>{outcomeTally.withOutcome} of the {outcomeTally.assessed}</b> points this pass could judge.
+                              {outcomeTally.notAssessed > 0 && ` ${outcomeTally.notAssessed} of the ${outcomeTally.total} points could not be judged at all on this pass, and are counted neither way.`}
+                              {" "}
+                            </>
+                          )}
                           This is reported for the area as a whole rather than line by line: the official requirement text for this area does not itemise what outcome evidence should look like, so there is no official list to tick off, and inventing one would be fabricating an official expectation.
                         </p>
                       </div>

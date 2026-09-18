@@ -2575,10 +2575,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }));
         };
 
+        // Stores the reason ON the run rather than only in the log. Without
+        // this a pass that FAILED and a pass that never ran were the same
+        // thing on the result page: "these two areas were not looked at",
+        // with no way for the person reading it to find out which.
+        const skipped = (reason: string, liveError?: string) =>
+          finish({ subCriterionId, rows: [], runAt: new Date().toISOString(), runId, chunkFileNames: {}, skippedReason: reason }, liveError);
+
         try {
           const items = GD4_REQUIREMENTS.filter((r) => itemIdsForScope(subCriterionId).includes(r.id));
           const allAuditPoints = items.flatMap((r) => r.flatAuditPoints ?? []);
-          if (allAuditPoints.length === 0) { finish(null, "No audit points are defined for this sub-criterion."); return; }
+          if (allAuditPoints.length === 0) { skipped("No audit points are defined for this sub-criterion, so there was nothing for this pass to check."); return; }
 
           // Combined policy + evidence text, rebuilt from the two Option A
           // runs' file ledgers via fileTextCache (cache-first; the cache is
@@ -2594,7 +2601,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             seen.add(key);
             files.push(rec);
           }
-          if (files.length === 0) { finish(null, "The Option A results carry no file ledger — re-run the PPD Review and Evidence assessment first."); return; }
+          if (files.length === 0) { skipped("This check kept no list of the files it read, so the results and review pass had nothing to open. Run the check again."); return; }
 
           const MAX_PART_CHARS = 24_000;
           const parts: string[] = [];
@@ -2675,7 +2682,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             finish({ subCriterionId, rows: [], runAt: new Date().toISOString(), runId, chunkFileNames: {}, skippedReason: gate.reason });
             return;
           }
-          if (parts.length === 0) { finish(null, "None of the run's documents could be read (the session text cache is empty and Drive re-read failed) — re-run the Option A assessment first."); return; }
+          if (parts.length === 0) { skipped("None of this check's documents could be read a second time for the results and review pass, so both areas are left unassessed rather than marked down. Run the check again."); return; }
 
           const memories = selectLineStatusMemories(get().calibrationMemories);
           memories.forEach((m) => get().incrementMemoryUsage(m.id));
@@ -2700,7 +2707,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             result.usage
           );
         } catch (err) {
-          finish(null, err instanceof Error ? err.message : String(err));
+          const liveError = err instanceof Error ? err.message : String(err);
+          // A failure, named on the run. Rows stay empty, so nothing is judged
+          // and neither dimension can be marked down off the back of it.
+          skipped(`The results and review pass did not finish: ${liveError} Both areas are left unassessed rather than marked down. Run the check again.`, liveError);
         }
       },
 

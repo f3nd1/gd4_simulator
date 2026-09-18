@@ -79,13 +79,20 @@ export function outcomeDimensionState(
 
 // The pass's own counts. Reported as counts, never as a band: turning them into
 // a dimension score is the decision this page deliberately does not take.
-export function outcomePassTally(rows: { outcomeEvident?: boolean; reviewEvident?: boolean }[] | undefined): {
-  total: number; withOutcome: number; withReview: number;
-} {
+export function outcomePassTally(
+  rows: { outcomeEvident?: boolean; reviewEvident?: boolean; notAssessed?: boolean }[] | undefined,
+): { total: number; assessed: number; notAssessed: number; withOutcome: number; withReview: number } {
   const r = rows ?? [];
+  // A point whose AI call failed in every window comes back notAssessed. It is
+  // NOT a point with no outcome data: counting it in the denominator turns a
+  // failed call into "we looked and found nothing", which is the same false
+  // negative the pass gate exists to prevent, one line down.
+  const judged = r.filter((x) => !x.notAssessed);
   return {
     total: r.length,
-    withOutcome: r.filter((x) => x.outcomeEvident === true).length,
-    withReview: r.filter((x) => x.reviewEvident === true).length,
+    assessed: judged.length,
+    notAssessed: r.length - judged.length,
+    withOutcome: judged.filter((x) => x.outcomeEvident === true).length,
+    withReview: judged.filter((x) => x.reviewEvident === true).length,
   };
 }

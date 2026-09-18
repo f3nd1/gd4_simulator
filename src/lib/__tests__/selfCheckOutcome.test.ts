@@ -91,11 +91,33 @@ describe("what the pass found, as counts", () => {
       { reviewEvident: true },
       {},
     ]);
-    expect(t).toEqual({ total: 4, withOutcome: 1, withReview: 3 });
+    expect(t).toEqual({ total: 4, assessed: 4, notAssessed: 0, withOutcome: 1, withReview: 3 });
   });
 
   it("is empty-safe", () => {
-    expect(outcomePassTally(undefined)).toEqual({ total: 0, withOutcome: 0, withReview: 0 });
-    expect(outcomePassTally([])).toEqual({ total: 0, withOutcome: 0, withReview: 0 });
+    expect(outcomePassTally(undefined)).toEqual({ total: 0, assessed: 0, notAssessed: 0, withOutcome: 0, withReview: 0 });
+    expect(outcomePassTally([])).toEqual({ total: 0, assessed: 0, notAssessed: 0, withOutcome: 0, withReview: 0 });
+  });
+});
+
+describe("outcomePassTally and points the pass could not judge", () => {
+  it("keeps a failed point out of the denominator", () => {
+    const t = outcomePassTally([
+      { outcomeEvident: true, reviewEvident: true },
+      { outcomeEvident: false, reviewEvident: false },
+      // The AI call for this one failed in every window.
+      { outcomeEvident: false, reviewEvident: false, notAssessed: true },
+    ]);
+    expect(t.total).toBe(3);
+    expect(t.assessed).toBe(2);
+    expect(t.notAssessed).toBe(1);
+    // 1 of the 2 it could judge, never 1 of 3: the third was not looked at.
+    expect(t.withOutcome).toBe(1);
+    expect(t.withReview).toBe(1);
+  });
+
+  it("counts a clean pass exactly as before", () => {
+    const t = outcomePassTally([{ outcomeEvident: true, reviewEvident: false }, { outcomeEvident: false, reviewEvident: true }]);
+    expect(t).toEqual({ total: 2, assessed: 2, notAssessed: 0, withOutcome: 1, withReview: 1 });
   });
 });
