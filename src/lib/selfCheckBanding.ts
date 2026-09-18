@@ -44,17 +44,29 @@ export type BandDimensionRow = {
   // verbatim from the Guidance Document.
   descriptor: string;
   reason: string;
-  // Whether this self-check assessed the dimension at all.
+  // Whether this self-check SCORES the dimension. Always false for Systems &
+  // Outcomes and Review: turning what the results-and-review pass found into a
+  // band is a separate decision this page does not take.
   assessedHere: boolean;
+  // Whether this RUN looked at the dimension at all. Different from
+  // assessedHere, and the difference is the whole point: a dimension that was
+  // checked and not scored must not be described as "not assessed", and one
+  // that was never looked at must not be described as checked. The two used to
+  // come from one hardcoded constant, so the same row could say "not assessed"
+  // in one column and "checked against your own documents" in the next.
+  checkedHere: boolean;
 };
 
-// Option A writes Systems & Outcomes and Review as "Not evident" on every line
-// it produces, because it reads a procedure and a set of records and nothing
-// else. They are not a finding about the area; they are two dimensions this
-// check does not cover.
-const ASSESSED_HERE: Record<BandDimensionRow["key"], boolean> = {
+// Which dimensions this page turns into a band. Approach and Processes only:
+// Option A writes the other two from the results-and-review pass, and whether
+// that should become a band is a decision deliberately still open.
+const SCORED_HERE: Record<BandDimensionRow["key"], boolean> = {
   approach: true, processes: true, systemsOutcomes: false, review: false,
 };
+
+// Which dimensions THIS RUN looked at. Approach and Processes always; the other
+// two only when the results-and-review pass actually produced verdicts.
+export type OutcomeChecked = { systemsOutcomes: boolean; review: boolean };
 
 export const DIMENSION_SOURCE: Record<BandDimensionRow["key"], string> = {
   approach: "From your written procedure: what the Procedure tab found.",
@@ -72,6 +84,11 @@ export const DIMENSION_SOURCE_CHECKED: Partial<Record<BandDimensionRow["key"], s
   review: "Checked against your own documents for results and review records. What it found is below. It is not turned into a band here.",
 };
 
+// The Earned column for a dimension this page does not score. Two states, and
+// they must not be confused: one was looked at, one was not.
+export const NOT_SCORED_HERE = "checked, not scored here";
+export const NOT_ASSESSED_HERE = "not assessed";
+
 export type BandWorking = {
   rows: BandDimensionRow[];
   // The configured ceiling per dimension (25% by default, tunable in
@@ -86,10 +103,15 @@ export function buildBandWorking(
   scores: ApsrMatrixScores | undefined,
   reasons: Partial<Record<BandDimensionRow["key"], string>> = {},
   scale: ApsrScale = DEFAULT_APSR_SCALE,
+  // Defaults to "the pass did not run", so an OLD stored result, or an export
+  // built without it, says the two dimensions were not looked at rather than
+  // claiming a pass that may never have happened.
+  checked: OutcomeChecked = { systemsOutcomes: false, review: false },
 ): BandWorking {
   const rows: BandDimensionRow[] = EDUTRUST_DIMENSIONS.map((d) => {
     const key = d.key as BandDimensionRow["key"];
-    const assessedHere = ASSESSED_HERE[key];
+    const assessedHere = SCORED_HERE[key];
+    const checkedHere = assessedHere || (key === "systemsOutcomes" ? checked.systemsOutcomes : key === "review" ? checked.review : false);
     // The model still returns a band for all four, diagnosed from lines that
     // say outright it did not look. Dropped HERE, at the one place the rows are
     // built, so no surface downstream can print it: a screen, a CSV or a PDF
@@ -105,6 +127,7 @@ export function buildBandWorking(
       descriptor: band === undefined || band === 0 ? "" : bandLevel(band as Band)[key],
       reason: (reasons[key] || "").trim(),
       assessedHere,
+      checkedHere,
     };
   });
   return { rows, maxPct: scale.maxPctPerDimension };
@@ -124,6 +147,13 @@ export const THREE_FOLDERS_NOTE =
 
 export const TWO_DIMENSIONS_NOTE =
   "This check reads a written procedure and a set of records, so it can only assess Approach and Processes. It gives no overall band. Systems & Outcomes and Review are not assessed here, and scoring them low for not having been looked at would have understated a well-run area by one to two bands. Your audit lead assesses all four and sets the band.";
+
+// Which of the two notes a result gets, read off the WORKING rather than off a
+// caller's own idea of what ran. One decision, so the screen, the CSV and the
+// printed page cannot disagree about whether the pass happened.
+export function dimensionsNote(w: BandWorking | undefined): string {
+  return w?.rows.some((r) => !r.assessedHere && r.checkedHere) ? THREE_FOLDERS_NOTE : TWO_DIMENSIONS_NOTE;
+}
 
 export const INFERRED_THRESHOLDS_NOTE =
   "The percentages are internal placeholders reconstructed from a single SSG auditor's worked example, not an auditor-confirmed formula. Nothing on this page is an official result.";
@@ -156,12 +186,12 @@ export function bandCoverageNote(bandedItemId: string, allItemIds: string[], sub
 // An unassessed dimension is hatched across its whole track, which reads as
 // unknown, rather than left empty, which reads as zero.
 export type BandGraphic = {
-  segments: { key: BandDimensionRow["key"]; label: string; pct: number; max: number; assessedHere: boolean; band: ApsrDimensionScore | undefined }[];
+  segments: { key: BandDimensionRow["key"]; label: string; pct: number; max: number; assessedHere: boolean; checkedHere: boolean; band: ApsrDimensionScore | undefined }[];
 };
 
 export function bandGraphic(w: BandWorking): BandGraphic {
   return {
-    segments: w.rows.map((r) => ({ key: r.key, label: r.label, pct: r.pct, max: w.maxPct, assessedHere: r.assessedHere, band: r.band })),
+    segments: w.rows.map((r) => ({ key: r.key, label: r.label, pct: r.pct, max: w.maxPct, assessedHere: r.assessedHere, checkedHere: r.checkedHere, band: r.band })),
   };
 }
 
@@ -199,7 +229,7 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 // The words beside each track. Every state is carried in text as well as in
 // pattern, so the picture survives greyscale printing and a screen reader.
 function segmentText(seg: BandGraphic["segments"][number]): string {
-  if (!seg.assessedHere) return "not assessed by this check";
+  if (!seg.assessedHere) return seg.checkedHere ? "checked, not scored here" : "not assessed by this check";
   if (seg.band === undefined) return "not scored";
   return `Band ${seg.band} of 5 · ${seg.pct}% of ${seg.max}%`;
 }

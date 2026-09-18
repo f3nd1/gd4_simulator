@@ -13,7 +13,7 @@ import { toCsv } from "./auditCsvExport";
 import { buildStamp } from "./buildInfo";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
@@ -534,6 +534,18 @@ export const VIEW_TALLY: Record<SelfCheckView, { complies: string; partly: strin
   records: { complies: "records found", partly: null, doesNot: "no records found" },
 };
 
+// What the three tabs are, where a reader meets them. The Overall sentence is
+// the engine's real decision procedure (agentRuntime.ts:3141-3148) in plain
+// words, not a plausible-sounding summary: rule 2 makes an undocumented line
+// "Not met" whatever the records show, rule 3 caps a partly documented line at
+// "Partial" however complete the evidence, and only rule 4 lets the records
+// decide. Kept to one sentence each; the counter below the tabs does the rest.
+export const TABS_EXPLAINED: { label: string; text: string }[] = [
+  { label: "Procedure", text: "Does your written procedure say this will happen?" },
+  { label: "Records", text: "Do your records show it actually happening?" },
+  { label: "Overall", text: "The two together, and the one that counts. If your procedure does not cover a requirement it does not comply whatever your records show; if it covers it only partly the line can go no higher than partly complies; and where the procedure is adequate, your records decide." },
+];
+
 export const VIEW_NOTE: Record<SelfCheckView, string> = {
   overview: "",
   "procedure-only": PROCEDURE_ONLY_NOTE,
@@ -737,7 +749,7 @@ export function buildSelfCheckCsv(
       d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check",
     ])),
     pad([ROWS_DO_NOT_SUM_NOTE]),
-    pad([TWO_DIMENSIONS_NOTE]),
+    pad([dimensionsNote(bandWorking)]),
     pad([INFERRED_THRESHOLDS_NOTE]),
     blank,
     pad(["What the full audit will look for"]),
@@ -831,7 +843,7 @@ export function buildSelfCheckHtml(opts: {
       </tr>`).join("")}</tbody>
     </table>
     <p class="muted">${escapeHtml(ROWS_DO_NOT_SUM_NOTE)}</p>
-    <p class="muted">${escapeHtml(TWO_DIMENSIONS_NOTE)}</p>
+    <p class="muted">${escapeHtml(dimensionsNote(bandWorking))}</p>
     <p class="muted">${escapeHtml(INFERRED_THRESHOLDS_NOTE)}</p>
     <h2>What the full audit will look for</h2>
     <p>${escapeHtml(IMPROVE_HEADLINE)}</p>
@@ -1035,6 +1047,16 @@ export function plainRunError(raw: string | undefined): string | undefined {
   }
   if (/AI is disabled|no API key/i.test(raw)) {
     return "The checking service is not switched on. Ask your audit lead to switch it on, then run the check again.";
+  }
+  // "PPD extraction window 1/2, batch 1/1 failed — OpenAI request timed out
+  // after 90s" is the engine's own wording and means nothing to the person
+  // reading it. Say what happened to their documents instead.
+  if (/extraction (window|batch)[^]*?(failed|timed out)/i.test(raw) || /timed out/i.test(raw)) {
+    const part = raw.match(/window (\d+)\/(\d+)/i);
+    return `One of the passes over your documents did not finish${part ? ` (part ${part[1]} of ${part[2]})` : ""}, so part of what you uploaded was never read. Anything it would have found is missing from this result.`;
+  }
+  if (/returned no parseable|not valid JSON/i.test(raw)) {
+    return "One of the passes over your documents came back unreadable, so part of what you uploaded was never judged.";
   }
   return raw;
 }

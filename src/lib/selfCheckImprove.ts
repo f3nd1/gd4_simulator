@@ -101,7 +101,16 @@ export const IMPROVE_HEADLINE =
   "Two of the four dimensions are not assessed here, and that is not a judgement on your area.";
 
 export const IMPROVE_WHY =
-  "This check never opens the evidence Systems & Outcomes and Review need: it reads the folder holding your written procedure and the folder holding your records, and nothing else. Your audit lead assesses those two dimensions in the full audit, and sets the band from all four. What follows is what they will be looking for, in the Guidance Document's own words.";
+  "Nothing on this run reached a verdict on the outcome data and review records those two are judged on. Your audit lead assesses them in the full audit, and sets the band from all four. What follows is what they will be looking for, in the Guidance Document's own words.";
+
+// Said INSTEAD once the results-and-review pass HAS produced verdicts. The pair
+// above is then untrue: this run did look, and says what it found further up.
+// What is still missing is the band, which this page does not set.
+export const IMPROVE_HEADLINE_CHECKED =
+  "These two dimensions were checked on this run, but this page does not turn them into a band.";
+
+export const IMPROVE_WHY_CHECKED =
+  "What the check found for each is reported above: requirement by requirement for Review, and for the area as a whole for Systems & Outcomes. Your audit lead weighs that alongside everything else and sets the band from all four. What follows is the standard they will weigh it against, in the Guidance Document's own words.";
 
 // The pattern the reported 4.1 run showed, named only when the run's own gaps
 // actually show it. Not asserted from nothing.

@@ -21,7 +21,7 @@ import {
   toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv, buildSelfCheckHtml,
   selfCheckFilename, describeBlock, plainRunError, plainDetail, planFor, toProcedureRows, toRecordsRows,
   SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE, NO_BAND_LINE,
-  VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
+  VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, TABS_EXPLAINED, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
   citedText, missingText, expectedEvidenceGroups, VERDICT_LEGEND, tallySlices, feedsFor, SUMMARY_LABEL,
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
@@ -30,8 +30,8 @@ import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunR
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
 import { buildLabel } from "../lib/buildInfo";
-import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, TWO_DIMENSIONS_NOTE, THREE_FOLDERS_NOTE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, DIMENSION_SOURCE_CHECKED, type BandWorking } from "../lib/selfCheckBanding";
+import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NOT_SCORED_HERE, NOT_ASSESSED_HERE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, DIMENSION_SOURCE_CHECKED, type BandWorking } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -312,12 +312,41 @@ export function SelfCheck() {
   // The results-and-review pass, and only when the run on screen is the CURRENT
   // one: the pass is stored once per area, not once per run, so attaching it to
   // an archived run would date a later check to an earlier day.
-  const outcomeShown = viewingRun === 0 ? outcomeResults[scope] : undefined;
+  //
+  // It must also be NEWER than the run it is shown against. The pass reads a
+  // run's own documents, so one stored before the run on screen belongs to an
+  // earlier check; pairing them would credit this result with a pass that never
+  // saw it. A result from before the pass existed carries nothing at all, and
+  // then says the pass did not run, which is the truth about it.
+  const outcomeShown = useMemo(() => {
+    if (viewingRun !== 0) return undefined;
+    const res = outcomeResults[scope];
+    if (!res) return undefined;
+    const runAt = existing?.runAt;
+    if (runAt && res.runAt && new Date(res.runAt).getTime() < new Date(runAt).getTime()) return undefined;
+    return res;
+  }, [viewingRun, outcomeResults, scope, existing]);
   const outcomeState = useMemo(() => outcomeDimensionState(outcomeShown), [outcomeShown]);
   const outcomeTally = useMemo(() => outcomePassTally(outcomeShown?.rows), [outcomeShown]);
   // Only the official review lines, via the same ref set the improvement panel
   // already uses. Nothing here re-judges: these are the pass's own verdicts.
   const outcomeReviewLines = useMemo(() => reviewShapedRows(outcomeShown?.rows ?? []), [outcomeShown]);
+  // Whether the two dimensions this page does not score were nevertheless
+  // LOOKED AT on the run being shown. Read off the working the panel prints, so
+  // every sentence about them on the page comes from the same fact.
+  const dimensionsChecked = !!bandWorking?.rows.some((r) => !r.assessedHere && r.checkedHere);
+  // The run's own report that something did not finish, from EITHER pass. Both
+  // are checked: a records-pass failure was never surfaced here at all.
+  // Lines the procedure pass never reached a verdict on. Not a gap: the engine
+  // caps their combined verdict and says so in the row's own comment.
+  const unjudgedProcedure = useMemo(
+    () => (existing?.rows ?? []).filter((r) => r.ppdVerdict === "Not assessed").length,
+    [existing],
+  );
+  const incompleteNote = useMemo(() => {
+    const w = [...(ppdResults[scope]?.runWarnings ?? []), ...(existing?.runWarnings ?? [])];
+    return w.length > 0 ? plainRunError(w[0]) : undefined;
+  }, [ppdResults, existing, scope]);
   const expectedGroups = useMemo(() => expectedEvidenceGroups(rows), [rows]);
   // The run's own reported gaps, gathered for the improvement section. Nothing
   // new is written: these are the strings already on the rows.
@@ -455,12 +484,18 @@ export function SelfCheck() {
         const s = await useChecklistModuleStore.getState().suggestBand(itemIds[0]);
         if (stale()) return;
         if (s) {
+          // Whether the results-and-review pass reached verdicts on THIS run,
+          // read from the store at this moment rather than from a render-time
+          // closure. It decides the wording of the two rows the panel does not
+          // score: "checked, not scored here" against "not assessed".
+          const orNow = useWorkspaceStore.getState().outcomeReviewResults[area.scope];
+          const orChecked = !!orNow && !orNow.skippedReason && (orNow.rows?.length ?? 0) > 0;
           setBandWorking(buildBandWorking(s.dimensionBands, {
             approach: s.dimensions.approach.reason,
             processes: s.dimensions.processes.reason,
             systemsOutcomes: s.dimensions.systemsOutcomes.reason,
             review: s.dimensions.review.reason,
-          }, apsrScale));
+          }, apsrScale, { systemsOutcomes: orChecked, review: orChecked }));
           setDimensionCoverage(bandCoverageNote(itemIds[0], itemIds, "This dimension assessment"));
         }
       }
@@ -998,6 +1033,44 @@ export function SelfCheck() {
               {shownRun?.duration && ` · took ${shownRun.duration}`}
             </p>
 
+            {/* AT THE TOP, before a single verdict. This used to sit below the
+                export buttons, at 99% of the page: by the time a reader met it
+                they had already read and believed the whole result.
+
+                What a failed extraction call actually does, established by
+                running it: every line in the failed batch is added to
+                extractFailedRefs (agentRuntime.ts:2725) and any such line that
+                reaches no verdict comes back "Not assessed", never the
+                fabricated "Not documented" gap. So an incomplete run UNDER-
+                reports rather than invents, and the honest thing to say is
+                which lines are missing answers rather than gaps. */}
+            {incompleteNote && (
+              <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 9, padding: "11px 13px", margin: "10px 0 0" }}>
+                <b style={{ fontSize: 13.5, color: "#92400e" }}>Part of this check did not complete, so this result is incomplete</b>
+                <p style={{ ...muted, margin: "6px 0 0", color: "#92400e" }}>{incompleteNote}</p>
+                {/* What is ACTUALLY affected, counted off the rows rather than
+                    asserted. A failed pass never writes a gap: the lines it
+                    covered come back with no verdict on that side, and their
+                    overall result is capped rather than failed. Both shapes are
+                    named because they read differently on the tabs. */}
+                {counts.couldNotCheck > 0 && (
+                  <p style={{ ...muted, margin: "6px 0 0", color: "#92400e" }}>
+                    {counts.couldNotCheck} of the {counts.total} requirement {counts.total === 1 ? "line" : "lines"} below came back <b>could not check</b>.
+                    Those are missing answers, not gaps: nothing that failed was recorded as a fault in your area.
+                  </p>
+                )}
+                {unjudgedProcedure > 0 && (
+                  <p style={{ ...muted, margin: "6px 0 0", color: "#92400e" }}>
+                    {unjudgedProcedure} of the {counts.total} requirement {counts.total === 1 ? "line" : "lines"} below reached <b>no verdict on the procedure side</b>.
+                    Their overall result is held at <b>partly complies</b> for that reason alone, and none of them is a finding that your procedure is missing.
+                  </p>
+                )}
+                <p style={{ ...muted, margin: "6px 0 0", color: "#92400e" }}>
+                  Run the check again before relying on this result.
+                </p>
+              </div>
+            )}
+
             {/* The check asks two separate questions and they fail
                 independently: your procedure can be silent while your records
                 are full, and the other way round. Blended into one verdict that
@@ -1017,6 +1090,20 @@ export function SelfCheck() {
                   </button>
                 ))}
               </div>
+            )}
+
+            {/* What the three tabs mean, where they are met. It was never said
+                anywhere: a reader could see the tabs and not know what Overall
+                was for. */}
+            {!procedureOnlyResult && (
+              <p style={{ ...muted, margin: "0 0 10px" }}>
+                {TABS_EXPLAINED.map((t, i) => (
+                  <span key={t.label}>
+                    {i > 0 && " "}
+                    <b style={{ color: INK }}>{t.label}:</b> {t.text}
+                  </span>
+                ))}
+              </p>
             )}
 
             {/* A procedure-only result answers "is it written down?", so it is
@@ -1047,8 +1134,10 @@ export function SelfCheck() {
                     </span>
                   ))}
                 </div>
+                {/* The rule itself is stated once, under the tabs. This says
+                    only what each COUNT means, which that sentence does not. */}
                 <p style={{ ...muted, margin: "7px 0 0" }}>
-                  Documented but no records means the procedure is fine and the proof is missing. Records but nothing documented means it happens but the procedure does not say so. The two tabs above show which requirement is which.
+                  Documented but no records means the procedure is fine and the proof is missing. Records but nothing documented means it happens but the procedure does not say so. The Procedure and Records tabs show which requirement is which.
                 </p>
               </div>
             )}
@@ -1206,15 +1295,17 @@ export function SelfCheck() {
                             {d.label}
                             <div style={{ ...muted, fontSize: 11 }}>{d.definition}</div>
                           </td>
-                          <td style={{ padding: "8px 9px" }}>{d.band === undefined ? <span style={muted}>not scored</span> : `Band ${d.band}`}</td>
+                          <td style={{ padding: "8px 9px" }}>{d.band === undefined ? <span style={muted}>{d.checkedHere ? "not scored here" : "not scored"}</span> : `Band ${d.band}`}</td>
                           <td style={{ padding: "8px 9px", fontWeight: 700 }}>
-                            {d.assessedHere ? `${d.pct}% of ${bandWorking.maxPct}%` : <span style={{ ...muted, fontWeight: 400 }}>not assessed</span>}
+                            {d.assessedHere
+                              ? `${d.pct}% of ${bandWorking.maxPct}%`
+                              : <span style={{ ...muted, fontWeight: 400 }}>{d.checkedHere ? NOT_SCORED_HERE : NOT_ASSESSED_HERE}</span>}
                           </td>
                           <td style={{ padding: "8px 9px", color: "#475569" }}>{d.descriptor || <span style={muted}>—</span>}</td>
                           <td style={{ padding: "8px 9px", color: "#475569" }}>
                             {d.assessedHere
                               ? (d.reason || DIMENSION_SOURCE[d.key])
-                              : outcomeState.state === "assessed" && DIMENSION_SOURCE_CHECKED[d.key]
+                              : d.checkedHere && DIMENSION_SOURCE_CHECKED[d.key]
                                 ? <b style={{ color: "#1e40af" }}>{DIMENSION_SOURCE_CHECKED[d.key]}</b>
                                 : <b style={{ color: "#92400e" }}>{DIMENSION_SOURCE[d.key]}</b>}
                           </td>
@@ -1224,10 +1315,13 @@ export function SelfCheck() {
                   </table>
                 </div>
                 <p style={{ ...muted, marginBottom: 0 }}>{ROWS_DO_NOT_SUM_NOTE}</p>
-                <p style={outcomeState.state === "assessed"
+                {/* One decision for all three surfaces (screen, CSV, print):
+                    dimensionsNote reads the working, not the caller's idea of
+                    what ran, so they cannot disagree. */}
+                <p style={dimensionsChecked
                   ? { ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", borderRadius: 8, padding: "9px 11px" }
                   : { ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
-                  {outcomeState.state === "assessed" ? THREE_FOLDERS_NOTE : TWO_DIMENSIONS_NOTE}
+                  {dimensionsNote(bandWorking)}
                 </p>
 
 
@@ -1237,8 +1331,8 @@ export function SelfCheck() {
                     dimension, or a gap this run itself reported. */}
                 <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 10, padding: "12px 14px", margin: "12px 0" }}>
                   <b style={{ fontSize: 13.5, color: "#1e40af" }}>What the full audit will look for</b>
-                  <p style={{ ...muted, margin: "6px 0 2px", color: "#1e3a8a" }}>{IMPROVE_HEADLINE}</p>
-                  <p style={{ ...muted, margin: "0 0 10px", color: "#1e3a8a" }}>{IMPROVE_WHY}</p>
+                  <p style={{ ...muted, margin: "6px 0 2px", color: "#1e3a8a" }}>{dimensionsChecked ? IMPROVE_HEADLINE_CHECKED : IMPROVE_HEADLINE}</p>
+                  <p style={{ ...muted, margin: "0 0 10px", color: "#1e3a8a" }}>{dimensionsChecked ? IMPROVE_WHY_CHECKED : IMPROVE_WHY}</p>
                   {unassessedDimensions(itemIdsForScope(area.scope)).map((d) => (
                     <div key={d.key} style={{ borderTop: "1px solid #bfdbfe", paddingTop: 9, marginTop: 9 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>{d.label}</div>
@@ -1446,11 +1540,6 @@ export function SelfCheck() {
               <button type="button" onClick={onCsv} style={{ ...bigBtn, fontSize: 13.5, padding: "10px 18px", background: "#fff", color: INK, border: "1px solid #cbd5e1" }}>⬇ Download as spreadsheet (CSV)</button>
             </div>
             {note && <p style={{ ...muted, color: "#92400e", marginBottom: 0 }}>{note}</p>}
-            {ppdResults[area.scope]?.runWarnings?.length ? (
-              <p style={{ ...muted, marginTop: 10, marginBottom: 0, color: "#92400e" }}>
-                Part of this check did not complete, so the result may be incomplete: {plainRunError(ppdResults[area.scope]?.runWarnings?.[0])}
-              </p>
-            ) : null}
           </section>
         )}
       </div>

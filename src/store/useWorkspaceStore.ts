@@ -2016,7 +2016,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.evidenceAssessments[subCriterionId] : undefined;
             return {
               evidenceAssessments: rows
-                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs } }
+                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNote ? [coverageNote] : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs } }
                 : st.evidenceAssessments,
               evidenceAssessmentHistory: prev
                 ? { ...st.evidenceAssessmentHistory, [subCriterionId]: [prev, ...(st.evidenceAssessmentHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
@@ -2478,6 +2478,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // hands-off run cannot auto-evaluate are named here (durable, shown in
           // the Run Log), not silently absent.
           if (autoIncludeManual && skippedHumanOnly.length) coverageParts.push(`${skippedHumanOnly.length} pre-check item(s) require human judgement and were not auto-evaluated in this hands-off run (review manually in Pre-check): ${skippedHumanOnly.join("; ")}.`);
+          // AI calls that failed or timed out during THIS pass. They were only
+          // ever console.error'd and put in the review log, so a records-pass
+          // timeout never reached the page at all.
+          if (result.windowErrors?.length) coverageParts.push(...result.windowErrors);
           const coverageNote = coverageParts.length ? coverageParts.join(" ") : undefined;
           // Audit Checklist Library pass — the evidence bucket, the sibling of
           // the policy bucket run by runPPDReview. Same isolation: this extra

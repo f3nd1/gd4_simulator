@@ -1117,6 +1117,12 @@ export type EvidenceAssessmentResult = {
   // value when the model honours a temperature parameter, null when it
   // doesn't (gpt-5/o-series). undefined on runs from before this field.
   effectiveTemperature?: number | null;
+  // What did not complete on this run: unreadable evidence files, and the AI
+  // calls that failed or timed out. The PPD result has carried these since it
+  // existed; the evidence result dropped them into the AI review log only, so a
+  // records-pass timeout was invisible on the self-check page. Stored so an
+  // incomplete run can say so where it is read, not only in a diagnostic.
+  runWarnings?: string[];
   // Per-file ledger for this Option A evidence run, in the same AuditFileRecord
   // shape the staged path uses, so the two paths' file-ledger CSVs line up.
   // Undefined when the rows were derived from a prior staged audit (no fresh
