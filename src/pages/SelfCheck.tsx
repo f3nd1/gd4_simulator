@@ -124,6 +124,11 @@ export function SelfCheck() {
   // historyOpen is: the panel is not rendered at all on a tab with no files, so
   // the element's own state would be lost on the way there and back.
   const [filesOpen, setFilesOpen] = useState(false);
+  // Which requirement the workspace is showing. Held by REF, not by index: the
+  // three tabs return the same refs in the same order, so switching tab keeps
+  // the reader on the requirement they were reading rather than throwing them
+  // back to the top.
+  const [selectedRef, setSelectedRef] = useState<string>("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -674,6 +679,37 @@ export function SelfCheck() {
         ".sc-run-row{display:grid;grid-template-columns:minmax(0,1fr) 62px 124px 58px;align-items:center;column-gap:8px;line-height:17px}",
         ".sc-run-counts{display:grid;grid-template-columns:repeat(4,1fr);text-align:center}",
         `.sc-runs-box{max-height:${RUNS_BOX_HEIGHT}px;overflow-y:auto}`,
+        // ── The requirement workspace ────────────────────────────────────
+        // A list to choose from and one requirement in full, in place of four
+        // narrow columns carrying requirement wording, reasoning, quotes,
+        // source files, missing elements and remediation all at once.
+        ".sc-view-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:14px 0 10px}",
+        ".sc-view-tab{border:1px solid;border-radius:10px;padding:9px 12px;text-align:left;cursor:pointer;font:inherit}",
+        ".sc-view-tab strong{display:block;font-size:13.5px;line-height:1.2}",
+        ".sc-view-tab span{display:block;font-size:11.5px;margin-top:3px;line-height:1.35}",
+        ".sc-workspace{display:grid;grid-template-columns:minmax(210px,248px) minmax(0,1fr);gap:14px;align-items:start;margin:12px 0}",
+        // The list scrolls on its own and stays put while a long requirement is
+        // read, so choosing the next one never means scrolling back up.
+        ".sc-req-nav{border:1px solid #e2e8f0;border-radius:10px;background:#fff;position:sticky;top:12px;max-height:calc(100vh - 40px);display:flex;flex-direction:column;overflow:hidden}",
+        ".sc-req-nav-head{padding:9px 11px;border-bottom:1px solid #e2e8f0;font-size:12px;font-weight:800;color:#0f172a;background:#f8fafc}",
+        ".sc-req-nav-list{overflow-y:auto;padding:5px}",
+        ".sc-req-link{display:grid;grid-template-columns:9px minmax(0,1fr);gap:1px 8px;align-items:center;width:100%;text-align:left;border:1px solid transparent;border-radius:8px;padding:7px 8px;cursor:pointer;font:inherit}",
+        ".sc-req-link:hover{background:#f8fafc}",
+        ".sc-req-dot{width:9px;height:9px;border-radius:50%;grid-row:1/3}",
+        ".sc-req-code{font-size:12px;font-weight:800;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+        ".sc-req-state{font-size:11px;font-weight:700}",
+        ".sc-req-card{border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:15px 17px;min-width:0}",
+        ".sc-req-summary{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:16px;margin-top:12px}",
+        ".sc-req-eyebrow{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#64748b;margin-bottom:4px}",
+        // One column below the width where two make the prose too narrow, and
+        // the list becomes a short scrolling strip above the card rather than a
+        // sidebar pushed off-screen.
+        "@media (max-width: 900px){",
+        ".sc-view-tabs{grid-template-columns:1fr}",
+        ".sc-workspace{grid-template-columns:1fr}",
+        ".sc-req-nav{position:static;max-height:230px}",
+        ".sc-req-summary{grid-template-columns:1fr;gap:12px}",
+        "}",
         // The delete control is quiet until it is pointed at. Nine red words
         // down a dense list would compete with the counts, which are the whole
         // reason for the list, and would advertise the one control here that
@@ -1083,34 +1119,31 @@ export function SelfCheck() {
                 independently: your procedure can be silent while your records
                 are full, and the other way round. Blended into one verdict that
                 difference was invisible, and the fix for each is different. */}
+            {/* Each tab carries its own one-line hint, so all three meanings
+                are readable whichever one is open, and the active tab's fuller
+                sentence follows as the subheader. A reader could previously see
+                three tabs and not know what Overall was for. */}
             {!procedureOnlyResult && (
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "14px 0 10px" }}>
+              <div className="sc-view-tabs">
                 {(["overview", "procedure", "records"] as const).map((k) => (
                   <button
-                    key={k} type="button" onClick={() => setTab(k)}
+                    key={k} type="button" onClick={() => setTab(k)} aria-pressed={tab === k}
+                    className="sc-view-tab"
                     style={{
-                      border: "1px solid", borderColor: tab === k ? INK : "#cbd5e1", background: tab === k ? INK : "#fff",
-                      color: tab === k ? "#fff" : INK, borderRadius: 999, padding: "8px 16px",
-                      fontSize: 13.5, fontWeight: 700, cursor: "pointer",
+                      borderColor: tab === k ? INK : "#cbd5e1", background: tab === k ? INK : "#fff",
+                      color: tab === k ? "#fff" : INK,
                     }}
                   >
-                    {k === "overview" ? "Overall" : VIEW_LABEL[k]}
+                    <strong>{k === "overview" ? "Overall" : VIEW_LABEL[k]}</strong>
+                    <span style={{ color: tab === k ? "#dbe3ef" : "#64748b" }}>{TABS_EXPLAINED[k].hint}</span>
                   </button>
                 ))}
               </div>
             )}
 
-            {/* What the three tabs mean, where they are met. It was never said
-                anywhere: a reader could see the tabs and not know what Overall
-                was for. */}
             {!procedureOnlyResult && (
               <p style={{ ...muted, margin: "0 0 10px" }}>
-                {TABS_EXPLAINED.map((t, i) => (
-                  <span key={t.label}>
-                    {i > 0 && " "}
-                    <b style={{ color: INK }}>{t.label}:</b> {t.text}
-                  </span>
-                ))}
+                <b style={{ color: INK }}>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
               </p>
             )}
 
@@ -1260,45 +1293,29 @@ export function SelfCheck() {
               </div>
             </div>
 
-            <div style={{ overflowX: "auto" }}>
-              {/* minWidth, not just width:100%: on a phone the four columns
-                  squeezed instead of scrolling and the Why column became a
-                  two-word-wide strip. The container already scrolls. */}
-              <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ textAlign: "left", background: "#f8fafc" }}>
-                    {/* Result FIRST. A four-word verdict in a narrow column to
-                        the right of four hundred words of prose is the last
-                        thing the eye reaches; in a fixed left column with a
-                        colour rail it is the first, and the tab can be scanned
-                        at scrolling speed without stopping. */}
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "14%", minWidth: 132 }}>Result</th>
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "22%" }}>What the requirement asks</th>
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "37%" }}>Why</th>
-                    <th style={{ padding: "9px 10px", borderBottom: "1px solid #e2e8f0", width: "27%" }}>What to fix</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr key={`${view}-${r.ref}`} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top" }}>
-                      <td style={{ padding: "12px 10px", borderLeft: `6px solid ${TONE_BG[r.tone].fg}` }}>
-                        <span
-                          style={{ ...TONE_BG[r.tone], border: `2px solid ${TONE_BG[r.tone].fg}`, padding: "5px 10px", borderRadius: 8, fontSize: 13.5, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7, lineHeight: 1.25 }}
-                          title={r.label}
-                        >
-                          <span aria-hidden style={{ fontSize: 17, lineHeight: 1 }}>{r.icon}</span>{r.label}
-                        </span>
-                      </td>
-                      <td style={{ padding: "12px 10px" }}>{r.requirement}<div style={{ ...muted, fontSize: 11 }}>{r.ref}</div></td>
-                      <td style={{ padding: "12px 10px", color: "#334155" }}><WhyCell key={`${view}-${r.ref}`} row={r} /></td>
-                      <td style={{ padding: "12px 10px", color: "#334155" }}>
-                        {r.fix || <span style={muted}>{r.tone === "good" || r.tone === "neutral" ? "—" : "The check did not suggest anything specific here. Ask your audit lead what would close it."}</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {/* THE REQUIREMENT WORKSPACE, in place of the four-column table.
+                The table put requirement wording, verdict, reasoning, quoted
+                passages, source files, missing elements and remediation into
+                four narrow columns, which made rows hundreds of pixels tall and
+                forced horizontal scanning across every one of them. One
+                requirement is now read at a time, chosen from a list that can
+                be scanned in a glance.
+
+                The rows are the SAME rows the table had, and they are already
+                per-tab: toSelfCheckRows / toProcedureRows / toRecordsRows. So
+                switching tab rebuilds the list, every sidebar status, the
+                selected requirement's status and everything in the card, with
+                no new assessment logic anywhere. */}
+            {/* No key on the view: remounting per tab threw the reader back to
+                the first requirement every time they switched, which defeats
+                the whole point of being able to see which layer has the
+                problem on ONE line. The selection is held by ref instead. */}
+            <RequirementWorkspace
+              rows={rows}
+              selectedRef={selectedRef}
+              setSelectedRef={setSelectedRef}
+              view={view}
+            />
 
             {/* The two dimensions this check can defend, and the two it leaves
                 alone. It shows no overall band: scoring Systems & Outcomes and
@@ -1612,7 +1629,101 @@ function Disclosure({ summary, children, open }: { summary: string; children: Re
   );
 }
 
-function WhyCell({ row }: { row: SelfCheckRow }) {
+// One requirement at a time: a list to choose from, and the chosen one in full.
+//
+// Everything here comes off the SelfCheckRow the table already had. Nothing is
+// re-judged, re-worded or re-counted, and the supporting detail is the existing
+// WhyCell verbatim, so the disclosures, the quote de-duplication and the
+// "show all N missing" control behave exactly as they did.
+function RequirementWorkspace({ rows, selectedRef, setSelectedRef, view }: {
+  rows: SelfCheckRow[];
+  selectedRef: string;
+  setSelectedRef: (r: string) => void;
+  view: SelfCheckView;
+}) {
+  // The chosen row, or the first one. Falling back rather than showing nothing
+  // matters on a tab switch and on a rerun, where the stored ref may not exist
+  // in the new list.
+  const selected = rows.find((r) => r.ref === selectedRef) ?? rows[0];
+  if (!selected) return null;
+  const fixLabel = view === "procedure" ? "What to write" : "What to do";
+  return (
+    <div className="sc-workspace">
+      <nav className="sc-req-nav" aria-label="Requirements">
+        <div className="sc-req-nav-head">Requirements <span style={{ ...muted, fontWeight: 400 }}>({rows.length})</span></div>
+        <div className="sc-req-nav-list">
+          {rows.map((r) => {
+            const here = r.ref === selected.ref;
+            return (
+              <button
+                key={r.ref} type="button" onClick={() => setSelectedRef(r.ref)} aria-current={here || undefined}
+                className="sc-req-link"
+                style={{ background: here ? "#eef2ff" : undefined, borderColor: here ? "#c7d2fe" : "transparent" }}
+              >
+                {/* The state travels as a glyph AND a word AND a colour, the
+                    same three ways it does on the card. */}
+                <span aria-hidden className="sc-req-dot" style={{ background: TONE_BG[r.tone].fg }} />
+                <span className="sc-req-code" style={{ color: INK }}>{r.ref}</span>
+                <span className="sc-req-state" style={{ color: TONE_BG[r.tone].fg }}>{r.icon} {r.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
+      <article className="sc-req-card" style={{ borderLeft: `5px solid ${TONE_BG[selected.tone].fg}` }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span
+            style={{ ...TONE_BG[selected.tone], border: `2px solid ${TONE_BG[selected.tone].fg}`, padding: "5px 11px", borderRadius: 8, fontSize: 13.5, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 7, lineHeight: 1.25 }}
+          >
+            <span aria-hidden style={{ fontSize: 17, lineHeight: 1 }}>{selected.icon}</span>{selected.label}
+          </span>
+          <span style={{ ...muted, fontFamily: "ui-monospace,monospace", fontSize: 12 }}>{selected.ref}</span>
+        </div>
+        <h3 style={{ fontSize: 16.5, lineHeight: 1.4, margin: "10px 0 0", color: INK, fontWeight: 700 }}>{selected.requirement}</h3>
+
+        <div className="sc-req-summary">
+          <div>
+            <div className="sc-req-eyebrow">{SUMMARY_LABEL[selected.summaryKind] || "What was found"}</div>
+            {/* The summary ONLY. Where the engine wrote none, WhyCell below
+                prints the full reasoning open, exactly as it always did; both
+                printing it would show the same prose twice. */}
+            <p style={{ margin: 0, color: "#334155", fontSize: 13.5, lineHeight: 1.62 }}>
+              {selected.summary || <span style={muted}>{selected.why ? "No short summary was written. The full reasoning is below." : "No reason recorded."}</span>}
+            </p>
+          </div>
+          <div>
+            <div className="sc-req-eyebrow">{fixLabel}</div>
+            <p style={{ margin: 0, color: "#334155", fontSize: 13.5, lineHeight: 1.62 }}>
+              {selected.fix || <span style={muted}>{selected.tone === "good" || selected.tone === "neutral" ? "Nothing to do for this one." : "The check did not suggest anything specific here. Ask your audit lead what would close it."}</span>}
+            </p>
+          </div>
+        </div>
+
+        {/* The reasoning gets its own labelled section rather than trailing
+            under the summary with nothing to say what it is, and folds like
+            every other piece of supporting detail. */}
+        <div style={{ borderTop: "1px solid #eef2f7", marginTop: 12, paddingTop: 6 }}>
+          {selected.why && (
+            <Disclosure summary="Why this verdict">
+              <span style={{ color: "#334155" }}>{selected.why}</span>
+            </Disclosure>
+          )}
+          {/* Everything else, unchanged: the same component the table cell used,
+              so every disclosure stays shut by default and every quote is still
+              shown once. */}
+          <WhyCell key={`${view}-${selected.ref}`} row={selected} showProse={false} />
+        </div>
+      </article>
+    </div>
+  );
+}
+
+// `showProse: false` leaves out the summary and the reasoning, which the
+// requirement card prints itself under its own headings. Everything else (the
+// cap note, the quotes, the missing elements, the weaker file-only citations)
+// is identical either way.
+function WhyCell({ row, showProse = true }: { row: SelfCheckRow; showProse?: boolean }) {
   const w = row.working;
   const quotes = w?.citations ?? [];
   // A weaker citation: files named with no verified excerpt. Still real, so
@@ -1627,14 +1738,14 @@ function WhyCell({ row }: { row: SelfCheckRow }) {
   const reasoning = row.why || "";
   return (
     <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>
-      {row.summary && (
+      {showProse && row.summary && (
         <div style={{ marginBottom: 5 }}>
           <span style={{ fontWeight: 700, color: "#0f172a" }}>{SUMMARY_LABEL[row.summaryKind]}: </span>
           <span style={{ color: "#1f2937" }}>{row.summary}</span>
         </div>
       )}
-      {!reasoning && !row.summary && <span style={muted}>No reason recorded.</span>}
-      {reasoning && (row.summary && reasoning.length > LONG_REASONING
+      {showProse && !reasoning && !row.summary && <span style={muted}>No reason recorded.</span>}
+      {showProse && reasoning && (row.summary && reasoning.length > LONG_REASONING
         // Only collapsed where a one-line summary already stands in for it.
         // With no summary the reasoning IS the answer and stays open.
         ? <Disclosure summary="Why this verdict"><span style={{ color: "#334155" }}>{reasoning}</span></Disclosure>

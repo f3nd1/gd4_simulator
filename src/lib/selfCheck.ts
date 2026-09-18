@@ -540,11 +540,22 @@ export const VIEW_TALLY: Record<SelfCheckView, { complies: string; partly: strin
 // "Not met" whatever the records show, rule 3 caps a partly documented line at
 // "Partial" however complete the evidence, and only rule 4 lets the records
 // decide. Kept to one sentence each; the counter below the tabs does the rest.
-export const TABS_EXPLAINED: { label: string; text: string }[] = [
-  { label: "Procedure", text: "Does your written procedure say this will happen?" },
-  { label: "Records", text: "Do your records show it actually happening?" },
-  { label: "Overall", text: "The two together, and the one that counts. If your procedure does not cover a requirement it does not comply whatever your records show; if it covers it only partly the line can go no higher than partly complies; and where the procedure is adequate, your records decide." },
-];
+export const TABS_EXPLAINED: Record<"overview" | "procedure" | "records", { hint: string; text: string }> = {
+  // `hint` rides on the tab button, so all three meanings are visible at once
+  // whichever tab is open; `text` is the subheader for the tab actually open.
+  overview: {
+    hint: "The final result for each requirement",
+    text: "The two together, and the one that counts. If your procedure does not cover a requirement it does not comply whatever your records show; if it covers it only partly the line can go no higher than partly complies; and where the procedure is adequate, your records decide.",
+  },
+  procedure: {
+    hint: "What your written procedure says",
+    text: "This view checks your documented approach only: policies, procedures, handbooks and terms of reference. It does not judge whether the process was actually carried out.",
+  },
+  records: {
+    hint: "What your records show happened",
+    text: "This view checks implementation evidence only: minutes, registers, logs, reports, signed records and emails. It does not judge whether your written procedure describes the process properly.",
+  },
+};
 
 export const VIEW_NOTE: Record<SelfCheckView, string> = {
   overview: "",
