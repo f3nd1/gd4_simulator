@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
-import { EDUTRUST_BANDS } from "../data/edutrustRubric";
 import { runScopesForSub, scopeTitle, itemIdsForScope, folderScopeId } from "../lib/evidenceScope";
 import { parseFolderId } from "../lib/drive/driveClient";
 import { aiOfflineReason } from "../lib/ai/aiClient";
@@ -31,7 +30,7 @@ import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
 import { buildLabel } from "../lib/buildInfo";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NOT_SCORED_HERE, NOT_ASSESSED_HERE, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, DIMENSION_SOURCE_CHECKED, type BandWorking } from "../lib/selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NOT_ASSESSED_HERE, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, DIMENSION_SOURCE_CHECKED, type BandWorking } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -334,7 +333,10 @@ export function SelfCheck() {
   // Whether the two dimensions this page does not score were nevertheless
   // LOOKED AT on the run being shown. Read off the working the panel prints, so
   // every sentence about them on the page comes from the same fact.
-  const dimensionsChecked = !!bandWorking?.rows.some((r) => !r.assessedHere && r.checkedHere);
+  const dimensionsChecked = !!bandWorking?.rows.every((r) => r.assessedHere);
+  // The band, and null whenever any dimension is missing. One derivation, used
+  // by the card, the working panel and both exports.
+  const selfTotal = useMemo(() => selfCheckTotal(bandWorking ?? undefined, apsrScale), [bandWorking, apsrScale]);
   // The run's own report that something did not finish, from EITHER pass. Both
   // are checked: a records-pass failure was never surfaced here at all.
   // Lines the procedure pass never reached a verdict on. Not a gap: the engine
@@ -481,7 +483,13 @@ export function SelfCheck() {
         setBandCoverage(bandCoverageNote(committedEntry!.id, itemIds, "This band"));
       }
       if (judged) {
-        const s = await useChecklistModuleStore.getState().suggestBand(itemIds[0]);
+        // The pass's own verdicts go INTO the band call. Without them the
+        // digest carries the "not assessed" placeholder on every line for these
+        // two dimensions (measured live), and a band diagnosed from that is a
+        // band diagnosed from an absence. Nothing is written to the checklist.
+        const orRows = useWorkspaceStore.getState().outcomeReviewResults[area.scope];
+        const usableOutcomeRows = orRows && !orRows.skippedReason ? orRows.rows : undefined;
+        const s = await useChecklistModuleStore.getState().suggestBand(itemIds[0], usableOutcomeRows);
         if (stale()) return;
         if (s) {
           // Whether the results-and-review pass reached verdicts on THIS run,
@@ -1154,16 +1162,43 @@ export function SelfCheck() {
               </p>
             )}
 
+            {/* THE BAND, and the one condition for showing one: all four
+                dimensions carry a real score from THIS run, which can only
+                happen when the results-and-review pass ran and read something.
+                Two of four is not a total, and a total built on two understates
+                a well-run area by one to two bands, which is why this page went
+                without a band at all (9f63527) until all four could be scored.
+                The arithmetic is printed beside it: a band nobody can check is
+                a number to argue with rather than read. */}
+            {view === "overview" && selfTotal && (
+              <div style={{ border: "2px solid #c7d2fe", borderRadius: 10, padding: 14, margin: "12px 0", background: "#eef2ff" }}>
+                <b style={{ fontSize: 15, color: INK }}>Band {selfTotal.band} of 5, {bandName(selfTotal.band)}</b>
+                <p style={{ ...muted, margin: "5px 0 0", color: "#3730a3" }}>
+                  <b>{selfCheckTotalWorking(selfTotal)}</b>. That is Approach, Processes, Systems &amp; Outcomes and Review added up, each worth up to {bandWorking?.maxPct ?? 25}%.
+                  The four are broken out below.
+                </p>
+                <p style={{ ...muted, margin: "5px 0 0", color: "#3730a3" }}>
+                  This is this tool's reading of your own documents, not an SSG result and not your audit lead's band. {SELF_CHECK_DISCLAIMER}
+                </p>
+                {bandCoverage && <p style={{ ...muted, margin: "5px 0 0", color: "#3730a3" }}>{bandCoverage}</p>}
+              </div>
+            )}
+            {view === "overview" && !selfTotal && dimensionsChecked === false && bandWorking && (
+              <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
+                {NO_BAND_WITHOUT_FOUR_NOTE}
+              </p>
+            )}
+
             {view === "overview" && (
             <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fbfcfe" }}>
               {band.kind === "none" ? (
                 <>
-                  <b style={{ fontSize: 14 }}>This check gives no band</b>
-                  <p style={{ ...muted, margin: "5px 0 0" }}>{NO_BAND_LINE}</p>
+                  <b style={{ fontSize: 14 }}>{selfTotal ? "Your audit lead has not recorded a band for this area" : "This check gives no band"}</b>
+                  <p style={{ ...muted, margin: "5px 0 0" }}>{selfTotal ? "The band above is this check's own working. When your audit lead records one for this area it appears here beside it." : NO_BAND_LINE}</p>
                 </>
               ) : (
                 <>
-                  <b style={{ fontSize: 14 }}>Band {band.band} of 5 — {band.name}</b>
+                  <b style={{ fontSize: 14 }}>Band {band.band} of 5, {band.name}</b>
                   <p style={{ ...muted, margin: "5px 0 0" }}>
                     This is the band your audit lead has already recorded for this area. It is not a result of this check.
                     {" "}{SELF_CHECK_DISCLAIMER}
@@ -1295,19 +1330,17 @@ export function SelfCheck() {
                             {d.label}
                             <div style={{ ...muted, fontSize: 11 }}>{d.definition}</div>
                           </td>
-                          <td style={{ padding: "8px 9px" }}>{d.band === undefined ? <span style={muted}>{d.checkedHere ? "not scored here" : "not scored"}</span> : `Band ${d.band}`}</td>
+                          <td style={{ padding: "8px 9px" }}>{d.band === undefined ? <span style={muted}>not scored</span> : `Band ${d.band}`}</td>
                           <td style={{ padding: "8px 9px", fontWeight: 700 }}>
                             {d.assessedHere
                               ? `${d.pct}% of ${bandWorking.maxPct}%`
-                              : <span style={{ ...muted, fontWeight: 400 }}>{d.checkedHere ? NOT_SCORED_HERE : NOT_ASSESSED_HERE}</span>}
+                              : <span style={{ ...muted, fontWeight: 400 }}>{NOT_ASSESSED_HERE}</span>}
                           </td>
                           <td style={{ padding: "8px 9px", color: "#475569" }}>{d.descriptor || <span style={muted}>—</span>}</td>
                           <td style={{ padding: "8px 9px", color: "#475569" }}>
                             {d.assessedHere
-                              ? (d.reason || DIMENSION_SOURCE[d.key])
-                              : d.checkedHere && DIMENSION_SOURCE_CHECKED[d.key]
-                                ? <b style={{ color: "#1e40af" }}>{DIMENSION_SOURCE_CHECKED[d.key]}</b>
-                                : <b style={{ color: "#92400e" }}>{DIMENSION_SOURCE[d.key]}</b>}
+                              ? (d.reason || DIMENSION_SOURCE_CHECKED[d.key] || DIMENSION_SOURCE[d.key])
+                              : <b style={{ color: "#92400e" }}>{DIMENSION_SOURCE[d.key]}</b>}
                           </td>
                         </tr>
                       ))}
@@ -2117,6 +2150,3 @@ function LinkField(props: {
   );
 }
 
-function bandName(b: number): string {
-  return EDUTRUST_BANDS.find((x) => x.band === b)?.name ?? "";
-}

@@ -28,7 +28,7 @@
 // this app has already removed. The auditor's OWN committed band still shows:
 // that is a recorded fact about the area, not a reading of this run.
 import { EDUTRUST_BANDS, EDUTRUST_DIMENSIONS, bandLevel } from "../data/edutrustRubric";
-import { pctForScore, DEFAULT_APSR_SCALE, type ApsrScale } from "./checklistBanding";
+import { pctForScore, finalBandFromPct, DEFAULT_APSR_SCALE, type ApsrScale } from "./checklistBanding";
 import type { ApsrDimensionScore, ApsrMatrixScores, Band } from "../types";
 
 export type BandDimensionRow = {
@@ -57,10 +57,12 @@ export type BandDimensionRow = {
   checkedHere: boolean;
 };
 
-// Which dimensions this page turns into a band. Approach and Processes only:
-// Option A writes the other two from the results-and-review pass, and whether
-// that should become a band is a decision deliberately still open.
-const SCORED_HERE: Record<BandDimensionRow["key"], boolean> = {
+// Which dimensions this page turns into a band. Approach and Processes always;
+// the other two only when the results-and-review pass actually ran and read
+// something, which is what `checked` carries. A dimension nobody looked at is
+// never scored, because "Not evident" is the bottom of the official scale and
+// scoring an absence understated a genuinely Band 4 area as Band 3 (9f63527).
+const ALWAYS_SCORED: Record<BandDimensionRow["key"], boolean> = {
   approach: true, processes: true, systemsOutcomes: false, review: false,
 };
 
@@ -75,18 +77,14 @@ export const DIMENSION_SOURCE: Record<BandDimensionRow["key"], string> = {
   review: "Not assessed by this check. It needs your review and improvement records, which this check does not read.",
 };
 
-// Said INSTEAD when the optional results-and-review folder was linked and read.
-// The dimension still carries no band here — that decision is separate and is
-// deliberately not taken by this page — but "not assessed" would be untrue once
-// the pass has read a folder and reported what it found.
+// Said for the two dimensions once the results-and-review pass HAS produced
+// verdicts, which is also when they are scored.
 export const DIMENSION_SOURCE_CHECKED: Partial<Record<BandDimensionRow["key"], string>> = {
-  systemsOutcomes: "Checked against your own documents for results and review records. What it found is below. It is not turned into a band here.",
-  review: "Checked against your own documents for results and review records. What it found is below. It is not turned into a band here.",
+  systemsOutcomes: "From the second look at your own documents for results and review records. What it found is reported below.",
+  review: "From the second look at your own documents for results and review records. What it found is reported below.",
 };
 
-// The Earned column for a dimension this page does not score. Two states, and
-// they must not be confused: one was looked at, one was not.
-export const NOT_SCORED_HERE = "checked, not scored here";
+// The Earned column for a dimension this run did not look at.
 export const NOT_ASSESSED_HERE = "not assessed";
 
 export type BandWorking = {
@@ -110,8 +108,10 @@ export function buildBandWorking(
 ): BandWorking {
   const rows: BandDimensionRow[] = EDUTRUST_DIMENSIONS.map((d) => {
     const key = d.key as BandDimensionRow["key"];
-    const assessedHere = SCORED_HERE[key];
-    const checkedHere = assessedHere || (key === "systemsOutcomes" ? checked.systemsOutcomes : key === "review" ? checked.review : false);
+    const checkedHere = ALWAYS_SCORED[key] || (key === "systemsOutcomes" ? checked.systemsOutcomes : key === "review" ? checked.review : false);
+    // Scored exactly when it was checked: a dimension this run looked at gets
+    // its band, and one it did not gets nothing at all.
+    const assessedHere = checkedHere;
     // The model still returns a band for all four, diagnosed from lines that
     // say outright it did not look. Dropped HERE, at the one place the rows are
     // built, so no surface downstream can print it: a screen, a CSV or a PDF
@@ -133,6 +133,42 @@ export function buildBandWorking(
   return { rows, maxPct: scale.maxPctPerDimension };
 }
 
+// ── The band, and the one condition under which this page shows one ─────────
+//
+// ALL FOUR dimensions must carry a real band from THIS run. That means the
+// results-and-review pass ran and read something: with no pass, or a pass that
+// read nothing, two of the four are missing and a total of the other two is not
+// a total. It is the same gate `complete` expresses on the human APSR matrix,
+// but it cannot reuse that function: apsrMatrixResult's `complete` describes a
+// human-entered ApsrMatrixScores and counts a scored 0 as complete, and neither
+// is true of this working. The suggester only ever returns 1 to 5, so a 0 can
+// never reach here.
+export type SelfCheckTotal = { band: Band; totalPct: number; maxPct: number; parts: { label: string; pct: number }[] };
+
+export function selfCheckTotal(w: BandWorking | undefined, scale: ApsrScale = DEFAULT_APSR_SCALE): SelfCheckTotal | null {
+  if (!w) return null;
+  if (!w.rows.every((r) => r.assessedHere && r.band !== undefined && r.band > 0)) return null;
+  const totalPct = w.rows.reduce((n, r) => n + r.pct, 0);
+  return {
+    band: finalBandFromPct(totalPct, scale),
+    totalPct,
+    maxPct: scale.maxPctPerDimension * 4,
+    parts: w.rows.map((r) => ({ label: r.label, pct: r.pct })),
+  };
+}
+
+// The official band's name. It lived as a private helper on the page, which is
+// why the exports could not use it.
+export function bandName(b: number): string {
+  return EDUTRUST_BANDS.find((x) => x.band === b)?.name ?? "";
+}
+
+// The arithmetic, written out, because a band nobody can check is a number to
+// be argued with rather than read.
+export function selfCheckTotalWorking(t: SelfCheckTotal): string {
+  return `${t.parts.map((p) => `${p.pct}%`).join(" + ")} = ${t.totalPct}% of ${t.maxPct}%`;
+}
+
 // The five bands with the descriptor for each dimension, so an auditor can read
 // the two dimension bands above against the official scale. No row is marked as
 // "this result": a self-check produces no overall band to mark.
@@ -141,18 +177,21 @@ export const BAND_LADDER = EDUTRUST_BANDS;
 export const ROWS_DO_NOT_SUM_NOTE =
   "No single requirement below carries a score into these dimensions. Each row is evidence that a dimension was judged on: your procedure verdicts feed Approach, and your combined verdicts feed Processes. The dimension judgements are made from the rows as a whole, not counted up from them.";
 
-// The counterpart to TWO_DIMENSIONS_NOTE for a run that read the third folder.
+// The counterpart to TWO_DIMENSIONS_NOTE for a run that assessed all four.
 export const THREE_FOLDERS_NOTE =
-  "This check read your written procedure and your records, then read the same documents again looking for results and review records. It still gives no overall band: turning four dimensions into one band is your audit lead's judgement, not this page's. What that second look found is reported below, requirement by requirement for Review, and as a whole for Systems & Outcomes.";
+  "This check read your written procedure and your records, then read the same documents again looking for results and review records. All four dimensions were assessed, so a band is given: it is the four percentages added up, and the arithmetic is shown beside it. It is still this tool's reading of your own documents, not an SSG result, and your audit lead sets the band that counts.";
+
+export const NO_BAND_WITHOUT_FOUR_NOTE =
+  "No band is shown for this check. A band is a total of all four dimensions, and two of them were not assessed on this run, so there is no total to give. Your audit lead assesses all four in the full audit and sets the band.";
 
 export const TWO_DIMENSIONS_NOTE =
-  "This check reads a written procedure and a set of records, so it can only assess Approach and Processes. It gives no overall band. Systems & Outcomes and Review are not assessed here, and scoring them low for not having been looked at would have understated a well-run area by one to two bands. Your audit lead assesses all four and sets the band.";
+  "Only Approach and Processes were assessed on this run, so no band is given. Scoring the other two low for not having been looked at would understate a well-run area by one to two bands, which is exactly what a band built on half the dimensions does. Your audit lead assesses all four and sets the band.";
 
 // Which of the two notes a result gets, read off the WORKING rather than off a
 // caller's own idea of what ran. One decision, so the screen, the CSV and the
 // printed page cannot disagree about whether the pass happened.
 export function dimensionsNote(w: BandWorking | undefined): string {
-  return w?.rows.some((r) => !r.assessedHere && r.checkedHere) ? THREE_FOLDERS_NOTE : TWO_DIMENSIONS_NOTE;
+  return w?.rows.every((r) => r.assessedHere) ? THREE_FOLDERS_NOTE : TWO_DIMENSIONS_NOTE;
 }
 
 export const INFERRED_THRESHOLDS_NOTE =
@@ -229,7 +268,7 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 // The words beside each track. Every state is carried in text as well as in
 // pattern, so the picture survives greyscale printing and a screen reader.
 function segmentText(seg: BandGraphic["segments"][number]): string {
-  if (!seg.assessedHere) return seg.checkedHere ? "checked, not scored here" : "not assessed by this check";
+  if (!seg.assessedHere) return "not assessed by this check";
   if (seg.band === undefined) return "not scored";
   return `Band ${seg.band} of 5 · ${seg.pct}% of ${seg.max}%`;
 }

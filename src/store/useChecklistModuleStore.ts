@@ -15,6 +15,7 @@ import type {
   HolisticBandRecord,
   ApsrDimensionScore,
   ApsrMatrixScores,
+  OutcomeReviewRow,
 } from "../types";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { buildDraftFinding, lineSufficiency, lineApsr, apsrMatrixResult } from "../lib/checklistBanding";
@@ -25,7 +26,7 @@ import { buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
 import { runLiveChecklistGeneration, runLiveEvidenceFill, runHolisticBandSuggestion, type HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
 import { effectiveSettings, type AIUsage } from "../lib/ai/aiClient";
-import type { OutcomeReviewLegUpdate } from "../lib/outcomeReviewApply";
+import { withOutcomeLegs, buildOutcomeReviewLegUpdates, type OutcomeReviewLegUpdate } from "../lib/outcomeReviewApply";
 import { useAISettingsStore } from "./useAISettingsStore";
 import { useScoringConfigStore } from "./useScoringConfigStore";
 import { useWorkspaceStore, composeSchoolContext } from "./useWorkspaceStore";
@@ -98,7 +99,11 @@ export type ChecklistModuleState = {
   // setHolisticBand. Returns null when AI is unavailable or the call fails
   // (the failure is recorded in the AI Review Log; no simulated fallback —
   // a fabricated band judgment would be worse than none).
-  suggestBand: (itemId: string) => Promise<HolisticBandSuggestionResult | null>;
+  // `outcomeRows` lets a caller diagnose Systems & Outcomes and Review from a
+  // results-and-review pass WITHOUT committing it to the checklist: the legs are
+  // patched into a copy of the lines for this one call. Nothing is written, so
+  // the audit lead's Apply gate and every finding's wording are untouched.
+  suggestBand: (itemId: string, outcomeRows?: OutcomeReviewRow[]) => Promise<HolisticBandSuggestionResult | null>;
 
   generateSpecific: (itemId: string) => Promise<void>;
   updatePendingLine: (itemId: string, lineId: string, patch: Partial<SpecificChecklistLine>) => void;
@@ -282,7 +287,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         set((s) => mapEntry(s, itemId, (e) => ({ ...e, apsrMatrix: { ...(e.apsrMatrix ?? {}), [dim]: value } })));
       },
 
-      suggestBand: async (itemId) => {
+      suggestBand: async (itemId, outcomeRows) => {
         const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
         const aiSettings = useAISettingsStore.getState();
         if (!req || !(aiSettings.enabled && aiSettings.apiKey)) return null;
@@ -299,7 +304,14 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         let usage: AIUsage | undefined;
         try {
           const settings = effectiveSettings(aiSettings, { purpose: "analysis", context: composeSchoolContext(ws.schoolContext) });
-          const result = await runHolisticBandSuggestion(req, get().entries[itemId]?.specific ?? [], settings, { memories, onUsage: (u) => { usage = u; } });
+          const lines = get().entries[itemId]?.specific ?? [];
+          // See withOutcomeLegs: the digest otherwise carries the "not assessed"
+          // placeholder for these two dimensions on every line, and a band
+          // diagnosed from that is a band diagnosed from an absence.
+          const withLegs = outcomeRows?.length
+            ? withOutcomeLegs(lines, buildOutcomeReviewLegUpdates(outcomeRows, { [itemId]: lines.map((l) => ({ id: l.id, sourceRef: l.sourceRef, clause: l.clause })) }))
+            : lines;
+          const result = await runHolisticBandSuggestion(req, withLegs, settings, { memories, onUsage: (u) => { usage = u; } });
           ws.pushAIReviewLog({
             agent: "Holistic Band Assessor",
             reviewType: "Checklist",

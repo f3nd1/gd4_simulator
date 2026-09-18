@@ -58,10 +58,12 @@ describe("the self-check reports only the dimensions it actually assessed", () =
     expect(w.rows[0].pct).toBe(0);
   });
 
-  it("marks which two dimensions this check does not assess, and says why", () => {
+  // With no results-and-review pass, these two are still the two that go
+  // unassessed, and the note still refuses a band on two of four.
+  it("marks which two dimensions a run without the pass does not assess, and says why", () => {
     const w = buildBandWorking({ approach: 5, processes: 5, systemsOutcomes: 5, review: 5 });
     expect(w.rows.filter((r) => !r.assessedHere).map((r) => r.key)).toEqual(["systemsOutcomes", "review"]);
-    expect(TWO_DIMENSIONS_NOTE).toMatch(/gives no overall band/);
+    expect(TWO_DIMENSIONS_NOTE).toMatch(/no band is given/);
     expect(TWO_DIMENSIONS_NOTE).toMatch(/one to two bands/);
     expect(DIMENSION_SOURCE.systemsOutcomes).toMatch(/Not assessed by this check/);
     expect(DIMENSION_SOURCE.review).toMatch(/Not assessed by this check/);
@@ -86,7 +88,7 @@ describe("the self-check reports only the dimensions it actually assessed", () =
   // The auditor's OWN band is a recorded fact about the area and survives.
   it("still reports a band the auditor committed, and none of its own", () => {
     expect(bandLineOf({ kind: "auditor", band: 4, name: "Exceeding", totalPct: 80 }))
-      .toBe("Band set by your auditor: Band 4 of 5 — Exceeding (80%)");
+      .toBe("Band set by your auditor: Band 4 of 5, Exceeding (80%)");
     expect(bandLineOf({ kind: "none" })).toBe(NO_BAND_LINE);
     expect(NO_BAND_LINE).toMatch(/gives no band/);
   });

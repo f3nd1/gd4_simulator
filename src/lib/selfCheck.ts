@@ -13,7 +13,7 @@ import { toCsv } from "./auditCsvExport";
 import { buildStamp } from "./buildInfo";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
@@ -614,6 +614,20 @@ export type SelfCheckBand =
   | { kind: "none" }
   | { kind: "auditor"; band: Band; name: string; totalPct: number };
 
+// The check's OWN band, when all four dimensions carried a score. Separate from
+// the auditor's: one is this tool reading your documents, the other is a
+// recorded decision, and an export that blurred them would be the worst thing
+// on the page.
+export type SelfCheckOwnBand = { band: Band; name: string; working: string } | null;
+
+// Derived from the WORKING the export is already printing, never passed in
+// separately: the band line and the dimension panel beneath it then cannot
+// disagree about whether all four were assessed.
+export function ownBandOf(w: BandWorking | undefined): SelfCheckOwnBand {
+  const t = selfCheckTotal(w);
+  return t ? { band: t.band, name: bandName(t.band), working: selfCheckTotalWorking(t) } : null;
+}
+
 export const SELF_CHECK_HEADERS = [
   // "In one line" sits beside Result so a spreadsheet can be read down two
   // columns without opening Why. It holds an engine field verbatim and is
@@ -668,9 +682,14 @@ export function missingText(w: SelfCheckWorking | undefined): string {
 export const NO_BAND_LINE =
   "This check gives no band. It assesses two of the four EduTrust dimensions, Approach and Processes; your audit lead assesses all four and sets the band.";
 
-export function bandLineOf(band: SelfCheckBand): string {
-  if (band.kind === "none") return NO_BAND_LINE;
-  return `Band set by your auditor: Band ${band.band} of 5 — ${band.name} (${band.totalPct}%)`;
+export function bandLineOf(band: SelfCheckBand, own?: SelfCheckOwnBand): string {
+  const ownLine = own
+    ? `This check's band: Band ${own.band} of 5, ${own.name}. ${own.working}. All four dimensions were assessed on this run. This is the tool's reading of your own documents, not an SSG result.`
+    : "";
+  if (band.kind === "none") return ownLine || NO_BAND_LINE;
+  // No em dash: house rule for anything a user reads.
+  const auditorLine = `Band set by your auditor: Band ${band.band} of 5, ${band.name} (${band.totalPct}%)`;
+  return ownLine ? `${ownLine} ${auditorLine}` : auditorLine;
 }
 
 // The band and the disclaimer ride in the CSV too. A spreadsheet gets
@@ -694,7 +713,7 @@ export function buildSelfCheckCsv(
   // and printing the area's band on top of half the answer would read as though
   // that half produced it.
   const trailer = [
-    ...(view === "overview" ? [bandLineOf(band)] : [VIEW_NOTE[view]]),
+    ...(view === "overview" ? [bandLineOf(band, ownBandOf(bandWorking))] : [VIEW_NOTE[view]]),
     ...(timing ? [`This check took ${timing}.`] : []),
     // Which build produced this file. A filed working paper that cannot say
     // which version of the tool wrote it cannot be reconciled with a later one.
@@ -936,7 +955,7 @@ export function buildSelfCheckHtml(opts: {
     <h3>What this tab feeds</h3>
     <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), PRINT_BAND_PALETTE, { idSuffix: "Feeds", feeds })}</div>
     <p class="muted">${escapeHtml(feeds.caption)}</p>`;
-  const bandLine = view === "overview" ? bandLineOf(band) : VIEW_NOTE[view];
+  const bandLine = view === "overview" ? bandLineOf(band, ownBandOf(bandWorking)) : VIEW_NOTE[view];
   // Same condition as the screen: a run with nothing unjudged must not carry a
   // paragraph explaining "Could not check", which reads as a warning about a
   // result that is not there.

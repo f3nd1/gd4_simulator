@@ -29,6 +29,43 @@ export function outcomeReviewLegs(row: OutcomeReviewRow): OutcomeReviewLegs {
 
 export type OutcomeReviewLegUpdate = { itemId: string; lineId: string } & OutcomeReviewLegs;
 
+// The same legs, applied to a COPY of the lines and thrown away afterwards.
+//
+// Why this exists: the band suggester diagnoses each dimension from a digest of
+// the lines' APSR notes, and on an Option A line the two legs below are the
+// "Not assessed by Option A" placeholder until a human clicks Apply on the PPD
+// Review page. Measured on a live run: every line in the digest read
+// "Systems&Outcomes Not evident; Review Not evident" while the pass had just
+// found review records and outcome data. Scoring those dimensions off that
+// digest would band them from a placeholder, which is the error this page has
+// had removed three times.
+//
+// So the self-check patches the legs IN MEMORY for the one call, and writes
+// nothing. The checklist, the findings and the audit lead's Apply gate are all
+// untouched: a finding's wording cannot change because a band was shown.
+export function withOutcomeLegs(
+  lines: SpecificChecklistLine[],
+  updates: OutcomeReviewLegUpdate[],
+): SpecificChecklistLine[] {
+  if (updates.length === 0) return lines;
+  const byLine = new Map(updates.map((u) => [u.lineId, u]));
+  return lines.map((l) => {
+    const u = byLine.get(l.id);
+    if (!u) return l;
+    // The SAME evidence item applyOutcomeReviewLegs writes to: the first one
+    // carrying an APSR snapshot. A line with none was never audited and has no
+    // snapshot to patch.
+    const idx = l.evidence.findIndex((ev) => ev.apsr);
+    if (idx < 0) return l;
+    return {
+      ...l,
+      evidence: l.evidence.map((ev, i) =>
+        i === idx && ev.apsr ? { ...ev, apsr: { ...ev.apsr, systemsOutcomes: u.systemsOutcomes, review: u.review } } : ev
+      ),
+    };
+  });
+}
+
 // Joins pass rows to checklist lines by normalized official ref — the same
 // join buildOptionALineWrites uses — and returns per-line leg updates.
 // notAssessed rows (stopped run / AI call failed in every window) produce NO
