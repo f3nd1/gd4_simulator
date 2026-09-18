@@ -559,8 +559,10 @@ describe("the two passes are separable, and each is counted in its own words", (
   it("keeps the procedure-only note separate from the procedure tab's", () => {
     expect(VIEW_NOTE["procedure-only"]).toBe(PROCEDURE_ONLY_NOTE);
     expect(VIEW_NOTE.procedure).not.toBe(PROCEDURE_ONLY_NOTE);
-    expect(VIEW_NOTE.procedure).toContain("other tab");
-    expect(VIEW_NOTE.records).toContain("other tab");
+    // Each half points at its counterpart BY NAME, so a reader does not have
+    // to count tabs to find the other answer.
+    expect(VIEW_NOTE.procedure).toContain(`${VIEW_LABEL.records} tab`);
+    expect(VIEW_NOTE.records).toContain(`${VIEW_LABEL.procedure} tab`);
     expect(VIEW_NOTE.overview).toBe("");
   });
 

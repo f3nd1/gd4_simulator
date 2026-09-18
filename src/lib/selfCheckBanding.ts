@@ -57,7 +57,7 @@ const ASSESSED_HERE: Record<BandDimensionRow["key"], boolean> = {
 };
 
 export const DIMENSION_SOURCE: Record<BandDimensionRow["key"], string> = {
-  approach: "From your written procedure: what the Your written procedure tab found.",
+  approach: "From your written procedure: what the Procedure tab found.",
   processes: "From your records: what the Overall tab concluded for each requirement.",
   systemsOutcomes: "Not assessed by this check. It needs outcome data your audit lead reviews separately.",
   review: "Not assessed by this check. It needs your review and improvement records, which this check does not read.",

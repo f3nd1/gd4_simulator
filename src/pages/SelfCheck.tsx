@@ -121,6 +121,10 @@ export function SelfCheck() {
   // back unmounted the node and shut it again. Deliberately not persisted: it
   // is a reading position, not a setting, and starts shut on every visit.
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Whether the file list on the result is open. Page-level for the same reason
+  // historyOpen is: the panel is not rendered at all on a tab with no files, so
+  // the element's own state would be lost on the way there and back.
+  const [filesOpen, setFilesOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -1099,7 +1103,7 @@ export function SelfCheck() {
                 be the same class of error as merging their chunk maps. The
                 overall tab keeps the merged view, which answers the different
                 question of what the whole check opened. */}
-            <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} />
+            <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} open={filesOpen} setOpen={setFilesOpen} />
 
             {/* The shape of the tab before a single row is read, and which
                 dimension this tab's own verdicts feed. Both were on the overall
@@ -1568,30 +1572,46 @@ function WhyCell({ row }: { row: SelfCheckRow }) {
 
 // What one pass read, as a list an auditor can tick down.
 //
-// Open by default and never self-closing: the point is to confirm Drive
-// actually opened everything, which cannot be done behind a disclosure
-// triangle. Unreadable rows carry a tint AND a word AND a cross, because a gap
-// reported against an unreadable file is not a real gap.
-function FileTable({ rows, perPass, sameLink }: { rows: SelfCheckFileRow[]; perPass: boolean; sameLink: boolean }) {
+// Collapsed by default: on a folder of any size this is the longest thing on
+// the tab, and it answers a question ("did Drive actually open everything?")
+// that a reader asks occasionally, not every time. The count is on the header
+// so the shut state still answers it roughly.
+//
+// The UNREADABLE warning does NOT collapse with it. A gap reported against a
+// file that was never read is not a real gap, and a warning that only appears
+// when the panel happens to be open is not a warning. Shut and clean the header
+// is one line; shut with failures it names the files. Unreadable rows still
+// carry a tint AND a word AND a cross inside.
+function FileTable({ rows, perPass, sameLink, open, setOpen }: {
+  rows: SelfCheckFileRow[]; perPass: boolean; sameLink: boolean;
+  open: boolean; setOpen: (v: boolean) => void;
+}) {
   if (rows.length === 0) return null;
   const counts = countFileRows(rows);
+  const warning = unreadableWarning(counts);
   return (
-    <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, margin: "12px 0", background: "#fff" }}>
-      <div style={{ padding: "10px 13px 0", fontSize: 13.5, fontWeight: 700, color: INK }}>
-        {perPass ? "Every file this tab read" : "Every file this check read"}
+    <details
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+      style={{ border: "1px solid #e2e8f0", borderRadius: 10, margin: "12px 0", background: "#fff", borderColor: counts.unreadable > 0 ? "#fde68a" : "#e2e8f0" }}
+    >
+      <summary style={{ cursor: "pointer", listStyle: "revert", padding: "10px 13px" }}>
+        <b style={{ fontSize: 13.5, color: INK }}>{perPass ? "Every file this tab read" : "Every file this check read"}</b>
+        {/* Each count is its own nowrap unit, so a narrow screen breaks
+            BETWEEN them rather than through "1 could not be read". */}
         <span style={{ ...muted, fontWeight: 400, marginLeft: 8 }}>
-          {counts.read} read{counts.check > 0 && ` · ${counts.check} worth checking`}{counts.unreadable > 0 && ` · ${counts.unreadable} could not be read`}
+          <span style={{ whiteSpace: "nowrap" }}>{counts.read} read</span>
+          {counts.check > 0 && <> · <span style={{ whiteSpace: "nowrap" }}>{counts.check} worth checking</span></>}
+          {counts.unreadable > 0 && <> · <span style={{ whiteSpace: "nowrap" }}>{counts.unreadable} could not be read</span></>}
         </span>
-      </div>
-      <div style={{ padding: "8px 13px 13px" }}>
+        {warning && (
+          <span style={{ ...muted, display: "block", marginTop: 6, color: "#92400e", fontWeight: 700 }}>{warning}</span>
+        )}
+      </summary>
+      <div style={{ padding: "0 13px 13px" }}>
         {sameLink && (
           <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px", marginTop: 0 }}>
             {SAME_LINK_WARNING}
-          </p>
-        )}
-        {counts.unreadable > 0 && (
-          <p style={{ ...muted, background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "9px 11px", marginTop: 0 }}>
-            {unreadableWarning(counts)}
           </p>
         )}
         <div style={{ overflowX: "auto" }}>
@@ -1632,7 +1652,7 @@ function FileTable({ rows, perPass, sameLink }: { rows: SelfCheckFileRow[]; perP
           </table>
         </div>
       </div>
-    </div>
+    </details>
   );
 }
 

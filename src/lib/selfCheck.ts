@@ -511,11 +511,15 @@ export function toRecordsRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckConte
 // one of them is missing its other half.
 export type SelfCheckView = "overview" | "procedure" | "records" | "procedure-only";
 
+// ONE definition, and it is the tab button, the CSV filename, the printed
+// page's heading and the PDF tab title. Renaming here renames all four, which
+// is the point: a tab called one thing on screen and another in the file an
+// auditor files is two names for one thing.
 export const VIEW_LABEL: Record<SelfCheckView, string> = {
   overview: "Overall",
-  procedure: "Your written procedure",
-  records: "Your records",
-  "procedure-only": "Your written procedure",
+  procedure: "Procedure",
+  records: "Records",
+  "procedure-only": "Procedure",
 };
 
 // Each view counts in its own vocabulary. A records view has no "partly":
@@ -533,8 +537,10 @@ export const VIEW_TALLY: Record<SelfCheckView, { complies: string; partly: strin
 export const VIEW_NOTE: Record<SelfCheckView, string> = {
   overview: "",
   "procedure-only": PROCEDURE_ONLY_NOTE,
-  procedure: "This is what your written procedure says it will do. It does not say whether any of it actually happened. Your records answer that, on the other tab.",
-  records: "This is what your records show actually happened. It does not say whether your written procedure covers it. Your written procedure answers that, on the other tab.",
+  // The tabs are named, now that their names are short enough to say in a
+  // sentence: "the other tab" made a reader count tabs to work out which.
+  procedure: "This is what your written procedure says it will do. It does not say whether any of it actually happened. Your records answer that, on the Records tab.",
+  records: "This is what your records show actually happened. It does not say whether your written procedure covers it. Your written procedure answers that, on the Procedure tab.",
 };
 
 // The four combinations a process owner has to be able to see, and the fifth
