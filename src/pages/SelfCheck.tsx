@@ -54,6 +54,44 @@ const h2: React.CSSProperties = { fontSize: 17, fontWeight: 700, margin: 0, colo
 // The number on each cell of the input row. Small, because it sits inside a
 // field label rather than heading a card of its own.
 const stepDot: React.CSSProperties = { ...stepNum, width: 21, height: 21, fontSize: 11.5 };
+
+// What each numbered step means, in full. It was three blocks of prose under
+// the fields — a guidance box, an expander and a line under each box — which is
+// the wall the user kept scrolling past on every run. The words are all still
+// here; they open from the number they belong to.
+//
+// The swapped-folder warning is in BOTH folder steps deliberately: there is no
+// honest detector for a swapped pair (a filename heuristic gave 18% false
+// positives), so the only defence is saying it where the link is pasted.
+const STEP_HELP: Record<number, { title: string; body: string[] }> = {
+  1: {
+    title: "Which area do you look after?",
+    body: [
+      "Pick the sub-criterion you are responsible for. The check reads only the requirement lines that belong to it, and its description appears under the row once you have chosen.",
+    ],
+  },
+  2: {
+    title: "Where is your written procedure?",
+    body: [
+      "What you SAY you do. The document that sets out how this area is meant to work: your policy, your procedure, your handbook or your terms of reference. Not minutes, registers, logs or reports, even when they are about this area: those go in box 3.",
+      "It must be a different folder from box 3. One link in both boxes makes every document count as your written procedure and as your records at the same time, and a requirement then looks proved because your procedure says it happens.",
+      "Getting the two the wrong way round is easy to do and hard to spot: the check cannot tell a swapped pair from an area with no records yet. If almost every line comes back the same way and the reasons keep saying the records were policy wording, check the two boxes before you believe the result.",
+    ],
+  },
+  3: {
+    title: "Where is your evidence?",
+    body: [
+      "What you actually DID. The records that show it happening: minutes, forms, logs, registers, signed copies, reports and emails. Not your policy or procedure documents, even when their names mention records: those go in box 2.",
+      "It must be a different folder from box 2, for the same reason: one folder in both boxes proves a requirement with the procedure that promised it.",
+    ],
+  },
+  4: {
+    title: "Run the check",
+    body: [
+      "The check reads your written procedure, then reads your records against it, then reads the same documents again for results and review records. Leave the tab open until it finishes: it runs in this browser, so closing or reloading stops it.",
+    ],
+  },
+};
 const muted: React.CSSProperties = { fontSize: 13, color: "#64748b", lineHeight: 1.55 };
 const input: React.CSSProperties = { width: "100%", boxSizing: "border-box", padding: "11px 12px", fontSize: 14, border: "1px solid #cbd5e1", borderRadius: 9, background: "#fff" };
 const bigBtn: React.CSSProperties = { border: "none", borderRadius: 10, padding: "13px 26px", fontSize: 15, fontWeight: 800, cursor: "pointer", background: "#7c3aed", color: "#fff" };
@@ -741,13 +779,26 @@ export function SelfCheck() {
         // A blink is a fast squash on a long cycle: visible if you are looking,
         // invisible if you are not.
         "@keyframes scBlink{0%,94%,100%{transform:scaleY(1)}96%,98%{transform:scaleY(0.12)}}",
+        // Four more movements on cycles that do not divide into each other, so
+        // the cat never falls into a visible loop: a head turn, an ear twitch
+        // each side, and one paw kneading. A check runs for minutes, and the
+        // reported complaint was that a breathing, blinking, tail-flicking cat
+        // was still too static to watch.
+        "@keyframes scHead{0%,44%{transform:rotate(0deg) translateX(0)}52%{transform:rotate(-7deg) translateX(-0.6px)}60%{transform:rotate(-7deg) translateX(-0.6px)}70%{transform:rotate(5deg) translateX(0.5px)}78%{transform:rotate(5deg) translateX(0.5px)}88%,100%{transform:rotate(0deg) translateX(0)}}",
+        "@keyframes scEarL{0%,80%,100%{transform:rotate(0deg)}84%{transform:rotate(-13deg)}88%{transform:rotate(4deg)}92%{transform:rotate(0deg)}}",
+        "@keyframes scEarR{0%,36%,100%{transform:rotate(0deg)}40%{transform:rotate(12deg)}45%{transform:rotate(-4deg)}50%{transform:rotate(0deg)}}",
+        "@keyframes scKnead{0%,58%,100%{transform:translateY(0) scaleX(1)}64%{transform:translateY(-1.6px) scaleX(0.94)}70%{transform:translateY(0) scaleX(1.03)}76%{transform:translateY(0) scaleX(1)}}",
         ".sc-cat-body{animation:scBreathe 4s ease-in-out infinite;transform-origin:23px 33px}",
         ".sc-cat-tail{animation:scTail 3.2s ease-in-out infinite;transform-origin:33px 31px}",
         ".sc-cat-eyes{animation:scBlink 6s ease-in-out infinite;transform-origin:23px 15px}",
+        ".sc-cat-head{animation:scHead 9s ease-in-out infinite;transform-origin:23px 21px}",
+        ".sc-cat-ear-l{animation:scEarL 7s ease-in-out infinite;transform-origin:18px 10px}",
+        ".sc-cat-ear-r{animation:scEarR 11s ease-in-out infinite;transform-origin:28px 10px}",
+        ".sc-cat-paw-l{animation:scKnead 5.5s ease-in-out infinite;transform-origin:18px 33px}",
         // Anyone who has asked the operating system for less movement gets a
         // still cat. The rotating copy and the elapsed timer still change, so
         // the card is still demonstrably alive without any animation at all.
-        "@media (prefers-reduced-motion: reduce){.sc-cat-body,.sc-cat-tail,.sc-cat-eyes{animation:none}.sc-bar,.sc-indet{animation:none!important;transition:none!important}}",
+        "@media (prefers-reduced-motion: reduce){.sc-cat-body,.sc-cat-tail,.sc-cat-eyes,.sc-cat-head,.sc-cat-ear-l,.sc-cat-ear-r,.sc-cat-paw-l{animation:none}.sc-bar,.sc-indet{animation:none!important;transition:none!important}}",
         // The band graphic's palette, as custom properties so the SAME markup
         // renders on a light card and on a dark one. The rest of this page is
         // light-only today; the graphic is written so it does not become
@@ -780,7 +831,9 @@ export function SelfCheck() {
         // ── The input row, to the supplied design's "Inputs used for this
         // check" card: area, written procedure, records and run, left to right
         // in one row, the whole thing folding away once there is a result.
-        ".sc-inputs{border:1px solid #dfe5ee;border-radius:14px;background:#fff;margin-bottom:16px;overflow:hidden}",
+        // NOT overflow:hidden. The step popovers hang out of this card, and hidden
+        // clipped them mid-sentence with their Close button off the bottom.
+        ".sc-inputs{border:1px solid #dfe5ee;border-radius:14px;background:#fff;margin-bottom:16px}",
         ".sc-inputs-summary{list-style:none;cursor:pointer;padding:13px 17px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:750;font-size:14px;color:#172033}",
         ".sc-inputs-summary::-webkit-details-marker{display:none}",
         ".sc-inputs-summary:after{content:\"Show\";font-size:12px;color:#6d28d9;font-weight:800;margin-left:auto}",
@@ -789,7 +842,10 @@ export function SelfCheck() {
         ".sc-inputs-body{border-top:1px solid #eef2f6;padding:16px 17px 4px;display:grid;grid-template-columns:1.05fr 1fr 1fr auto;gap:14px;align-items:start}",
         ".sc-field{min-width:0}",
         ".sc-field label{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:800;color:#465268;margin:0 0 6px;min-height:22px}",
-        ".sc-field-help{font-size:11.5px;line-height:1.45;color:#65728a;margin:6px 0 0}",
+        // The step explanation, anchored to its number. Above the field rather
+        // than below it, because the fields sit in a row and a panel pushing
+        // down would move the other three.
+        ".sc-step-help{position:absolute;z-index:20;top:26px;left:0;width:330px;max-width:80vw;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 8px 24px rgba(16,24,40,.12);padding:11px 13px;font-size:12.5px;font-weight:400;line-height:1.5;color:#475569;white-space:normal}",
         ".sc-run-button{height:42px;border:0;border-radius:9px;background:#7c3aed;color:#fff;font-weight:800;font-size:14px;padding:0 20px;white-space:nowrap;font-family:inherit}",
         ".sc-inputs-more{padding:8px 17px 16px}",
         "@media (max-width: 980px){",
@@ -823,6 +879,9 @@ export function SelfCheck() {
         // The gap is deliberate: the four counts are one thing to read, the two
         // pictures under them are another.
         ".sc-hero-split{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;margin-top:18px}",
+        // Hidden while the sidebar's Export card is on screen (see the 900px
+        // block, where the sidebar goes and this comes back).
+        ".sc-export-foot{display:none}",
         // Filters and search sit above the one requirement they choose, and
         // do not float: with a single requirement on the stage the list is
         // never scrolled past while it is being read.
@@ -885,6 +944,7 @@ export function SelfCheck() {
         ".sc-side-list{display:flex;gap:7px;overflow-x:auto;max-height:none;padding:2px 2px 8px}",
         ".sc-req-link{min-width:190px;flex:0 0 190px}",
         ".sc-side-card.sc-download-card{display:none}",
+        ".sc-export-foot{display:flex}",
         ".sc-finding-summary{grid-template-columns:1fr}",
         ".sc-summary-block+.sc-summary-block{border-left:0;border-top:1px solid #eef2f7}",
         ".sc-detail-grid{grid-template-columns:1fr}",
@@ -1003,7 +1063,7 @@ export function SelfCheck() {
 
           <div className="sc-inputs-body">
             <div className="sc-field">
-              <label htmlFor="sc-area"><span style={stepDot}>1</span>Which area do you look after?</label>
+              <label htmlFor="sc-area"><StepDot n={1} />Which area do you look after?</label>
               <select id="sc-area" value={scope} onChange={(e) => { setScope(e.target.value); setRunIndex(0); setConfirmDelete(null); setAllRuns(false); setPhase("idle"); setError(null); setConfirmOverwrite(false); }}
                 style={{ ...input, cursor: "pointer" }} disabled={running}>
                 <option value="">Choose your area…</option>
@@ -1023,7 +1083,6 @@ export function SelfCheck() {
               <LinkField
                 step={2}
                 label="Where is your written procedure?"
-                help="What you SAY you do: policy, procedure, handbook or terms of reference."
                 value={procLink} onChange={setProcLink} state={procState} disabled={!area || running}
                 onEdit={() => { setError(null); setConfirmOverwrite(false); }}
               />
@@ -1033,14 +1092,13 @@ export function SelfCheck() {
               <LinkField
                 step={3}
                 label="Where is your evidence?"
-                help="What you actually DID: minutes, forms, logs, registers, signed copies, reports and emails."
                 value={evLink} onChange={setEvLink} state={evState} disabled={!area || running}
                 onEdit={() => { setError(null); setConfirmOverwrite(false); }}
               />
             </div>
 
             <div className="sc-field sc-run-field" style={{ opacity: ready || running ? 1 : 0.55 }}>
-              <label><span style={stepDot}>4</span>Run the check</label>
+              <label><StepDot n={4} />Run the check</label>
               <button
                 type="button" className="sc-run-button"
                 style={{ opacity: ready && !running ? 1 : 0.45, cursor: ready && !running ? "pointer" : "not-allowed" }}
@@ -1114,51 +1172,11 @@ export function SelfCheck() {
             />
           )}
 
-          {/* Four blocks used to stand here before the first box: an intro
-              paragraph, this warning box, and a full paragraph under each
-              field. All of it was true, and stacked it was 323px of reading
-              before a link could be pasted. What is needed at the moment of
-              pasting is the two-line distinction and the swap warning; the
-              rest is read once, so it is folded away.
-
-              The swap warning stays VISIBLE and is not folded: the check
-              cannot tell a swapped pair from an honest "documented but no
-              records" result, because both were run and both produce the same
-              evidence-side signature down to the same comment. There is no
-              honest detector, so this sentence is the only defence.
-
-              A plain native <details> is safe here where the run-history one
-              was not: this section always renders, so the element is never
-              unmounted and keeps its own open state. */}
-          <div style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", margin: 0 }}>
-            <b>First box: what you SAY you do. Second box: what you actually DID.</b> They must be two
-            different folders, and getting them the wrong way round is easy to do and hard to spot.
-            <details style={{ marginTop: 6 }}>
-              <summary style={{ cursor: "pointer", listStyle: "revert", fontWeight: 700, color: INK }}>What goes in each box</summary>
-              <p style={{ margin: "7px 0 0" }}>
-                <b>Where is your written procedure?</b> The document that sets out how this area is meant to
-                work: your policy, your procedure, your handbook or your terms of reference. Not minutes,
-                registers, logs or reports, even when they are about this area: those go in the second box.
-              </p>
-              <p style={{ margin: "7px 0 0" }}>
-                <b>Where is your evidence?</b> The records that show it happening: minutes, forms, logs,
-                registers, signed copies, reports and emails. Not your policy or procedure documents, even
-                when their names mention records: those go in the first box.
-              </p>
-              <p style={{ margin: "7px 0 0" }}>
-                <b>Why two different folders.</b> One link in both boxes makes every document count as your
-                written procedure and as your records at the same time, and a requirement then looks proved
-                because your procedure says it happens.
-              </p>
-              <p style={{ margin: "7px 0 0" }}>
-                <b>What a swapped pair looks like.</b> The check reads the first box looking for what you
-                promise and the second looking for proof it happened, and it cannot tell a swapped pair from
-                an area with no records yet. If almost every line comes back the same way and the reasons keep
-                saying the records were policy wording, check the two boxes before you believe the result.
-              </p>
-            </details>
-          </div>
-          <div style={{ height: 10 }} />
+          {/* The guidance box and its "what goes in each box" expander that
+              used to stand here are behind the numbers on the row itself now
+              (STEP_HELP): every word of them is in step 2 and step 3,
+              including the swapped-folder warning, which is repeated in both
+              because there is no honest detector for a swapped pair. */}
 
           {/* A third box for a separate results-and-review folder was here for
               one commit. It was removed because this folder already holds what
@@ -1188,7 +1206,9 @@ export function SelfCheck() {
               than because a record shows it happening. Point the two boxes at two different folders before running.
             </p>
           )}
-          {plan.note && (
+          {/* Only while nothing is running: during a run the same sentence is
+              inside the panel with the cat and the timer, not repeated here. */}
+          {plan.note && !running && (
             <p style={{
               ...muted, marginBottom: 0, marginTop: 14, padding: "9px 11px", borderRadius: 8,
               background: plan.canRun ? (plan.kind === "full" ? "#f0fdf4" : "#fffbeb") : "#fef2f2",
@@ -1203,13 +1223,35 @@ export function SelfCheck() {
 
           {running && (
             <div>
-              {/* Elapsed time runs for the whole check, from the first stage to
-                  the last, so a long run is never indistinguishable from a hang. */}
-              <div style={{ ...muted, marginTop: 0, marginBottom: 10 }}>
-                Running for {formatElapsed(now - (runStartedAt || now))}
-                {/* Only once a requirement has actually finished, so the figure
-                    is measured pace rather than an invented constant. */}
-                {remaining && <span> · {remaining}</span>}
+              {/* ONE panel while the check runs: the cat, the elapsed time, the
+                  finish estimate, what the check is doing with your documents
+                  and the rotating line. These were three separate blocks — a
+                  timer line at the top, the plan note above the stage list and
+                  the cat below it — for one piece of information.
+
+                  The cat is also the only thing here that moves between engine
+                  events: the stage list is entirely event-driven and holds
+                  still for 15 to 25 seconds at a time, which reads as a freeze. */}
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", marginBottom: 12 }}>
+                <WaitingCat />
+                <div style={{ minWidth: 0 }}>
+                  {/* Elapsed time runs for the whole check, from the first stage
+                      to the last, so a long run is never indistinguishable from
+                      a hang. The estimate appears only once a requirement has
+                      actually finished, so it is measured pace rather than an
+                      invented constant. */}
+                  <div style={{ fontSize: 14, fontWeight: 700, color: INK }}>
+                    Running for {formatElapsed(now - (runStartedAt || now))}
+                    {remaining && <span style={{ ...muted, fontWeight: 400 }}> · {remaining}</span>}
+                  </div>
+                  {plan.note && (
+                    <div style={{ ...muted, marginTop: 4 }}>
+                      {plan.note}
+                      {plan.kind === "full" && " I will then read the same documents again looking for results and review records, and report what they show for the two areas this check used to leave alone."}
+                    </div>
+                  )}
+                  <div style={{ ...muted, marginTop: 4 }}>{waitingMessage(now - (runStartedAt || now))}</div>
+                </div>
               </div>
 
               <ol style={{ listStyle: "none", padding: 0, margin: "0 0 12px" }}>
@@ -1255,14 +1297,6 @@ export function SelfCheck() {
                   );
                 })}
               </ol>
-
-              {/* The only thing on this card that moves between engine events.
-                  The stage list above is entirely event-driven and holds still
-                  for 15 to 25 seconds at a time, which reads as a freeze. */}
-              <div style={{ display: "flex", alignItems: "center", gap: 12, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
-                <WaitingCat />
-                <div style={{ ...muted, margin: 0 }}>{waitingMessage(now - (runStartedAt || now))}</div>
-              </div>
 
               {/* Stall: the engine bumps a heartbeat on every event, so silence
                   is measurable rather than guessed. */}
@@ -1944,7 +1978,11 @@ export function SelfCheck() {
               </div>
             )}
 
-            <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+            {/* The same two handlers as the sidebar's pair, and hidden at every
+                width where that sidebar is on screen: two sets of download
+                buttons on one page is one set too many. Below 900px the
+                sidebar is gone, and this is the only way to export. */}
+            <div className="sc-export-foot" style={{ gap: 8, marginTop: 14, flexWrap: "wrap" }}>
               <button type="button" onClick={onPdf} style={{ ...bigBtn, fontSize: 13.5, padding: "10px 18px" }}>⬇ Download as PDF</button>
               <button type="button" onClick={onCsv} style={{ ...bigBtn, fontSize: 13.5, padding: "10px 18px", background: "#fff", color: INK, border: "1px solid #cbd5e1" }}>⬇ Download as spreadsheet (CSV)</button>
             </div>
@@ -2369,13 +2407,14 @@ function RunHistory(props: {
                                 <span key={i} style={{ opacity: v === 0 ? 0.35 : 1, fontWeight: v > 0 ? 700 : 400 }}>{v}</span>
                               ))}
                         </div>
-                        {/* Archived runs only, in its own column with a gutter,
-                            never inside the row's click target. The current
-                            result is what the Evidence Folder and PPD Review
-                            pages read, and the store refuses index 0 too, so
-                            this is not the only guard. */}
+                        {/* In its own column with a gutter, never inside the
+                            row's click target. The LATEST check can be deleted
+                            too now: an area with one check had no delete
+                            anywhere, which is what a user hit. Deleting it
+                            promotes the check behind it, and the confirmation
+                            says so. */}
                         <div className="sc-run-del" style={{ ...cell, textAlign: "right", paddingRight: 6 }}>
-                          {!r.current && r.openable && (
+                          {r.openable && (
                             <button
                               type="button" onClick={() => setConfirmDelete({ kind: "run", index: r.index })}
                               title={`Delete the check from ${r.label}`}
@@ -2479,7 +2518,16 @@ function DeleteConfirm({ what, runs, onCancel, onConfirm }: { what: DeleteTarget
         ) : (
           <>
             <li>The whole check from <b>{target?.label}</b> goes: its results, what it read, its timing and its line on the timeline.</li>
-            <li>Your latest check is not affected. It is what your audit lead sees, and it cannot be deleted from here.</li>
+            {target?.current ? (
+              <li>
+                This is your <b>latest</b> check, the one your audit lead sees.
+                {archived > 0
+                  ? " The check before it takes its place as the latest one."
+                  : " It is the only check of this area, so the area goes back to never having been checked."}
+              </li>
+            ) : (
+              <li>Your latest check is not affected. It is what your audit lead sees.</li>
+            )}
             <li>This cannot be undone. Download it first if you want a copy.</li>
           </>
         )}
@@ -2558,39 +2606,91 @@ function WaitingCat() {
         <g className="sc-cat-body">
           {/* haunch and chest, one sitting silhouette */}
           <path d="M14 33 C13 24, 17 19, 23 19 C29 19, 33 24, 32 33 Z" fill="#b6c2d2" />
-          {/* head */}
-          <circle cx="23" cy="15" r="8" fill="#b6c2d2" />
-          {/* ears */}
-          <path d="M16.5 10 L16 4.5 L21 8 Z" fill="#b6c2d2" />
-          <path d="M29.5 10 L30 4.5 L25 8 Z" fill="#b6c2d2" />
-          {/* eyes: two short strokes that squash shut on the blink */}
-          <g className="sc-cat-eyes">
-            <ellipse cx="20" cy="15" rx="1.3" ry="1.6" fill="#475569" />
-            <ellipse cx="26" cy="15" rx="1.3" ry="1.6" fill="#475569" />
+          {/* the head is its own group: it tilts and turns on its own cycle,
+              which is what makes the cat look like it is watching the run
+              rather than sitting still and breathing. */}
+          <g className="sc-cat-head">
+            <circle cx="23" cy="15" r="8" fill="#b6c2d2" />
+            {/* ears, each hinged at its own base so they twitch separately */}
+            <path className="sc-cat-ear-l" d="M16.5 10 L16 4.5 L21 8 Z" fill="#b6c2d2" />
+            <path className="sc-cat-ear-r" d="M29.5 10 L30 4.5 L25 8 Z" fill="#b6c2d2" />
+            {/* eyes: two short strokes that squash shut on the blink */}
+            <g className="sc-cat-eyes">
+              <ellipse cx="20" cy="15" rx="1.3" ry="1.6" fill="#475569" />
+              <ellipse cx="26" cy="15" rx="1.3" ry="1.6" fill="#475569" />
+            </g>
+            {/* nose */}
+            <path d="M23 18 l-1.2 -1.4 h2.4 Z" fill="#a78bfa" />
+            {/* whiskers, so the head turn reads as a turn */}
+            <g stroke="#8ea0b5" strokeWidth="0.7" strokeLinecap="round">
+              <path d="M19 18.4 L13.5 17.6" /><path d="M19 19.2 L13.8 19.8" />
+              <path d="M27 18.4 L32.5 17.6" /><path d="M27 19.2 L32.2 19.8" />
+            </g>
           </g>
-          {/* nose */}
-          <path d="M23 18 l-1.2 -1.4 h2.4 Z" fill="#a78bfa" />
         </g>
-        {/* paws stay put while the body breathes above them */}
-        <ellipse cx="18" cy="33" rx="4" ry="2.2" fill="#d5dde7" />
+        {/* front paws: one of them kneads on a long cycle */}
+        <ellipse className="sc-cat-paw-l" cx="18" cy="33" rx="4" ry="2.2" fill="#d5dde7" />
         <ellipse cx="28" cy="33" rx="4" ry="2.2" fill="#d5dde7" />
       </g>
     </svg>
   );
 }
 
-// One Drive-link field: its plain-language question, the one line that says
-// which folder it means, and per-field validation. Two of these rather than one
+// The numbered badge, which is also the control that opens that step's
+// explanation. A hover tooltip was tried on this page and reported as doing
+// nothing: it needs a steady hover, never fires on a click and does not exist
+// on a touch screen. This is a button, so it works on all three.
+function StepDot({ n }: { n: number }) {
+  const [open, setOpen] = useState(false);
+  const help = STEP_HELP[n];
+  const box = useRef<HTMLSpanElement>(null);
+  // A popover that only closes from its own Close button sits over whatever is
+  // behind it until you find that button — it blocked the run-history control
+  // in testing. Escape and a click anywhere else close it, as any popover
+  // should.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  return (
+    <span ref={box} style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
+        title={`What step ${n} means`} aria-label={`What step ${n} means`}
+        style={{ ...stepDot, border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit" }}
+      >
+        {n}
+      </button>
+      {open && (
+        <span className="sc-step-help" role="note">
+          <b style={{ display: "block", color: INK, marginBottom: 4 }}>{help.title}</b>
+          {help.body.map((line) => <span key={line} style={{ display: "block", marginBottom: 6 }}>{line}</span>)}
+          <button type="button" onClick={() => setOpen(false)}
+            style={{ background: "none", border: "none", padding: 0, font: "inherit", fontWeight: 700, color: "#1d4ed8", cursor: "pointer", textDecoration: "underline" }}>
+            Close
+          </button>
+        </span>
+      )}
+    </span>
+  );
+}
+
+// One Drive-link field: its plain-language question and per-field validation. Two of these rather than one
 // shared field, because the two folders are read by different passes.
 function LinkField(props: {
-  step: number; label: string; help: string; value: string; state: "empty" | "bad" | "ok";
+  step: number; label: string; value: string; state: "empty" | "bad" | "ok";
   disabled: boolean; onChange: (v: string) => void; onEdit: () => void;
 }) {
   return (
     <div>
       {/* The numbered label is the cell's own heading now: the four steps read
-          left to right across the row rather than as four stacked headings. */}
-      <label><span style={stepDot}>{props.step}</span>{props.label}</label>
+          left to right across the row rather than as four stacked headings,
+          and the number opens what used to be a paragraph underneath. */}
+      <label><StepDot n={props.step} />{props.label}</label>
       <input
         value={props.value}
         onChange={(e) => { props.onChange(e.target.value); props.onEdit(); }}
@@ -2606,9 +2706,6 @@ function LinkField(props: {
         </p>
       )}
       {props.state === "ok" && <p style={{ ...muted, color: "#166534", margin: "7px 0 0" }}>That looks right.</p>}
-      {/* Under the box rather than above it: in a row of four cells the help
-          line would otherwise push the inputs out of line with each other. */}
-      <p className="sc-field-help">{props.help}</p>
     </div>
   );
 }

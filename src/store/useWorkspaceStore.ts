@@ -1383,13 +1383,40 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       updateCycle: (patch) => set((s) => ({ cycle: { ...s.cycle, ...patch, updatedAt: new Date().toISOString() } })),
 
       deleteSelfCheckRun: (subCriterionId, index) => {
-        // Archived runs only. The current result belongs to the audit lead.
-        if (index < 1) return;
         set((st) => {
           const ppdHist = st.ppdReviewHistory[subCriterionId] ?? [];
           const evHist = st.evidenceAssessmentHistory[subCriterionId] ?? [];
+          // INDEX 0 IS THE CURRENT RESULT. It used to be undeletable, because
+          // it is what the Evidence Folder and PPD Review pages read for this
+          // area — but an area with exactly one check then had no way to remove
+          // anything at all, which is what the user hit. Deleting it promotes
+          // the newest archived run into its place, so those pages always read
+          // a real run or nothing; the page's confirmation says both.
+          if (index === 0) {
+            const ppdRest = [...ppdHist];
+            const evRest = [...evHist];
+            const nextPpd = ppdRest.shift();
+            const nextEv = evRest.shift();
+            const ppdResults = { ...st.ppdReviewResults };
+            const evResults = { ...st.evidenceAssessments };
+            if (nextPpd) ppdResults[subCriterionId] = nextPpd; else delete ppdResults[subCriterionId];
+            if (nextEv) evResults[subCriterionId] = nextEv; else delete evResults[subCriterionId];
+            // The results-and-review pass belongs to the run that was deleted,
+            // never to the one promoted behind it.
+            const outcome = { ...st.outcomeReviewResults };
+            delete outcome[subCriterionId];
+            return {
+              ppdReviewResults: ppdResults,
+              evidenceAssessments: evResults,
+              outcomeReviewResults: outcome,
+              ppdReviewHistory: { ...st.ppdReviewHistory, [subCriterionId]: ppdRest },
+              evidenceAssessmentHistory: { ...st.evidenceAssessmentHistory, [subCriterionId]: evRest },
+              ppdRunLog: { ...st.ppdRunLog, [subCriterionId]: (st.ppdRunLog[subCriterionId] ?? []).slice(1) },
+              evidenceRunLog: { ...st.evidenceRunLog, [subCriterionId]: (st.evidenceRunLog[subCriterionId] ?? []).slice(1) },
+            };
+          }
           const at = index - 1;
-          if (at >= Math.max(ppdHist.length, evHist.length)) return {};
+          if (at < 0 || at >= Math.max(ppdHist.length, evHist.length)) return {};
           return {
             ppdReviewHistory: { ...st.ppdReviewHistory, [subCriterionId]: ppdHist.filter((_, i) => i !== at) },
             evidenceAssessmentHistory: { ...st.evidenceAssessmentHistory, [subCriterionId]: evHist.filter((_, i) => i !== at) },

@@ -48,24 +48,34 @@ describe("deleting one run", () => {
     expect(s.ppdHistory).toEqual(s.history);
   });
 
-  // The CURRENT result is what the Evidence Folder and PPD Review pages read.
-  // A process owner must not be able to remove the result their audit lead is
-  // working from, and that is enforced HERE, not only hidden in the page.
-  it("refuses to delete the current result, whatever asks it to", () => {
+  // The CURRENT result is what the Evidence Folder and PPD Review pages read,
+  // so deleting it must never leave those pages pointing at nothing by
+  // accident: the check behind it is promoted in the same write, and BOTH
+  // passes move together.
+  it("deletes the current result and promotes the check behind it", () => {
     useWorkspaceStore.getState().deleteSelfCheckRun(SUB, 0);
     const s = shape();
-    expect(s.current).toEqual(["2026-03-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z"]);
-    expect(s.history).toEqual(["2026-02-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"]);
+    expect(s.current).toEqual(["2026-02-01T00:00:00.000Z", "2026-02-01T00:00:00.000Z"]);
+    expect(s.history).toEqual(["2026-01-01T00:00:00.000Z"]);
+    expect(s.ppdHistory).toEqual(s.history);
   });
 
-  it("refuses even when the current result is the only run there is", () => {
+  // The pass belongs to the run that produced it. Promoting an older run must
+  // not hand it the deleted run's results-and-review pass.
+  it("drops the results-and-review pass with the run it belonged to", () => {
+    useWorkspaceStore.setState({ outcomeReviewResults: { [SUB]: { subCriterionId: SUB, rows: [], runAt: "x", runId: "OR-1", chunkFileNames: {} } } } as never);
+    useWorkspaceStore.getState().deleteSelfCheckRun(SUB, 0);
+    expect(useWorkspaceStore.getState().outcomeReviewResults[SUB]).toBeUndefined();
+  });
+
+  it("leaves the area unchecked when the only run there is goes", () => {
     useWorkspaceStore.setState({
       ppdReviewResults: { [SUB]: ppd("3") }, evidenceAssessments: { [SUB]: ev("3") },
       ppdReviewHistory: { [SUB]: [] }, evidenceAssessmentHistory: { [SUB]: [] },
     } as never);
     useWorkspaceStore.getState().deleteSelfCheckRun(SUB, 0);
-    expect(useWorkspaceStore.getState().evidenceAssessments[SUB]).toBeDefined();
-    expect(useWorkspaceStore.getState().ppdReviewResults[SUB]).toBeDefined();
+    expect(useWorkspaceStore.getState().evidenceAssessments[SUB]).toBeUndefined();
+    expect(useWorkspaceStore.getState().ppdReviewResults[SUB]).toBeUndefined();
   });
 
   it("touches no other sub-criterion", () => {
@@ -80,7 +90,7 @@ describe("deleting one run", () => {
   });
 
   it("is a no-op on an index that does not exist, rather than corrupting the pairing", () => {
-    for (const bad of [99, -1, 0]) useWorkspaceStore.getState().deleteSelfCheckRun(SUB, bad);
+    for (const bad of [99, -1]) useWorkspaceStore.getState().deleteSelfCheckRun(SUB, bad);
     expect(shape().history).toEqual(["2026-02-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"]);
     expect(shape().current).toEqual(["2026-03-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z"]);
   });
@@ -96,6 +106,17 @@ describe("deleting one run", () => {
     useWorkspaceStore.getState().deleteSelfCheckRun(SUB, 1);
     expect(useWorkspaceStore.getState().evidenceRunLog[SUB].map((x) => x.at)).toEqual(["r3", "r1"]);
     expect(useWorkspaceStore.getState().ppdRunLog[SUB].map((x) => x.at)).toEqual(["r3", "r1"]);
+  });
+
+  it("takes the current run's timeline entry with it when the current run goes", () => {
+    const sum = (at: string) => ({ at, c: 1, p: 0, d: 0, u: 0, n: 1 });
+    useWorkspaceStore.setState({
+      evidenceRunLog: { [SUB]: [sum("r3"), sum("r2"), sum("r1")] },
+      ppdRunLog: { [SUB]: [sum("r3"), sum("r2"), sum("r1")] },
+    } as never);
+    useWorkspaceStore.getState().deleteSelfCheckRun(SUB, 0);
+    expect(useWorkspaceStore.getState().evidenceRunLog[SUB].map((x) => x.at)).toEqual(["r2", "r1"]);
+    expect(useWorkspaceStore.getState().ppdRunLog[SUB].map((x) => x.at)).toEqual(["r2", "r1"]);
   });
 });
 
