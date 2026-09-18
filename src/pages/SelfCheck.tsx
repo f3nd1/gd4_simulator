@@ -133,12 +133,17 @@ export function SelfCheck() {
   // historyOpen is: the panel is not rendered at all on a tab with no files, so
   // the element's own state would be lost on the way there and back.
   const [filesOpen, setFilesOpen] = useState(false);
-  // Which requirements the list is showing. Both reset on a tab switch, the
-  // way the supplied design does it: a filter left over from Overall would
+  // Which requirements the selector is offering. Both reset on a tab switch,
+  // the way the supplied design does it: a filter left over from Overall would
   // silently hide lines on Procedure, and a reader who did not notice would
   // read a short list as the whole tab.
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
+  // Which requirement the stage is showing. Held by REF, not by index: the
+  // three tabs return the same refs in the same order, so switching tab keeps
+  // the reader on the requirement they were reading rather than throwing them
+  // back to the first one.
+  const [selectedRef, setSelectedRef] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -415,6 +420,11 @@ export function SelfCheck() {
       return byStatus && byText;
     });
   }, [rows, filter, query]);
+  // DERIVED, never stored: a filter or a tab switch can take the chosen
+  // requirement off the list, and the design's answer is to fall through to
+  // the first one still on offer rather than show an empty stage.
+  const selected = visibleRows.find((r) => r.ref === selectedRef) ?? visibleRows[0];
+  const selectedIdx = selected ? visibleRows.findIndex((r) => r.ref === selected.ref) : -1;
   const shownRun = runs[viewingRun];
   // What changed since the check before the one on screen. Counted from the
   // two runs' own stored verdicts; nothing is re-judged.
@@ -747,27 +757,37 @@ export function SelfCheck() {
         // asked to follow. It replaces a sidebar plus ONE card showing one
         // requirement at a time: that hid seven of eight lines behind a click
         // and cannot be read straight through, printed or scrolled.
-        ".sc-results-layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:18px;align-items:start;margin-top:12px}",
-        ".sc-side{position:sticky;top:14px;display:flex;flex-direction:column;gap:12px}",
-        ".sc-side-card{border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:12px}",
+        ".sc-results-layout{display:grid;grid-template-columns:300px minmax(0,1fr);gap:22px;align-items:start;margin-top:12px}",
+        // min-width:0, or the horizontal selector strip below 900px sizes the
+        // grid track to its own 8 x 190px content and pushes the whole page
+        // sideways: at 420px the result was 1431px wide and scrolled.
+        ".sc-side{position:sticky;top:14px;display:flex;flex-direction:column;gap:12px;min-width:0}",
+        ".sc-side-card{border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:12px;min-width:0}",
         ".sc-side-card h3{font-size:13px;margin:0 0 6px;color:#0f172a}",
         ".sc-side-list{max-height:calc(100vh - 260px);overflow-y:auto;margin:0 -4px}",
+        // The stage holds ONE requirement, so it is given a floor: without it
+        // the page jumped every time a short requirement followed a long one.
+        ".sc-stage{min-height:430px}",
+        ".sc-workspace-heading{display:flex;align-items:center;gap:10px;margin:2px 0 10px}",
+        ".sc-workspace-heading h3{font-size:14px;margin:0;color:#172033}",
+        ".sc-workspace-position{font-size:12px;color:#65728a;margin-left:auto;white-space:nowrap}",
+        ".sc-selected-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:#7c3aed;margin-bottom:5px}",
+        ".sc-view-subheader{margin-top:10px;border:1px solid #dfe5ee;background:#f8fafc;border-radius:9px;padding:9px 11px;font-size:12.5px;color:#4b5870}",
+        ".sc-view-subheader b{color:#172033}",
         ".sc-main{min-width:0}",
         ".sc-hero{border:1px solid #e2e8f0;border-radius:13px;background:#fff;padding:15px 17px}",
         ".sc-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:11px}",
-        // The tabs and the filters travel with the reader: on a long result the
-        // Overall/Procedure/Records choice used to scroll away, and switching
-        // meant scrolling back to the top to find it.
-        ".sc-toolbar{position:sticky;top:0;z-index:5;background:rgba(244,246,250,.95);backdrop-filter:blur(8px);padding:9px 0;margin-top:10px}",
-        ".sc-filters{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:7px}",
-        ".sc-filter{border:1px solid #cbd5e1;background:#fff;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer;color:#334155;font-family:inherit}",
+        // Filters and search sit above the one requirement they choose, and
+        // do not float: with a single requirement on the stage the list is
+        // never scrolled past while it is being read.
+        ".sc-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 0 12px}",
+        ".sc-filter{border:1px solid #cfd8e6;background:#fff;border-radius:999px;padding:6px 10px;font-size:12.5px;font-weight:750;cursor:pointer;color:#334155;font-family:inherit}",
         ".sc-filter[data-on]{background:#172033;color:#fff;border-color:#172033}",
-        ".sc-search{margin-left:auto;min-width:230px;height:32px;border:1px solid #cbd5e1;border-radius:9px;padding:0 10px;font:inherit;font-size:12.5px;background:#fff}",
-        ".sc-view-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}",
-        ".sc-view-tab{border:1px solid;border-radius:10px;padding:7px 11px;text-align:left;cursor:pointer;font:inherit;display:flex;gap:7px;align-items:baseline;min-width:0}",
-        ".sc-view-tab strong{font-size:13px;line-height:1.2;flex-shrink:0}",
-        ".sc-view-tab span{font-size:11px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-        ".sc-findings{display:grid;gap:11px;margin-top:11px}",
+        ".sc-search{flex:1;min-width:220px;height:36px;border:1px solid #cfd8e6;border-radius:9px;padding:0 11px;font:inherit;font-size:13px;background:#fff}",
+        ".sc-view-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:16px}",
+        ".sc-view-tab{border:1px solid;border-radius:10px;padding:10px 12px;text-align:left;cursor:pointer;font:inherit;min-width:0}",
+        ".sc-view-tab strong{display:block;font-size:13.5px;line-height:1.2}",
+        ".sc-view-tab span{display:block;font-size:11.5px;margin-top:3px;line-height:1.35}",
         // 96px, because the sticky toolbar above would otherwise cover the head
         // of the card a jump link lands on.
         ".sc-finding{border:1px solid #e2e8f0;border-radius:13px;background:#fff;overflow:hidden;scroll-margin-top:96px;min-width:0}",
@@ -776,7 +796,6 @@ export function SelfCheck() {
         ".sc-status-badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 9px;font-size:11.5px;font-weight:800;border:1px solid}",
         ".sc-code{font:800 11.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:#64748b}",
         ".sc-finding-title{font-size:15.5px;line-height:1.35;margin:0;font-weight:700;color:#1f2733}",
-        ".sc-top-link{background:none;border:0;padding:0;font:inherit;font-size:11.5px;color:#64748b;cursor:pointer;white-space:nowrap;text-decoration:underline}",
         ".sc-consistency{margin:11px 15px 0;background:#fff8e8;border:1px solid #f2ce80;border-radius:9px;padding:8px 10px;font-size:12.5px;color:#7b4b00}",
         ".sc-consistency strong{display:block}",
         ".sc-finding-summary{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr)}",
@@ -792,31 +811,40 @@ export function SelfCheck() {
         ".sc-detail-items{display:contents}",
         ".sc-detail-grid>details,.sc-detail-grid>.sc-detail-items>*{padding:10px 13px;border-left:1px solid #eef2f7;margin:0;min-width:0}",
         ".sc-detail-grid>details>summary{font-size:12px}",
-        ".sc-req-link{display:grid;grid-template-columns:9px minmax(0,1fr);gap:1px 8px;align-items:center;width:100%;text-align:left;border:1px solid transparent;border-radius:8px;padding:6px 8px;cursor:pointer;font:inherit;background:none}",
-        ".sc-req-link:hover{background:#f8fafc}",
-        ".sc-req-dot{width:9px;height:9px;border-radius:50%;grid-row:1/3}",
+        ".sc-req-link{display:grid;grid-template-columns:10px minmax(0,1fr);gap:1px 8px;align-items:center;width:100%;text-align:left;border:1px solid transparent;border-radius:8px;padding:10px 9px;margin:2px 0;cursor:pointer;font:inherit;background:none}",
+        ".sc-req-link:hover{background:#f7f8fb}",
+        ".sc-req-dot{width:8px;height:8px;border-radius:99px;grid-row:1/4}",
         ".sc-req-code{font-size:12px;font-weight:800;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-        ".sc-req-state{font-size:11px;font-weight:700}",
-        // The mock's own breakpoint: below it the sidebar has nowhere to sit,
-        // so the jump list and the duplicate export buttons go (both exist
-        // again in the page body) and every split column becomes one.
-        "@media (max-width: 980px){",
+        // Two lines of the requirement itself, clamped: the code alone does not
+        // say what the line is about, and the full wording is a paragraph.
+        ".sc-req-title{grid-column:2;font-size:11.5px;line-height:1.35;color:#475569;margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}",
+        ".sc-req-state{grid-column:2;font-size:11px;font-weight:700;margin-top:3px}",
+        ".sc-req-link[data-selected]{background:#f5f3ff;border-color:#c4b5fd;box-shadow:inset 3px 0 0 #6d28d9}",
+        ".sc-req-link[data-selected] .sc-req-code{color:#5b21b6}",
+        // The design's own breakpoint. The selector CANNOT simply be hidden
+        // here the way a jump list could: it is how a requirement is chosen,
+        // so it becomes a horizontal strip of cards above the stage. Only the
+        // duplicate export buttons go, and the pair at the foot of the result
+        // is still there.
+        "@media (max-width: 900px){",
         ".sc-results-layout{grid-template-columns:1fr}",
-        ".sc-side{display:none}",
+        ".sc-side{position:static}",
+        ".sc-side-list{display:flex;gap:7px;overflow-x:auto;max-height:none;padding:2px 2px 8px}",
+        ".sc-req-link{min-width:190px;flex:0 0 190px}",
+        ".sc-side-card.sc-download-card{display:none}",
         ".sc-finding-summary{grid-template-columns:1fr}",
         ".sc-summary-block+.sc-summary-block{border-left:0;border-top:1px solid #eef2f7}",
         ".sc-detail-grid{grid-template-columns:1fr}",
         ".sc-detail-grid>details,.sc-detail-grid>.sc-detail-items>*{border-left:0;border-top:1px solid #eef2f7}",
         "}",
         "@media (max-width: 640px){",
-        ".sc-view-tabs{grid-template-columns:1fr;gap:6px}",
-        ".sc-view-tab{padding:6px 10px}",
-        ".sc-stats{grid-template-columns:1fr 1fr}",
-        // Three stacked tabs plus a filter row would pin a third of a phone
-        // screen, so below this width the toolbar scrolls with the page.
-        ".sc-toolbar{position:static;background:none;backdrop-filter:none}",
-        ".sc-search{margin-left:0;width:100%;min-width:0}",
-        ".sc-finding{scroll-margin-top:12px}",
+        ".sc-results-layout{gap:12px}",
+        ".sc-hero{padding:14px}",
+        ".sc-view-tabs{grid-template-columns:1fr}",
+        ".sc-stats{grid-template-columns:repeat(2,minmax(0,1fr))}",
+        ".sc-toolbar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}",
+        ".sc-search{grid-column:1/-1;width:100%;min-width:0}",
+        ".sc-req-link{min-width:170px;flex-basis:170px}",
         "}",
         // The delete control is quiet until it is pointed at. Nine red words
         // down a dense list would compete with the counts, which are the whole
@@ -1229,29 +1257,28 @@ export function SelfCheck() {
             <div className="sc-results-layout">
               <aside className="sc-side">
                 <div className="sc-side-card">
-                  <h3>Requirements <span style={{ ...muted, fontWeight: 400 }}>({rows.length})</span></h3>
-                  <p style={{ ...muted, margin: "0 0 6px", fontSize: 11.5 }}>Jump straight to one without scrolling the whole result.</p>
+                  <h3>Requirements <span style={{ ...muted, fontWeight: 400 }}>({visibleRows.length}{visibleRows.length === rows.length ? "" : ` of ${rows.length}`})</span></h3>
+                  <p style={{ ...muted, margin: "0 0 6px", fontSize: 11.5 }}>Select one requirement to inspect. The main panel shows only that requirement.</p>
                   <div className="sc-side-list">
-                    {rows.map((r) => (
+                    {/* Only the requirements the filter and the search leave on
+                        offer, as the design has it: a link that cannot be shown
+                        is not an option. */}
+                    {visibleRows.map((r) => (
                       <button
                         key={r.ref} type="button" className="sc-req-link"
-                        onClick={() => {
-                          // A filtered-out card has no element to scroll to, so
-                          // the jump clears the filter first and scrolls after
-                          // React has put the card back on the page.
-                          setFilter("all"); setQuery("");
-                          const id = findingId(view, r.ref);
-                          setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
-                        }}
+                        data-selected={selected?.ref === r.ref || undefined}
+                        aria-current={selected?.ref === r.ref || undefined}
+                        onClick={() => setSelectedRef(r.ref)}
                       >
                         <span aria-hidden className="sc-req-dot" style={{ background: TONE_BG[r.tone].fg }} />
                         <span className="sc-req-code" style={{ color: INK }}>{r.ref}</span>
+                        <span className="sc-req-title">{r.requirement}</span>
                         <span className="sc-req-state" style={{ color: TONE_BG[r.tone].fg }}>{r.icon} {r.label}</span>
                       </button>
                     ))}
                   </div>
                 </div>
-                <div className="sc-side-card">
+                <div className="sc-side-card sc-download-card">
                   <h3>Export</h3>
                   <div style={{ display: "grid", gap: 7 }}>
                     <button type="button" onClick={onPdf} style={{ ...bigBtn, fontSize: 12.5, padding: "8px 11px", textAlign: "left" }}>⬇ Download PDF</button>
@@ -1268,6 +1295,37 @@ export function SelfCheck() {
                       {counts.total} requirement {counts.total === 1 ? "line" : "lines"}
                     </span>
                   </div>
+
+                  {/* The check asks two separate questions and they fail
+                      independently: your procedure can be silent while your
+                      records are full, and the other way round. Each tab
+                      carries its own one-line hint, so all three meanings are
+                      readable whichever one is open, and the active tab's
+                      fuller sentence follows as the subheader. */}
+                  {!procedureOnlyResult && (
+                    <div className="sc-view-tabs">
+                      {(["overview", "procedure", "records"] as const).map((k) => (
+                        <button
+                          key={k} type="button" aria-pressed={tab === k}
+                          onClick={() => { setTab(k); setFilter("all"); setQuery(""); }}
+                          className="sc-view-tab"
+                          style={{
+                            borderColor: tab === k ? INK : "#cfd8e6", background: tab === k ? INK : "#fff",
+                            color: tab === k ? "#fff" : INK,
+                          }}
+                        >
+                          <strong>{k === "overview" ? "Overall" : VIEW_LABEL[k]}</strong>
+                          <span style={{ color: tab === k ? "#dbe3ef" : "#65728a" }}>{TABS_EXPLAINED[k].hint}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {!procedureOnlyResult && (
+                    <div className="sc-view-subheader">
+                      <b>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
+                    </div>
+                  )}
 
             {/* AT THE TOP, before a single verdict. This used to sit below the
                 export buttons, at 99% of the page: by the time a reader met it
@@ -1307,10 +1365,6 @@ export function SelfCheck() {
               </div>
             )}
 
-            {/* The check asks two separate questions and they fail
-                independently: your procedure can be silent while your records
-                are full, and the other way round. Blended into one verdict that
-                difference was invisible, and the fix for each is different. */}
                 {/* A procedure-only result answers "is it written down?", so it is
                     counted in those words. "Complies" on a run that never opened a
                     record would be a claim nobody made. */}
@@ -1322,49 +1376,6 @@ export function SelfCheck() {
                 </div>
                 <Svg html={tallyBarSvg(tallySlices(counts, view), SCREEN_BAND_PALETTE)} />
                 </div>
-
-                {/* STICKY. The tab choice and the filters follow the reader down
-                    a result that runs to several screens; scrolling back to the
-                    top to change tab was the complaint that put them here.
-                    Each tab carries its own one-line hint, so all three meanings
-                    are readable whichever one is open, and the active tab's fuller
-                    sentence follows as the subheader. */}
-                <div className="sc-toolbar">
-                  {!procedureOnlyResult && (
-                    <div className="sc-view-tabs">
-                      {(["overview", "procedure", "records"] as const).map((k) => (
-                        <button
-                          key={k} type="button" aria-pressed={tab === k}
-                          onClick={() => { setTab(k); setFilter("all"); setQuery(""); }}
-                          className="sc-view-tab"
-                          style={{
-                            borderColor: tab === k ? INK : "#cbd5e1", background: tab === k ? INK : "#fff",
-                            color: tab === k ? "#fff" : INK,
-                          }}
-                        >
-                          <strong>{k === "overview" ? "Overall" : VIEW_LABEL[k]}</strong>
-                          <span style={{ color: tab === k ? "#dbe3ef" : "#64748b" }}>{TABS_EXPLAINED[k].hint}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <div className="sc-filters">
-                    {filterDefs.map((f) => (
-                      <button key={f.key} type="button" className="sc-filter" data-on={filter === f.key || undefined}
-                        onClick={() => setFilter(f.key)}>{f.label}</button>
-                    ))}
-                    <input
-                      className="sc-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)}
-                      placeholder="Search code, requirement or finding" aria-label="Search requirements"
-                    />
-                  </div>
-                </div>
-
-                {!procedureOnlyResult && (
-                  <p style={{ ...muted, margin: "2px 0 0" }}>
-                    <b style={{ color: INK }}>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
-                  </p>
-                )}
 
                 {VIEW_NOTE[view] && (
                   <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
@@ -1384,26 +1395,41 @@ export function SelfCheck() {
               </p>
             )}
 
-                {/* THE REQUIREMENTS THEMSELVES, one card each, straight after
-                    the counts and the warnings that change how they read.
-                    Everything that used to stand between the tabs and the
-                    verdicts now follows below them: none of it is gone, it is
-                    simply no longer in front of the thing it supports.
+                {/* ONE requirement at a time, chosen in the selector on the
+                    left, as the supplied design has it. The filters and the
+                    search narrow what the selector offers; they never change a
+                    verdict, and the count above still covers the whole tab.
 
                     The rows are the SAME rows the table had, and they are
                     already per-tab: toSelfCheckRows / toProcedureRows /
-                    toRecordsRows. Switching tab rebuilds the list, the jump
-                    links and every card, with no new assessment logic. */}
-                <div className="sc-findings">
-                  {visibleRows.map((r) => (
-                    <FindingCard
-                      key={r.ref} row={r} view={view} id={findingId(view, r.ref)}
-                      onTop={() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-                    />
+                    toRecordsRows. Switching tab rebuilds the selector and the
+                    stage, with no new assessment logic anywhere. */}
+                <div className="sc-workspace-heading">
+                  <h3>Requirement detail</h3>
+                  <span className="sc-workspace-position">
+                    {selected
+                      ? `${selectedIdx + 1} of ${visibleRows.length} shown · ${selected.ref}`
+                      : "No requirement matches this filter"}
+                  </span>
+                </div>
+
+                <div className="sc-toolbar">
+                  {filterDefs.map((f) => (
+                    <button key={f.key} type="button" className="sc-filter" data-on={filter === f.key || undefined}
+                      onClick={() => setFilter(f.key)}>{f.label}</button>
                   ))}
-                  {visibleRows.length === 0 && (
-                    <p style={{ ...muted, border: "1px dashed #cbd5e1", borderRadius: 12, padding: 20, textAlign: "center", margin: 0 }}>
-                      Nothing matches this filter. This tab checked {rows.length} requirement {rows.length === 1 ? "line" : "lines"}.
+                  <input
+                    className="sc-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search code, requirement or finding" aria-label="Search requirements"
+                  />
+                </div>
+
+                <div className="sc-stage">
+                  {selected ? (
+                    <FindingCard key={`${view}-${selected.ref}`} row={selected} view={view} id={findingId(view, selected.ref)} />
+                  ) : (
+                    <p style={{ ...muted, border: "1px dashed #cfd8e6", borderRadius: 12, padding: 24, textAlign: "center", margin: 0, background: "#fff" }}>
+                      No requirement matches this filter. This tab checked {rows.length} requirement {rows.length === 1 ? "line" : "lines"}.
                     </p>
                   )}
                 </div>
@@ -1843,8 +1869,8 @@ function Disclosure({ summary, children, open }: { summary: string; children: Re
 // re-judged, re-worded or re-counted, and the supporting detail is the existing
 // WhyCell verbatim, so the disclosures, the quote de-duplication and the
 // "show all N missing" control behave exactly as they did.
-function FindingCard({ row, view, id, onTop }: {
-  row: SelfCheckRow; view: SelfCheckView; id: string; onTop: () => void;
+function FindingCard({ row, view, id }: {
+  row: SelfCheckRow; view: SelfCheckView; id: string;
 }) {
   const t = TONE_BG[row.tone];
   // The consistency guard's warning arrives inside the comment; it is shown as
@@ -1855,6 +1881,11 @@ function FindingCard({ row, view, id, onTop }: {
     <article id={id} className="sc-finding" style={{ borderLeft: `5px solid ${t.fg}` }}>
       <div className="sc-finding-head">
         <div style={{ minWidth: 0 }}>
+          {/* Which side of the check this card is reporting. Only on the two
+              half-tabs: on Overall the card IS the whole answer, and a label
+              saying so would be noise. */}
+          {view === "procedure" && <div className="sc-selected-label">Written procedure</div>}
+          {view === "records" && <div className="sc-selected-label">Records / implementation evidence</div>}
           <div className="sc-finding-meta">
             {/* The state travels as a glyph AND a word AND a colour, never colour alone. */}
             <span className="sc-status-badge" style={{ ...t, borderColor: t.fg }}>
@@ -1864,7 +1895,6 @@ function FindingCard({ row, view, id, onTop }: {
           </div>
           <h3 className="sc-finding-title">{row.requirement}</h3>
         </div>
-        <button type="button" className="sc-top-link" onClick={onTop}>Back to summary</button>
       </div>
 
       {warning && (
