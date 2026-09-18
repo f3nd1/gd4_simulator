@@ -820,6 +820,11 @@ export type WorkspaceState = {
   // until applyOutcomeReviewResult (the human's explicit Apply click).
   outcomeReviewResults: Record<string, OutcomeReviewPassResult>;
   runOutcomeReviewPass: (subCriterionId: string) => Promise<void>;
+  // Attaches the self-check's band call to the run it belongs to, so the
+  // dimension panel and its detail table survive a reload. Patches the CURRENT
+  // result only: history entries were archived before the band existed and must
+  // keep whatever they were archived with.
+  attachBandSuggestion: (subCriterionId: string, suggestion: NonNullable<EvidenceAssessmentResult["bandSuggestion"]>) => void;
   // The explicit Apply click (all modes, including full-auto): writes the
   // pass's Systems & Outcomes / Review legs onto the matched checklist lines
   // (applyOutcomeReviewLegs), logs the human decision, stamps appliedAt.
@@ -2698,6 +2703,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           finish(null, err instanceof Error ? err.message : String(err));
         }
       },
+
+      attachBandSuggestion: (subCriterionId, suggestion) =>
+        set((st) => {
+          const cur = st.evidenceAssessments[subCriterionId];
+          if (!cur) return {};
+          return { evidenceAssessments: { ...st.evidenceAssessments, [subCriterionId]: { ...cur, bandSuggestion: suggestion } } };
+        }),
 
       applyOutcomeReviewResult: (subCriterionId) => {
         const res = get().outcomeReviewResults[subCriterionId];

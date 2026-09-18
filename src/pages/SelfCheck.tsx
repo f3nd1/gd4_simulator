@@ -30,7 +30,7 @@ import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
 import { buildLabel } from "../lib/buildInfo";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NOT_ASSESSED_HERE, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, DIMENSION_SOURCE_CHECKED, type BandWorking } from "../lib/selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NOT_ASSESSED_HERE, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, DIMENSION_SOURCE_CHECKED } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -100,11 +100,13 @@ export function SelfCheck() {
   // a different question and must never be dressed as a full one.
   const [mode, setMode] = useState<"full" | "procedure-only">("full");
   const [tab, setTab] = useState<SelfCheckView>("overview");
-  const [bandWorking, setBandWorking] = useState<BandWorking | null>(null);
+  // NOT state: derived from the run being shown, so it survives a reload and
+  // follows you into an archived check. Held in useState it was lost on every
+  // refresh, taking the dimension panel, its detail table, the band card and
+  // both exports' dimension sections with it.
   // Two coverage notes, because they caption two different things: the
   // auditor's committed band on the card, and the dimension panel below it.
   const [bandCoverage, setBandCoverage] = useState("");
-  const [dimensionCoverage, setDimensionCoverage] = useState("");
   // Which stored run is being viewed. Reset to the latest whenever the area
   // changes or a new run finishes, so "you are looking at an old result" can
   // never be a state somebody arrives in without choosing it.
@@ -338,6 +340,21 @@ export function SelfCheck() {
   // Whether the two dimensions this page does not score were nevertheless
   // LOOKED AT on the run being shown. Read off the working the panel prints, so
   // every sentence about them on the page comes from the same fact.
+  // Rebuilt from the run's own stored inputs. The labels, official descriptors
+  // and percentages are derived, never stored, so a change to the configured
+  // scale re-derives rather than printing a stale number beside a live one.
+  // `existing` already resolves to the run being viewed (atRun), so an archived
+  // check shows its own dimensions rather than the latest run's.
+  const bandWorking = useMemo(() => {
+    const b = existing?.bandSuggestion;
+    return b ? buildBandWorking(b.scores, b.reasons, apsrScale, b.checked) : null;
+  }, [existing, apsrScale]);
+  // Which requirement item the panel below describes, from the run that
+  // produced it rather than from whatever is selected now.
+  const dimensionCoverage = useMemo(() => {
+    const b = existing?.bandSuggestion;
+    return b && area ? bandCoverageNote(b.itemId, itemIdsForScope(area.scope), "This dimension assessment") : "";
+  }, [existing, area]);
   const dimensionsChecked = !!bandWorking?.rows.every((r) => r.assessedHere);
   // The band, and null whenever any dimension is missing. One derivation, used
   // by the card, the working panel and both exports.
@@ -396,7 +413,7 @@ export function SelfCheck() {
     setNow(Date.now());
     setStageStartedAt(Date.now());
     setDoneSummaries({});
-    setError(null); setNote(null); setBand({ kind: "none" }); setBandWorking(null); setBandCoverage(""); setDimensionCoverage("");
+    setError(null); setNote(null); setBand({ kind: "none" }); setBandCoverage("");
     const procedureOnly = plan.kind === "procedure-only";
     setMode(procedureOnly ? "procedure-only" : "full");
     setTab("overview");
@@ -503,13 +520,18 @@ export function SelfCheck() {
           // score: "checked, not scored here" against "not assessed".
           const orNow = useWorkspaceStore.getState().outcomeReviewResults[area.scope];
           const orChecked = !!orNow && !orNow.skippedReason && (orNow.rows?.length ?? 0) > 0;
-          setBandWorking(buildBandWorking(s.dimensionBands, {
-            approach: s.dimensions.approach.reason,
-            processes: s.dimensions.processes.reason,
-            systemsOutcomes: s.dimensions.systemsOutcomes.reason,
-            review: s.dimensions.review.reason,
-          }, apsrScale, { systemsOutcomes: orChecked, review: orChecked }));
-          setDimensionCoverage(bandCoverageNote(itemIds[0], itemIds, "This dimension assessment"));
+          // Stored on the run, not held in page state.
+          useWorkspaceStore.getState().attachBandSuggestion(area.scope, {
+            itemId: itemIds[0],
+            scores: s.dimensionBands,
+            reasons: {
+              approach: s.dimensions.approach.reason,
+              processes: s.dimensions.processes.reason,
+              systemsOutcomes: s.dimensions.systemsOutcomes.reason,
+              review: s.dimensions.review.reason,
+            },
+            checked: { systemsOutcomes: orChecked, review: orChecked },
+          });
         }
       }
       setRanAt(new Date().toLocaleString("en-SG"));

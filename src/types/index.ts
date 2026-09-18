@@ -1117,6 +1117,28 @@ export type EvidenceAssessmentResult = {
   // value when the model honours a temperature parameter, null when it
   // doesn't (gpt-5/o-series). undefined on runs from before this field.
   effectiveTemperature?: number | null;
+  // The four dimension bands this run's band call returned, and its reasons.
+  //
+  // Stored as the INPUTS, not as the built BandWorking: the labels, the official
+  // descriptors and the percentages are all derived from these by
+  // buildBandWorking, so a later change to the configured scale re-derives
+  // correctly and nothing verbatim is duplicated into storage. It is a few
+  // hundred bytes per run.
+  //
+  // It is here rather than in page state because page state does not survive a
+  // reload: the dimension panel, its detail table, the band card and both
+  // exports' dimension sections all vanished on any refresh, which is the one
+  // part of the result an auditor has to be able to defend. Attaching it to the
+  // RESULT also means an archived run keeps its own.
+  bandSuggestion?: {
+    // Which requirement item the band call was made for. Two sub-criteria hold
+    // more than one, and the panel already says which.
+    itemId: string;
+    scores: ApsrMatrixScores;
+    reasons: { approach: string; processes: string; systemsOutcomes: string; review: string };
+    // Whether the results-and-review pass had produced verdicts for this run.
+    checked: { systemsOutcomes: boolean; review: boolean };
+  };
   // What did not complete on this run: unreadable evidence files, and the AI
   // calls that failed or timed out. The PPD result has carried these since it
   // existed; the evidence result dropped them into the AI review log only, so a
