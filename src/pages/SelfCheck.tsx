@@ -1983,56 +1983,6 @@ export function SelfCheck() {
             </div>
 
 
-            {/* THE BAND, and the one condition for showing one: all four
-                dimensions carry a real score from THIS run, which can only
-                happen when the results-and-review pass ran and read something.
-                Two of four is not a total, and a total built on two understates
-                a well-run area by one to two bands, which is why this page went
-                without a band at all (9f63527) until all four could be scored.
-                The arithmetic is printed beside it: a band nobody can check is
-                a number to argue with rather than read. */}
-            {view === "overview" && selfTotal && (
-              <div style={{ border: "2px solid #c7d2fe", borderRadius: 10, padding: 14, margin: "12px 0", background: "#eef2ff" }}>
-                <b style={{ fontSize: 15, color: INK }}>Band {selfTotal.band} of 5, {bandName(selfTotal.band)}</b>
-                <p style={{ ...muted, margin: "5px 0 0", color: "#3730a3" }}>
-                  <b>{selfCheckTotalWorking(selfTotal)}</b>. That is Approach, Processes, Systems &amp; Outcomes and Review added up, each worth up to {bandWorking?.maxPct ?? 25}%.
-                  The four are broken out below.
-                </p>
-                <p style={{ ...muted, margin: "5px 0 0", color: "#3730a3" }}>
-                  This is this tool's reading of your own documents, not an SSG result and not your audit lead's band. {SELF_CHECK_DISCLAIMER}
-                </p>
-                {bandCoverage && <p style={{ ...muted, margin: "5px 0 0", color: "#3730a3" }}>{bandCoverage}</p>}
-              </div>
-            )}
-            {view === "overview" && !selfTotal && dimensionsChecked === false && bandWorking && (
-              <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
-                {NO_BAND_WITHOUT_FOUR_NOTE}
-              </p>
-            )}
-
-            {view === "overview" && (
-            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fbfcfe" }}>
-              {band.kind === "none" ? (
-                <>
-                  <b style={{ fontSize: 14 }}>{selfTotal ? "Your audit lead has not recorded a band for this area" : "This check gives no band"}</b>
-                  <p style={{ ...muted, margin: "5px 0 0" }}>{selfTotal ? "The band above is this check's own working. When your audit lead records one for this area it appears here beside it." : NO_BAND_LINE}</p>
-                </>
-              ) : (
-                <>
-                  <b style={{ fontSize: 14 }}>Band {band.band} of 5, {band.name}</b>
-                  <p style={{ ...muted, margin: "5px 0 0" }}>
-                    This is the band your audit lead has already recorded for this area. It is not a result of this check.
-                    {" "}{SELF_CHECK_DISCLAIMER}
-                  </p>
-                  {/* Which requirement item the number belongs to. Shown on the
-                      card as well as in the working below, because a committed
-                      auditor band has no working panel to carry it. */}
-                  {bandCoverage && <p style={{ ...muted, margin: "5px 0 0" }}>{bandCoverage}</p>}
-                </>
-              )}
-            </div>
-            )}
-
             {/* The two dimensions this check can defend, and the two it leaves
                 alone. It shows no overall band: scoring Systems & Outcomes and
                 Review at the bottom for never having been opened understated a
@@ -2121,6 +2071,57 @@ export function SelfCheck() {
                 produces it.
               </p>
             )}
+
+            {/* THE BAND, and the one condition for showing one: all four
+                dimensions carry a real score from THIS run, which can only
+                happen when the results-and-review pass ran and read something.
+                Two of four is not a total, and a total built on two understates
+                a well-run area by one to two bands, which is why this page went
+                without a band at all (9f63527) until all four could be scored.
+                The arithmetic is printed beside it: a band nobody can check is
+                a number to argue with rather than read. */}
+            {view === "overview" && selfTotal && (
+              <div style={{ border: "2px solid #c7d2fe", borderRadius: 10, padding: 14, margin: "12px 0", background: "#eef2ff" }}>
+                <b style={{ fontSize: 15, color: INK }}>Band {selfTotal.band} of 5, {bandName(selfTotal.band)}</b>
+                <p style={{ ...muted, margin: "5px 0 0", color: "#3730a3" }}>
+                  <b>{selfCheckTotalWorking(selfTotal)}</b>. That is Approach, Processes, Systems &amp; Outcomes and Review added up, each worth up to {bandWorking?.maxPct ?? 25}%.
+                  The four are broken out in the matrix above.
+                </p>
+                <p style={{ ...muted, margin: "5px 0 0", color: "#3730a3" }}>
+                  This is this tool's reading of your own documents, not an SSG result and not your audit lead's band. {SELF_CHECK_DISCLAIMER}
+                </p>
+                {bandCoverage && <p style={{ ...muted, margin: "5px 0 0", color: "#3730a3" }}>{bandCoverage}</p>}
+              </div>
+            )}
+            {view === "overview" && !selfTotal && dimensionsChecked === false && bandWorking && (
+              <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
+                {NO_BAND_WITHOUT_FOUR_NOTE}
+              </p>
+            )}
+
+            {view === "overview" && (
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fbfcfe" }}>
+              {band.kind === "none" ? (
+                <>
+                  <b style={{ fontSize: 14 }}>{selfTotal ? "Your audit lead\u2019s band for this area: not recorded yet" : "This check gives no band"}</b>
+                  <p style={{ ...muted, margin: "5px 0 0" }}>{selfTotal ? "The band above is this check's own working, added up from the four dimensions. Your audit lead records the band that counts, separately, and it appears here when they do." : NO_BAND_LINE}</p>
+                </>
+              ) : (
+                <>
+                  <b style={{ fontSize: 14 }}>Band {band.band} of 5, {band.name}</b>
+                  <p style={{ ...muted, margin: "5px 0 0" }}>
+                    This is the band your audit lead has already recorded for this area. It is not a result of this check.
+                    {" "}{SELF_CHECK_DISCLAIMER}
+                  </p>
+                  {/* Which requirement item the number belongs to. Shown on the
+                      card as well as in the working below, because a committed
+                      auditor band has no working panel to carry it. */}
+                  {bandCoverage && <p style={{ ...muted, margin: "5px 0 0" }}>{bandCoverage}</p>}
+                </>
+              )}
+            </div>
+            )}
+
 
                 </div>
               )}
