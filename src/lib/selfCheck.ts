@@ -13,7 +13,7 @@ import { toCsv } from "./auditCsvExport";
 import { buildStamp } from "./buildInfo";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
@@ -706,6 +706,26 @@ export function bandLineOf(band: SelfCheckBand, own?: SelfCheckOwnBand): string 
 // The band and the disclaimer ride in the CSV too. A spreadsheet gets
 // forwarded and printed on its own; without them it reads like a bare verdict
 // list that somebody could mistake for an official outcome.
+export type DimensionStepRefs = Parameters<typeof nextBandRoute>[1];
+
+// What the next band needs, for the two files. Same builder as the screen, so
+// a filed working paper cannot state a different shortfall from the page it
+// was printed from.
+function nextBandCsv(w: BandWorking | undefined, stepRefs: DimensionStepRefs): string[][] {
+  const r = nextBandRoute(w, stepRefs);
+  const row = (cells: string[]) => [...cells, ...Array(Math.max(0, SELF_CHECK_HEADERS.length - cells.length)).fill("")];
+  if (r.kind === "top") return [row([]), row([NEXT_BAND_TOP_NOTE])];
+  if (r.kind !== "route") return [];
+  return [
+    row([]),
+    row([`What Band ${r.nextBand}, ${r.nextBandName}, would need`]),
+    row([nextBandWorking(r)]),
+    row([NEXT_BAND_CAVEAT]),
+    row(["Dimension", "Step", "Official descriptor at that band", "Lines this run marked short"]),
+    ...r.options.map((o) => row([o.label, `Band ${o.from} to Band ${o.to}`, o.descriptor, o.refs.join(", ")])),
+  ];
+}
+
 export function buildSelfCheckCsv(
   areaLabel: string, rows: SelfCheckRow[], band: SelfCheckBand, view: SelfCheckView = "overview",
   files: SelfCheckFileRow[] = [],
@@ -717,6 +737,10 @@ export function buildSelfCheckCsv(
   // held the same link. Empty/false on an older result that recorded neither.
   timing: string = "",
   sameLink = false,
+  // Requirement lines behind each dimension, from the run's own two passes.
+  // Optional: an older caller, and the "earlier check" export, has none, and
+  // the route then prints without named lines rather than inventing them.
+  stepRefs: DimensionStepRefs = {},
 ): string {
   const pad = (cells: string[]) => [...cells, ...Array(Math.max(0, SELF_CHECK_HEADERS.length - cells.length)).fill("")];
   const blank = pad([]);
@@ -768,28 +792,25 @@ export function buildSelfCheckCsv(
     blank,
     pad(["What this check assessed"]),
     ...(bandCoverage ? [pad([bandCoverage])] : []),
-    pad(["Dimension", "Band", "Earned", "Out of", "Assessed by this check?", "Official descriptor", "Where it came from"]),
-    ...bandWorking.rows.map((d) => pad([
-      d.label,
-      d.band === undefined ? "not scored" : `Band ${d.band}`,
-      d.assessedHere ? `${d.pct}%` : "",
-      `${bandWorking.maxPct}%`,
-      d.assessedHere ? "yes" : "NO",
-      d.descriptor,
-      d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check",
-    ])),
     pad([ROWS_DO_NOT_SUM_NOTE]),
     blank,
     // The rubric matrix, one row per dimension. The mark travels INSIDE the
     // cell text: a spreadsheet carries no highlight, and a band marked only by
     // a colour on screen would arrive here unmarked.
     pad(["The official band scale, with this check's band marked"]),
-    pad(["Dimension", "This check", ...rubricMatrix(bandWorking).bands.map((b) => `Band ${b.band} ${b.name}`)]),
+    pad(["Dimension", "This check", "Where it came from", ...rubricMatrix(bandWorking).bands.map((b) => `Band ${b.band} ${b.name}`)]),
     ...rubricMatrix(bandWorking).rows.map((r) => pad([
       r.label,
       r.stateLabel,
+      r.source,
       ...r.cells.map((c) => `${c.state === "achieved" ? `${RUBRIC_ACHIEVED_MARK} — ` : c.state === "next" ? `${RUBRIC_NEXT_MARK} — ` : ""}${c.descriptor}`),
     ])),
+    blank,
+    // Why each dimension got its band. It opens on the row on screen; a
+    // spreadsheet has nowhere to open, so it travels as its own rows.
+    pad(["Why each dimension got its band"]),
+    ...rubricMatrix(bandWorking).rows.map((r) => pad([r.label, r.sourceDetail, r.reason || "No reason was recorded for this dimension on this run."])),
+    ...nextBandCsv(bandWorking, stepRefs),
     blank,
     pad([dimensionsNote(bandWorking)]),
     pad([INFERRED_THRESHOLDS_NOTE]),
@@ -854,10 +875,30 @@ function rubricMatrixHtml(w: BandWorking): string {
   return `<table>
     <thead><tr><th>Dimension</th>${m.bands.map((b) => `<th>Band ${b.band}<br/><span class="muted">${escapeHtml(b.name)}</span></th>`).join("")}</tr></thead>
     <tbody>${m.rows.map((r) => `<tr>
-      <td><b>${escapeHtml(r.label)}</b><br/><span class="muted">${escapeHtml(r.stateLabel)}</span></td>
+      <td><b>${escapeHtml(r.label)}</b><br/><span class="muted">${escapeHtml(r.stateLabel)}</span><br/><span class="muted">${escapeHtml(r.source)}</span></td>
       ${r.cells.map(cell).join("")}
     </tr>`).join("")}</tbody>
-  </table>`;
+  </table>
+  <h3>Why each dimension got its band</h3>
+  <ul>${m.rows.map((r) => `<li><b>${escapeHtml(r.label)}.</b> ${escapeHtml(r.sourceDetail)} ${escapeHtml(r.reason || "No reason was recorded for this dimension on this run.")}</li>`).join("")}</ul>`;
+}
+
+// The route, printed. Paper is where this gets read in a meeting, so it says
+// the arithmetic and the target wording in full rather than folding either.
+function nextBandHtml(w: BandWorking | undefined, stepRefs: DimensionStepRefs): string {
+  const r = nextBandRoute(w, stepRefs);
+  if (r.kind === "top") return `<p class="muted">${escapeHtml(NEXT_BAND_TOP_NOTE)}</p>`;
+  if (r.kind !== "route") return "";
+  return `<h2>What Band ${r.nextBand}, ${escapeHtml(r.nextBandName)}, would need</h2>
+    <p>${escapeHtml(nextBandWorking(r))}</p>
+    <p class="muted">${escapeHtml(NEXT_BAND_CAVEAT)}</p>
+    <table>
+      <thead><tr><th>Dimension</th><th>Step</th><th>Official descriptor at that band</th><th>Lines this run marked short</th></tr></thead>
+      <tbody>${r.options.map((o) => `<tr>
+        <td><b>${escapeHtml(o.label)}</b></td><td>Band ${o.from} to Band ${o.to}</td>
+        <td>${escapeHtml(o.descriptor)}</td><td>${escapeHtml(o.refs.join(", "))}</td>
+      </tr>`).join("")}</tbody>
+    </table>`;
 }
 
 export function buildSelfCheckHtml(opts: {
@@ -871,13 +912,14 @@ export function buildSelfCheckHtml(opts: {
   files?: SelfCheckFileRow[];
   bandWorking?: BandWorking;
   bandCoverage?: string;
+  stepRefs?: DimensionStepRefs;
   // How long the run took, already formatted, and whether both folder boxes
   // held one link. Both empty/false on a result that recorded neither.
   timing?: string;
   sameLink?: boolean;
   itemIds?: string[];
 }): string {
-  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [], bandWorking, bandCoverage, itemIds = [], timing = "", sameLink = false } = opts;
+  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [], bandWorking, bandCoverage, itemIds = [], timing = "", sameLink = false, stepRefs = {} } = opts;
   const gaps = runNamedGaps(rows);
   const reviewRows = reviewShapedRows(rows);
   const legendHtml = `
@@ -895,17 +937,6 @@ export function buildSelfCheckHtml(opts: {
     <h2>What this check assessed</h2>
     <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), PRINT_BAND_PALETTE, { idSuffix: "Print" })}</div>
     ${bandCoverage ? `<p class="muted">${escapeHtml(bandCoverage)}</p>` : ""}
-    <table>
-      <thead><tr><th>Dimension</th><th>Band</th><th>Earned</th><th>Out of</th><th>Assessed by this check?</th><th>Official descriptor at that band</th><th>Where it came from</th></tr></thead>
-      <tbody>${bandWorking.rows.map((d) => `<tr>
-        <td>${escapeHtml(d.label)}</td>
-        <td>${d.band === undefined ? "not scored" : `Band ${d.band}`}</td>
-        <td>${d.assessedHere ? `${d.pct}%` : ""}</td><td>${bandWorking.maxPct}%</td>
-        <td>${d.assessedHere ? "yes" : "<b>NO</b>"}</td>
-        <td>${escapeHtml(d.descriptor)}</td>
-        <td>${escapeHtml(d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check")}</td>
-      </tr>`).join("")}</tbody>
-    </table>
     <p class="muted">${escapeHtml(ROWS_DO_NOT_SUM_NOTE)}</p>
     <p class="muted">${escapeHtml(dimensionsNote(bandWorking))}</p>
     <p class="muted">${escapeHtml(INFERRED_THRESHOLDS_NOTE)}</p>
@@ -931,7 +962,8 @@ export function buildSelfCheckHtml(opts: {
       ${reviewShapedGapNote(gaps) ? `<p class="muted">${escapeHtml(reviewShapedGapNote(gaps))}</p>` : ""}
       <ul>${gaps.map((g) => `<li><b>${escapeHtml(g.ref)}</b> ${escapeHtml(g.text)}</li>`).join("")}</ul>`}
     <h2>The official band scale, with this check's band marked</h2>
-    ${rubricMatrixHtml(bandWorking)}`;
+    ${rubricMatrixHtml(bandWorking)}
+    ${view === "overview" ? nextBandHtml(bandWorking, stepRefs) : ""}`;
   const fileCounts = countFileRows(files);
   const fileWarning = unreadableWarning(fileCounts);
   // Printed in black and white, so the unreadable rows carry a word rather than

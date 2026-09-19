@@ -36,8 +36,8 @@ import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunR
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
 import { buildLabel } from "../lib/buildInfo";
-import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NOT_ASSESSED_HERE, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, DIMENSION_SOURCE_CHECKED } from "../lib/selfCheckBanding";
+import { unassessedDimensions, dimensionStepRefs, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -459,6 +459,20 @@ export function SelfCheck() {
   // The band, and null whenever any dimension is missing. One derivation, used
   // by the card, the working panel and both exports.
   const selfTotal = useMemo(() => selfCheckTotal(bandWorking ?? undefined, apsrScale), [bandWorking, apsrScale]);
+  // What the next band would need, computed from the run rather than narrated.
+  // The failing lines come from the two passes' own verdicts, not from the
+  // rows of whichever tab is open: the dimensions describe the RUN.
+  const stepRefs = useMemo(
+    () => dimensionStepRefs({
+      procedure: ppdExisting?.rows.map((r) => ({ ref: r.ref, verdict: String(r.verdict) })),
+      combined: existing?.rows.map((r) => ({ ref: r.gdRef, verdict: String(r.verdict) })),
+    }),
+    [ppdExisting, existing],
+  );
+  const bandRoute = useMemo(
+    () => nextBandRoute(bandWorking ?? undefined, stepRefs, apsrScale),
+    [bandWorking, stepRefs, apsrScale],
+  );
   // The run's own report that something did not finish, from EITHER pass. Both
   // are checked: a records-pass failure was never surfaced here at all.
   // Lines the procedure pass never reached a verdict on. Not a gap: the engine
@@ -759,7 +773,7 @@ export function SelfCheck() {
     // bandWorking rides on EVERY view now: the two half-tabs use it to draw
     // which dimension their own verdicts feed. Only the overall view prints the
     // full dimension panel and the coverage note.
-    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, exportFiles, bandWorking ?? undefined, view === "overview" ? bandCoverage : undefined, itemIdsForScope(area.scope), exportTiming, sameLink), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
+    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, exportFiles, bandWorking ?? undefined, view === "overview" ? bandCoverage : undefined, itemIdsForScope(area.scope), exportTiming, sameLink, stepRefs), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
   }
   function onPdf() {
     if (!area) return;
@@ -771,6 +785,7 @@ export function SelfCheck() {
         bandWorking: bandWorking ?? undefined,
         bandCoverage: view === "overview" ? bandCoverage : undefined,
         itemIds: itemIdsForScope(area.scope),
+        stepRefs,
       })}`,
       view === "overview" ? `Self-check ${area.title}` : `Self-check ${area.title} — ${VIEW_LABEL[view]}`,
     );
@@ -1119,6 +1134,18 @@ export function SelfCheck() {
         ".sc-rubric [data-cell=\"achieved\"]{background:#f5f3ff;color:#1f2733;font-weight:700;outline:2px solid #6d28d9;outline-offset:-2px}",
         ".sc-rubric [data-cell=\"next\"]{outline:2px dashed #a78bfa;outline-offset:-2px}",
         ".sc-rubric-mark{display:block;font-size:10px;font-weight:800;color:#6d28d9;margin-bottom:2px}",
+        // Where the dimension came from, on the row itself: the page shows
+        // three tabs and four dimensions, and readers hunt for the other two.
+        ".sc-rubric-src{display:block;margin-top:4px;font-size:10.5px;color:#64748b;font-weight:400}",
+        ".sc-rubric-why-btn{display:block;margin-top:5px;padding:0;border:0;background:none;cursor:pointer;font-size:10.5px;font-weight:700;color:#6d28d9;text-align:left;font-family:inherit}",
+        ".sc-rubric-why-btn:hover,.sc-rubric-why-btn:focus-visible{text-decoration:underline}",
+        // The reasoning the second table used to hold. Full row width, because
+        // it is a paragraph and the dimension column is 13%.
+        ".sc-rubric-why{font-size:12px;line-height:1.5;color:#475569;background:#fbfcfe}",
+        ".sc-rubric-why p{margin:0 0 5px}",
+        ".sc-rubric-why p:last-child{margin-bottom:0}",
+        ".sc-rubric-why b{color:#1f2733}",
+        ".sc-rubric-noreason{color:#92400e}",
         ".sc-rubric-card{border:1px solid #e2e8f0;border-radius:8px;padding:9px 10px;background:#fff}",
         ".sc-rubric-card ol{list-style:none;margin:7px 0 0;padding:0;display:grid;gap:5px}",
         ".sc-rubric-card li{border:1px solid #e2e8f0;border-radius:6px;padding:6px 7px;font-size:11.5px;color:#475569;line-height:1.35;background:#fff}",
@@ -1967,22 +1994,6 @@ export function SelfCheck() {
               </div>
             )}
 
-            {/* Read BEFORE the table. An auditor could not tell whether
-                "Written down" meant compliant, and the honest answer is that
-                each tab settles half the question. */}
-            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fff" }}>
-              <b style={{ fontSize: 13 }}>What each result means on this tab</b>
-              <div style={{ display: "grid", gap: 5, marginTop: 7, gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))" }}>
-                {VERDICT_LEGEND[view].map((l) => (
-                  <div key={l.label} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
-                    <span style={{ ...TONE_BG[LEGEND_TONE[l.icon]], padding: "1px 8px", borderRadius: 999, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>{l.icon} {l.label}</span>
-                    <span style={{ color: "#475569" }}>{l.meaning}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-
             {/* The two dimensions this check can defend, and the two it leaves
                 alone. It shows no overall band: scoring Systems & Outcomes and
                 Review at the bottom for never having been opened understated a
@@ -2001,48 +2012,10 @@ export function SelfCheck() {
                     The same numbers the table below carries, read straight off
                     the same rows — nothing here is recomputed. */}
                 <RubricMatrixView working={bandWorking} />
-                <details style={{ marginTop: 8 }}>
-                  <summary style={{ cursor: "pointer", listStyle: "revert", fontSize: 13, fontWeight: 700, color: INK }}>View dimension details</summary>
-                <div style={{ overflowX: "auto", marginTop: 10 }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-                    <thead>
-                      <tr style={{ textAlign: "left", background: "#f8fafc" }}>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "18%" }}>Dimension</th>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "9%" }}>Band</th>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "12%" }}>Earned</th>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "32%" }}>Official descriptor at that band</th>
-                        <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0" }}>Where it came from</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bandWorking.rows.map((d) => (
-                        <tr key={d.key} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top", background: d.assessedHere ? undefined : "#f8fafc" }}>
-                          <td style={{ padding: "8px 9px", fontWeight: 600 }}>
-                            {d.label}
-                            <div style={{ ...muted, fontSize: 11 }}>{d.definition}</div>
-                          </td>
-                          <td style={{ padding: "8px 9px" }}>{d.band === undefined ? <span style={muted}>not scored</span> : `Band ${d.band}`}</td>
-                          <td style={{ padding: "8px 9px", fontWeight: 700 }}>
-                            {d.assessedHere
-                              ? `${d.pct}% of ${bandWorking.maxPct}%`
-                              : <span style={{ ...muted, fontWeight: 400 }}>{NOT_ASSESSED_HERE}</span>}
-                          </td>
-                          <td style={{ padding: "8px 9px", color: "#475569" }}>{d.descriptor || <span style={muted}>—</span>}</td>
-                          <td style={{ padding: "8px 9px", color: "#475569" }}>
-                            {d.assessedHere
-                              ? (d.reason || DIMENSION_SOURCE_CHECKED[d.key] || DIMENSION_SOURCE[d.key])
-                              : <b style={{ color: "#92400e" }}>{DIMENSION_SOURCE[d.key]}</b>}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {/* One decision for all three surfaces (screen, CSV, print):
-                    dimensionsNote reads the working, not the caller's idea of
-                    what ran, so they cannot disagree. */}
-                <p style={{ ...muted, marginBottom: 0 }}>{ROWS_DO_NOT_SUM_NOTE}</p>
-                </details>
+                {/* Kept when the second table it used to close went: it says
+                    the rows below the matrix do not add up into these
+                    dimensions, which nothing else on the page says. */}
+                <p style={{ ...muted, margin: "9px 0 0" }}>{ROWS_DO_NOT_SUM_NOTE}</p>
                 {/* NOT folded: it says whether all four dimensions were really
                     judged on this run, which changes how every number above
                     reads. */}
@@ -2099,6 +2072,41 @@ export function SelfCheck() {
               </p>
             )}
 
+            {/* WHAT THE NEXT BAND NEEDS. Every number is derived: the shortfall
+                from the configured thresholds, the target wording from the
+                official descriptor one band up, and the named lines from the
+                run's own verdicts. It promises nothing and routes nothing that
+                the arithmetic does not already say. */}
+            {view === "overview" && bandRoute.kind === "route" && (
+              <div style={{ border: "1px solid #c7d2fe", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fff" }}>
+                <b style={{ fontSize: 14, color: INK }}>What Band {bandRoute.nextBand}, {bandRoute.nextBandName}, would need</b>
+                <p style={{ ...muted, margin: "5px 0 0" }}>{nextBandWorking(bandRoute)}</p>
+                <p style={{ ...muted, margin: "5px 0 9px" }}>{NEXT_BAND_CAVEAT}</p>
+                <div style={{ display: "grid", gap: 7 }}>
+                  {bandRoute.options.map((o) => (
+                    <div key={o.key} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px", background: "#fbfcfe" }}>
+                      <b style={{ fontSize: 12.5, color: INK }}>{o.label}: Band {o.from} &rarr; Band {o.to}</b>
+                      <div style={{ fontSize: 12.5, color: "#475569", lineHeight: 1.45, marginTop: 3 }}>{o.descriptor}</div>
+                      {/* Named only where the run really has line-level
+                          evidence for the dimension. Systems & Outcomes has
+                          none, and says nothing rather than something. */}
+                      {o.refs.length > 0 && (
+                        <div style={{ ...muted, fontSize: 11.5, marginTop: 4 }}>
+                          Lines this run marked short on this dimension: <b style={{ color: "#3730a3" }}>{o.refs.join(", ")}</b>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p style={{ ...muted, margin: "9px 0 0" }}>{INFERRED_THRESHOLDS_NOTE}</p>
+              </div>
+            )}
+            {view === "overview" && bandRoute.kind === "top" && (
+              <p style={{ ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", borderRadius: 8, padding: "9px 11px" }}>
+                {NEXT_BAND_TOP_NOTE}
+              </p>
+            )}
+
             {view === "overview" && (
             <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fbfcfe" }}>
               {band.kind === "none" ? (
@@ -2122,6 +2130,23 @@ export function SelfCheck() {
             </div>
             )}
 
+
+            {/* LAST in the panel, which reads: what was assessed (the counts
+                and the matrix), how it was judged (the reasoning that opens on
+                each row), then what the result means. It used to sit between
+                the matrix and the old second table, which was the one place it
+                broke the reading. */}
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fff" }}>
+              <b style={{ fontSize: 13 }}>What each result means on this tab</b>
+              <div style={{ display: "grid", gap: 5, marginTop: 7, gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))" }}>
+                {VERDICT_LEGEND[view].map((l) => (
+                  <div key={l.label} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
+                    <span style={{ ...TONE_BG[LEGEND_TONE[l.icon]], padding: "1px 8px", borderRadius: 999, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>{l.icon} {l.label}</span>
+                    <span style={{ color: "#475569" }}>{l.meaning}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
 
                 </div>
               )}
@@ -2376,6 +2401,29 @@ const LONG_REASONING = 320;
 // band highlights nothing at all and says why on the row.
 function RubricMatrixView({ working }: { working: ReturnType<typeof buildBandWorking> }) {
   const m = rubricMatrix(working);
+  // The reasoning that used to be a SECOND four-row table under this one. It
+  // is the only thing the grid has no room for, so it folds into the row it
+  // belongs to instead of being restated beside it.
+  const [openWhy, setOpenWhy] = useState<string | null>(null);
+  const whyButton = (r: RubricMatrixRow) => (
+    <button
+      type="button"
+      className="sc-rubric-why-btn"
+      aria-expanded={openWhy === r.key}
+      onClick={() => setOpenWhy(openWhy === r.key ? null : r.key)}
+    >
+      {openWhy === r.key ? "\u25be" : "\u25b8"} Why this band
+    </button>
+  );
+  const whyBody = (r: RubricMatrixRow) => (
+    <div className="sc-rubric-why">
+      <p><b>What this dimension asks.</b> {r.definition}</p>
+      <p><b>Where it came from.</b> {r.sourceDetail}</p>
+      {r.reason
+        ? <p><b>Why this band.</b> {r.reason}</p>
+        : <p className="sc-rubric-noreason">No reason was recorded for this dimension on this run.</p>}
+    </div>
+  );
   const mark = (state: "achieved" | "next" | "plain") =>
     state === "plain" ? null : <span className="sc-rubric-mark">{state === "achieved" ? RUBRIC_ACHIEVED_MARK : RUBRIC_NEXT_MARK}</span>;
   return (
@@ -2391,17 +2439,24 @@ function RubricMatrixView({ working }: { working: ReturnType<typeof buildBandWor
             </tr>
           </thead>
           <tbody>
-            {m.rows.map((r) => (
+            {m.rows.flatMap((r) => [
               <tr key={r.key} data-state={r.state}>
                 <th scope="row">
                   <span className="sc-rubric-dim">{r.label}</span>
                   <span className="sc-rubric-state">{r.stateLabel}</span>
+                  <span className="sc-rubric-src">{r.source}</span>
+                  {whyButton(r)}
                 </th>
                 {r.cells.map((c) => (
                   <td key={c.band} data-cell={c.state}>{mark(c.state)}{c.descriptor}</td>
                 ))}
-              </tr>
-            ))}
+              </tr>,
+              openWhy === r.key ? (
+                <tr key={`${r.key}-why`} data-state={r.state}>
+                  <td colSpan={6}>{whyBody(r)}</td>
+                </tr>
+              ) : null,
+            ])}
           </tbody>
         </table>
       </div>
@@ -2413,6 +2468,9 @@ function RubricMatrixView({ working }: { working: ReturnType<typeof buildBandWor
           <div key={r.key} className="sc-rubric-card" data-state={r.state}>
             <div className="sc-rubric-dim">{r.label}</div>
             <div className="sc-rubric-state">{r.stateLabel}</div>
+            <div className="sc-rubric-src">{r.source}</div>
+            {whyButton(r)}
+            {openWhy === r.key && whyBody(r)}
             <ol>
               {r.cells.map((c) => (
                 <li key={c.band} data-cell={c.state}>

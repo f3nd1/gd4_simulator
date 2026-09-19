@@ -145,8 +145,8 @@ describe("both exports carry the working", () => {
     expect(csv).toContain("What each result means");
     expect(csv).toContain("Partly complies");
     expect(csv).toContain("What this check assessed");
-    expect(csv).toContain("Approach,Band 2,10%,25%,yes");
-    expect(csv).toContain("NOT assessed by this check");
+    expect(csv).toContain("Approach,Band 2 of 5 \u00b7 10% of 25%,From the Procedure tab");
+    expect(csv).toContain("Not assessed by this check");
     expect(csv).toContain("No single requirement below carries a score");
   });
 
@@ -184,8 +184,18 @@ describe("both exports carry the working", () => {
     // Band 1 descriptor, and printing it beside a dimension nobody opened is
     // the exact thing this change removed. (The full five-band ladder further
     // down the document still quotes it, as reference for all five bands.)
-    expect(csv).toContain("Systems & Outcomes,not scored,,25%,NO,,NOT assessed by this check");
-    expect(html).toMatch(/<td>Systems &amp; Outcomes<\/td>\s*<td>not scored<\/td>\s*<td><\/td><td>25%<\/td>\s*<td><b>NO<\/b><\/td>\s*<td><\/td>/);
+    expect(csv).toContain("Systems & Outcomes,Not assessed by this check,The second read produced no verdicts on this run");
+    // No percentage and no band anywhere on that row.
+    expect(csv).not.toMatch(/^Systems & Outcomes,Band \d/m);
+    // The printed matrix row: it says the dimension was not assessed, and NO
+    // cell on it is marked as this check's band. The five descriptors are
+    // still printed, because the matrix is the official scale and the row
+    // marks nothing on it.
+    const soRow = html.slice(html.indexOf("Systems &amp; Outcomes</b>"));
+    const row = soRow.slice(0, soRow.indexOf("</tr>"));
+    expect(row).toContain("Not assessed by this check");
+    expect(row).not.toContain("\u2713 This check");
+    expect(row).not.toMatch(/Band \d of 5/);
   });
 
   it("omits the dimension section when there is nothing assessed to report", () => {
@@ -327,7 +337,7 @@ describe("the graphic degrades honestly into both exports", () => {
   it("puts the shape and the guidance in the CSV, where an SVG cannot go", () => {
     const csv = buildSelfCheckCsv("4.1 Admissions", rows, { kind: "none" }, "overview", [], w, "", ["4.1.1"]);
     expect(csv).toContain("What this check assessed");
-    expect(csv).toContain("Systems & Outcomes,not scored,,25%,NO");
+    expect(csv).toContain("Systems & Outcomes,Not assessed by this check,");
     expect(csv).toContain("What the full audit will look for");
     expect(csv).toContain("Key systems are interacting with one another");
     expect(csv).toContain("Procedure review records");
@@ -340,7 +350,7 @@ describe("the graphic degrades honestly into both exports", () => {
       band: { kind: "none" }, rows, ranAt: "x", view: "overview", bandWorking: w, itemIds: ["4.1.1"],
     });
     expect(html).toContain("What this check assessed");
-    expect(html).toContain("<b>NO</b>");
+    expect(html).toContain("Not assessed by this check");
     expect(html).toContain("What the full audit will look for");
     expect(html).toContain("Many to most trends and current performance levels");
     expect(html).toContain("Procedure review records");

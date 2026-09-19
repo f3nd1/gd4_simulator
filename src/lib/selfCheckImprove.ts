@@ -176,3 +176,37 @@ export const REVIEW_FINDINGS_INTRO =
 
 export const REVIEW_FINDINGS_NONE =
   "This area's review lines were not among the ones this run judged, so there is nothing to repeat here.";
+
+// ── Which requirement lines hold each dimension down ───────────────────────
+//
+// The mapping is the one the engine itself uses when it writes a checklist
+// line (optionAChecklistWrite.ts:29-45): the PROCEDURE verdict becomes the
+// line's Approach status and the COMBINED verdict becomes its Processes
+// status. So the lines that fell short on each pass are the lines behind that
+// dimension's band, and naming them is reporting the run rather than guessing.
+//
+// Review gets the official GD4 lines that ask whether a process is reviewed —
+// the same REVIEW_LINE_REFS filter the Review section already uses, so the two
+// cannot name different lines.
+//
+// Systems & Outcomes deliberately gets NONE. No line-level source for it
+// exists in this run, and inventing a line-to-outcome mapping would be
+// fabricating the thing this page exists to avoid.
+const SHORTFALL = new Set(["Partial", "Not met", "Not documented", "Inadequate"]);
+
+export function dimensionStepRefs(opts: {
+  procedure?: { ref: string; verdict: string }[];
+  combined?: { ref: string; verdict: string }[];
+}): Partial<Record<"approach" | "processes" | "review", string[]>> {
+  const short = (rows: { ref: string; verdict: string }[] | undefined) =>
+    [...new Set((rows ?? []).filter((r) => SHORTFALL.has(r.verdict)).map((r) => r.ref))];
+  const approach = short(opts.procedure);
+  const processes = short(opts.combined);
+  return {
+    approach,
+    processes,
+    // Review's lines are whichever of the shortfalls are review-shaped, from
+    // both passes: a review line can fail on either.
+    review: reviewShapedRows([...approach, ...processes].map((ref) => ({ ref }))).map((r) => r.ref),
+  };
+}

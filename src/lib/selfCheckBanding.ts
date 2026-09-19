@@ -84,6 +84,25 @@ export const DIMENSION_SOURCE_CHECKED: Partial<Record<BandDimensionRow["key"], s
   review: "From the second look at your own documents for results and review records. What it found is reported below.",
 };
 
+// Where each dimension's judgement comes from, in a few words, for the matrix
+// row itself. The long form below is the same fact in a sentence.
+//
+// It exists because the page shows three tabs and four dimensions, and a
+// reader reasonably hunts for the missing two. There is no tab for them
+// because there is no separate document set: the results-and-review pass
+// re-reads the SAME documents. Adding a fourth tab would imply a folder that
+// does not exist.
+export const DIMENSION_TAB_SOURCE: Record<BandDimensionRow["key"], string> = {
+  approach: "From the Procedure tab",
+  processes: "From the Overall tab: procedure and records combined",
+  systemsOutcomes: "From a second read of the same documents. No tab of its own",
+  review: "From a second read of the same documents. No tab of its own",
+};
+
+// Said instead when the second read produced no verdicts, so the dimension was
+// never scored.
+export const DIMENSION_NOT_READ = "The second read produced no verdicts on this run";
+
 // The Earned column for a dimension this run did not look at.
 export const NOT_ASSESSED_HERE = "not assessed";
 
@@ -451,6 +470,14 @@ export type RubricMatrixRow = {
   // band to highlight.
   stateLabel: string;
   band: ApsrDimensionScore | undefined;
+  // Where this dimension's judgement came from: a few words for the row, and
+  // the full sentence for the expanded detail.
+  source: string;
+  sourceDetail: string;
+  // The model's own reason for the band. Empty on a dimension it did not score.
+  // This is the ONE thing the matrix's grid has no room for, and it is why the
+  // rows open rather than the old second table existing.
+  reason: string;
   cells: { band: Band; descriptor: string; state: RubricCellState }[];
 };
 
@@ -487,6 +514,9 @@ export function rubricMatrix(w: BandWorking): RubricMatrix {
         state,
         stateLabel,
         band: r.band,
+        source: r.checkedHere ? DIMENSION_TAB_SOURCE[r.key] : DIMENSION_NOT_READ,
+        sourceDetail: r.checkedHere ? (DIMENSION_SOURCE_CHECKED[r.key] || DIMENSION_SOURCE[r.key]) : DIMENSION_SOURCE[r.key],
+        reason: r.reason,
         cells: EDUTRUST_BANDS.map((b) => ({
           band: b.band as Band,
           descriptor: b[r.key],
@@ -496,3 +526,88 @@ export function rubricMatrix(w: BandWorking): RubricMatrix {
     }),
   };
 }
+
+// ── What the next band needs, computed rather than narrated ────────────────
+//
+// The one thing a process owner actually wants from this page: how far short
+// the total is, how many band steps that is, and which dimensions have the
+// headroom to take them. Every part of it is derived: the shortfall from the
+// configured thresholds, the target wording from the official descriptor at
+// the band above, and the named requirement lines from the run's own verdicts.
+// Nothing here promises a band, and nothing invents a route.
+export type BandStepOption = {
+  key: BandDimensionRow["key"];
+  label: string;
+  from: Band;
+  to: Band;
+  // The official descriptor at the band this step reaches, verbatim.
+  descriptor: string;
+  // Requirement lines from THIS run that hold this dimension down. Empty where
+  // the run has no line-level source for the dimension, which is the honest
+  // answer for Systems & Outcomes.
+  refs: string[];
+};
+
+export type NextBandRoute =
+  // Fewer than four dimensions scored, so there is no total to be short of.
+  | { kind: "no-total" }
+  | { kind: "top"; totalPct: number }
+  | {
+      kind: "route";
+      band: Band; nextBand: Band; nextBandName: string;
+      totalPct: number; maxPct: number;
+      // The total this band's range tops out at: the next band starts ABOVE it.
+      thresholdPct: number;
+      steps: number; stepPct: number; reachedPct: number;
+      options: BandStepOption[];
+    };
+
+export function nextBandRoute(
+  w: BandWorking | undefined,
+  refs: Partial<Record<BandDimensionRow["key"], string[]>> = {},
+  scale: ApsrScale = DEFAULT_APSR_SCALE,
+): NextBandRoute {
+  const total = selfCheckTotal(w, scale);
+  if (!w || !total) return { kind: "no-total" };
+  if (total.band >= 5) return { kind: "top", totalPct: total.totalPct };
+  const thresholdPct = scale.bandThresholds[total.band - 1];
+  const stepPct = pctForScore(1, scale);
+  // The next band starts ABOVE the threshold, and a total only moves in whole
+  // band steps, so this is the number of steps that actually clears it. Stated
+  // as steps rather than as "+1%", which is not a move this scale can make.
+  const steps = Math.floor((thresholdPct - total.totalPct) / stepPct) + 1;
+  const nextBand = (total.band + 1) as Band;
+  return {
+    kind: "route",
+    band: total.band, nextBand, nextBandName: bandName(nextBand),
+    totalPct: total.totalPct, maxPct: total.maxPct, thresholdPct,
+    steps, stepPct, reachedPct: total.totalPct + steps * stepPct,
+    // Lowest-banded dimension first: that is where the headroom is, not a
+    // claim that it is the easiest work.
+    options: w.rows
+      .filter((r) => r.band !== undefined && r.band > 0 && r.band < 5)
+      .sort((a, b) => (a.band as number) - (b.band as number))
+      .map((r) => {
+        const to = ((r.band as number) + 1) as Band;
+        return { key: r.key, label: r.label, from: r.band as Band, to, descriptor: bandLevel(to)[r.key], refs: refs[r.key] ?? [] };
+      }),
+  };
+}
+
+// One sentence of arithmetic, shared by the screen and both exports so they
+// cannot state different shortfalls.
+export function nextBandWorking(r: Extract<NextBandRoute, { kind: "route" }>): string {
+  // The "any mix" claim is safe by construction: reaching one step past the
+  // threshold can never exceed the ceiling, so the headroom for that many
+  // steps always exists somewhere in the four.
+  const spread = r.steps === 1
+    ? "Any one of the dimensions below would clear it."
+    : `Any ${r.steps} band steps across the dimensions below would clear it, and one dimension can move more than one band.`;
+  return `Band ${r.nextBand} starts above ${r.thresholdPct}%. This check totals ${r.totalPct}% of ${r.maxPct}%. ${r.steps} band step${r.steps === 1 ? "" : "s"} of ${r.stepPct}% would reach ${r.reachedPct}%. ${spread}`;
+}
+
+export const NEXT_BAND_CAVEAT =
+  "This is arithmetic on this tool's own reconstructed percentages, not a route an auditor has agreed. Moving a dimension up means meeting the official wording below in your documents and records; nothing here promises a band.";
+
+export const NEXT_BAND_TOP_NOTE =
+  "This check's own total is already at the top band, so there is no next band to work towards on its reading. That is this tool's arithmetic, not an SSG result, and your audit lead sets the band that counts.";
