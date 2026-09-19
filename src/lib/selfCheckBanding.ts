@@ -103,6 +103,18 @@ export const DIMENSION_TAB_SOURCE: Record<BandDimensionRow["key"], string> = {
 // never scored.
 export const DIMENSION_NOT_READ = "The second read produced no verdicts on this run";
 
+// The same fact at graphic scale. The four dimensions are listed in TWO places
+// (this drawing in the result hero, and the matrix in the support panel), and
+// a source line on only one of them leaves the question unanswered wherever
+// the reader happens to be looking.
+export const DIMENSION_TAB_TAG: Record<BandDimensionRow["key"], string> = {
+  approach: "from the Procedure tab",
+  processes: "from the Overall tab",
+  systemsOutcomes: "from a second read, no tab",
+  review: "from a second read, no tab",
+};
+export const DIMENSION_TAG_NOT_READ = "not read on this run";
+
 // The Earned column for a dimension this run did not look at.
 export const NOT_ASSESSED_HERE = "not assessed";
 
@@ -244,12 +256,12 @@ export function bandCoverageNote(bandedItemId: string, allItemIds: string[], sub
 // An unassessed dimension is hatched across its whole track, which reads as
 // unknown, rather than left empty, which reads as zero.
 export type BandGraphic = {
-  segments: { key: BandDimensionRow["key"]; label: string; pct: number; max: number; assessedHere: boolean; checkedHere: boolean; band: ApsrDimensionScore | undefined }[];
+  segments: { key: BandDimensionRow["key"]; label: string; pct: number; max: number; assessedHere: boolean; checkedHere: boolean; band: ApsrDimensionScore | undefined; source: string }[];
 };
 
 export function bandGraphic(w: BandWorking): BandGraphic {
   return {
-    segments: w.rows.map((r) => ({ key: r.key, label: r.label, pct: r.pct, max: w.maxPct, assessedHere: r.assessedHere, checkedHere: r.checkedHere, band: r.band })),
+    segments: w.rows.map((r) => ({ key: r.key, label: r.label, pct: r.pct, max: w.maxPct, assessedHere: r.assessedHere, checkedHere: r.checkedHere, band: r.band, source: r.checkedHere ? DIMENSION_TAB_TAG[r.key] : DIMENSION_TAG_NOT_READ })),
   };
 }
 
@@ -319,7 +331,7 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
   // table is the content, and at the previous size the panel pushed it below
   // the fold. The type sits at the page's own scale (11px/10px) rather than
   // above every other heading on it.
-  const VX = 132, AX = 280, TW = 140, ROW = 17, TOP = 34, BARH = 9;
+  const VX = 132, AX = 280, TW = 140, ROW = 25, TOP = 34, BARH = 9;
   const W = AX + TW + (opts.feeds ? 66 : 8);
   const H = TOP + g.segments.length * ROW + 4;
   const hatchId = `scHatch${opts.idSuffix ?? ""}`;
@@ -355,6 +367,8 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
     // feeds survives greyscale and a screen reader.
     const fed = opts.feeds?.key === seg.key;
     return `${t(10, y + 8, fed ? `${NAME};font-weight:700` : NAME, seg.label)}
+      ${/* Where this dimension's judgement came from, on the drawing itself. */ ""}
+      ${t(10, y + 19, `font-size:9px;fill:${p.mute}`, seg.source)}
       ${t(VX, y + 8, SMALL, segmentText(seg))}
       <rect x="${AX}" y="${y}" width="${TW}" height="${BARH}" rx="2" style="fill:${p.track}"/>
       ${fill}
@@ -535,6 +549,24 @@ export function rubricMatrix(w: BandWorking): RubricMatrix {
 // configured thresholds, the target wording from the official descriptor at
 // the band above, and the named requirement lines from the run's own verdicts.
 // Nothing here promises a band, and nothing invents a route.
+// One requirement line behind a dimension's band, carrying the run's OWN
+// "What to do" for that line. The action is copied from the row the verdict
+// came from and never rewritten, merged or shortened: a to-do that says
+// something different from the requirement row it came from is worse than no
+// to-do at all.
+export type DimensionStepLine = {
+  ref: string;
+  // Verbatim from the row. Empty where the run recorded none, which is real:
+  // on a line where extraction found nothing the judge never runs, so there is
+  // no suggested action to copy.
+  action: string;
+  // Which pass judged it, so the page can say where the action came from.
+  from: "procedure" | "combined";
+  // The OTHER dimensions this same line also holds down. One fix clearing two
+  // dimensions is the cheapest work on the page, and it used to be invisible.
+  alsoBlocks: string[];
+};
+
 export type BandStepOption = {
   key: BandDimensionRow["key"];
   label: string;
@@ -545,8 +577,10 @@ export type BandStepOption = {
   // Requirement lines from THIS run that hold this dimension down. Empty where
   // the run has no line-level source for the dimension, which is the honest
   // answer for Systems & Outcomes.
-  refs: string[];
+  lines: DimensionStepLine[];
 };
+
+export const NO_ACTION_RECORDED = "No action was recorded for this line on this run.";
 
 export type NextBandRoute =
   // Fewer than four dimensions scored, so there is no total to be short of.
@@ -564,7 +598,7 @@ export type NextBandRoute =
 
 export function nextBandRoute(
   w: BandWorking | undefined,
-  refs: Partial<Record<BandDimensionRow["key"], string[]>> = {},
+  refs: Partial<Record<BandDimensionRow["key"], Omit<DimensionStepLine, "alsoBlocks">[]>> = {},
   scale: ApsrScale = DEFAULT_APSR_SCALE,
 ): NextBandRoute {
   const total = selfCheckTotal(w, scale);
@@ -584,14 +618,30 @@ export function nextBandRoute(
     steps, stepPct, reachedPct: total.totalPct + steps * stepPct,
     // Lowest-banded dimension first: that is where the headroom is, not a
     // claim that it is the easiest work.
-    options: w.rows
+    options: withCrossLinks(w.rows
       .filter((r) => r.band !== undefined && r.band > 0 && r.band < 5)
       .sort((a, b) => (a.band as number) - (b.band as number))
       .map((r) => {
         const to = ((r.band as number) + 1) as Band;
-        return { key: r.key, label: r.label, from: r.band as Band, to, descriptor: bandLevel(to)[r.key], refs: refs[r.key] ?? [] };
-      }),
+        return {
+          key: r.key, label: r.label, from: r.band as Band, to, descriptor: bandLevel(to)[r.key],
+          lines: (refs[r.key] ?? []).map((l) => ({ ...l, alsoBlocks: [] })),
+        };
+      })),
   };
+}
+
+// A line that appears under more than one dimension says so on every one of
+// them. Done here rather than in the refs builder because it is a fact about
+// the OPTIONS actually offered: a dimension already at Band 5 is not on the
+// list, so its lines are not blocking anything you can still move.
+function withCrossLinks(options: BandStepOption[]): BandStepOption[] {
+  const seen = new Map<string, string[]>();
+  for (const o of options) for (const l of o.lines) seen.set(l.ref, [...(seen.get(l.ref) ?? []), o.label]);
+  return options.map((o) => ({
+    ...o,
+    lines: o.lines.map((l) => ({ ...l, alsoBlocks: (seen.get(l.ref) ?? []).filter((x) => x !== o.label) })),
+  }));
 }
 
 // One sentence of arithmetic, shared by the screen and both exports so they

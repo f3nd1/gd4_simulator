@@ -36,8 +36,8 @@ import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunR
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
 import { buildLabel } from "../lib/buildInfo";
-import { unassessedDimensions, dimensionStepRefs, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
+import { unassessedDimensions, dimensionStepLines, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, NO_ACTION_RECORDED, type DimensionStepLine, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -462,12 +462,17 @@ export function SelfCheck() {
   // What the next band would need, computed from the run rather than narrated.
   // The failing lines come from the two passes' own verdicts, not from the
   // rows of whichever tab is open: the dimensions describe the RUN.
+  // BUILT rows from both passes, not the raw engine rows: the "What to do"
+  // the route prints has to be the very text the requirement row prints, and
+  // that text is produced by the row builders (fixFor / suggestedRewrite).
+  // Built for BOTH passes regardless of which tab is open, because the
+  // dimensions describe the run rather than the tab.
   const stepRefs = useMemo(
-    () => dimensionStepRefs({
-      procedure: ppdExisting?.rows.map((r) => ({ ref: r.ref, verdict: String(r.verdict) })),
-      combined: existing?.rows.map((r) => ({ ref: r.gdRef, verdict: String(r.verdict) })),
+    () => dimensionStepLines({
+      procedure: ppdExisting ? toProcedureRows(ppdExisting.rows, runCtx) : undefined,
+      combined: existing ? toSelfCheckRows(existing.rows, runCtx) : undefined,
     }),
-    [ppdExisting, existing],
+    [ppdExisting, existing, runCtx],
   );
   const bandRoute = useMemo(
     () => nextBandRoute(bandWorking ?? undefined, stepRefs, apsrScale),
@@ -2089,10 +2094,31 @@ export function SelfCheck() {
                       <div style={{ fontSize: 12.5, color: "#475569", lineHeight: 1.45, marginTop: 3 }}>{o.descriptor}</div>
                       {/* Named only where the run really has line-level
                           evidence for the dimension. Systems & Outcomes has
-                          none, and says nothing rather than something. */}
-                      {o.refs.length > 0 && (
-                        <div style={{ ...muted, fontSize: 11.5, marginTop: 4 }}>
-                          Lines this run marked short on this dimension: <b style={{ color: "#3730a3" }}>{o.refs.join(", ")}</b>
+                          none, and says nothing rather than something.
+
+                          Each line brings its OWN "What to do" from the row
+                          that judged it, so the route reads as a to-do list
+                          and a reader never has to open the requirement to
+                          find out what it asks for. */}
+                      {o.lines.length > 0 && (
+                        <div style={{ marginTop: 6 }}>
+                          <div style={{ ...muted, fontSize: 11.5, marginBottom: 4 }}>
+                            Lines this run marked short on this dimension ({o.lines.length}):
+                          </div>
+                          <StepLine line={o.lines[0]} />
+                          {/* One line expanded, the rest folded: four long
+                              actions under four dimensions is a wall nobody
+                              reads. */}
+                          {o.lines.length > 1 && (
+                            <details style={{ marginTop: 4 }}>
+                              <summary style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#6d28d9" }}>
+                                {o.lines.length - 1} more line{o.lines.length - 1 === 1 ? "" : "s"} on this dimension
+                              </summary>
+                              <div style={{ display: "grid", gap: 4, marginTop: 4 }}>
+                                {o.lines.slice(1).map((l) => <StepLine key={l.ref} line={l} />)}
+                              </div>
+                            </details>
+                          )}
                         </div>
                       )}
                     </div>
@@ -2481,6 +2507,29 @@ function RubricMatrixView({ working }: { working: ReturnType<typeof buildBandWor
             </ol>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// One requirement line in the next-band route: its ref, whether the same line
+// also holds another dimension down, and the run's own action for it. The
+// action text is printed exactly as the requirement row prints it.
+function StepLine({ line }: { line: DimensionStepLine }) {
+  return (
+    <div style={{ borderLeft: "2px solid #ddd6fe", paddingLeft: 8, marginTop: 4 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 700, color: "#3730a3" }}>
+        {line.ref}
+        {line.alsoBlocks.length > 0 && (
+          <span style={{ marginLeft: 6, fontWeight: 700, color: "#92400e" }}>
+            &#9733; also holds back {line.alsoBlocks.join(" and ")}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: line.action ? "#475569" : "#92400e", lineHeight: 1.45, marginTop: 2 }}>
+        {line.action
+          ? <><b style={{ color: "#1f2733" }}>What to do.</b> {line.action}</>
+          : NO_ACTION_RECORDED}
       </div>
     </div>
   );

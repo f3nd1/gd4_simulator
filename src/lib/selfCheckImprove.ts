@@ -26,6 +26,7 @@ import { EDUTRUST_BANDS, EDUTRUST_DIMENSIONS } from "../data/edutrustRubric";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { normalizeAuditRef } from "./gd4Refs";
 import type { Band } from "../types";
+import type { DimensionStepLine } from "./selfCheckBanding";
 import type { SelfCheckRow } from "./selfCheck";
 
 export type UnassessedDimension = {
@@ -177,13 +178,18 @@ export const REVIEW_FINDINGS_INTRO =
 export const REVIEW_FINDINGS_NONE =
   "This area's review lines were not among the ones this run judged, so there is nothing to repeat here.";
 
-// ── Which requirement lines hold each dimension down ───────────────────────
+// ── Which requirement lines hold each dimension down, and what to do ──────
 //
 // The mapping is the one the engine itself uses when it writes a checklist
 // line (optionAChecklistWrite.ts:29-45): the PROCEDURE verdict becomes the
 // line's Approach status and the COMBINED verdict becomes its Processes
 // status. So the lines that fell short on each pass are the lines behind that
 // dimension's band, and naming them is reporting the run rather than guessing.
+//
+// Each line brings its OWN "What to do" from the row that judged it, copied
+// verbatim. Never the other pass's action, never two lines merged, never a
+// shortened version: the route has to say the same thing as the requirement
+// row a reader would open.
 //
 // Review gets the official GD4 lines that ask whether a process is reviewed —
 // the same REVIEW_LINE_REFS filter the Review section already uses, so the two
@@ -192,21 +198,36 @@ export const REVIEW_FINDINGS_NONE =
 // Systems & Outcomes deliberately gets NONE. No line-level source for it
 // exists in this run, and inventing a line-to-outcome mapping would be
 // fabricating the thing this page exists to avoid.
+type StepSource = { ref: string; verdict: string; fix?: string };
+
+// Both row builders put the procedure pass on the same verdict axis
+// (toProcedureRows: Adequate→Met, Not documented→Not met), and the raw PPD
+// words are kept so a caller passing unbuilt rows still works.
 const SHORTFALL = new Set(["Partial", "Not met", "Not documented", "Inadequate"]);
 
-export function dimensionStepRefs(opts: {
-  procedure?: { ref: string; verdict: string }[];
-  combined?: { ref: string; verdict: string }[];
-}): Partial<Record<"approach" | "processes" | "review", string[]>> {
-  const short = (rows: { ref: string; verdict: string }[] | undefined) =>
-    [...new Set((rows ?? []).filter((r) => SHORTFALL.has(r.verdict)).map((r) => r.ref))];
-  const approach = short(opts.procedure);
-  const processes = short(opts.combined);
+export function dimensionStepLines(opts: {
+  procedure?: StepSource[];
+  combined?: StepSource[];
+}): Partial<Record<"approach" | "processes" | "review", Omit<DimensionStepLine, "alsoBlocks">[]>> {
+  const short = (rows: StepSource[] | undefined, from: "procedure" | "combined") => {
+    const out = new Map<string, Omit<DimensionStepLine, "alsoBlocks">>();
+    for (const r of rows ?? []) {
+      // First write wins, so one ref appears once per dimension. The duplicate
+      // "3.1.1.DS4, 3.1.1.DS4" on Review came from merging two lists without
+      // this.
+      if (SHORTFALL.has(r.verdict) && !out.has(r.ref)) out.set(r.ref, { ref: r.ref, action: (r.fix || "").trim(), from });
+    }
+    return [...out.values()];
+  };
+  const approach = short(opts.procedure, "procedure");
+  const processes = short(opts.combined, "combined");
+  // A review line can fall short on either pass. Deduped by ref, with the
+  // combined judgement preferred: it is the one that saw both halves.
+  const review = new Map<string, Omit<DimensionStepLine, "alsoBlocks">>();
+  for (const l of [...processes, ...approach]) if (!review.has(l.ref)) review.set(l.ref, l);
   return {
     approach,
     processes,
-    // Review's lines are whichever of the shortfalls are review-shaped, from
-    // both passes: a review line can fail on either.
-    review: reviewShapedRows([...approach, ...processes].map((ref) => ({ ref }))).map((r) => r.ref),
+    review: reviewShapedRows([...review.values()]),
   };
 }

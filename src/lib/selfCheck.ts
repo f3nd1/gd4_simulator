@@ -13,7 +13,7 @@ import { toCsv } from "./auditCsvExport";
 import { buildStamp } from "./buildInfo";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, NO_ACTION_RECORDED, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
@@ -721,8 +721,13 @@ function nextBandCsv(w: BandWorking | undefined, stepRefs: DimensionStepRefs): s
     row([`What Band ${r.nextBand}, ${r.nextBandName}, would need`]),
     row([nextBandWorking(r)]),
     row([NEXT_BAND_CAVEAT]),
-    row(["Dimension", "Step", "Official descriptor at that band", "Lines this run marked short"]),
-    ...r.options.map((o) => row([o.label, `Band ${o.from} to Band ${o.to}`, o.descriptor, o.refs.join(", ")])),
+    row(["Dimension", "Step", "Official descriptor at that band"]),
+    ...r.options.flatMap((o) => [
+      row([o.label, `Band ${o.from} to Band ${o.to}`, o.descriptor]),
+      // A spreadsheet has nothing to fold, so every line and its action is a
+      // row of its own under the dimension it belongs to.
+      ...o.lines.map((l) => row(["", l.ref, l.action || NO_ACTION_RECORDED, l.alsoBlocks.length > 0 ? `Also holds back ${l.alsoBlocks.join(" and ")}` : ""])),
+    ]),
   ];
 }
 
@@ -893,10 +898,11 @@ function nextBandHtml(w: BandWorking | undefined, stepRefs: DimensionStepRefs): 
     <p>${escapeHtml(nextBandWorking(r))}</p>
     <p class="muted">${escapeHtml(NEXT_BAND_CAVEAT)}</p>
     <table>
-      <thead><tr><th>Dimension</th><th>Step</th><th>Official descriptor at that band</th><th>Lines this run marked short</th></tr></thead>
+      <thead><tr><th>Dimension</th><th>Step</th><th>Official descriptor at that band</th><th>Lines this run marked short, and what to do</th></tr></thead>
       <tbody>${r.options.map((o) => `<tr>
         <td><b>${escapeHtml(o.label)}</b></td><td>Band ${o.from} to Band ${o.to}</td>
-        <td>${escapeHtml(o.descriptor)}</td><td>${escapeHtml(o.refs.join(", "))}</td>
+        <td>${escapeHtml(o.descriptor)}</td>
+        <td>${o.lines.length === 0 ? "" : `<ul>${o.lines.map((l) => `<li><b>${escapeHtml(l.ref)}</b>${l.alsoBlocks.length > 0 ? ` <b>(also holds back ${escapeHtml(l.alsoBlocks.join(" and "))})</b>` : ""}<br/>${escapeHtml(l.action || NO_ACTION_RECORDED)}</li>`).join("")}</ul>`}</td>
       </tr>`).join("")}</tbody>
     </table>`;
 }

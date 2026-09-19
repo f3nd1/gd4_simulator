@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildBandWorking, nextBandRoute, nextBandWorking } from "../selfCheckBanding";
-import { dimensionStepRefs } from "../selfCheckImprove";
+import { dimensionStepLines } from "../selfCheckImprove";
 import { EDUTRUST_BANDS } from "../../data/edutrustRubric";
 
 const all = (s: { approach: number; processes: number; systemsOutcomes: number; review: number }) =>
@@ -53,19 +53,58 @@ describe("nextBandRoute", () => {
     expect(nextBandRoute(undefined)).toEqual({ kind: "no-total" });
   });
 
-  it("carries the run's own failing lines onto the matching dimension", () => {
-    const refs = dimensionStepRefs({
-      procedure: [{ ref: "3.1.1.DS2.h", verdict: "Not documented" }, { ref: "3.1.1.DS1", verdict: "Adequate" }],
-      combined: [{ ref: "3.1.1.DS3.c", verdict: "Not met" }, { ref: "3.1.1.DS4", verdict: "Partial" }],
+  it("carries the run's own failing lines, and their own actions, onto the matching dimension", () => {
+    const refs = dimensionStepLines({
+      procedure: [
+        { ref: "3.1.1.DS2.h", verdict: "Not met", fix: "Document the governing-law clause in the PPD." },
+        { ref: "3.1.1.DS4", verdict: "Partial", fix: "Rewrite the review clause to name a schedule." },
+        { ref: "3.1.1.DS1", verdict: "Met", fix: "never shown" },
+      ],
+      combined: [
+        { ref: "3.1.1.DS3.c", verdict: "Not met", fix: "Keep a dated list of agents no longer representing you." },
+        { ref: "3.1.1.DS4", verdict: "Partial", fix: "Record the annual review and its agreed actions." },
+      ],
     });
-    expect(refs.approach).toEqual(["3.1.1.DS2.h"]);
-    expect(refs.processes).toEqual(["3.1.1.DS3.c", "3.1.1.DS4"]);
-    // DS4 is the official "review for continual improvement" line.
-    expect(refs.review).toEqual(["3.1.1.DS4"]);
+    expect(refs.approach!.map((l) => l.ref)).toEqual(["3.1.1.DS2.h", "3.1.1.DS4"]);
+    expect(refs.processes!.map((l) => l.ref)).toEqual(["3.1.1.DS3.c", "3.1.1.DS4"]);
+    // The duplicate this replaced: DS4 falls short on BOTH passes and used to
+    // be listed twice under Review.
+    expect(refs.review!.map((l) => l.ref)).toEqual(["3.1.1.DS4"]);
+    // And it keeps the COMBINED pass's action, which saw both halves.
+    expect(refs.review![0].action).toBe("Record the annual review and its agreed actions.");
+    expect(refs.review![0].from).toBe("combined");
+    // Each line's action is its own row's, never the other pass's.
+    expect(refs.approach!.find((l) => l.ref === "3.1.1.DS4")!.action).toBe("Rewrite the review clause to name a schedule.");
+  });
+
+  it("never repeats a ref within a dimension", () => {
+    const refs = dimensionStepLines({
+      combined: [
+        { ref: "3.1.1.DS4", verdict: "Partial", fix: "first" },
+        { ref: "3.1.1.DS4", verdict: "Not met", fix: "second" },
+      ],
+    });
+    expect(refs.processes!.map((l) => l.ref)).toEqual(["3.1.1.DS4"]);
     const r = nextBandRoute(all({ approach: 3, processes: 2, systemsOutcomes: 3, review: 2 }), refs);
     if (r.kind !== "route") throw new Error("expected a route");
-    expect(r.options.find((o) => o.key === "processes")!.refs).toEqual(["3.1.1.DS3.c", "3.1.1.DS4"]);
-    // No line-level source exists for Systems & Outcomes, so none is claimed.
-    expect(r.options.find((o) => o.key === "systemsOutcomes")!.refs).toEqual([]);
+    for (const o of r.options) expect(new Set(o.lines.map((l) => l.ref)).size).toBe(o.lines.length);
+  });
+
+  it("flags a line that holds more than one dimension back", () => {
+    const refs = dimensionStepLines({
+      procedure: [{ ref: "3.1.1.DS4", verdict: "Partial", fix: "a" }],
+      combined: [{ ref: "3.1.1.DS4", verdict: "Partial", fix: "b" }],
+    });
+    const r = nextBandRoute(all({ approach: 3, processes: 2, systemsOutcomes: 3, review: 2 }), refs);
+    if (r.kind !== "route") throw new Error("expected a route");
+    const onApproach = r.options.find((o) => o.key === "approach")!.lines.find((l) => l.ref === "3.1.1.DS4")!;
+    expect(onApproach.alsoBlocks.sort()).toEqual(["Processes", "Review"]);
+    // Systems & Outcomes has no line-level source, so it claims none.
+    expect(r.options.find((o) => o.key === "systemsOutcomes")!.lines).toEqual([]);
+  });
+
+  it("keeps a line with no recorded action rather than dropping it", () => {
+    const refs = dimensionStepLines({ combined: [{ ref: "3.1.1.DS3.c", verdict: "Not met" }] });
+    expect(refs.processes).toEqual([{ ref: "3.1.1.DS3.c", action: "", from: "combined" }]);
   });
 });
