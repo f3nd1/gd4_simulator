@@ -871,7 +871,28 @@ export function SelfCheck() {
         // Air between the blocks in here: the run-history card, the folder
         // guidance and the running panel were butted up against each other.
         ".sc-inputs-more>*+*{margin-top:10px}",
-        ".sc-run-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start;margin-bottom:12px}",
+        // ── The processing workspace ────────────────────────────────────
+        // A bounded frame, not a section that grows with the folder: the two
+        // panes scroll inside it, so 150 files and 1 file both end at the same
+        // place and the Stop button is never at the foot of a white field.
+        ".sc-proc{border:1px solid #dfe5ee;border-radius:12px;background:#fff;overflow:hidden}",
+        ".sc-proc-head{display:flex;align-items:flex-start;gap:12px;background:#f8fafc;border-bottom:1px solid #eef2f6;padding:11px 13px}",
+        ".sc-proc-hint{font-size:11.5px;color:#8490a3;white-space:nowrap;padding-top:3px}",
+        ".sc-proc-body{display:grid;grid-template-columns:minmax(0,38fr) minmax(0,62fr)}",
+        ".sc-proc-pane{min-width:0;display:flex;flex-direction:column;padding:11px 13px}",
+        ".sc-proc-pane+.sc-proc-pane{border-left:1px solid #eef2f6}",
+        ".sc-proc-label{font-size:10.5px;font-weight:850;letter-spacing:.07em;text-transform:uppercase;color:#8490a3;margin-bottom:7px}",
+        // 300px, not a viewport fraction: the content is a five-row list and a
+        // file table, and both are legible in that space at every width.
+        ".sc-proc-scroll{min-height:0;max-height:300px;overflow-y:auto}",
+        ".sc-proc-status{border-top:1px solid #eef2f6;margin-top:8px;padding-top:8px;overflow-wrap:anywhere}",
+        ".sc-proc-foot{border-top:1px solid #eef2f6;padding:11px 13px}",
+        "@media (max-width: 900px){",
+        ".sc-proc-body{grid-template-columns:1fr}",
+        ".sc-proc-pane+.sc-proc-pane{border-left:0;border-top:1px solid #eef2f6}",
+        ".sc-proc-scroll{max-height:220px}",
+        ".sc-proc-hint{display:none}",
+        "}",
         "@media (max-width: 980px){",
         ".sc-inputs-body{grid-template-columns:1fr 1fr}",
         ".sc-run-field{grid-column:1/-1}",
@@ -989,7 +1010,6 @@ export function SelfCheck() {
         "}",
         "@media (max-width: 640px){",
         ".sc-hero-split{grid-template-columns:1fr;gap:12px}",
-        ".sc-run-split{grid-template-columns:1fr;gap:12px}",
         ".sc-results-layout{gap:12px}",
         ".sc-hero{padding:14px}",
         ".sc-view-tabs{grid-template-columns:1fr}",
@@ -1260,7 +1280,7 @@ export function SelfCheck() {
 
 
           {running && (
-            <div>
+            <div className="sc-proc">
               {/* ONE panel while the check runs: the cat, the elapsed time, the
                   finish estimate, what the check is doing with your documents
                   and the rotating line. These were three separate blocks — a
@@ -1270,9 +1290,9 @@ export function SelfCheck() {
                   The cat is also the only thing here that moves between engine
                   events: the stage list is entirely event-driven and holds
                   still for 15 to 25 seconds at a time, which reads as a freeze. */}
-              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", marginBottom: 12 }}>
+              <div className="sc-proc-head">
                 <WaitingCat />
-                <div style={{ minWidth: 0 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
                   {/* Elapsed time runs for the whole check, from the first stage
                       to the last, so a long run is never indistinguishable from
                       a hang. The estimate appears only once a requirement has
@@ -1290,14 +1310,20 @@ export function SelfCheck() {
                   )}
                   <div style={{ ...muted, marginTop: 4 }}>{waitingMessage(now - (runStartedAt || now))}</div>
                 </div>
+                {/* Quiet, and desktop only: it answers "is this normal?" without
+                    competing with the elapsed time. */}
+                <span className="sc-proc-hint">Usually a few minutes</span>
               </div>
 
-              {/* Two columns: the five stages on the left, the documents on
-                  the right. Stacked, the stage list sat under a file ledger
-                  that grows with the folder, so on a real run the stages were
-                  off the bottom of the screen. */}
-              <div className="sc-run-split">
-              <div style={{ minWidth: 0 }}>
+              {/* Two columns inside ONE bounded workspace: the five stages on
+                  the left, the documents on the right. Both panes scroll
+                  INSIDE the frame, so a folder of 150 files no longer makes the
+                  page itself hundreds of pixels taller than the content, and a
+                  folder of one file no longer leaves a white field under it. */}
+              <div className="sc-proc-body">
+              <div className="sc-proc-pane">
+                <div className="sc-proc-label">Progress</div>
+                <div className="sc-proc-scroll">
               <ol style={{ listStyle: "none", padding: 0, margin: "0 0 12px" }}>
                 {visibleSteps.map((s, i) => {
                   const state = i < activeIdx ? "done" : i === activeIdx ? "now" : "todo";
@@ -1342,9 +1368,12 @@ export function SelfCheck() {
                 })}
               </ol>
 
+                </div>
               </div>
 
-              <div style={{ minWidth: 0 }}>
+              <div className="sc-proc-pane">
+                <div className="sc-proc-label">Live activity</div>
+                <div className="sc-proc-scroll">
                 {/* WHICH DOCUMENTS, not just which stage. A run over 154 files
                     showed one line ("Checking requirement 1 of 6") for 50
                     minutes, with no way to see which file or which call it was
@@ -1359,21 +1388,26 @@ export function SelfCheck() {
                   />
                 )}
 
-                {/* What the request in flight is reading, once the run has
-                    moved from reading into judging. Every pass reports it now,
-                    including the results-and-review one, which used to say only
-                    "window 1/3 · batch 1/2". */}
-                {(liveProgress?.currentWindowFiles?.length ?? 0) > 0 && (
-                  <p style={{ ...muted, margin: (liveProgress?.filesFound?.length ?? 0) > 0 ? "8px 0 0" : 0 }}>
-                    <b style={{ color: INK }}>Now checking against:</b> {liveProgress!.currentWindowFiles!.join(", ")}
-                  </p>
-                )}
-                {(liveProgress?.filesFound?.length ?? 0) === 0 && (liveProgress?.currentWindowFiles?.length ?? 0) === 0 && (
-                  <p style={{ ...muted, margin: 0 }}>The documents this step is using appear here as it opens them.</p>
-                )}
+                </div>
+                {/* PINNED under the list, never inside it: what the request in
+                    flight is reading. Every pass reports it now, including the
+                    results-and-review one, which used to say only "window 1/3 ·
+                    batch 1/2". */}
+                <div className="sc-proc-status">
+                  {(liveProgress?.currentWindowFiles?.length ?? 0) > 0 ? (
+                    <p style={{ ...muted, margin: 0 }}>
+                      <b style={{ color: INK }}>Now checking against:</b> {liveProgress!.currentWindowFiles!.join(", ")}
+                    </p>
+                  ) : (liveProgress?.filesFound?.length ?? 0) === 0 ? (
+                    <p style={{ ...muted, margin: 0 }}>The documents this step is using appear here as it opens them.</p>
+                  ) : (
+                    <p style={{ ...muted, margin: 0 }}>{plainDetail(liveProgress?.detail || "") || "Reading your documents."}</p>
+                  )}
+                </div>
               </div>
               </div>
 
+              <div className="sc-proc-foot">
               {/* Stall: the engine bumps a heartbeat on every event, so silence
                   is measurable rather than guessed. */}
               {stall.level !== "none" && (
@@ -1410,6 +1444,7 @@ export function SelfCheck() {
                 style={{ fontSize: 13.5, padding: "9px 16px", borderRadius: 10, border: "1px solid #cbd5e1", background: "#fff", cursor: "pointer", color: "#991b1b", fontWeight: 700 }}>
                 Stop
               </button>
+              </div>
             </div>
           )}
 
