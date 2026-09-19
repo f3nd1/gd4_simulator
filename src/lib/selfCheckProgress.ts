@@ -34,6 +34,10 @@ export type RunProgress = {
   // Which source files the AI call in flight right now is reading from, so a
   // stuck stage can name the documents rather than "the checking service".
   currentWindowFiles?: string[];
+  // Everything the run has said so far, oldest first. The page showed only the
+  // line in flight, so a reader could see what was happening now and nothing
+  // about what had already been read.
+  log?: { at: number; text: string; tone?: "info" | "good" | "warn" | "bad" }[];
   // The Outcomes & Review pass emits only a prose detail line ("Reading X…"),
   // no file ledger and no per-line map, so that stage shows this verbatim.
   detail?: string;

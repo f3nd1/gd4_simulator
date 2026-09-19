@@ -12,6 +12,7 @@ import {
   type RunProgress, type StageKey,
 } from "../lib/selfCheckProgress";
 import { useWorkspaceStore, OPTION_A_RUN_HISTORY_CAP } from "../store/useWorkspaceStore";
+import type { AuditFileRecord } from "../types";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
@@ -56,6 +57,9 @@ const INK = "#1f2733";
 const card: React.CSSProperties = { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, padding: 20, marginBottom: 16 };
 const stepNum: React.CSSProperties = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: "50%", background: INK, color: "#fff", fontSize: 13, fontWeight: 800, flexShrink: 0 };
 const h2: React.CSSProperties = { fontSize: 17, fontWeight: 700, margin: 0, color: INK };
+// The run log's four tones, as the engine already emits them.
+const LOG_TONE: Record<string, string> = { info: "#475569", good: "#15803d", warn: "#92400e", bad: "#b91c1c" };
+
 // The three Audit support categories, in the order a reader needs them: what
 // was read, how the check works, what the full audit adds.
 const SUPPORT_TABS = [
@@ -204,6 +208,15 @@ export function SelfCheck() {
   // Which Audit support category is open. Files first: it is what follows
   // naturally from reading a requirement's finding.
   const [supportTab, setSupportTab] = useState<SupportTab>("files");
+  // Whether the run's activity log is open. Shut by default: the file list
+  // above it answers most questions, and the log is what you open when it does
+  // not.
+  const [logOpen, setLogOpen] = useState(false);
+  // Re-read one file: which file is chosen, what the last attempt said, and
+  // whether one is in flight. Page state only — nothing about it is stored.
+  const [rereadKey, setRereadKey] = useState("");
+  const [rereadNote, setRereadNote] = useState("");
+  const [rereading, setRereading] = useState(false);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   // Which requirement the stage is showing. Held by REF, not by index: the
@@ -459,6 +472,23 @@ export function SelfCheck() {
     return w.length > 0 ? plainRunError(w[0]) : undefined;
   }, [ppdResults, existing, scope]);
   const expectedGroups = useMemo(() => expectedEvidenceGroups(rows), [rows]);
+  // The files THIS stored check read, each with the number of requirement lines
+  // that quoted it, counted off the run's own chunk map. Records side only: the
+  // written-procedure pass is not what this control re-runs.
+  const rereadFiles = useMemo(() => {
+    if (!existing) return [] as { key: string; name: string; lines: number }[];
+    const chunkFiles = existing.chunkFileNames ?? {};
+    return (existing.fileLedger ?? [])
+      .filter((f) => f.bucket === "evidence" && (f.driveFileId || f.path))
+      .map((f) => ({
+        key: f.driveFileId || f.path,
+        name: f.name,
+        lines: existing.rows.filter((r) =>
+          (r.evidenceChunkIds ?? []).some((c) => chunkFiles[c] === f.name)
+          || (r.evidenceFiles ?? []).some((e) => e.name === f.name)
+        ).length,
+      }));
+  }, [existing]);
   // The run's own reported gaps, gathered for the improvement section. Nothing
   // new is written: these are the strings already on the rows.
   const runGaps = useMemo(() => runNamedGaps(rows), [rows]);
@@ -754,6 +784,28 @@ export function SelfCheck() {
     phase === "policy" ? (ppdProgress ?? undefined)
       : phase === "outcomes" ? (orProgress?.detail ? { detail: orProgress.detail, currentWindowFiles: orProgress.currentWindowFiles } : undefined)
       : (phase === "records" || phase === "band") ? (evProgress ?? undefined) : undefined;
+  // EVERY file this run has opened, across all its passes, not just the pass in
+  // flight. The live pane read one progress object, so the file list vanished
+  // the moment the run moved on to the results-and-review stage, which is the
+  // stage that takes longest and where a reader most wants to see what was
+  // read. Deduplicated by Drive id (or path), policy pass first.
+  const runLedger = useMemo(() => {
+    const out: AuditFileRecord[] = [];
+    const seen = new Set<string>();
+    for (const rec of [...(ppdProgress?.filesFound ?? []), ...(evProgress?.filesFound ?? [])]) {
+      const key = rec.driveFileId || rec.path;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(rec);
+    }
+    return out;
+  }, [ppdProgress, evProgress]);
+  // The run's own activity log, both passes, oldest first. The engine has
+  // always kept it; this page just never showed it.
+  const runLog = useMemo(
+    () => [...(ppdProgress?.log ?? []), ...(evProgress?.log ?? [])].sort((a, b) => a.at - b.at),
+    [ppdProgress, evProgress],
+  );
   const stall = stallState(now, liveProgress, runStartedAt || now, canSkipAiCall);
   // When the currently counted stage began. The finish estimate divides the
   // time this stage has ACTUALLY taken by the requirements it has ACTUALLY
@@ -886,6 +938,7 @@ export function SelfCheck() {
         // file table, and both are legible in that space at every width.
         ".sc-proc-scroll{min-height:0;max-height:300px;overflow-y:auto}",
         ".sc-proc-status{border-top:1px solid #eef2f6;margin-top:8px;padding-top:8px;overflow-wrap:anywhere}",
+        ".sc-proc-log{margin-top:6px;border:1px solid #eef2f6;border-radius:8px;background:#fbfcfe;padding:6px 9px;font-size:11.5px;line-height:1.5;max-height:150px;overflow-y:auto}",
         ".sc-proc-foot{border-top:1px solid #eef2f6;padding:11px 13px}",
         "@media (max-width: 900px){",
         ".sc-proc-body{grid-template-columns:1fr}",
@@ -1379,13 +1432,37 @@ export function SelfCheck() {
                     minutes, with no way to see which file or which call it was
                     on, let alone skip it. This is the ledger the Evidence
                     Folder page has always had, with its per-file Skip. */}
-                {(liveProgress?.filesFound?.length ?? 0) > 0 && (
+                {runLedger.length > 0 && (
                   <FileLedger
-                    files={liveProgress!.filesFound!}
+                    files={runLedger}
                     isActive
                     progress={{ currentFileName: liveProgress?.currentFile, currentFileAction: "Reading" }}
                     onSkipFile={() => useWorkspaceStore.getState().skipCurrentFile()}
                   />
+                )}
+
+                {/* THE WHOLE RUN'S LOG, not only the line in flight. The engine
+                    has always kept it (both passes append to their own `log`);
+                    this page showed the current activity and nothing about what
+                    had already happened, so a reader could not tell what had
+                    been read before the stage that was hanging. Newest last, so
+                    it reads like a transcript. */}
+                {runLog.length > 0 && (
+                  <details open={logOpen} onToggle={(e) => { if (e.target === e.currentTarget) setLogOpen(e.currentTarget.open); }} style={{ marginTop: 8 }}>
+                    <summary style={{ cursor: "pointer", listStyle: "revert", fontSize: 12, fontWeight: 800, color: "#475569" }}>
+                      Activity log ({runLog.length} {runLog.length === 1 ? "line" : "lines"})
+                    </summary>
+                    <div className="sc-proc-log">
+                      {runLog.map((l, i) => (
+                        <div key={`${l.at}-${i}`} style={{ display: "flex", gap: 8, padding: "2px 0", color: LOG_TONE[l.tone ?? "info"] }}>
+                          <span style={{ color: "#94a3b8", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+                            {new Date(l.at).toLocaleTimeString("en-SG", { hour12: false })}
+                          </span>
+                          <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{l.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
                 )}
 
                 </div>
@@ -1393,6 +1470,28 @@ export function SelfCheck() {
                     flight is reading. Every pass reports it now, including the
                     results-and-review one, which used to say only "window 1/3 ·
                     batch 1/2". */}
+                {/* A manual skip, available the whole time rather than only
+                    after a minute of silence: a file that is merely slow is
+                    still the file the reader wants to move past. Same two
+                    actions the stall panel offers. */}
+                {(liveProgress?.canSkipCurrentFile || canSkipAiCall) && (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const st = useWorkspaceStore.getState();
+                        if (liveProgress?.canSkipCurrentFile) st.skipCurrentFile();
+                        else st.skipCurrentAiCall();
+                      }}
+                      style={{ fontSize: 12, fontWeight: 700, padding: "5px 11px", borderRadius: 8, border: "1px solid #fbbf24", background: "#fffbeb", color: "#92400e", cursor: "pointer" }}
+                    >
+                      {liveProgress?.canSkipCurrentFile
+                        ? `Skip ${liveProgress.currentFile ? `"${liveProgress.currentFile}"` : "this file"}`
+                        : "Skip this step and carry on"}
+                    </button>
+                  </div>
+                )}
+
                 <div className="sc-proc-status">
                   {(liveProgress?.currentWindowFiles?.length ?? 0) > 0 ? (
                     <p style={{ ...muted, margin: 0 }}>
@@ -1742,6 +1841,48 @@ export function SelfCheck() {
                 overall tab keeps the merged view, which answers the different
                 question of what the whole check opened. */}
             <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} open={filesOpen} setOpen={setFilesOpen} />
+
+            {/* RE-READ ONE FILE. A document that was unreadable, or that has
+                since been replaced with a better scan, used to mean running the
+                whole area again: 150 files fetched to fix one. This reads that
+                one file again (the rest come from this session's text cache)
+                and re-checks ONLY the requirement lines that quoted it. It says
+                so before it runs, and it says what it did not redo after. */}
+            {rereadFiles.length > 0 && (
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fff" }}>
+                <b style={{ fontSize: 13 }}>Read one file again</b>
+                <p style={{ ...muted, margin: "4px 0 8px" }}>
+                  For a file that could not be read, or one you have since replaced in Drive. It reads that file again and re-checks only the
+                  requirement lines that quoted it. Every other line, and the whole written-procedure side, stays exactly as it is.
+                </p>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <select
+                    value={rereadKey} onChange={(e) => { setRereadKey(e.target.value); setRereadNote(""); }}
+                    disabled={rereading}
+                    style={{ ...input, width: "auto", minWidth: 260, maxWidth: "100%", flex: "1 1 260px", padding: "8px 10px", fontSize: 13, cursor: "pointer" }}
+                  >
+                    <option value="">Choose a file this check read…</option>
+                    {rereadFiles.map((f) => (
+                      <option key={f.key} value={f.key}>{f.name}{f.lines === 0 ? " (no line quoted it)" : ` (${f.lines} ${f.lines === 1 ? "line" : "lines"} quoted it)`}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button" disabled={!rereadKey || rereading}
+                    onClick={() => {
+                      if (!area || !rereadKey) return;
+                      setRereading(true); setRereadNote("");
+                      void useWorkspaceStore.getState().recheckFileLines(area.scope, rereadKey)
+                        .then((r) => setRereadNote(r.message))
+                        .finally(() => { setRereading(false); setRunIndex(0); });
+                    }}
+                    style={{ ...bigBtn, fontSize: 13, padding: "8px 14px", opacity: !rereadKey || rereading ? 0.45 : 1, cursor: !rereadKey || rereading ? "not-allowed" : "pointer" }}
+                  >
+                    {rereading ? "Reading it again…" : "Read again and re-check its lines"}
+                  </button>
+                </div>
+                {rereadNote && <p style={{ ...muted, margin: "8px 0 0", color: INK }}>{rereadNote}</p>}
+              </div>
+            )}
 
             {/* What good looks like, from the official published list and
                 nothing else. Once per requirement item, because that is the

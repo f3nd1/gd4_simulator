@@ -1114,6 +1114,16 @@ export type WorkspaceState = {
   // findings (with a prior PPD + Evidence run and a matching line ref) are
   // re-checkable; anything else returns ok:false with the reason.
   recheckFinding: (findingId: string) => Promise<{ ok: boolean; message: string }>;
+  // ONE file read again, and only the requirement lines that cited it
+  // re-assessed. For the case where a document was unreadable or has been
+  // replaced with a better scan: re-running the whole area re-reads a folder of
+  // 150 files to fix one of them. The other files come from the session text
+  // cache, so only this one is fetched from Drive again.
+  //
+  // It DOES re-assess: the lines that quoted the old text cannot keep verdicts
+  // drawn from text the run no longer holds. Lines that never cited the file
+  // are carried through untouched by runEvidenceAssessment's retry path.
+  recheckFileLines: (subCriterionId: string, fileKey: string) => Promise<{ ok: boolean; message: string }>;
   // Clarification round: batch-re-check several open findings after new evidence
   // is added. Groups the selected findings by Evidence-Folder scope, unions each
   // scope's retry refs, then runs runEvidenceAssessment once per scope
@@ -7538,6 +7548,45 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         });
         useChecklistModuleStore.getState().clearSavedFindingId(id);
         useFindingDraftStore.getState().clearSavedFindingId(id);
+      },
+
+      recheckFileLines: async (subCriterionId, fileKey) => {
+        const ev = get().evidenceAssessments[subCriterionId];
+        if (!ev) return { ok: false, message: "This area has no stored check to re-check against." };
+        const rec = (ev.fileLedger ?? []).find((f) => (f.driveFileId || f.path) === fileKey);
+        if (!rec) return { ok: false, message: "That file is not in this check's own list of what it read." };
+        // WHICH lines cited it, by this run's own chunk map. Never a guess: a
+        // line is re-assessed only when one of its cited chunks resolves to
+        // this file's name.
+        const chunkFiles = ev.chunkFileNames ?? {};
+        const refs = ev.rows
+          .filter((r) =>
+            (r.evidenceChunkIds ?? []).some((c) => chunkFiles[c] === rec.name)
+            // A row can also name the file directly, without a chunk id.
+            || (r.evidenceFiles ?? []).some((f) => f.name === rec.name))
+          .map((r) => r.gdRef);
+        if (refs.length === 0) {
+          return { ok: false, message: `No requirement line in this check quoted ${rec.name}, so re-reading it would change nothing. Run the whole check again if the file is new.` };
+        }
+        // Drop the cached text so this ONE file is fetched from Drive again;
+        // every other file still comes from the cache.
+        if (rec.driveFileId) {
+          set((st) => {
+            const next = { ...st.fileTextCache };
+            for (const k of Object.keys(next)) if (k.startsWith(`${rec.driveFileId}:`)) delete next[k];
+            return { fileTextCache: next };
+          });
+        }
+        const beforeRunAt = ev.runAt;
+        await get().runEvidenceAssessment(subCriterionId, refs);
+        const after = get().evidenceAssessments[subCriterionId];
+        if (!after || after.runAt === beforeRunAt) {
+          return { ok: false, message: get().auditBlockedReason ?? "The re-check could not run. Check Google Drive is connected and an auditor is selected, then try again." };
+        }
+        return {
+          ok: true,
+          message: `${rec.name} was read again and the ${refs.length} requirement ${refs.length === 1 ? "line that quoted" : "lines that quoted"} it ${refs.length === 1 ? "was" : "were"} re-checked. Every other line is unchanged, and the dimension working and the results-and-review pass are from the earlier run: run the whole check again if you want those redone too.`,
+        };
       },
 
       recheckFinding: async (findingId) => {
