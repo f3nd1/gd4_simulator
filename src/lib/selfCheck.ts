@@ -13,7 +13,7 @@ import { toCsv } from "./auditCsvExport";
 import { buildStamp } from "./buildInfo";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
@@ -714,12 +714,13 @@ export type DimensionStepRefs = Parameters<typeof nextBandRoute>[1];
 function nextBandCsv(w: BandWorking | undefined, stepRefs: DimensionStepRefs): string[][] {
   const r = nextBandRoute(w, stepRefs);
   const row = (cells: string[]) => [...cells, ...Array(Math.max(0, SELF_CHECK_HEADERS.length - cells.length)).fill("")];
-  if (r.kind === "top") return [row([]), row([NEXT_BAND_TOP_NOTE])];
-  if (r.kind !== "route") return [];
+  // Every dimension at the top too: nothing left to point at.
+  if (r.kind === "top" && r.allAtTop) return [row([]), row([NEXT_BAND_TOP_NOTE])];
+  if (r.kind === "no-total") return [];
   return [
     row([]),
-    row([CLIMB_HEADING]),
-    row([nextBandWorking(r)]),
+    row([r.kind === "top" ? CLIMB_HEADING_AT_TOP : CLIMB_HEADING]),
+    row([r.kind === "top" ? TOP_BAND_WITH_ROOM_NOTE : nextBandWorking(r)]),
     row([NEXT_BAND_CAVEAT]),
     row(["Dimension", "Step", "Official descriptor at that band"]),
     ...r.options.flatMap((o) => o.atTop ? [row([o.label, `Band ${o.from} of 5`, CLIMB_AT_TOP])] : [
@@ -896,10 +897,10 @@ function rubricMatrixHtml(w: BandWorking): string {
 // the arithmetic and the target wording in full rather than folding either.
 function nextBandHtml(w: BandWorking | undefined, stepRefs: DimensionStepRefs): string {
   const r = nextBandRoute(w, stepRefs);
-  if (r.kind === "top") return `<p class="muted">${escapeHtml(NEXT_BAND_TOP_NOTE)}</p>`;
-  if (r.kind !== "route") return "";
-  return `<h2>${escapeHtml(CLIMB_HEADING)}</h2>
-    <p>${escapeHtml(nextBandWorking(r))}</p>
+  if (r.kind === "top" && r.allAtTop) return `<p class="muted">${escapeHtml(NEXT_BAND_TOP_NOTE)}</p>`;
+  if (r.kind === "no-total") return "";
+  return `<h2>${escapeHtml(r.kind === "top" ? CLIMB_HEADING_AT_TOP : CLIMB_HEADING)}</h2>
+    <p>${escapeHtml(r.kind === "top" ? TOP_BAND_WITH_ROOM_NOTE : nextBandWorking(r))}</p>
     <p class="muted">${escapeHtml(NEXT_BAND_CAVEAT)}</p>
     <table>
       <thead><tr><th>Dimension</th><th>Step</th><th>Official descriptor at that band</th><th>Lines this run marked short, and what to do</th></tr></thead>

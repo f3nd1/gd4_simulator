@@ -37,7 +37,7 @@ import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
 import { buildLabel } from "../lib/buildInfo";
 import { unassessedDimensions, dimensionStepLines, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_NEXT_LABEL, CLIMB_BEYOND_LABEL, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, type DimensionStepLine, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_NEXT_LABEL, CLIMB_BEYOND_LABEL, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, type DimensionStepLine, type BandStepOption, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -2087,90 +2087,46 @@ export function SelfCheck() {
                 <b style={{ fontSize: 14, color: INK }}>{CLIMB_HEADING}</b>
                 <p style={{ ...muted, margin: "5px 0 0" }}>{nextBandWorking(bandRoute)}</p>
                 <p style={{ ...muted, margin: "5px 0 9px" }}>{NEXT_BAND_CAVEAT}</p>
-                <div style={{ display: "grid", gap: 7 }}>
-                  {bandRoute.options.map((o) => (
-                    <div key={o.key} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px", background: "#fbfcfe" }}>
-                      {/* Where it stands, then the one step that is work, then
-                          the rungs above it, which are direction. The two are
-                          told apart by more than order: the step sits in a
-                          bordered, tinted box and the rest is folded. */}
-                      <b style={{ fontSize: 12.5, color: INK }}>{o.label}: now Band {o.from} of 5 on this dimension</b>
-                      {o.atTop ? (
-                        <div style={{ fontSize: 12.5, color: "#475569", lineHeight: 1.45, marginTop: 3 }}>{CLIMB_AT_TOP}</div>
-                      ) : (
-                        <>
-                      <div style={{ border: "1px solid #c7d2fe", borderRadius: 6, background: "#fff", padding: "7px 9px", marginTop: 5 }}>
-                        <div style={{ fontSize: 11, fontWeight: 800, color: "#6d28d9", textTransform: "uppercase", letterSpacing: ".02em" }}>{CLIMB_NEXT_LABEL}</div>
-                        <b style={{ fontSize: 12.5, color: INK }}>Band {o.from} &rarr; Band {o.to}</b>
-                        <div style={{ fontSize: 12.5, color: "#475569", lineHeight: 1.45, marginTop: 3 }}>{o.descriptor}</div>
-                      {/* Named only where the run really has line-level
-                          evidence for the dimension. Systems & Outcomes has
-                          none, and says nothing rather than something.
-
-                          Each line brings its OWN "What to do" from the row
-                          that judged it, so the route reads as a to-do list
-                          and a reader never has to open the requirement to
-                          find out what it asks for. */}
-                      {o.lines.length > 0 && (
-                        <div style={{ marginTop: 6 }}>
-                          <div style={{ ...muted, fontSize: 11.5, marginBottom: 4 }}>
-                            Lines this run marked short on this dimension ({o.lines.length}):
-                          </div>
-                          <StepLine line={o.lines[0]} />
-                          {/* One line expanded, the rest folded: four long
-                              actions under four dimensions is a wall nobody
-                              reads. */}
-                          {o.lines.length > 1 && (
-                            <details style={{ marginTop: 4 }}>
-                              <summary style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#6d28d9" }}>
-                                {o.lines.length - 1} more line{o.lines.length - 1 === 1 ? "" : "s"} on this dimension
-                              </summary>
-                              <div style={{ display: "grid", gap: 4, marginTop: 4 }}>
-                                {o.lines.slice(1).map((l) => <StepLine key={l.ref} line={l} />)}
-                              </div>
-                            </details>
-                          )}
-                        </div>
-                      )}
-                      </div>
-                      {/* Official wording only. The run produced no evidence
-                          about a band the area is not standing on, so there is
-                          nothing to name against these. */}
-                      {o.beyond.length > 0 && (
-                        <details style={{ marginTop: 5 }}>
-                          <summary style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#475569" }}>
-                            {CLIMB_BEYOND_LABEL} ({o.beyond.length})
-                          </summary>
-                          <div style={{ display: "grid", gap: 4, marginTop: 4 }}>
-                            {o.beyond.map((b) => (
-                              <div key={b.to} style={{ fontSize: 12, color: "#64748b", lineHeight: 1.45 }}>
-                                <b style={{ color: "#475569" }}>Band {b.to}.</b> {b.descriptor}
-                              </div>
-                            ))}
-                            <div style={{ ...muted, fontSize: 11 }}>{CLIMB_BEYOND_NOTE}</div>
-                          </div>
-                        </details>
-                      )}
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <ClimbList options={bandRoute.options} />
                 <p style={{ ...muted, margin: "9px 0 0" }}>{INFERRED_THRESHOLDS_NOTE}</p>
               </div>
             )}
+            {/* AT THE TOP BAND, the ladder stays. An area at 95% can still
+                have a dimension at Band 4, and this block used to vanish
+                entirely there, taking the one remaining step with it. */}
             {view === "overview" && bandRoute.kind === "top" && (
-              <p style={{ ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", borderRadius: 8, padding: "9px 11px" }}>
-                {NEXT_BAND_TOP_NOTE}
-              </p>
+              bandRoute.allAtTop ? (
+                <p style={{ ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", borderRadius: 8, padding: "9px 11px" }}>
+                  {NEXT_BAND_TOP_NOTE}
+                </p>
+              ) : (
+                <div style={{ border: "1px solid #c7d2fe", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fff" }}>
+                  <b style={{ fontSize: 14, color: INK }}>{CLIMB_HEADING_AT_TOP}</b>
+                  <p style={{ ...muted, margin: "5px 0 0" }}>{TOP_BAND_WITH_ROOM_NOTE}</p>
+                  <p style={{ ...muted, margin: "5px 0 9px" }}>{NEXT_BAND_CAVEAT}</p>
+                  <ClimbList options={bandRoute.options} />
+                  <p style={{ ...muted, margin: "9px 0 0" }}>{INFERRED_THRESHOLDS_NOTE}</p>
+                </div>
+              )
             )}
 
-            {view === "overview" && (
+            {/* EMPTY, and only one line of it. Saying that nothing has been
+                recorded is worth a sentence, not a full card: the card's job
+                is telling two DIFFERENT numbers apart, and with only one of
+                them present there is nothing to tell apart. The fuller
+                version below is kept for when a band really is recorded. */}
+            {view === "overview" && band.kind === "none" && selfTotal && (
+              <p style={{ ...muted, margin: "10px 0" }}>
+                <b style={{ color: INK }}>Your audit lead has not recorded a band for this area yet.</b>{" "}
+                The band above is this check&rsquo;s own working, and theirs appears here when they set it.
+              </p>
+            )}
+            {view === "overview" && !(band.kind === "none" && selfTotal) && (
             <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fbfcfe" }}>
               {band.kind === "none" ? (
                 <>
-                  <b style={{ fontSize: 14 }}>{selfTotal ? "Your audit lead\u2019s band for this area: not recorded yet" : "This check gives no band"}</b>
-                  <p style={{ ...muted, margin: "5px 0 0" }}>{selfTotal ? "The band above is this check's own working, added up from the four dimensions. Your audit lead records the band that counts, separately, and it appears here when they do." : NO_BAND_LINE}</p>
+                  <b style={{ fontSize: 14 }}>This check gives no band</b>
+                  <p style={{ ...muted, margin: "5px 0 0" }}>{NO_BAND_LINE}</p>
                 </>
               ) : (
                 <>
@@ -2547,6 +2503,82 @@ function RubricMatrixView({ working }: { working: ReturnType<typeof buildBandWor
 // One requirement line in the next-band route: its ref, whether the same line
 // also holds another dimension down, and the run's own action for it. The
 // action text is printed exactly as the requirement row prints it.
+// The ladder: one card per dimension, drawn the same whether the area is short
+// of the next overall band or already at the top of the scale.
+function ClimbList({ options }: { options: BandStepOption[] }) {
+  return (
+    <div style={{ display: "grid", gap: 7 }}>
+      {options.map((o) => (
+                            <div key={o.key} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px", background: "#fbfcfe" }}>
+            {/* Where it stands, then the one step that is work, then
+                the rungs above it, which are direction. The two are
+                told apart by more than order: the step sits in a
+                bordered, tinted box and the rest is folded. */}
+            <b style={{ fontSize: 12.5, color: INK }}>{o.label}: now Band {o.from} of 5 on this dimension</b>
+            {o.atTop ? (
+              <div style={{ fontSize: 12.5, color: "#475569", lineHeight: 1.45, marginTop: 3 }}>{CLIMB_AT_TOP}</div>
+            ) : (
+              <>
+            <div style={{ border: "1px solid #c7d2fe", borderRadius: 6, background: "#fff", padding: "7px 9px", marginTop: 5 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#6d28d9", textTransform: "uppercase", letterSpacing: ".02em" }}>{CLIMB_NEXT_LABEL}</div>
+              <b style={{ fontSize: 12.5, color: INK }}>Band {o.from} &rarr; Band {o.to}</b>
+              <div style={{ fontSize: 12.5, color: "#475569", lineHeight: 1.45, marginTop: 3 }}>{o.descriptor}</div>
+            {/* Named only where the run really has line-level
+                evidence for the dimension. Systems & Outcomes has
+                none, and says nothing rather than something.
+
+                Each line brings its OWN "What to do" from the row
+                that judged it, so the route reads as a to-do list
+                and a reader never has to open the requirement to
+                find out what it asks for. */}
+            {o.lines.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ ...muted, fontSize: 11.5, marginBottom: 4 }}>
+                  Lines this run marked short on this dimension ({o.lines.length}):
+                </div>
+                <StepLine line={o.lines[0]} />
+                {/* One line expanded, the rest folded: four long
+                    actions under four dimensions is a wall nobody
+                    reads. */}
+                {o.lines.length > 1 && (
+                  <details style={{ marginTop: 4 }}>
+                    <summary style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#6d28d9" }}>
+                      {o.lines.length - 1} more line{o.lines.length - 1 === 1 ? "" : "s"} on this dimension
+                    </summary>
+                    <div style={{ display: "grid", gap: 4, marginTop: 4 }}>
+                      {o.lines.slice(1).map((l) => <StepLine key={l.ref} line={l} />)}
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
+            </div>
+            {/* Official wording only. The run produced no evidence
+                about a band the area is not standing on, so there is
+                nothing to name against these. */}
+            {o.beyond.length > 0 && (
+              <details style={{ marginTop: 5 }}>
+                <summary style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#475569" }}>
+                  {CLIMB_BEYOND_LABEL} ({o.beyond.length})
+                </summary>
+                <div style={{ display: "grid", gap: 4, marginTop: 4 }}>
+                  {o.beyond.map((b) => (
+                    <div key={b.to} style={{ fontSize: 12, color: "#64748b", lineHeight: 1.45 }}>
+                      <b style={{ color: "#475569" }}>Band {b.to}.</b> {b.descriptor}
+                    </div>
+                  ))}
+                  <div style={{ ...muted, fontSize: 11 }}>{CLIMB_BEYOND_NOTE}</div>
+                </div>
+              </details>
+            )}
+              </>
+            )}
+          </div>
+      ))}
+    </div>
+  );
+}
+
 function StepLine({ line }: { line: DimensionStepLine }) {
   return (
     <div style={{ borderLeft: "2px solid #ddd6fe", paddingLeft: 8, marginTop: 4 }}>

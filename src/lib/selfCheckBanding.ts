@@ -605,7 +605,10 @@ export const NO_ACTION_RECORDED = "No action was recorded for this line on this 
 export type NextBandRoute =
   // Fewer than four dimensions scored, so there is no total to be short of.
   | { kind: "no-total" }
-  | { kind: "top"; totalPct: number }
+  // Already at the top band overall. The block does NOT go quiet: an area at
+  // 95% can still have a dimension sitting at Band 4, and hiding the ladder
+  // there loses sight of the one step it has left.
+  | { kind: "top"; totalPct: number; maxPct: number; options: BandStepOption[]; allAtTop: boolean }
   | {
       kind: "route";
       band: Band; nextBand: Band; nextBandName: string;
@@ -623,7 +626,10 @@ export function nextBandRoute(
 ): NextBandRoute {
   const total = selfCheckTotal(w, scale);
   if (!w || !total) return { kind: "no-total" };
-  if (total.band >= 5) return { kind: "top", totalPct: total.totalPct };
+  if (total.band >= 5) {
+    const options = climbOptions(w, refs);
+    return { kind: "top", totalPct: total.totalPct, maxPct: total.maxPct, options, allAtTop: options.every((o) => o.atTop) };
+  }
   const thresholdPct = scale.bandThresholds[total.band - 1];
   const stepPct = pctForScore(1, scale);
   // The next band starts ABOVE the threshold, and a total only moves in whole
@@ -638,22 +644,34 @@ export function nextBandRoute(
     steps, stepPct, reachedPct: total.totalPct + steps * stepPct,
     // Lowest-banded dimension first: that is where the headroom is, not a
     // claim that it is the easiest work.
-    options: withCrossLinks(w.rows
-      .filter((r) => r.band !== undefined && r.band > 0)
-      .sort((a, b) => (a.band as number) - (b.band as number))
-      .map((r) => {
-        const from = r.band as Band;
-        const atTop = from >= 5;
-        const to = (atTop ? 5 : from + 1) as Band;
-        return {
-          key: r.key, label: r.label, from, atTop, to,
-          descriptor: atTop ? "" : bandLevel(to)[r.key],
-          // A dimension at the top has no step, so nothing is holding one.
-          lines: atTop ? [] : (refs[r.key] ?? []).map((l) => ({ ...l, alsoBlocks: [] })),
-          beyond: atTop ? [] : EDUTRUST_BANDS.filter((b) => b.band > to).map((b) => ({ to: b.band as Band, descriptor: b[r.key] })),
-        };
-      })),
+    options: climbOptions(w, refs),
   };
+}
+
+// The ladder itself, built once for BOTH the short-of-the-next-band case and
+// the already-at-the-top one. They show the same thing and only the sentence
+// above it differs.
+function climbOptions(
+  w: BandWorking,
+  refs: Partial<Record<BandDimensionRow["key"], Omit<DimensionStepLine, "alsoBlocks">[]>>,
+): BandStepOption[] {
+  return withCrossLinks(w.rows
+    // Lowest-banded dimension first: that is where the headroom is, not a
+    // claim that it is the easiest work.
+    .filter((r) => r.band !== undefined && r.band > 0)
+    .sort((a, b) => (a.band as number) - (b.band as number))
+    .map((r) => {
+      const from = r.band as Band;
+      const atTop = from >= 5;
+      const to = (atTop ? 5 : from + 1) as Band;
+      return {
+        key: r.key, label: r.label, from, atTop, to,
+        descriptor: atTop ? "" : bandLevel(to)[r.key],
+        // A dimension at the top has no step, so nothing is holding one.
+        lines: atTop ? [] : (refs[r.key] ?? []).map((l) => ({ ...l, alsoBlocks: [] })),
+        beyond: atTop ? [] : EDUTRUST_BANDS.filter((b) => b.band > to).map((b) => ({ to: b.band as Band, descriptor: b[r.key] })),
+      };
+    }));
 }
 
 // A line that appears under more than one dimension says so on every one of
@@ -696,5 +714,15 @@ export const CLIMB_BEYOND_NOTE =
   "No lines are named against these. This run judged your area against where it stands now, so it produced nothing about what a later band would need. The wording is the Guidance Document's.";
 export const CLIMB_AT_TOP = "Already at Band 5 on this dimension, the top of the official scale.";
 
+// Said when the total is at the top band but some dimension is not. The block
+// stays, because the remaining step is exactly the work an area at 95% still
+// has, and going quiet there hid it.
+export const TOP_BAND_WITH_ROOM_NOTE =
+  "This check's own total is already in the top band, so there is no higher overall band to work towards on its reading. These dimensions can still move up, and the full audit judges each of them, so what is left is shown below. That is this tool's arithmetic, not an SSG result, and your audit lead sets the band that counts.";
+
+// Said when the total is at the top band AND every dimension is too.
 export const NEXT_BAND_TOP_NOTE =
-  "This check's own total is already at the top band, so there is no next band to work towards on its reading. That is this tool's arithmetic, not an SSG result, and your audit lead sets the band that counts.";
+  "This check's own total is already at the top band, and so is every one of the four dimensions on its reading, so there is nothing left for it to point at. That is this tool's arithmetic, not an SSG result, and your audit lead sets the band that counts.";
+
+// The heading over the ladder when the overall band is already at the top.
+export const CLIMB_HEADING_AT_TOP = "Where each dimension stands, and what is left to move";

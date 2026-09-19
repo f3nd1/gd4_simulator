@@ -65,8 +65,26 @@ describe("nextBandRoute", () => {
     for (const b of p.beyond) expect(Object.keys(b)).toEqual(["to", "descriptor"]);
   });
 
-  it("says top rather than forcing a route", () => {
-    expect(nextBandRoute(all({ approach: 5, processes: 5, systemsOutcomes: 5, review: 5 }))).toEqual({ kind: "top", totalPct: 100 });
+  it("says top rather than forcing a route, and marks that nothing is left", () => {
+    const r = nextBandRoute(all({ approach: 5, processes: 5, systemsOutcomes: 5, review: 5 }));
+    if (r.kind !== "top") throw new Error("expected top");
+    expect(r.totalPct).toBe(100);
+    expect(r.allAtTop).toBe(true);
+    expect(r.options.every((o) => o.atTop)).toBe(true);
+  });
+
+  it("keeps the ladder at the top band when a dimension can still move", () => {
+    // 95%: the overall band is already 5, and Review is still on Band 4. The
+    // block used to vanish here, taking that remaining step with it.
+    const r = nextBandRoute(all({ approach: 5, processes: 5, systemsOutcomes: 5, review: 4 }));
+    if (r.kind !== "top") throw new Error("expected top");
+    expect(r.totalPct).toBe(95);
+    expect(r.allAtTop).toBe(false);
+    const review = r.options.find((o) => o.key === "review")!;
+    expect(review.atTop).toBe(false);
+    expect(review.to).toBe(5);
+    expect(review.descriptor).toBe(EDUTRUST_BANDS[4].review);
+    expect(review.beyond).toEqual([]);
   });
 
   it("gives no route when fewer than four dimensions were assessed", () => {
