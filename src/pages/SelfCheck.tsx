@@ -38,6 +38,7 @@ import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome
 import { buildLabel } from "../lib/buildInfo";
 import { unassessedDimensions, dimensionStepLines, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
 import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_NEXT_LABEL, CLIMB_BEYOND_LABEL, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, type DimensionStepLine, type BandStepOption, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
+import { useGuidanceStore, disclaimerSnoozed, DISCLAIMER_SNOOZE_DAYS } from "../store/useGuidanceStore";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -156,6 +157,11 @@ export function SelfCheck() {
   const aiSettings = useAISettingsStore();
   const apsrScale = useScoringConfigStore((s) => s.apsrScale);
 
+  // Snooze state for the top practice-check banner. Per device, and it expires
+  // by itself, so the banner is a recurring reminder rather than something one
+  // click removes for good.
+  const disclaimerSnoozedAt = useGuidanceStore((g) => g.disclaimerSnoozedAt);
+  const snoozeDisclaimer = useGuidanceStore((g) => g.snoozeDisclaimer);
   const [scope, setScope] = useState("");
   const [procLink, setProcLink] = useState("");
   const [evLink, setEvLink] = useState("");
@@ -1179,9 +1185,28 @@ export function SelfCheck() {
           <p style={{ ...muted, margin: "6px 0 0", fontSize: 11.5 }} title="The version of this page you are looking at. Quote it if you report a problem.">
             Build <span style={{ fontFamily: "ui-monospace,monospace" }}>{buildLabel()}</span>
           </p>
-          <p style={{ ...muted, marginTop: 8, background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", borderRadius: 8, padding: "8px 11px", fontSize: 12.5 }}>
-            {SELF_CHECK_DISCLAIMER}
-          </p>
+          {/* SNOOZABLE, and only here. This is the repeated reminder at the
+              top of the page, which someone running the check weekly read on
+              every visit. The same sentence beside a band qualifies that
+              specific number, and the copies in both exports travel to people
+              who dismissed nothing, so neither of those is snoozable.
+
+              Deliberately NOT behind the guidance master switch: turning off
+              tips should not turn off a disclaimer. */}
+          {!disclaimerSnoozed(disclaimerSnoozedAt) && (
+            <p style={{ ...muted, marginTop: 8, background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, display: "flex", alignItems: "flex-start", gap: 10 }}>
+              <span style={{ flex: 1 }}>{SELF_CHECK_DISCLAIMER}</span>
+              <button
+                type="button"
+                onClick={snoozeDisclaimer}
+                title={`Hide this reminder for ${DISCLAIMER_SNOOZE_DAYS} days on this device. It comes back after that, and it still appears beside every band and in both downloads.`}
+                aria-label={`Hide this reminder for ${DISCLAIMER_SNOOZE_DAYS} days`}
+                style={{ flexShrink: 0, border: "1px solid #fdba74", background: "#fff", color: "#9a3412", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700, lineHeight: 1, padding: "3px 7px" }}
+              >
+                &#10005;
+              </button>
+            </p>
+          )}
         </header>
 
         {connecting && !driveToken && (
@@ -1535,8 +1560,15 @@ export function SelfCheck() {
                 {/* A manual skip, available the whole time rather than only
                     after a minute of silence: a file that is merely slow is
                     still the file the reader wants to move past. Same two
-                    actions the stall panel offers. */}
-                {(liveProgress?.canSkipCurrentFile || canSkipAiCall) && (
+                    actions the stall panel offers.
+
+                    HIDDEN once the stall panel appears, because the panel
+                    offers the identical action a few lines below with the
+                    explanation of what skipping does attached, and the two
+                    were on screen together. Not deleted: the panel only shows
+                    after a minute of silence, and before that this is the
+                    only way to move past a file that is merely slow. */}
+                {(liveProgress?.canSkipCurrentFile || canSkipAiCall) && stall.level === "none" && (
                   <div style={{ marginTop: 8 }}>
                     <button
                       type="button"
