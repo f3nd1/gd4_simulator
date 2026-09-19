@@ -13,7 +13,7 @@ import { toCsv } from "./auditCsvExport";
 import { buildStamp } from "./buildInfo";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, BAND_LADDER, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
@@ -779,6 +779,18 @@ export function buildSelfCheckCsv(
       d.assessedHere ? (d.reason || "assessed by this check") : "NOT assessed by this check",
     ])),
     pad([ROWS_DO_NOT_SUM_NOTE]),
+    blank,
+    // The rubric matrix, one row per dimension. The mark travels INSIDE the
+    // cell text: a spreadsheet carries no highlight, and a band marked only by
+    // a colour on screen would arrive here unmarked.
+    pad(["The official band scale, with this check's band marked"]),
+    pad(["Dimension", "This check", ...rubricMatrix(bandWorking).bands.map((b) => `Band ${b.band} ${b.name}`)]),
+    ...rubricMatrix(bandWorking).rows.map((r) => pad([
+      r.label,
+      r.stateLabel,
+      ...r.cells.map((c) => `${c.state === "achieved" ? `${RUBRIC_ACHIEVED_MARK} — ` : c.state === "next" ? `${RUBRIC_NEXT_MARK} — ` : ""}${c.descriptor}`),
+    ])),
+    blank,
     pad([dimensionsNote(bandWorking)]),
     pad([INFERRED_THRESHOLDS_NOTE]),
     blank,
@@ -826,6 +838,28 @@ export function selfCheckFilename(areaLabel: string, ext: "csv"): string {
 // Printable version. Reuses PRINTABLE_DOC_CSS and printHtmlInNewTab from the
 // page, so the PDF is produced by the same print-to-tab path every other
 // document in this app uses rather than a second generator.
+// The rubric matrix for the printed page. Same rubricMatrix() the screen and
+// the CSV use, so the filed working paper cannot disagree with either. Literal
+// colours and a word in every marked cell: this is printed, often in black and
+// white, where a purple outline is nothing at all.
+function rubricMatrixHtml(w: BandWorking): string {
+  const m = rubricMatrix(w);
+  const cell = (c: { state: string; descriptor: string }) => {
+    const style = c.state === "achieved"
+      ? "border:2px solid #4c1d95;background:#f5f3ff;font-weight:700;"
+      : c.state === "next" ? "border:2px dashed #7c3aed;" : "";
+    const mark = c.state === "achieved" ? RUBRIC_ACHIEVED_MARK : c.state === "next" ? RUBRIC_NEXT_MARK : "";
+    return `<td style="${style}">${mark ? `<b>${escapeHtml(mark)}</b><br/>` : ""}${escapeHtml(c.descriptor)}</td>`;
+  };
+  return `<table>
+    <thead><tr><th>Dimension</th>${m.bands.map((b) => `<th>Band ${b.band}<br/><span class="muted">${escapeHtml(b.name)}</span></th>`).join("")}</tr></thead>
+    <tbody>${m.rows.map((r) => `<tr>
+      <td><b>${escapeHtml(r.label)}</b><br/><span class="muted">${escapeHtml(r.stateLabel)}</span></td>
+      ${r.cells.map(cell).join("")}
+    </tr>`).join("")}</tbody>
+  </table>`;
+}
+
 export function buildSelfCheckHtml(opts: {
   areaLabel: string;
   areaDescription: string;
@@ -896,14 +930,8 @@ export function buildSelfCheckHtml(opts: {
       <h3>What this run already told you is missing</h3>
       ${reviewShapedGapNote(gaps) ? `<p class="muted">${escapeHtml(reviewShapedGapNote(gaps))}</p>` : ""}
       <ul>${gaps.map((g) => `<li><b>${escapeHtml(g.ref)}</b> ${escapeHtml(g.text)}</li>`).join("")}</ul>`}
-    <h2>The official band scale</h2>
-    <table>
-      <thead><tr><th>Band</th><th>Approach</th><th>Processes</th><th>Systems &amp; Outcomes</th><th>Review</th></tr></thead>
-      <tbody>${BAND_LADDER.map((b) => `<tr>
-        <td>Band ${b.band} ${escapeHtml(b.name)}</td>
-        <td>${escapeHtml(b.approach)}</td><td>${escapeHtml(b.processes)}</td><td>${escapeHtml(b.systemsOutcomes)}</td><td>${escapeHtml(b.review)}</td>
-      </tr>`).join("")}</tbody>
-    </table>`;
+    <h2>The official band scale, with this check's band marked</h2>
+    ${rubricMatrixHtml(bandWorking)}`;
   const fileCounts = countFileRows(files);
   const fileWarning = unreadableWarning(fileCounts);
   // Printed in black and white, so the unreadable rows carry a word rather than

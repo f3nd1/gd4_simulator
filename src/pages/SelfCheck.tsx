@@ -37,7 +37,7 @@ import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
 import { buildLabel } from "../lib/buildInfo";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, BAND_LADDER, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NOT_ASSESSED_HERE, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, DIMENSION_SOURCE_CHECKED } from "../lib/selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NOT_ASSESSED_HERE, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, DIMENSION_SOURCE, DIMENSION_SOURCE_CHECKED } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -1095,6 +1095,36 @@ export function SelfCheck() {
         // six and still keeps the panel inside one screen.
         `.sc-runs-box{max-height:${Math.round(RUNS_BOX_HEIGHT * 1.5)}px}`,
         "}",
+        // The rubric matrix. Light only, like every other table on this page:
+        // it sits inside a white panel, so the graphic's dark tokens would put
+        // a dark table on a white card.
+        ".sc-rubric-stack{display:none}",
+        ".sc-rubric-wide{overflow-x:auto}",
+        ".sc-rubric table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px}",
+        // index.css gives every th nowrap, uppercase and sticky positioning,
+        // which put the row headers on one line straight across the next
+        // column. This table's headers are prose, so it opts out.
+        ".sc-rubric th,.sc-rubric td{border:1px solid #e2e8f0;padding:6px 7px;text-align:left;vertical-align:top;line-height:1.35;white-space:normal;text-transform:none;letter-spacing:0;position:static;overflow-wrap:anywhere}",
+        ".sc-rubric thead th{background:#f8fafc;font-size:11px;font-weight:800;color:#1f2733;width:17.4%}",
+        ".sc-rubric thead th:first-child{width:13%}",
+        ".sc-rubric thead th span{display:block;font-weight:400;color:#64748b}",
+        ".sc-rubric tbody th{background:#f8fafc;color:#1f2733}",
+        ".sc-rubric td{background:#fff;color:#475569}",
+        ".sc-rubric-dim{display:block;font-weight:800;font-size:12px;color:#1f2733}",
+        ".sc-rubric-state{display:block;margin-top:3px;font-size:10.5px;font-weight:600;color:#64748b}",
+        // A row with no band says so in the amber this page already uses for
+        // "not assessed", and highlights no cell at all.
+        ".sc-rubric [data-state=\"not-assessed\"] .sc-rubric-state,.sc-rubric [data-state=\"checked-not-scored\"] .sc-rubric-state{color:#92400e}",
+        ".sc-rubric [data-state=\"not-assessed\"] td,.sc-rubric [data-state=\"not-assessed\"] li{background:#f8fafc}",
+        ".sc-rubric [data-cell=\"achieved\"]{background:#f5f3ff;color:#1f2733;font-weight:700;outline:2px solid #6d28d9;outline-offset:-2px}",
+        ".sc-rubric [data-cell=\"next\"]{outline:2px dashed #a78bfa;outline-offset:-2px}",
+        ".sc-rubric-mark{display:block;font-size:10px;font-weight:800;color:#6d28d9;margin-bottom:2px}",
+        ".sc-rubric-card{border:1px solid #e2e8f0;border-radius:8px;padding:9px 10px;background:#fff}",
+        ".sc-rubric-card ol{list-style:none;margin:7px 0 0;padding:0;display:grid;gap:5px}",
+        ".sc-rubric-card li{border:1px solid #e2e8f0;border-radius:6px;padding:6px 7px;font-size:11.5px;color:#475569;line-height:1.35;background:#fff}",
+        ".sc-rubric-band{display:block;font-size:11px;font-weight:700;color:#1f2733}",
+        ".sc-rubric-card .sc-rubric-mark{display:inline;margin:0 0 0 6px}",
+        "@media (max-width: 760px){.sc-rubric-wide{display:none}.sc-rubric-stack{display:grid;gap:10px}}",
         ".sc-band-graphic{--g-ink:#1f2733;--g-mute:#64748b;--g-track:#e2e8f0;--g-on:#7c3aed;--g-hatch-bg:#f1f5f9;--g-hatch-line:#cbd5e1;--g-surface:#fff;--g-edge:#e2e8f0}",
         "@media (prefers-color-scheme: dark){.sc-band-graphic{--g-ink:#e2e8f0;--g-mute:#94a3b8;--g-track:#334155;--g-on:#a78bfa;--g-hatch-bg:#1e293b;--g-hatch-line:#475569;--g-surface:#0f172a;--g-edge:#334155}}",
       ].join("")}</style>
@@ -2020,17 +2050,7 @@ export function SelfCheck() {
                 {/* The four dimensions and what each earned, in one line each.
                     The same numbers the table below carries, read straight off
                     the same rows — nothing here is recomputed. */}
-                <div style={{ display: "grid", gap: 4, marginTop: 9 }}>
-                  {bandWorking.rows.map((d) => (
-                    <div key={`sum-${d.key}`} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 13 }}>
-                      <span style={{ fontWeight: 700, color: INK, minWidth: 150 }}>{d.label}</span>
-                      <span style={{ color: "#475569" }}>{d.band === undefined ? "not scored" : `Band ${d.band} of 5`}</span>
-                      <span style={{ ...muted }}>
-                        {d.assessedHere ? `${d.pct}% of ${bandWorking.maxPct}%` : NOT_ASSESSED_HERE}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                <RubricMatrixView working={bandWorking} />
                 <details style={{ marginTop: 8 }}>
                   <summary style={{ cursor: "pointer", listStyle: "revert", fontSize: 13, fontWeight: 700, color: INK }}>View dimension details</summary>
                 <div style={{ overflowX: "auto", marginTop: 10 }}>
@@ -2083,35 +2103,6 @@ export function SelfCheck() {
                 </p>
 
 
-                <details style={{ marginTop: 6 }}>
-                  <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700, color: INK }}>The official band scale, for all four dimensions</summary>
-                  <div style={{ overflowX: "auto", marginTop: 8 }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                      <thead>
-                        <tr style={{ textAlign: "left", background: "#f8fafc" }}>
-                          <th style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0", width: "16%" }}>Band</th>
-                          <th style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0" }}>Approach</th>
-                          <th style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0" }}>Processes</th>
-                          <th style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0" }}>Systems &amp; Outcomes</th>
-                          <th style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0" }}>Review</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {BAND_LADDER.map((b) => {
-                          return (
-                            <tr key={b.band} style={{ borderBottom: "1px solid #f1f5f9", verticalAlign: "top" }}>
-                              <td style={{ padding: "7px 8px" }}>Band {b.band} {b.name}</td>
-                              <td style={{ padding: "7px 8px", color: "#475569" }}>{b.approach}</td>
-                              <td style={{ padding: "7px 8px", color: "#475569" }}>{b.processes}</td>
-                              <td style={{ padding: "7px 8px", color: "#475569" }}>{b.systemsOutcomes}</td>
-                              <td style={{ padding: "7px 8px", color: "#475569" }}>{b.review}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </details>
                 <p style={{ ...muted, marginBottom: 0, marginTop: 8 }}>{INFERRED_THRESHOLDS_NOTE}</p>
               </div>
             )}
@@ -2373,6 +2364,68 @@ const LEGEND_TONE: Record<string, string> = { "✓": "good", "!": "medium", "✗
 // of it regardless. An auditor may have to defend any word of it.
 const MISSING_SHOWN = 3;
 const LONG_REASONING = 320;
+
+// The official rubric as a matrix: four dimensions down the side, the five
+// bands across, the Guidance Document's own descriptor in every cell. Both
+// shapes below are rendered from ONE rubricMatrix() call, so the phone cards
+// and the desktop table cannot come to say different things.
+//
+// Nothing is marked by colour alone: the achieved cell carries the words
+// "✓ This check" and the one above it "→ Next band", and a dimension with no
+// band highlights nothing at all and says why on the row.
+function RubricMatrixView({ working }: { working: ReturnType<typeof buildBandWorking> }) {
+  const m = rubricMatrix(working);
+  const mark = (state: "achieved" | "next" | "plain") =>
+    state === "plain" ? null : <span className="sc-rubric-mark">{state === "achieved" ? RUBRIC_ACHIEVED_MARK : RUBRIC_NEXT_MARK}</span>;
+  return (
+    <div className="sc-rubric" style={{ marginTop: 10 }}>
+      <div className="sc-rubric-wide">
+        <table>
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              {m.bands.map((b) => (
+                <th key={b.band} scope="col">Band {b.band}<span>{b.name}</span></th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {m.rows.map((r) => (
+              <tr key={r.key} data-state={r.state}>
+                <th scope="row">
+                  <span className="sc-rubric-dim">{r.label}</span>
+                  <span className="sc-rubric-state">{r.stateLabel}</span>
+                </th>
+                {r.cells.map((c) => (
+                  <td key={c.band} data-cell={c.state}>{mark(c.state)}{c.descriptor}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {/* Below 760px five columns of prose are unreadable at any font size, so
+          the matrix turns on its side: one card per dimension, the five bands
+          stacked inside it. Same cells, same marks, nothing dropped. */}
+      <div className="sc-rubric-stack">
+        {m.rows.map((r) => (
+          <div key={r.key} className="sc-rubric-card" data-state={r.state}>
+            <div className="sc-rubric-dim">{r.label}</div>
+            <div className="sc-rubric-state">{r.stateLabel}</div>
+            <ol>
+              {r.cells.map((c) => (
+                <li key={c.band} data-cell={c.state}>
+                  <span className="sc-rubric-band">Band {c.band} {m.bands[c.band - 1].name}{mark(c.state)}</span>
+                  {c.descriptor}
+                </li>
+              ))}
+            </ol>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function Disclosure({ summary, children, open }: { summary: string; children: React.ReactNode; open?: boolean }) {
   return (

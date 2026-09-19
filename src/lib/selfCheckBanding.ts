@@ -427,3 +427,72 @@ export function tallyBarSvg(slices: TallySlice[], p: BandPalette): string {
   }).join("")}
 </svg>`;
 }
+
+// ── The rubric matrix: four dimensions down the side, the five official bands
+// across, the Guidance Document's own descriptor in every cell.
+//
+// One builder for the screen, the CSV and the printed page, for the same reason
+// the graphic has one: three hand-written copies of a 20-cell table is three
+// chances to print a descriptor against the wrong dimension. Every string in a
+// cell comes from EDUTRUST_BANDS unchanged; nothing here is written out again.
+//
+// The states are the honesty rule made explicit. A dimension nobody looked at,
+// and a dimension that was looked at but carries no band, must each read as
+// themselves. Neither may land on the Band 1 cell: "No organised approach is
+// evident" is a finding about the area, and an absence of assessment is not.
+export type RubricCellState = "achieved" | "next" | "plain";
+
+export type RubricMatrixRow = {
+  key: BandDimensionRow["key"];
+  label: string;
+  definition: string;
+  state: "scored" | "checked-not-scored" | "not-assessed";
+  // What the row marker says instead of a highlighted cell when there is no
+  // band to highlight.
+  stateLabel: string;
+  band: ApsrDimensionScore | undefined;
+  cells: { band: Band; descriptor: string; state: RubricCellState }[];
+};
+
+export type RubricMatrix = {
+  bands: { band: Band; name: string }[];
+  rows: RubricMatrixRow[];
+};
+
+export const RUBRIC_ACHIEVED_MARK = "✓ This check";
+export const RUBRIC_NEXT_MARK = "→ Next band";
+
+export function rubricMatrix(w: BandWorking): RubricMatrix {
+  return {
+    bands: EDUTRUST_BANDS.map((b) => ({ band: b.band as Band, name: b.name })),
+    rows: w.rows.map((r) => {
+      // Scored means a band on the official 1 to 5 scale. A 0 is a real score
+      // (the auditor example's R=0%) but sits below Band 1 and has no
+      // descriptor, so it highlights nothing and says so in words.
+      const scored = r.checkedHere && r.band !== undefined && r.band > 0;
+      const state: RubricMatrixRow["state"] = !r.checkedHere
+        ? "not-assessed"
+        : scored ? "scored" : "checked-not-scored";
+      const stateLabel = state === "not-assessed"
+        ? "Not assessed by this check"
+        : state === "scored"
+          ? `Band ${r.band} of 5 · ${r.pct}% of ${w.maxPct}%`
+          : r.band === 0
+            ? "Checked, scored 0% — below Band 1, so no descriptor applies"
+            : "Checked, but no band was produced";
+      return {
+        key: r.key,
+        label: r.label,
+        definition: r.definition,
+        state,
+        stateLabel,
+        band: r.band,
+        cells: EDUTRUST_BANDS.map((b) => ({
+          band: b.band as Band,
+          descriptor: b[r.key],
+          state: !scored ? "plain" : b.band === r.band ? "achieved" : b.band === (r.band as number) + 1 ? "next" : "plain",
+        })),
+      };
+    }),
+  };
+}
