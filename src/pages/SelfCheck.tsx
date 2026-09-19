@@ -26,6 +26,11 @@ import {
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
+// The live file ledger the Evidence Folder page already has: every file this
+// run has listed, its status as it changes, and a Skip button on the one being
+// read. Reused rather than rebuilt — a second, simpler live view would be a
+// second vocabulary for the same thing.
+import { FileLedger } from "./EvidenceFolder";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef, type RunDiff } from "../lib/selfCheckHistory";
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
@@ -125,6 +130,9 @@ export function SelfCheck() {
   const evRunLog = useWorkspaceStore((s) => s.evidenceRunLog);
   const ppdRunLog = useWorkspaceStore((s) => s.ppdRunLog);
   const deleteSelfCheckRun = useWorkspaceStore((s) => s.deleteSelfCheckRun);
+  // Whether the AI call in flight can be abandoned on its own, rather than
+  // taking the whole run down with it.
+  const canSkipAiCall = useWorkspaceStore((s) => s.canSkipAiCall);
   const clearSelfCheckHistory = useWorkspaceStore((s) => s.clearSelfCheckHistory);
   const ppdHistory = useWorkspaceStore((s) => s.ppdReviewHistory);
   const cycleStatus = useWorkspaceStore((s) => s.cycle.status);
@@ -734,7 +742,7 @@ export function SelfCheck() {
     phase === "policy" ? (ppdProgress ?? undefined)
       : phase === "outcomes" ? (orProgress?.detail ? { detail: orProgress.detail } : undefined)
       : (phase === "records" || phase === "band") ? (evProgress ?? undefined) : undefined;
-  const stall = stallState(now, liveProgress, runStartedAt || now);
+  const stall = stallState(now, liveProgress, runStartedAt || now, canSkipAiCall);
   // When the currently counted stage began. The finish estimate divides the
   // time this stage has ACTUALLY taken by the requirements it has ACTUALLY
   // finished, so it needs a real start, not the whole run's.
@@ -1254,6 +1262,30 @@ export function SelfCheck() {
                 </div>
               </div>
 
+              {/* WHICH DOCUMENTS, not just which stage. A run over 154 files
+                  showed one line ("Checking requirement 1 of 6") for 50
+                  minutes, and there was no way to see which file or which call
+                  it was on, let alone skip it. This is the ledger the Evidence
+                  Folder page has always had, with its per-file Skip. */}
+              {(liveProgress?.filesFound?.length ?? 0) > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <FileLedger
+                    files={liveProgress!.filesFound!}
+                    isActive
+                    progress={{ currentFileName: liveProgress?.currentFile, currentFileAction: "Reading" }}
+                    onSkipFile={() => useWorkspaceStore.getState().skipCurrentFile()}
+                  />
+                </div>
+              )}
+
+              {/* What the request in flight is actually reading, when the run
+                  has moved past reading into judging. */}
+              {(liveProgress?.currentWindowFiles?.length ?? 0) > 0 && (
+                <p style={{ ...muted, margin: "0 0 10px" }}>
+                  <b style={{ color: INK }}>Now checking against:</b> {liveProgress!.currentWindowFiles!.join(", ")}
+                </p>
+              )}
+
               <ol style={{ listStyle: "none", padding: 0, margin: "0 0 12px" }}>
                 {visibleSteps.map((s, i) => {
                   const state = i < activeIdx ? "done" : i === activeIdx ? "now" : "todo";
@@ -1310,11 +1342,16 @@ export function SelfCheck() {
                   <p style={{ ...muted, margin: "5px 0 0", color: stall.level === "stuck" ? "#7f1d1d" : "#92400e" }}>
                     {stall.waitingOn} Nothing has happened for {formatElapsed(now - (liveProgress?.heartbeatAt ?? runStartedAt))}.
                   </p>
-                  {stall.level === "stuck" && (
+                  {(stall.level === "stuck" || stall.control !== "cancel") && (
                     <div style={{ marginTop: 9 }}>
                       <button
                         type="button"
-                        onClick={() => { if (stall.control === "skip") useWorkspaceStore.getState().skipCurrentFile(); else stop(); }}
+                        onClick={() => {
+                          const st = useWorkspaceStore.getState();
+                          if (stall.control === "skip") st.skipCurrentFile();
+                          else if (stall.control === "skip-call") st.skipCurrentAiCall();
+                          else stop();
+                        }}
                         style={{ fontSize: 13, fontWeight: 700, padding: "7px 14px", borderRadius: 9, border: "1px solid #cbd5e1", background: "#fff", cursor: "pointer", color: "#991b1b" }}
                       >
                         {stall.controlLabel}

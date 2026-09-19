@@ -120,13 +120,26 @@ const REQUEST_TIMEOUT_MS = 90000;
 // fetch + an AbortController timeout. An optional external signal (from the
 // per-file abort controller in the audit loop) is chained so cancellation via
 // skipCurrentFile()/cancelBusy() also aborts any in-flight AI calls immediately.
-export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS, externalSignal?: AbortSignal): Promise<Response> {
+// THE TIMER MUST OUTLIVE THE HEADERS. It used to be cleared as soon as fetch
+// resolved, which is when the response HEADERS arrive — the body was then read
+// by the caller with no timeout at all. A connection that delivers headers and
+// then stalls mid-body therefore hung for ever: no abort, no error, no progress
+// event. That is exactly what a user hit — a self-check sat on one requirement
+// for 58 minutes with 50 of them showing no activity whatsoever.
+//
+// So the body is read HERE, under the same controller and the same deadline,
+// and callers get the text back with the response.
+export async function fetchTextWithTimeout(
+  url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS, externalSignal?: AbortSignal,
+): Promise<{ res: Response; text: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   // Chain external signal: if the caller aborts (user skip/cancel), abort ours too.
   externalSignal?.addEventListener("abort", () => controller.abort(), { once: true });
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    const text = await res.text();
+    return { res, text };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       if (externalSignal?.aborted) throw new AIClientError("AI call cancelled.");
@@ -144,18 +157,18 @@ export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs
 // external signal (user cancel) aborts the in-flight request via
 // fetchWithTimeout AND short-circuits the retry/backoff loop — a cancelled
 // run must not sit in a backoff sleep or fire further attempts.
-async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 3, timeoutMs?: number, externalSignal?: AbortSignal): Promise<Response> {
+async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 3, timeoutMs?: number, externalSignal?: AbortSignal): Promise<{ res: Response; text: string }> {
   let delay = 2000;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (externalSignal?.aborted) throw new AIClientError("AI call cancelled.");
-    const res = await fetchWithTimeout(url, init, timeoutMs, externalSignal);
+    const got = await fetchTextWithTimeout(url, init, timeoutMs, externalSignal);
     // Success, or a definitive client error (bad request / auth) — stop immediately.
-    if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) return res;
+    if (got.res.ok || (got.res.status >= 400 && got.res.status < 500 && got.res.status !== 429)) return got;
     if (attempt < maxAttempts - 1) {
       await new Promise((r) => setTimeout(r, delay));
       delay *= 2;
     } else {
-      return res; // return the last failed response for the caller to inspect
+      return got; // the last failed response, for the caller to inspect
     }
   }
   // Unreachable but satisfies TS
@@ -168,16 +181,15 @@ async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 3, t
 // families (gpt / o-series) to keep the list relevant.
 export async function listModels(apiKey: string): Promise<string[]> {
   if (!apiKey) throw new AIClientError("No OpenAI API key configured in Settings.");
-  const res = await fetchWithTimeout(
+  const { res, text } = await fetchTextWithTimeout(
     "https://api.openai.com/v1/models",
     { method: "GET", headers: { Authorization: `Bearer ${apiKey}` } },
     30000
   );
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
     throw new AIClientError(`Could not list models (${res.status}): ${text.slice(0, 200)}`);
   }
-  const data = await res.json();
+  const data = JSON.parse(text || "{}");
   const ids: string[] = Array.isArray(data?.data)
     ? data.data.map((m: { id?: unknown }) => (typeof m.id === "string" ? m.id : "")).filter(Boolean)
     : [];
@@ -229,26 +241,24 @@ export async function chatComplete(
     body: JSON.stringify(body),
   }, 3, opts?.timeoutMs, opts?.signal);
 
-  let res = await post(buildBody(opts?.plainText ? "text" : opts?.schema ? "schema" : "json"));
+  let got = await post(buildBody(opts?.plainText ? "text" : opts?.schema ? "schema" : "json"));
 
   // Older models reject json_schema with a 400 that names response_format —
   // fall back ONCE to plain json_object so the call still succeeds (the
   // downstream parse/verification path is unchanged and handles both).
-  if (!res.ok && res.status === 400 && opts?.schema) {
-    const errText = await res.text().catch(() => "");
-    if (/response_format|json_schema|schema/i.test(errText)) {
-      res = await post(buildBody("json"));
+  if (!got.res.ok && got.res.status === 400 && opts?.schema) {
+    if (/response_format|json_schema|schema/i.test(got.text)) {
+      got = await post(buildBody("json"));
     } else {
-      throw new AIClientError(`OpenAI request failed (400): ${errText.slice(0, 200)}`);
+      throw new AIClientError(`OpenAI request failed (400): ${got.text.slice(0, 200)}`);
     }
   }
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new AIClientError(`OpenAI request failed (${res.status}): ${text.slice(0, 200)}`);
+  if (!got.res.ok) {
+    throw new AIClientError(`OpenAI request failed (${got.res.status}): ${got.text.slice(0, 200)}`);
   }
 
-  const data = await res.json();
+  const data = JSON.parse(got.text || "{}");
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new AIClientError("OpenAI response did not contain a message.");
   if (opts?.onUsage && data?.usage) {
@@ -289,7 +299,7 @@ export async function describeImage(imageDataUrl: string, settings: AISettings, 
   };
   if (supportsTemperature(model)) body.temperature = 0.1;
 
-  const res = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
+  const { res, text } = await fetchTextWithTimeout("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -299,11 +309,10 @@ export async function describeImage(imageDataUrl: string, settings: AISettings, 
   }, REQUEST_TIMEOUT_MS, opts?.signal);
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
     throw new AIClientError(`OpenAI request failed (${res.status}): ${text.slice(0, 200)}`);
   }
 
-  const data = await res.json();
+  const data = JSON.parse(text || "{}");
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new AIClientError("OpenAI response did not contain a message.");
   if (opts?.onUsage && data?.usage) {

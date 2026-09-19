@@ -991,6 +991,10 @@ export type WorkspaceState = {
   // Skips the file currently being read — aborts its Drive download and/or AI
   // description call and moves the loop to the next file. No-op if not reading.
   skipCurrentFile: () => void;
+  // True only while an AI call is in flight AND the engine has handed over a
+  // way to abandon just that call. Never persisted: a rehydrated "true" would
+  // offer a control with nothing behind it.
+  canSkipAiCall: boolean;
   skipCurrentAiCall: () => void;
   // Dismisses the audit progress panel (does not cancel the audit itself).
   clearAuditProgress: () => void;
@@ -1470,6 +1474,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const { [key]: _removed, ...rest } = s.fileTextCache;
           return { fileTextCache: rest };
         }),
+      canSkipAiCall: false,
       skipCurrentFile: () => {
         // Abort only the current file — loop continues to the next one.
         _currentFileAbort?.("user-skip");
@@ -1851,7 +1856,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             signal: runAbort.signal,
             // Per-AI-call skip (Item 2b): register each in-flight extract call
             // so skipCurrentAiCall() can abandon just that call and continue.
-            onCallAbort: (fn) => { _currentAiCallAbort = fn; },
+            // The flag rides beside the handle so the page can OFFER the skip:
+            // the self-check's stall panel used to show Stop as the only
+            // control while a perfectly skippable call hung.
+            onCallAbort: (fn) => { _currentAiCallAbort = fn; set({ canSkipAiCall: !!fn }); },
           });
           // Surface window errors / early stop instead of logging a clean
           // success — a revoked key mid-run used to yield all-"Not documented"
@@ -2438,7 +2446,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             shouldStop: () => get().busy !== "evidenceassess" + subCriterionId,
             signal: runAbort.signal,
             // Per-AI-call skip (Item 2b) — see runPPDReview.
-            onCallAbort: (fn) => { _currentAiCallAbort = fn; },
+            // The flag rides beside the handle so the page can OFFER the skip:
+            // the self-check's stall panel used to show Stop as the only
+            // control while a perfectly skippable call hung.
+            onCallAbort: (fn) => { _currentAiCallAbort = fn; set({ canSkipAiCall: !!fn }); },
           });
           patchEv({ stage: "verifying", detail: "Verifying citations…", pct: 99 });
           logEv("Verifying quoted excerpts against the source documents…");
@@ -8118,6 +8129,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         return {
           ...s,
           fileTextCache: {},
+          canSkipAiCall: false,
           changeLog: [],
           // Transient run progress must never persist — a reload mid-round would
           // otherwise restore a stuck progress bar with no run behind it.

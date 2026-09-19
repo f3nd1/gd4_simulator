@@ -155,13 +155,39 @@ describe("stall detection", () => {
     expect(s.controlLabel).toBe("Skip this file");
   });
 
-  it("offers ONLY cancel when an AI call is what is hanging, and never calls it a skip", () => {
+  it("falls back to cancel when nothing skippable is in flight, and never calls it a skip", () => {
     const s = stallState(T0 + SLOW_AFTER_MS, { heartbeatAt: T0 }, T0);
     if (s.level === "none") throw new Error("expected a stall");
     expect(s.control).toBe("cancel");
     expect(s.controlLabel).toBe("Stop the check");
     expect(s.controlLabel.toLowerCase()).not.toContain("skip");
     expect(s.controlNote).toContain("no way to skip just this step");
+  });
+
+  // A hung AI call cost a user a 58-minute run, because Stop was the only
+  // control on offer. The engine races every call against a skip, so when the
+  // store says one is in flight the honest control is that skip.
+  it("offers the call skip when the engine has one to give, and says what it costs", () => {
+    const s = stallState(T0 + SLOW_AFTER_MS, { heartbeatAt: T0 }, T0, true);
+    if (s.level === "none") throw new Error("expected a stall");
+    expect(s.control).toBe("skip-call");
+    expect(s.controlNote).toContain("not checked");
+    expect(s.controlNote).not.toContain("ends the whole check");
+  });
+
+  // Reading a file beats an AI call: both can be skipped, and the file is the
+  // more specific thing to name.
+  it("prefers the file skip when a read and a call are both live", () => {
+    const s = stallState(T0 + SLOW_AFTER_MS, { heartbeatAt: T0, canSkipCurrentFile: true, currentFile: "Big Scan.pdf" }, T0, true);
+    if (s.level === "none") throw new Error("expected a stall");
+    expect(s.control).toBe("skip");
+  });
+
+  it("names the documents the hung call is reading, when the engine knows them", () => {
+    const s = stallState(T0 + SLOW_AFTER_MS, { heartbeatAt: T0, currentWindowFiles: ["Minutes 2026.docx", "Register.xlsx"] }, T0, true);
+    if (s.level === "none") throw new Error("expected a stall");
+    expect(s.waitingOn).toContain("Minutes 2026.docx");
+    expect(s.waitingOn).toContain("Register.xlsx");
   });
 
   it("measures from the run start when no event has ever fired", () => {

@@ -31,6 +31,9 @@ export type RunProgress = {
   window?: { current: number; total: number };
   lineRefs?: string[];
   lineStatus?: Record<string, "waiting" | "assessing" | "done">;
+  // Which source files the AI call in flight right now is reading from, so a
+  // stuck stage can name the documents rather than "the checking service".
+  currentWindowFiles?: string[];
   // The Outcomes & Review pass emits only a prose detail line ("Reading X…"),
   // no file ledger and no per-line map, so that stage shows this verbatim.
   detail?: string;
@@ -143,14 +146,16 @@ export type StallState =
       level: "slow" | "stuck";
       // What it is waiting on, named rather than guessed.
       waitingOn: string;
-      // A file read can be skipped for real. An AI call cannot, so the only
-      // honest control there is Cancel, and it must never be dressed as a skip.
-      control: "skip" | "cancel";
+      // A file read can be skipped for real, and so can the AI call in flight
+      // (the engine races every one against a skip). "cancel" is the last
+      // resort, for a stall with neither in progress, and a control must never
+      // be dressed as something it is not.
+      control: "skip" | "skip-call" | "cancel";
       controlLabel: string;
       controlNote: string;
     };
 
-export function stallState(now: number, p: RunProgress | undefined, startedAt: number): StallState {
+export function stallState(now: number, p: RunProgress | undefined, startedAt: number, canSkipCall = false): StallState {
   const last = p?.heartbeatAt ?? startedAt;
   const quiet = now - last;
   if (quiet < SLOW_AFTER_MS) return { level: "none" };
@@ -164,9 +169,23 @@ export function stallState(now: number, p: RunProgress | undefined, startedAt: n
       controlNote: "The rest of your documents will still be checked. The skipped file is named in your result.",
     };
   }
+  // A stuck AI call CAN be abandoned on its own: the engine races every call
+  // against a skip (raceCallSkip), which is what the Evidence Folder's "skip
+  // this call" control uses. This page used to offer only Stop, so a single
+  // hung call meant losing the whole run — a user sat on one for 50 minutes.
+  const files = p?.currentWindowFiles?.length ? ` It is reading from ${p.currentWindowFiles.slice(0, 3).join(", ")}${p.currentWindowFiles.length > 3 ? ` and ${p.currentWindowFiles.length - 3} more` : ""}.` : "";
+  if (canSkipCall) {
+    return {
+      level,
+      waitingOn: `It is waiting for the checking service to answer.${files}`,
+      control: "skip-call",
+      controlLabel: "Skip this step and carry on",
+      controlNote: "Only this one request is abandoned. The check moves on to the next batch of documents, and any requirement it never reached is reported as not checked rather than as a fault in your area.",
+    };
+  }
   return {
     level,
-    waitingOn: "It is waiting for the checking service to answer.",
+    waitingOn: `It is waiting for the checking service to answer.${files}`,
     control: "cancel",
     controlLabel: "Stop the check",
     controlNote: "There is no way to skip just this step, so stopping ends the whole check. Nothing you have already is lost.",
