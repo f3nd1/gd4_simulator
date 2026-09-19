@@ -1,4 +1,5 @@
 import type { AISettings } from "../../types";
+import { wellFormedText } from "../text/wellFormed";
 
 // The ONLY place that knows how to reach an LLM. Right now this calls the
 // OpenAI Chat Completions API directly from the browser using a key the
@@ -157,6 +158,19 @@ export async function fetchTextWithTimeout(
 // external signal (user cancel) aborts the in-flight request via
 // fetchWithTimeout AND short-circuits the retry/backoff loop — a cancelled
 // run must not sit in a backoff sleep or fire further attempts.
+// Applied to every outbound message by both call paths. Content that is not
+// a plain string (the vision parts array) is walked so an image call's text
+// part is covered too.
+function safeMessages<T>(messages: T): T {
+  const clean = (v: unknown): unknown => {
+    if (typeof v === "string") return wellFormedText(v);
+    if (Array.isArray(v)) return v.map(clean);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, clean(x)]));
+    return v;
+  };
+  return clean(messages) as T;
+}
+
 async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 3, timeoutMs?: number, externalSignal?: AbortSignal): Promise<{ res: Response; text: string }> {
   let delay = 2000;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -221,7 +235,12 @@ export async function chatComplete(
   // otherwise, which silently broke the prompt reviser), json_object for
   // everything else (unchanged legacy behaviour).
   const buildBody = (format: "schema" | "json" | "text"): Record<string, unknown> => {
-    const body: Record<string, unknown> = { model, messages: withContext(messages, settings) };
+    // THE GUARD. A lone surrogate anywhere in the prompt makes JSON.stringify
+    // emit an escape that is valid JSON syntax but not decodable UTF-8, and
+    // the API refuses the whole request with "Invalid body: failed to parse
+    // JSON value" — losing every requirement line the call covered. Applied
+    // here rather than at each caller so no future call site can forget it.
+    const body: Record<string, unknown> = { model, messages: safeMessages(withContext(messages, settings)) };
     if (format === "schema" && opts?.schema) {
       body.response_format = { type: "json_schema", json_schema: { name: opts.schema.name, strict: true, schema: opts.schema.schema } };
     } else if (format === "json") {
@@ -298,6 +317,7 @@ export async function describeImage(imageDataUrl: string, settings: AISettings, 
     ],
   };
   if (supportsTemperature(model)) body.temperature = 0.1;
+  body.messages = safeMessages(body.messages);
 
   const { res, text } = await fetchTextWithTimeout("https://api.openai.com/v1/chat/completions", {
     method: "POST",

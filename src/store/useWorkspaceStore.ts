@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { sliceWholeChars } from "../lib/text/wellFormed";
 import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage, flushPendingSaves } from "./supabaseStorage";
@@ -1801,7 +1802,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
             const fileChunkIds: string[] = [];
             for (let pi = 0; pi < totalParts; pi++) {
-              const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+              // Whole characters only: a cut between the halves of one leaves a lone
+              // surrogate, which the API rejects along with the entire request.
+              const chunkBody = sliceWholeChars(body, pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
               const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
               const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
               docParts.push(`[CHUNK:${chunkId}] --- ${file.path}${partLabel} ---\n${chunkBody}`);
@@ -2321,7 +2324,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
             const chunkIds: string[] = [];
             for (let pi = 0; pi < totalParts; pi++) {
-              const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+              // Whole characters only: a cut between the halves of one leaves a lone
+              // surrogate, which the API rejects along with the entire request.
+              const chunkBody = sliceWholeChars(body, pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
               const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
               const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
               docParts.push(`[CHUNK:${chunkId}] --- ${file.path}${partLabel} ---\n${chunkBody}`);
@@ -2715,7 +2720,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (isRecord(rec)) recordsRead++;
             const totalParts = Math.ceil(text.length / MAX_PART_CHARS) || 1;
             for (let pi = 0; pi < totalParts; pi++) {
-              const chunkBody = text.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+              // Whole characters only, as above.
+              const chunkBody = sliceWholeChars(text, pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
               const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
               chunkFileNames[chunkId] = rec.name;
               const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
@@ -5063,7 +5069,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Split large files into sub-chunks so no text is ever summarised or dropped.
           const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
           for (let pi = 0; pi < totalParts; pi++) {
-            const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+            // Whole characters only: a cut between the halves of one leaves a lone
+              // surrogate, which the API rejects along with the entire request.
+              const chunkBody = sliceWholeChars(body, pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
             const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
             const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
             const chunk: EvidenceChunk = {
@@ -6422,7 +6430,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const body = cachedEntry.text;
               const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
               for (let pi = 0; pi < totalParts; pi++) {
-                const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+                // Whole characters only: a cut between the halves of one leaves a lone
+              // surrogate, which the API rejects along with the entire request.
+              const chunkBody = sliceWholeChars(body, pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
                 const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
                 const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
                 evidenceChunks.push({ chunkId, filePath: file.path, fileName: file.path.split("/").pop() || file.path, bucket: resolvedBucket, fileKind: cachedEntry.fileKind, text: chunkBody, charCount: chunkBody.length, evidenceType: inferEvidenceType(cachedEntry.fileKind, resolvedBucket, chunkBody) });
@@ -6574,7 +6584,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", readMethod: textUsedVision ? "vision" : "text", ...(fileResult.pdfQuality ? { suspectedScannedPdf: fileResult.pdfQuality.suspectedScannedPdf, extractedTextQuality: fileResult.pdfQuality.extractedTextQuality } : {}) };
               const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
               for (let pi = 0; pi < totalParts; pi++) {
-                const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+                // Whole characters only: a cut between the halves of one leaves a lone
+              // surrogate, which the API rejects along with the entire request.
+              const chunkBody = sliceWholeChars(body, pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
                 const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
                 const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
                 evidenceChunks.push({ chunkId, filePath: file.path, fileName: file.path.split("/").pop() || file.path, bucket: resolvedBucket, fileKind: kind, text: chunkBody, charCount: chunkBody.length, evidenceType: inferEvidenceType(kind, resolvedBucket, chunkBody) });
@@ -6612,7 +6624,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode: "new", readMethod: "vision", suspectedScannedPdf: false, extractedTextQuality: q.extractedTextQuality };
               const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
               for (let pi = 0; pi < totalParts; pi++) {
-                const chunkBody = body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
+                // Whole characters only: a cut between the halves of one leaves a lone
+              // surrogate, which the API rejects along with the entire request.
+              const chunkBody = sliceWholeChars(body, pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS);
                 const chunkId = `C${String(++chunkCounter).padStart(3, "0")}`;
                 const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
                 evidenceChunks.push({ chunkId, filePath: file.path, fileName: file.path.split("/").pop() || file.path, bucket: resolvedBucket, fileKind: "PDF", text: chunkBody, charCount: chunkBody.length, evidenceType: inferEvidenceType("PDF", resolvedBucket, chunkBody) });

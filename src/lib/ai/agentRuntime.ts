@@ -6,6 +6,7 @@
 // official GD4 scoring engine never depends on a live AI call.
 
 import type { AgentDefinition, ItemEvidence, AISettings, ApsrWorkingScores, Band, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, SpecificChecklistLine, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
+import { sliceWholeChars } from "../text/wellFormed";
 import { chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage, type ChatSchema } from "./aiClient";
 import { sObj, sArr, sStr, sBool, sEnum } from "./schemaHelpers";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
@@ -1595,7 +1596,9 @@ function buildDocWindows(text: string): DocWindow[] {
   let start = 0;
   while (start < text.length) {
     const end = Math.min(start + WINDOW_SIZE, text.length);
-    windows.push({ text: text.slice(start, end), start, end, index: windows.length, total: 0 });
+    // Never cut between the two halves of one character: that leaves a lone
+    // surrogate, and the API refuses the whole request body it ends up in.
+    windows.push({ text: sliceWholeChars(text, start, end), start, end, index: windows.length, total: 0 });
     if (end >= text.length) break;
     start += step;
   }

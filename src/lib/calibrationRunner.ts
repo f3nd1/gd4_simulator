@@ -16,6 +16,7 @@
 // is unavailable under Vitest. All score math lives in calibrationTesting.ts.
 
 import { useWorkspaceStore, composeSchoolContext } from "../store/useWorkspaceStore";
+import { sliceWholeChars } from "./text/wellFormed";
 import { useAISettingsStore } from "../store/useAISettingsStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { useRuleTuningStore } from "../store/useRuleTuningStore";
@@ -186,7 +187,7 @@ async function gatherText(folderLink: string | undefined, label: string, signal:
     for (let pi = 0; pi < totalParts; pi++) {
       const chunkId = `C${String(++chunkStart.n).padStart(3, "0")}`;
       const partLabel = totalParts > 1 ? ` (part ${pi + 1} of ${totalParts})` : "";
-      parts.push(`[CHUNK:${chunkId}] --- ${file.path}${partLabel} ---\n${body.slice(pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS)}`);
+      parts.push(`[CHUNK:${chunkId}] --- ${file.path}${partLabel} ---\n${sliceWholeChars(body, pi * MAX_PART_CHARS, (pi + 1) * MAX_PART_CHARS)}`);
       chunkFiles[chunkId] = fileName;
     }
   }
