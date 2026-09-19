@@ -56,6 +56,15 @@ const INK = "#1f2733";
 const card: React.CSSProperties = { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, padding: 20, marginBottom: 16 };
 const stepNum: React.CSSProperties = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: "50%", background: INK, color: "#fff", fontSize: 13, fontWeight: 800, flexShrink: 0 };
 const h2: React.CSSProperties = { fontSize: 17, fontWeight: 700, margin: 0, color: INK };
+// The three Audit support categories, in the order a reader needs them: what
+// was read, how the check works, what the full audit adds.
+const SUPPORT_TABS = [
+  { key: "files", label: "Evidence & files" },
+  { key: "how", label: "How this assessment works" },
+  { key: "outcomes", label: "Outcomes & review" },
+] as const;
+type SupportTab = (typeof SUPPORT_TABS)[number]["key"];
+
 // The number on each cell of the input row. Small, because it sits inside a
 // field label rather than heading a card of its own.
 const stepDot: React.CSSProperties = { ...stepNum, width: 21, height: 21, fontSize: 11.5 };
@@ -192,6 +201,9 @@ export function SelfCheck() {
   // Whether the tab's "what this does not answer" line is open. Shut by
   // default: it is read once, not on every visit.
   const [viewNoteOpen, setViewNoteOpen] = useState(false);
+  // Which Audit support category is open. Files first: it is what follows
+  // naturally from reading a requirement's finding.
+  const [supportTab, setSupportTab] = useState<SupportTab>("files");
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   // Which requirement the stage is showing. Held by REF, not by index: the
@@ -891,6 +903,19 @@ export function SelfCheck() {
         // The gap is deliberate: the four counts are one thing to read, the two
         // pictures under them are another.
         ".sc-hero-split{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;margin-top:18px}",
+        // ── Audit support ───────────────────────────────────────────────
+        // One quiet area under the result, with a rule above it, so the
+        // supporting panels stop reading as a dozen results of equal weight.
+        ".sc-support{border-top:2px solid #e2e8f0;margin-top:20px;padding-top:14px}",
+        ".sc-support-head{margin-bottom:10px}",
+        ".sc-support-tabs{display:flex;gap:8px;flex-wrap:wrap}",
+        ".sc-support-tab{border:1px solid #cfd8e6;background:#fff;border-radius:999px;padding:6px 12px;font:inherit;font-size:12.5px;font-weight:750;color:#334155;cursor:pointer}",
+        ".sc-support-tab[data-on]{background:#172033;color:#fff;border-color:#172033}",
+        ".sc-support-body{margin-top:10px}",
+        // The panels inside a category keep their own borders, but their old
+        // top margins would compound with this one.
+        ".sc-support-body>div:first-of-type{margin-top:0}",
+        "@media (max-width: 640px){.sc-support-tabs{overflow-x:auto;flex-wrap:nowrap}.sc-support-tab{white-space:nowrap}}",
         // Hidden while the sidebar's Export card is on screen (see the 900px
         // block, where the sidebar goes and this comes back).
         ".sc-export-foot{display:none}",
@@ -1628,6 +1653,94 @@ export function SelfCheck() {
                   )}
                 </div>
 
+            {/* ── AUDIT SUPPORT ────────────────────────────────────────────
+                Everything below the requirement above is supporting material,
+                and it used to arrive as a dozen full-width panels of apparently
+                equal weight: files, then the two-sides count, then the band,
+                then the legend, then the dimension table, then what the full
+                audit wants, then the results-and-review pass, then the official
+                evidence list. Nothing is removed here. It is grouped into three
+                categories, one shown at a time, with the long parts folded.
+
+                The categories carry the same per-tab content they always did:
+                the file list is this tab's pass, the legend is this tab's
+                vocabulary, and nothing is copied across a tab that has no such
+                data. */}
+            <div className="sc-support">
+              <div className="sc-support-head">
+                <b style={{ fontSize: 14, color: INK }}>Audit support</b>
+                <p style={{ ...muted, margin: "3px 0 0" }}>
+                  The requirement above is the result. This is the supporting evidence, how the check works, and what the full audit adds.
+                </p>
+              </div>
+
+              <div className="sc-support-tabs" role="tablist" aria-label="Audit support">
+                {SUPPORT_TABS.map((t) => (
+                  <button
+                    key={t.key} type="button" role="tab" aria-selected={supportTab === t.key}
+                    onClick={() => setSupportTab(t.key)}
+                    className="sc-support-tab" data-on={supportTab === t.key || undefined}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {supportTab === "files" && (
+                <div className="sc-support-body">
+                  <p style={{ ...muted, margin: "0 0 4px" }}>
+                    What this tab&rsquo;s pass opened, and what the official requirement expects a passing record to contain.
+                  </p>
+            {/* Every file THIS TAB's pass read, open by default and tickable
+                down the list. It used to be a closed disclosure that only
+                opened itself when something was unreadable, so on a clean run
+                an auditor saw one line and had to know to click it.
+
+                It sits BELOW the verdicts it backs: open and above them it put
+                the findings table a full screen down the page, which is what
+                the last redesign was for. The unreadable-files warning still
+                prints above the verdicts, because it changes how they read.
+
+                Per pass, never merged: a file the records pass read is not
+                evidence the procedure pass read it, and merging the two would
+                be the same class of error as merging their chunk maps. The
+                overall tab keeps the merged view, which answers the different
+                question of what the whole check opened. */}
+            <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} open={filesOpen} setOpen={setFilesOpen} />
+
+            {/* What good looks like, from the official published list and
+                nothing else. Once per requirement item, because that is the
+                granularity the list is published at. */}
+            {expectedGroups.length > 0 && (
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 14px", margin: "14px 0 0", background: "#f8fafc" }}>
+                <b style={{ fontSize: 13.5 }}>What a passing record contains</b>
+                <p style={{ ...muted, margin: "4px 0 8px" }}>
+                  The official EduTrust GD4 expected-evidence list, quoted as published. It is not a judgement on anything you hold.
+                </p>
+                <details>
+                  <summary style={{ cursor: "pointer", listStyle: "revert", fontSize: 13, fontWeight: 700, color: INK }}>
+                    View expected evidence ({expectedGroups.reduce((n, g) => n + g.items.length, 0)} {expectedGroups.reduce((n, g) => n + g.items.length, 0) === 1 ? "entry" : "entries"})
+                  </summary>
+                {expectedGroups.map((g) => (
+                  <div key={g.itemId} style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: "#475569" }}>Requirement {g.itemId}</div>
+                    <ul style={{ ...muted, margin: "2px 0 0", paddingLeft: 17 }}>
+                      {g.items.map((i) => <li key={i}>{i}</li>)}
+                    </ul>
+                  </div>
+                ))}
+                </details>
+              </div>
+            )}
+
+                </div>
+              )}
+
+              {supportTab === "how" && (
+                <div className="sc-support-body">
+                  <p style={{ ...muted, margin: "0 0 4px" }}>
+                    What this check settles, what each result means, and the four EduTrust dimensions behind it.
+                  </p>
             {/* The four combinations, counted, on the overall tab only: it is
                 the one place both halves are in view at once. */}
             {view === "overview" && combos && combos.unknown < counts.total && (
@@ -1647,6 +1760,22 @@ export function SelfCheck() {
                 </p>
               </div>
             )}
+
+            {/* Read BEFORE the table. An auditor could not tell whether
+                "Written down" meant compliant, and the honest answer is that
+                each tab settles half the question. */}
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fff" }}>
+              <b style={{ fontSize: 13 }}>What each result means on this tab</b>
+              <div style={{ display: "grid", gap: 5, marginTop: 7, gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))" }}>
+                {VERDICT_LEGEND[view].map((l) => (
+                  <div key={l.label} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
+                    <span style={{ ...TONE_BG[LEGEND_TONE[l.icon]], padding: "1px 8px", borderRadius: 999, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>{l.icon} {l.label}</span>
+                    <span style={{ color: "#475569" }}>{l.meaning}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
 
             {/* THE BAND, and the one condition for showing one: all four
                 dimensions carry a real score from THIS run, which can only
@@ -1698,39 +1827,6 @@ export function SelfCheck() {
             </div>
             )}
 
-            {/* Every file THIS TAB's pass read, open by default and tickable
-                down the list. It used to be a closed disclosure that only
-                opened itself when something was unreadable, so on a clean run
-                an auditor saw one line and had to know to click it.
-
-                It sits BELOW the verdicts it backs: open and above them it put
-                the findings table a full screen down the page, which is what
-                the last redesign was for. The unreadable-files warning still
-                prints above the verdicts, because it changes how they read.
-
-                Per pass, never merged: a file the records pass read is not
-                evidence the procedure pass read it, and merging the two would
-                be the same class of error as merging their chunk maps. The
-                overall tab keeps the merged view, which answers the different
-                question of what the whole check opened. */}
-            <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} open={filesOpen} setOpen={setFilesOpen} />
-
-            {/* Read BEFORE the table. An auditor could not tell whether
-                "Written down" meant compliant, and the honest answer is that
-                each tab settles half the question. */}
-            <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fff" }}>
-              <b style={{ fontSize: 13 }}>What each result means on this tab</b>
-              <div style={{ display: "grid", gap: 5, marginTop: 7, gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))" }}>
-                {VERDICT_LEGEND[view].map((l) => (
-                  <div key={l.label} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
-                    <span style={{ ...TONE_BG[LEGEND_TONE[l.icon]], padding: "1px 8px", borderRadius: 999, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>{l.icon} {l.label}</span>
-                    <span style={{ color: "#475569" }}>{l.meaning}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-
             {/* The two dimensions this check can defend, and the two it leaves
                 alone. It shows no overall band: scoring Systems & Outcomes and
                 Review at the bottom for never having been opened understated a
@@ -1745,6 +1841,22 @@ export function SelfCheck() {
               <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "13px 15px", margin: "14px 0 0", background: "#fff" }}>
                 <b style={{ fontSize: 14 }}>What this check assessed</b>
                 {dimensionCoverage && <p style={{ ...muted, margin: "8px 0 2px" }}>{dimensionCoverage}</p>}
+                {/* The four dimensions and what each earned, in one line each.
+                    The same numbers the table below carries, read straight off
+                    the same rows — nothing here is recomputed. */}
+                <div style={{ display: "grid", gap: 4, marginTop: 9 }}>
+                  {bandWorking.rows.map((d) => (
+                    <div key={`sum-${d.key}`} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 13 }}>
+                      <span style={{ fontWeight: 700, color: INK, minWidth: 150 }}>{d.label}</span>
+                      <span style={{ color: "#475569" }}>{d.band === undefined ? "not scored" : `Band ${d.band} of 5`}</span>
+                      <span style={{ ...muted }}>
+                        {d.assessedHere ? `${d.pct}% of ${bandWorking.maxPct}%` : NOT_ASSESSED_HERE}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <details style={{ marginTop: 8 }}>
+                  <summary style={{ cursor: "pointer", listStyle: "revert", fontSize: 13, fontWeight: 700, color: INK }}>View dimension details</summary>
                 <div style={{ overflowX: "auto", marginTop: 10 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                     <thead>
@@ -1780,83 +1892,20 @@ export function SelfCheck() {
                     </tbody>
                   </table>
                 </div>
-                <p style={{ ...muted, marginBottom: 0 }}>{ROWS_DO_NOT_SUM_NOTE}</p>
                 {/* One decision for all three surfaces (screen, CSV, print):
                     dimensionsNote reads the working, not the caller's idea of
                     what ran, so they cannot disagree. */}
+                <p style={{ ...muted, marginBottom: 0 }}>{ROWS_DO_NOT_SUM_NOTE}</p>
+                </details>
+                {/* NOT folded: it says whether all four dimensions were really
+                    judged on this run, which changes how every number above
+                    reads. */}
                 <p style={dimensionsChecked
                   ? { ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", borderRadius: 8, padding: "9px 11px" }
                   : { ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px" }}>
                   {dimensionsNote(bandWorking)}
                 </p>
 
-
-                {/* What the other two dimensions need. Every line below is
-                    either the Guidance Document's own wording, the official
-                    expected-evidence list filtered to entries that name the
-                    dimension, or a gap this run itself reported. */}
-                <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 10, padding: "12px 14px", margin: "12px 0" }}>
-                  <b style={{ fontSize: 13.5, color: "#1e40af" }}>What the full audit will look for</b>
-                  <p style={{ ...muted, margin: "6px 0 2px", color: "#1e3a8a" }}>{dimensionsChecked ? IMPROVE_HEADLINE_CHECKED : IMPROVE_HEADLINE}</p>
-                  <p style={{ ...muted, margin: "0 0 10px", color: "#1e3a8a" }}>{dimensionsChecked ? IMPROVE_WHY_CHECKED : IMPROVE_WHY}</p>
-                  {unassessedDimensions(itemIdsForScope(area.scope)).map((d) => (
-                    <div key={d.key} style={{ borderTop: "1px solid #bfdbfe", paddingTop: 9, marginTop: 9 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>{d.label}</div>
-                      <div style={{ ...muted, margin: "2px 0 6px" }}>{d.plainQuestion}</div>
-                      <div style={{ ...muted, fontWeight: 700, color: "#475569" }}>What the Guidance Document asks for, at each band from here up</div>
-                      <ul style={{ ...muted, margin: "3px 0 7px", paddingLeft: 17 }}>
-                        {d.ladder.map((l) => <li key={l.band}><b>Band {l.band} {l.name}:</b> {l.descriptor}</li>)}
-                      </ul>
-                      {d.officialEvidence.length > 0 ? (
-                        <>
-                          <div style={{ ...muted, fontWeight: 700, color: "#475569" }}>On the official expected-evidence list for this requirement</div>
-                          <ul style={{ ...muted, margin: "3px 0 0", paddingLeft: 17 }}>
-                            {d.officialEvidence.map((e) => <li key={e}>{e}</li>)}
-                          </ul>
-                        </>
-                      ) : (
-                        <div style={{ ...muted }}>{d.noOfficialList}</div>
-                      )}
-                      {/* Review only. Every one of the 31 requirement items has
-                          at least one official line asking whether the process
-                          is reviewed, and this check has already judged them.
-                          Systems & Outcomes gets no equivalent: the words that
-                          would catch outcome lines also catch processes, and a
-                          filter that wrong is a fabricated list. */}
-                      {d.key === "review" && (
-                        <div style={{ borderTop: "1px solid #bfdbfe", paddingTop: 9, marginTop: 9 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>{REVIEW_FINDINGS_HEADING}</div>
-                          <p style={{ ...muted, margin: "3px 0 7px" }}>{REVIEW_FINDINGS_INTRO}</p>
-                          {reviewRows.length === 0 ? (
-                            <div style={{ ...muted }}>{REVIEW_FINDINGS_NONE}</div>
-                          ) : (
-                            <div style={{ display: "grid", gap: 5 }}>
-                              {reviewRows.map((r) => (
-                                <div key={r.ref} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
-                                  <span style={{ ...TONE_BG[r.tone], border: `1px solid ${TONE_BG[r.tone].fg}`, padding: "1px 8px", borderRadius: 6, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>{r.icon} {r.label}</span>
-                                  <span style={{ color: "#334155" }}>
-                                    {r.requirement}
-                                    <span style={{ ...muted, marginLeft: 6 }}>{r.ref}</span>
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {runGaps.length > 0 && (
-                    <div style={{ borderTop: "1px solid #bfdbfe", paddingTop: 9, marginTop: 9 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>What this run already told you is missing</div>
-                      {reviewShapedGapNote(runGaps) && <p style={{ ...muted, margin: "3px 0 5px" }}>{reviewShapedGapNote(runGaps)}</p>}
-                      <ul style={{ ...muted, margin: "3px 0 0", paddingLeft: 17 }}>
-                        {runGaps.slice(0, 8).map((g, i) => <li key={`${g.ref}-${i}`}><b>{g.ref}</b> {g.text}</li>)}
-                      </ul>
-                      {runGaps.length > 8 && <div style={{ ...muted, marginTop: 4 }}>and {runGaps.length - 8} more in the table above.</div>}
-                    </div>
-                  )}
-                </div>
 
                 <details style={{ marginTop: 6 }}>
                   <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700, color: INK }}>The official band scale, for all four dimensions</summary>
@@ -1906,6 +1955,14 @@ export function SelfCheck() {
               </p>
             )}
 
+                </div>
+              )}
+
+              {supportTab === "outcomes" && (
+                <div className="sc-support-body">
+                  <p style={{ ...muted, margin: "0 0 4px" }}>
+                    Results, reviews and improvement records, and what the full EduTrust audit looks at beyond this check.
+                  </p>
             {/* OUTSIDE the band panel above, deliberately. That panel only renders
                 when the run judged something, and a run where nothing could be read
                 judges nothing — which is exactly when this block's reason needs
@@ -1950,6 +2007,12 @@ export function SelfCheck() {
                           These are the official GD4 lines asking whether a process is reviewed for continual improvement.
                           A tick means a record of a review having happened was found and quoted. A procedure that says a review will happen is not one.
                         </p>
+                        {outcomeReviewLines.length > 0 && (
+                          <details>
+                            <summary style={{ cursor: "pointer", listStyle: "revert", fontSize: 13, fontWeight: 700, color: INK }}>
+                              View review records ({outcomeReviewLines.length} {outcomeReviewLines.length === 1 ? "line" : "lines"})
+                            </summary>
+                            <div style={{ marginTop: 6 }}>
                         {outcomeReviewLines.length === 0 ? (
                           <p style={{ ...muted, margin: 0 }}>This area&rsquo;s review lines were not among the ones the pass judged, so there is nothing to report here.</p>
                         ) : (
@@ -1981,12 +2044,15 @@ export function SelfCheck() {
                             ))}
                           </div>
                         )}
+                            </div>
+                          </details>
+                        )}
                       </div>
 
                       <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 9, marginTop: 9 }}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>Systems &amp; Outcomes, for this area as a whole</div>
                         <p style={{ ...muted, margin: "3px 0 7px" }}>
-                          Outcome data means real figures, results or trends covering the period, not a statement that outcomes will be tracked.
+                          Outcome data means real figures, results or trends covering the period, not a statement that outcomes will be tracked.{" "}
                           {outcomeTally.assessed === 0 ? (
                             <>None of the {outcomeTally.total} points could be judged on this pass, so nothing is reported either way.{" "}</>
                           ) : (
@@ -2014,25 +2080,82 @@ export function SelfCheck() {
                 </div>
             )}
 
-            {/* What good looks like, from the official published list and
-                nothing else. Once per requirement item, because that is the
-                granularity the list is published at. */}
-            {expectedGroups.length > 0 && (
-              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 14px", margin: "14px 0 0", background: "#f8fafc" }}>
-                <b style={{ fontSize: 13.5 }}>What a passing record contains</b>
-                <p style={{ ...muted, margin: "4px 0 8px" }}>
-                  The official EduTrust GD4 expected-evidence list, quoted as published. It is not a judgement on anything you hold.
-                </p>
-                {expectedGroups.map((g) => (
-                  <div key={g.itemId} style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 700, color: "#475569" }}>Requirement {g.itemId}</div>
-                    <ul style={{ ...muted, margin: "2px 0 0", paddingLeft: 17 }}>
-                      {g.items.map((i) => <li key={i}>{i}</li>)}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            )}
+                  {bandWorking && (
+                    <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 10, padding: "12px 14px", margin: "12px 0" }}>
+                    {/* What the other two dimensions need. Every line below is
+                        either the Guidance Document's own wording, the official
+                        expected-evidence list filtered to entries that name the
+                        dimension, or a gap this run itself reported. Moved here
+                        from inside the dimension panel: it is about what the
+                        full audit adds, not about this run's working. */}
+                      <b style={{ fontSize: 13.5, color: "#1e40af" }}>Full audit context</b>
+                  <p style={{ ...muted, margin: "6px 0 2px", color: "#1e3a8a" }}>{dimensionsChecked ? IMPROVE_HEADLINE_CHECKED : IMPROVE_HEADLINE}</p>
+                  <p style={{ ...muted, margin: "0 0 10px", color: "#1e3a8a" }}>{dimensionsChecked ? IMPROVE_WHY_CHECKED : IMPROVE_WHY}</p>
+                  <details>
+                    <summary style={{ cursor: "pointer", listStyle: "revert", fontSize: 13, fontWeight: 700, color: "#1e40af" }}>What the full audit will look for</summary>
+                  {unassessedDimensions(itemIdsForScope(area.scope)).map((d) => (
+                    <div key={d.key} style={{ borderTop: "1px solid #bfdbfe", paddingTop: 9, marginTop: 9 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>{d.label}</div>
+                      <div style={{ ...muted, margin: "2px 0 6px" }}>{d.plainQuestion}</div>
+                      <div style={{ ...muted, fontWeight: 700, color: "#475569" }}>What the Guidance Document asks for, at each band from here up</div>
+                      <ul style={{ ...muted, margin: "3px 0 7px", paddingLeft: 17 }}>
+                        {d.ladder.map((l) => <li key={l.band}><b>Band {l.band} {l.name}:</b> {l.descriptor}</li>)}
+                      </ul>
+                      {d.officialEvidence.length > 0 ? (
+                        <>
+                          <div style={{ ...muted, fontWeight: 700, color: "#475569" }}>On the official expected-evidence list for this requirement</div>
+                          <ul style={{ ...muted, margin: "3px 0 0", paddingLeft: 17 }}>
+                            {d.officialEvidence.map((e) => <li key={e}>{e}</li>)}
+                          </ul>
+                        </>
+                      ) : (
+                        <div style={{ ...muted }}>{d.noOfficialList}</div>
+                      )}
+                      {/* Review only. Every one of the 31 requirement items has
+                          at least one official line asking whether the process
+                          is reviewed, and this check has already judged them.
+                          Systems & Outcomes gets no equivalent: the words that
+                          would catch outcome lines also catch processes, and a
+                          filter that wrong is a fabricated list. */}
+                      {d.key === "review" && (
+                        <div style={{ borderTop: "1px solid #bfdbfe", paddingTop: 9, marginTop: 9 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>{REVIEW_FINDINGS_HEADING}</div>
+                          <p style={{ ...muted, margin: "3px 0 7px" }}>{REVIEW_FINDINGS_INTRO}</p>
+                          {reviewRows.length === 0 ? (
+                            <div style={{ ...muted }}>{REVIEW_FINDINGS_NONE}</div>
+                          ) : (
+                            <div style={{ display: "grid", gap: 5 }}>
+                              {reviewRows.map((r) => (
+                                <div key={r.ref} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 12.5, lineHeight: 1.5 }}>
+                                  <span style={{ ...TONE_BG[r.tone], border: `1px solid ${TONE_BG[r.tone].fg}`, padding: "1px 8px", borderRadius: 6, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>{r.icon} {r.label}</span>
+                                  <span style={{ color: "#334155" }}>
+                                    {r.requirement}
+                                    <span style={{ ...muted, marginLeft: 6 }}>{r.ref}</span>
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  </details>
+                  {runGaps.length > 0 && (
+                    <div style={{ borderTop: "1px solid #bfdbfe", paddingTop: 9, marginTop: 9 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>What this run already told you is missing</div>
+                      {reviewShapedGapNote(runGaps) && <p style={{ ...muted, margin: "3px 0 5px" }}>{reviewShapedGapNote(runGaps)}</p>}
+                      <ul style={{ ...muted, margin: "3px 0 0", paddingLeft: 17 }}>
+                        {runGaps.slice(0, 8).map((g, i) => <li key={`${g.ref}-${i}`}><b>{g.ref}</b> {g.text}</li>)}
+                      </ul>
+                      {runGaps.length > 8 && <div style={{ ...muted, marginTop: 4 }}>and {runGaps.length - 8} more in the table above.</div>}
+                    </div>
+                  )}
+                </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* The same two handlers as the sidebar's pair, and hidden at every
                 width where that sidebar is on screen: two sets of download
