@@ -37,7 +37,7 @@ import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
 import { buildLabel } from "../lib/buildInfo";
 import { unassessedDimensions, dimensionStepLines, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, NO_ACTION_RECORDED, type DimensionStepLine, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_NEXT_LABEL, CLIMB_BEYOND_LABEL, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, type DimensionStepLine, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
 // folder, press one button, read the result.
@@ -2084,14 +2084,25 @@ export function SelfCheck() {
                 the arithmetic does not already say. */}
             {view === "overview" && bandRoute.kind === "route" && (
               <div style={{ border: "1px solid #c7d2fe", borderRadius: 10, padding: 14, margin: "12px 0", background: "#fff" }}>
-                <b style={{ fontSize: 14, color: INK }}>What Band {bandRoute.nextBand}, {bandRoute.nextBandName}, would need</b>
+                <b style={{ fontSize: 14, color: INK }}>{CLIMB_HEADING}</b>
                 <p style={{ ...muted, margin: "5px 0 0" }}>{nextBandWorking(bandRoute)}</p>
                 <p style={{ ...muted, margin: "5px 0 9px" }}>{NEXT_BAND_CAVEAT}</p>
                 <div style={{ display: "grid", gap: 7 }}>
                   {bandRoute.options.map((o) => (
                     <div key={o.key} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 10px", background: "#fbfcfe" }}>
-                      <b style={{ fontSize: 12.5, color: INK }}>{o.label}: Band {o.from} &rarr; Band {o.to}</b>
-                      <div style={{ fontSize: 12.5, color: "#475569", lineHeight: 1.45, marginTop: 3 }}>{o.descriptor}</div>
+                      {/* Where it stands, then the one step that is work, then
+                          the rungs above it, which are direction. The two are
+                          told apart by more than order: the step sits in a
+                          bordered, tinted box and the rest is folded. */}
+                      <b style={{ fontSize: 12.5, color: INK }}>{o.label}: now Band {o.from} of 5 on this dimension</b>
+                      {o.atTop ? (
+                        <div style={{ fontSize: 12.5, color: "#475569", lineHeight: 1.45, marginTop: 3 }}>{CLIMB_AT_TOP}</div>
+                      ) : (
+                        <>
+                      <div style={{ border: "1px solid #c7d2fe", borderRadius: 6, background: "#fff", padding: "7px 9px", marginTop: 5 }}>
+                        <div style={{ fontSize: 11, fontWeight: 800, color: "#6d28d9", textTransform: "uppercase", letterSpacing: ".02em" }}>{CLIMB_NEXT_LABEL}</div>
+                        <b style={{ fontSize: 12.5, color: INK }}>Band {o.from} &rarr; Band {o.to}</b>
+                        <div style={{ fontSize: 12.5, color: "#475569", lineHeight: 1.45, marginTop: 3 }}>{o.descriptor}</div>
                       {/* Named only where the run really has line-level
                           evidence for the dimension. Systems & Outcomes has
                           none, and says nothing rather than something.
@@ -2120,6 +2131,27 @@ export function SelfCheck() {
                             </details>
                           )}
                         </div>
+                      )}
+                      </div>
+                      {/* Official wording only. The run produced no evidence
+                          about a band the area is not standing on, so there is
+                          nothing to name against these. */}
+                      {o.beyond.length > 0 && (
+                        <details style={{ marginTop: 5 }}>
+                          <summary style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#475569" }}>
+                            {CLIMB_BEYOND_LABEL} ({o.beyond.length})
+                          </summary>
+                          <div style={{ display: "grid", gap: 4, marginTop: 4 }}>
+                            {o.beyond.map((b) => (
+                              <div key={b.to} style={{ fontSize: 12, color: "#64748b", lineHeight: 1.45 }}>
+                                <b style={{ color: "#475569" }}>Band {b.to}.</b> {b.descriptor}
+                              </div>
+                            ))}
+                            <div style={{ ...muted, fontSize: 11 }}>{CLIMB_BEYOND_NOTE}</div>
+                          </div>
+                        </details>
+                      )}
+                        </>
                       )}
                     </div>
                   ))}

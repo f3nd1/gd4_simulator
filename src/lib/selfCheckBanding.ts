@@ -84,34 +84,40 @@ export const DIMENSION_SOURCE_CHECKED: Partial<Record<BandDimensionRow["key"], s
   review: "From the second look at your own documents for results and review records. What it found is reported below.",
 };
 
-// Where each dimension's judgement comes from, in a few words, for the matrix
-// row itself. The long form below is the same fact in a sentence.
+// Where each dimension's judgement comes from, in plain words, for the two
+// places the four dimensions are listed: the matrix and the result hero's
+// graphic. Both read the same constants, so they cannot describe the same
+// dimension differently.
 //
-// It exists because the page shows three tabs and four dimensions, and a
-// reader reasonably hunts for the missing two. There is no tab for them
-// because there is no separate document set: the results-and-review pass
-// re-reads the SAME documents. Adding a fourth tab would imply a folder that
-// does not exist.
+// The two outcome dimensions used to say "From a second read of the same
+// documents. No tab of its own", which is accurate and explains nothing to
+// someone who does not already know the passes exist. A real user asked what
+// it meant. It now says what actually happened, and why there is no tab: the
+// tool opens the SAME documents a second time looking for different things,
+// so there is no second set of documents for a tab to show.
+const SECOND_LOOK = "a second look at those same documents, for results and review records";
+const NO_TAB_WHY = "There is no tab for it because there are no extra documents to show.";
+
+// Row length, for the matrix.
 export const DIMENSION_TAB_SOURCE: Record<BandDimensionRow["key"], string> = {
-  approach: "From the Procedure tab",
-  processes: "From the Overall tab: procedure and records combined",
-  systemsOutcomes: "From a second read of the same documents. No tab of its own",
-  review: "From a second read of the same documents. No tab of its own",
+  approach: "From your written procedure, which is the Procedure tab",
+  processes: "From your procedure and your records together, which is the Overall tab",
+  systemsOutcomes: `From ${SECOND_LOOK}. ${NO_TAB_WHY}`,
+  review: `From ${SECOND_LOOK}. ${NO_TAB_WHY}`,
 };
 
 // Said instead when the second read produced no verdicts, so the dimension was
 // never scored.
 export const DIMENSION_NOT_READ = "The second read produced no verdicts on this run";
 
-// The same fact at graphic scale. The four dimensions are listed in TWO places
-// (this drawing in the result hero, and the matrix in the support panel), and
-// a source line on only one of them leaves the question unanswered wherever
-// the reader happens to be looking.
+// Graphic scale. The source sits on its own line under the dimension name with
+// the full width of the drawing to itself, so it carries the same sentence the
+// matrix opens with; only the "why no tab" clause is dropped for room.
 export const DIMENSION_TAB_TAG: Record<BandDimensionRow["key"], string> = {
-  approach: "from the Procedure tab",
-  processes: "from the Overall tab",
-  systemsOutcomes: "from a second read, no tab",
-  review: "from a second read, no tab",
+  approach: "from your written procedure, the Procedure tab",
+  processes: "from your procedure and records together, the Overall tab",
+  systemsOutcomes: SECOND_LOOK,
+  review: SECOND_LOOK,
 };
 export const DIMENSION_TAG_NOT_READ = "not read on this run";
 
@@ -571,6 +577,12 @@ export type BandStepOption = {
   key: BandDimensionRow["key"];
   label: string;
   from: Band;
+  // True at Band 5, where there is no step. The dimension is still listed:
+  // the block says where EACH dimension stands, and leaving out the one that
+  // is already at the top would make that heading a lie.
+  atTop: boolean;
+  // The band the immediate step reaches. Equal to `from` at the top, where
+  // there is none.
   to: Band;
   // The official descriptor at the band this step reaches, verbatim.
   descriptor: string;
@@ -578,6 +590,14 @@ export type BandStepOption = {
   // the run has no line-level source for the dimension, which is the honest
   // answer for Systems & Outcomes.
   lines: DimensionStepLine[];
+  // The rungs ABOVE the immediate step, official wording only.
+  //
+  // They deliberately carry no lines and no actions. A line-level fix exists
+  // only for the step a dimension is standing on: the run judged this area
+  // against where it is now, and produced no evidence at all about what a
+  // later rung would need. Printing an action list against Band 4 to 5 would
+  // be inventing one.
+  beyond: { to: Band; descriptor: string }[];
 };
 
 export const NO_ACTION_RECORDED = "No action was recorded for this line on this run.";
@@ -619,13 +639,18 @@ export function nextBandRoute(
     // Lowest-banded dimension first: that is where the headroom is, not a
     // claim that it is the easiest work.
     options: withCrossLinks(w.rows
-      .filter((r) => r.band !== undefined && r.band > 0 && r.band < 5)
+      .filter((r) => r.band !== undefined && r.band > 0)
       .sort((a, b) => (a.band as number) - (b.band as number))
       .map((r) => {
-        const to = ((r.band as number) + 1) as Band;
+        const from = r.band as Band;
+        const atTop = from >= 5;
+        const to = (atTop ? 5 : from + 1) as Band;
         return {
-          key: r.key, label: r.label, from: r.band as Band, to, descriptor: bandLevel(to)[r.key],
-          lines: (refs[r.key] ?? []).map((l) => ({ ...l, alsoBlocks: [] })),
+          key: r.key, label: r.label, from, atTop, to,
+          descriptor: atTop ? "" : bandLevel(to)[r.key],
+          // A dimension at the top has no step, so nothing is holding one.
+          lines: atTop ? [] : (refs[r.key] ?? []).map((l) => ({ ...l, alsoBlocks: [] })),
+          beyond: atTop ? [] : EDUTRUST_BANDS.filter((b) => b.band > to).map((b) => ({ to: b.band as Band, descriptor: b[r.key] })),
         };
       })),
   };
@@ -651,13 +676,25 @@ export function nextBandWorking(r: Extract<NextBandRoute, { kind: "route" }>): s
   // threshold can never exceed the ceiling, so the headroom for that many
   // steps always exists somewhere in the four.
   const spread = r.steps === 1
-    ? "Any one of the dimensions below would clear it."
-    : `Any ${r.steps} band steps across the dimensions below would clear it, and one dimension can move more than one band.`;
-  return `Band ${r.nextBand} starts above ${r.thresholdPct}%. This check totals ${r.totalPct}% of ${r.maxPct}%. ${r.steps} band step${r.steps === 1 ? "" : "s"} of ${r.stepPct}% would reach ${r.reachedPct}%. ${spread}`;
+    ? "Any one dimension moving up one band would clear it."
+    : `Any ${r.steps} single-band moves across the dimensions below would clear it, and one dimension can move more than one band.`;
+  return `Overall Band ${r.nextBand} starts above ${r.thresholdPct}%. This check totals ${r.totalPct}% of ${r.maxPct}%. Each dimension that moves up one band adds ${r.stepPct}%, so ${r.steps} move${r.steps === 1 ? "" : "s"} would reach ${r.reachedPct}%. ${spread}`;
 }
 
 export const NEXT_BAND_CAVEAT =
   "This is arithmetic on this tool's own reconstructed percentages, not a route an auditor has agreed. Moving a dimension up means meeting the official wording below in your documents and records; nothing here promises a band.";
+
+// The heading has to describe exactly what is listed under it. It used to say
+// "What Band 4 would need" over a list that also showed dimension moves past
+// Band 4, and the two senses of "Band 4" (the area's overall band, and one
+// dimension's own) collided in the same block.
+export const CLIMB_HEADING = "Where each dimension stands, and what moving up asks for";
+
+export const CLIMB_NEXT_LABEL = "Next step, and what is holding it";
+export const CLIMB_BEYOND_LABEL = "Above that, in the official wording";
+export const CLIMB_BEYOND_NOTE =
+  "No lines are named against these. This run judged your area against where it stands now, so it produced nothing about what a later band would need. The wording is the Guidance Document's.";
+export const CLIMB_AT_TOP = "Already at Band 5 on this dimension, the top of the official scale.";
 
 export const NEXT_BAND_TOP_NOTE =
   "This check's own total is already at the top band, so there is no next band to work towards on its reading. That is this tool's arithmetic, not an SSG result, and your audit lead sets the band that counts.";

@@ -17,8 +17,12 @@ describe("nextBandRoute", () => {
     expect(r.thresholdPct).toBe(60);
     expect(r.steps).toBe(3);
     expect(r.reachedPct).toBe(65);
-    expect(nextBandWorking(r)).toContain("3 band steps of 5% would reach 65%");
-    expect(nextBandWorking(r)).toContain("Any 3 band steps");
+    expect(nextBandWorking(r)).toContain("3 moves would reach 65%");
+    // "Band 4" in this sentence is the AREA's overall band; "Band 3 to Band 4"
+    // on a row below is one dimension's own. The collision was the reported
+    // confusion, so the sentence says which it means.
+    expect(nextBandWorking(r)).toContain("Overall Band 4 starts above 60%");
+    expect(nextBandWorking(r)).toContain("Any 3 single-band moves");
   });
 
   it("takes one step when the total sits exactly on the threshold", () => {
@@ -38,10 +42,27 @@ describe("nextBandRoute", () => {
     expect(p.descriptor).toBe(EDUTRUST_BANDS[2].processes);
   });
 
-  it("offers no step on a dimension already at Band 5", () => {
+  it("lists a dimension already at Band 5 but offers it no step", () => {
     const r = nextBandRoute(all({ approach: 5, processes: 3, systemsOutcomes: 3, review: 3 }));
     if (r.kind !== "route") throw new Error("expected a route");
-    expect(r.options.some((o) => o.key === "approach")).toBe(false);
+    // Listed, because the block says where EACH dimension stands.
+    const a = r.options.find((o) => o.key === "approach")!;
+    expect(a.atTop).toBe(true);
+    expect(a.beyond).toEqual([]);
+    expect(a.lines).toEqual([]);
+    expect(a.descriptor).toBe("");
+  });
+
+  it("shows the rungs above the next step, with wording only and never an action", () => {
+    const r = nextBandRoute(all({ approach: 3, processes: 2, systemsOutcomes: 3, review: 2 }));
+    if (r.kind !== "route") throw new Error("expected a route");
+    const p = r.options.find((o) => o.key === "processes")!;
+    expect(p.to).toBe(3);
+    expect(p.beyond.map((b) => b.to)).toEqual([4, 5]);
+    expect(p.beyond.map((b) => b.descriptor)).toEqual([EDUTRUST_BANDS[3].processes, EDUTRUST_BANDS[4].processes]);
+    // A later rung carries no line-level claim at all: the run produced no
+    // evidence about a band the area is not standing on.
+    for (const b of p.beyond) expect(Object.keys(b)).toEqual(["to", "descriptor"]);
   });
 
   it("says top rather than forcing a route", () => {

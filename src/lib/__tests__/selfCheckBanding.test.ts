@@ -145,7 +145,7 @@ describe("both exports carry the working", () => {
     expect(csv).toContain("What each result means");
     expect(csv).toContain("Partly complies");
     expect(csv).toContain("What this check assessed");
-    expect(csv).toContain("Approach,Band 2 of 5 \u00b7 10% of 25%,From the Procedure tab");
+    expect(csv).toContain('Approach,Band 2 of 5 \u00b7 10% of 25%,"From your written procedure, which is the Procedure tab"');
     expect(csv).toContain("Not assessed by this check");
     expect(csv).toContain("No single requirement below carries a score");
   });
