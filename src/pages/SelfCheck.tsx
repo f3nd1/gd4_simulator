@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { runScopesForSub, scopeTitle, itemIdsForScope, folderScopeId } from "../lib/evidenceScope";
+import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { parseFolderId } from "../lib/drive/driveClient";
 import { aiOfflineReason } from "../lib/ai/aiClient";
 import { downloadCsv } from "../lib/auditCsvExport";
@@ -8,8 +9,8 @@ import { buildWordingCapture, captureFilename } from "../lib/wordingCapture";
 import { printHtmlInNewTab, PRINTABLE_DOC_CSS, POPUP_BLOCKED_MESSAGE } from "../lib/printableDoc";
 import {
   formatElapsed, activityLine, countedFor, stallState, fileStageSummary, SLOW_TITLE,
-  waitingMessage, roughRemaining,
-  type RunProgress, type StageKey,
+  waitingMessage, roughRemaining, lineProgress, nowDoing, failureLines, linePassLabel,
+  type RunProgress, type StageKey, type LiveLine,
 } from "../lib/selfCheckProgress";
 import { useWorkspaceStore, OPTION_A_RUN_HISTORY_CAP } from "../store/useWorkspaceStore";
 import type { AuditFileRecord } from "../types";
@@ -832,6 +833,28 @@ export function SelfCheck() {
     () => [...(ppdProgress?.log ?? []), ...(evProgress?.log ?? [])].sort((a, b) => a.at - b.at),
     [ppdProgress, evProgress],
   );
+  // The official wording of every requirement line in this area, by ref. No
+  // short form exists in the data (the fields are ref, gd4ItemId, sourceType,
+  // text, parentText, sourceText, originalIndex) and one is not invented
+  // here: the line is shown in the Guidance Document's own words and allowed
+  // to wrap. parentText comes with it where there is one, because several
+  // lines are fragments that only read as English under their parent.
+  const lineText = useMemo(() => {
+    const out: Record<string, { text: string; parent?: string }> = {};
+    if (!area) return out;
+    for (const id of itemIdsForScope(area.scope)) {
+      for (const pt of GD4_REQUIREMENTS.find((r) => r.id === id)?.flatAuditPoints ?? []) {
+        out[pt.ref] = { text: pt.text, parent: pt.parentText };
+      }
+    }
+    return out;
+  }, [area]);
+  // Called straight, not memoised: liveProgress is rebuilt every render for
+  // the outcomes phase, so a useMemo on it never hits, and both are a map
+  // over at most 22 refs.
+  const liveLines = lineProgress(liveProgress);
+  const doingNow = nowDoing(liveProgress);
+  const liveFailures = useMemo(() => failureLines({ log: runLog }), [runLog]);
   const stall = stallState(now, liveProgress, runStartedAt || now, canSkipAiCall);
   // When the currently counted stage began. The finish estimate divides the
   // time this stage has ACTUALLY taken by the requirements it has ACTUALLY
@@ -1124,6 +1147,44 @@ export function SelfCheck() {
         // The rubric matrix. Light only, like every other table on this page:
         // it sits inside a white panel, so the graphic's dark tokens would put
         // a dark table on a white card.
+        // ── The live panel: what it is doing, and where each line has got
+        //    to. Light only, like the rest of this page.
+        ".sc-now{border:1px solid #ddd6fe;background:#f5f3ff;border-radius:8px;padding:8px 10px;margin-bottom:9px}",
+        ".sc-now-head{font-size:11.5px;font-weight:800;color:#5b21b6;margin-bottom:2px}",
+        ".sc-now-more{font-size:11px;color:#6d28d9;margin-top:3px}",
+        ".sc-now-files{font-size:11.5px;color:#475569;margin-top:5px;overflow-wrap:anywhere}",
+        ".sc-now-files b{color:#1f2733}",
+        ".sc-now-list{list-style:none;margin:4px 0 0;padding:0;display:grid;gap:3px}",
+        ".sc-now-list li{font-size:12.5px;line-height:1.45;color:#334155}",
+        ".sc-now-parent{color:#64748b}",
+        ".sc-now-ref{margin-left:6px;font-family:ui-monospace,monospace;font-size:10.5px;color:#94a3b8}",
+        // Failures first, and never folded.
+        ".sc-live-fails{border:1px solid #fecaca;background:#fef2f2;border-radius:8px;padding:8px 10px;margin-bottom:9px}",
+        ".sc-live-fails-head{font-size:11.5px;font-weight:800;color:#991b1b;margin-bottom:4px}",
+        ".sc-live-fail{font-size:11.5px;line-height:1.45;color:#7f1d1d;overflow-wrap:anywhere}",
+        ".sc-live-fail+.sc-live-fail{margin-top:3px}",
+        ".sc-live-more{font-size:11px;color:#b91c1c;margin-top:3px}",
+        ".sc-live-board{border:1px solid #e2e8f0;border-radius:8px;background:#fff;padding:8px 10px;margin-bottom:9px}",
+        ".sc-live-board-head{font-size:11.5px;color:#475569;margin-bottom:6px}",
+        ".sc-live-board-head b{color:#1f2733}",
+        ".sc-live-board-note{display:block;margin-top:2px;font-size:10.5px;color:#94a3b8}",
+        // One row per requirement line in the area, so the list cannot grow
+        // during a run: the largest area (4.2) has 22 lines, the median 12.
+        // Capped in height anyway, so a long area scrolls rather than pushing
+        // the file ledger off the panel.
+        ".sc-live-rows{list-style:none;margin:0;padding:0;display:grid;gap:2px;max-height:230px;overflow-y:auto}",
+        ".sc-live-row{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:7px;align-items:baseline;font-size:12px;line-height:1.4;padding:2px 0}",
+        ".sc-live-mark{font-size:11px;text-align:center}",
+        ".sc-live-text{color:#64748b;overflow-wrap:anywhere}",
+        // Never colour alone: the state is a word at the end of every row and
+        // a different mark at the start.
+        ".sc-live-state{font-size:10.5px;font-weight:700;white-space:nowrap}",
+        ".sc-live-row[data-state=\"checked\"] .sc-live-mark,.sc-live-row[data-state=\"checked\"] .sc-live-state{color:#166534}",
+        ".sc-live-row[data-state=\"checked\"] .sc-live-text{color:#1f2733}",
+        ".sc-live-row[data-state=\"checking\"] .sc-live-mark,.sc-live-row[data-state=\"checking\"] .sc-live-state{color:#6d28d9}",
+        ".sc-live-row[data-state=\"checking\"]{background:#f5f3ff;border-radius:5px}",
+        ".sc-live-row[data-state=\"waiting\"] .sc-live-mark,.sc-live-row[data-state=\"waiting\"] .sc-live-state{color:#94a3b8}",
+        "@media (max-width: 640px){.sc-live-row{grid-template-columns:14px minmax(0,1fr);row-gap:1px}.sc-live-state{grid-column:2}}",
         ".sc-rubric-stack{display:none}",
         ".sc-rubric-wide{overflow-x:auto}",
         ".sc-rubric table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:11.5px}",
@@ -1519,6 +1580,67 @@ export function SelfCheck() {
                     minutes, with no way to see which file or which call it was
                     on, let alone skip it. This is the ledger the Evidence
                     Folder page has always had, with its per-file Skip. */}
+                {/* WHAT IT IS ESTABLISHING, first, because "a file is open"
+                    is not the question a reader is asking at minute 16. The
+                    requirement is in the Guidance Document's own words: no
+                    short form exists in the data and none is invented here.
+                    Capped at two, with the rest marked on the board below,
+                    rather than reprinting a whole batch of wording twice. */}
+                {doingNow && (
+                  <div className="sc-now">
+                    <div className="sc-now-head">{doingNow.verb}:</div>
+                    <ul className="sc-now-list">
+                      {doingNow.refs.slice(0, 2).map((ref) => (
+                        <li key={ref}>
+                          {lineText[ref]?.parent && <span className="sc-now-parent">{lineText[ref]!.parent} </span>}
+                          {lineText[ref]?.text ?? ref}
+                          <span className="sc-now-ref">{ref}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {doingNow.refs.length > 2 && (
+                      <div className="sc-now-more">and {doingNow.refs.length - 2} more in the same request, marked below</div>
+                    )}
+                    {(liveProgress?.currentWindowFiles?.length ?? 0) > 0 && (
+                      <div className="sc-now-files"><b>In:</b> {liveProgress!.currentWindowFiles!.join(", ")}</div>
+                    )}
+                  </div>
+                )}
+
+                {/* ANYTHING THAT HAS GONE WRONG, first and unfolded. A batch
+                    failure is the thing a reader most needs while there is
+                    still time to act on it, and it used to be visible only
+                    inside the expandable log. */}
+                {liveFailures.rows.length > 0 && (
+                  <div className="sc-live-fails">
+                    <div className="sc-live-fails-head">&#9888; {liveFailures.rows.length + liveFailures.more} problem{liveFailures.rows.length + liveFailures.more === 1 ? "" : "s"} so far</div>
+                    {liveFailures.rows.map((t, i) => <div key={i} className="sc-live-fail">{t}</div>)}
+                    {liveFailures.more > 0 && <div className="sc-live-more">and {liveFailures.more} earlier, in the full log below</div>}
+                  </div>
+                )}
+
+                {/* WHERE EACH REQUIREMENT HAS GOT TO, and deliberately NOT what
+                    it was judged. A line's verdict is the raw model answer
+                    until four code-level gates run after the judge loop, so a
+                    verdict shown here could be contradicted by the result.
+                    Reached, being checked and still to do cannot be. */}
+                {liveLines && (
+                  <div className="sc-live-board">
+                    <div className="sc-live-board-head">
+                      {linePassLabel(phase)}: <b>{liveLines.checked}</b> checked
+                      {liveLines.checking > 0 && <> · <b>{liveLines.checking}</b> being checked</>}
+                      {liveLines.waiting > 0 && <> · <b>{liveLines.waiting}</b> still to do</>}
+                      {/* Each pass counts its own lines, and the run has two.
+                          Saying which one stops the reset reading as lost
+                          work, and stops the count reading as a verdict. */}
+                      <span className="sc-live-board-note">Each pass counts its own lines. Results are reported when the check finishes, not line by line.</span>
+                    </div>
+                    <ol className="sc-live-rows">
+                      {liveLines.lines.map((l) => <LiveLineRow key={l.ref} line={l} req={lineText[l.ref]} />)}
+                    </ol>
+                  </div>
+                )}
+
                 {runLedger.length > 0 && (
                   <FileLedger
                     files={runLedger}
@@ -2608,6 +2730,24 @@ function ClimbList({ options }: { options: BandStepOption[] }) {
           </div>
       ))}
     </div>
+  );
+}
+
+// One requirement line on the live board: where it has got to, never what it
+// was judged. The state is a word and a mark as well as a colour.
+function LiveLineRow({ line, req }: { line: LiveLine; req?: { text: string; parent?: string } }) {
+  const MARK = { checked: "\u2713", checking: "\u25cf", waiting: "\u25cb" } as const;
+  const LABEL = { checked: "checked", checking: "being checked", waiting: "still to do" } as const;
+  return (
+    <li className="sc-live-row" data-state={line.state}>
+      <span className="sc-live-mark" aria-hidden>{MARK[line.state]}</span>
+      <span className="sc-live-text">
+        {req?.parent && <span className="sc-now-parent">{req.parent} </span>}
+        {req?.text ?? line.ref}
+        <span className="sc-now-ref">{line.ref}</span>
+      </span>
+      <span className="sc-live-state">{LABEL[line.state]}</span>
+    </li>
   );
 }
 

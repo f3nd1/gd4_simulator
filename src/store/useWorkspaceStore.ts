@@ -1852,7 +1852,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 // so the live view shows which specific file(s) the in-flight
                 // call is using, not just which lines.
                 const files = [...new Set(ev.chunkIds.map((c) => chunkFileNames[c]).filter((n): n is string => !!n))];
-                patchPpd({ window: ev.window, lineStatus: ls, currentWindowFiles: files });
+                patchPpd({ window: ev.window, lineStatus: ls, currentWindowFiles: files, currentRefs: ev.refs, passStage: ev.stage });
                 logPpd(`Assessing window ${ev.window.current}/${ev.window.total} (${ev.refs.length} line${ev.refs.length === 1 ? "" : "s"})…`);
               } else if (ev.type === "batch-done") {
                 const cur = curPpd();
@@ -2443,7 +2443,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 // so the live view shows which specific file(s) the in-flight
                 // call is using, not just which lines.
                 const files = [...new Set(ev.chunkIds.map((c) => chunkFileNames[c]).filter((n): n is string => !!n))];
-                patchEv({ stage: "assessing", window: ev.window, lineStatus: ls, currentWindowFiles: files });
+                patchEv({ stage: "assessing", window: ev.window, lineStatus: ls, currentWindowFiles: files, currentRefs: ev.refs, passStage: ev.stage });
                 logEv(`Assessing lines ${ev.firstLine}–${ev.lastLine}${ev.window.total > 1 ? ` · window ${ev.window.current}/${ev.window.total}` : ""}…`);
               } else if (ev.type === "batch-done") {
                 const cur = curEv();

@@ -1324,6 +1324,12 @@ export type EvidenceAssessmentProgress = {
   lineRefs?: string[];     // all requirement-line refs, in order
   lineStatus?: Record<string, EvidenceLineRunStatus>;
   lineVerdict?: Record<string, string>; // ref → last verdict once assessed
+  // The requirement lines the AI call in flight covers, and which of the two
+  // passes it belongs to. Both arrive on every window-start event and were
+  // being discarded: the live view could say which FILE was open but not
+  // what the run was trying to establish from it.
+  currentRefs?: string[];
+  passStage?: "extract" | "judge";
   log?: EvidenceRunLogLine[];           // running activity log, newest last
   ai?: { calls: number; model?: string; totalTokens: number }; // live AI usage
   lastIssue?: EvidenceRunIssue; // most recent call/file-read failure, if any
@@ -1364,6 +1370,12 @@ export type PPDReviewProgress = {
   lineRefs?: string[];
   lineStatus?: Record<string, EvidenceLineRunStatus>;
   lineVerdict?: Record<string, string>;
+  // The requirement lines the AI call in flight covers, and which of the two
+  // passes it belongs to. Both arrive on every window-start event and were
+  // being discarded: the live view could say which FILE was open but not
+  // what the run was trying to establish from it.
+  currentRefs?: string[];
+  passStage?: "extract" | "judge";
   log?: EvidenceRunLogLine[];
   ai?: { calls: number; model?: string; totalTokens: number };
   lastIssue?: EvidenceRunIssue;

@@ -38,6 +38,9 @@ export type RunProgress = {
   // line in flight, so a reader could see what was happening now and nothing
   // about what had already been read.
   log?: { at: number; text: string; tone?: "info" | "good" | "warn" | "bad" }[];
+  // The requirement lines the call in flight covers, and which pass it is.
+  currentRefs?: string[];
+  passStage?: "extract" | "judge";
   // The Outcomes & Review pass emits only a prose detail line ("Reading X…"),
   // no file ledger and no per-line map, so that stage shows this verbatim.
   detail?: string;
@@ -244,3 +247,81 @@ export function roughRemaining(done: number, total: number, msSinceStageStart: n
 }
 
 export const SLOW_TITLE = "This step is taking longer than usual";
+
+
+// ── What the run can honestly say about itself while it is still running ────
+//
+// NOT the verdicts. A line's verdict is emitted by the judge loop as the raw
+// model answer, and four code-level gates run AFTER that loop: the Approach
+// hard-gate cap, the uncited-positive downgrade, the promise hard-gate and
+// the verdict/comment consistency guard. Measured on a live run: the model
+// said "Met" for 6.3.1.DS1 and the stored result says "Partial". Showing the
+// mid-run answer would be a judgement the run has not made, which is the
+// defect this page has had removed three times.
+//
+// What IS stable is where each line has got to. A line goes waiting →
+// being checked → checked and never goes back, so none of it can be
+// contradicted later.
+export type LiveLineState = "waiting" | "checking" | "checked";
+export type LiveLine = { ref: string; state: LiveLineState };
+
+export type LineProgress = {
+  total: number;
+  checked: number;
+  checking: number;
+  waiting: number;
+  lines: LiveLine[];
+};
+
+// WHICH pass these counts belong to. The two passes keep separate progress
+// objects and separate line maps, so the board legitimately restarts at zero
+// when the run moves from the procedure to the records. Measured on a live
+// run: without this the counts read 13 checked and then 13 still to do, which
+// looks like the check undoing its own work. Naming the pass makes the reset
+// mean what it is.
+export function linePassLabel(phase: string): string {
+  if (phase === "policy") return "Against your written procedure";
+  if (phase === "records" || phase === "band") return "Against your records";
+  return "Requirements";
+}
+
+export function lineProgress(p: RunProgress | undefined): LineProgress | null {
+  const refs = p?.lineRefs ?? [];
+  if (refs.length === 0) return null;
+  const lines: LiveLine[] = refs.map((ref) => {
+    const st = p?.lineStatus?.[ref];
+    return { ref, state: st === "done" ? "checked" : st === "assessing" ? "checking" : "waiting" };
+  });
+  return {
+    total: lines.length,
+    checked: lines.filter((l) => l.state === "checked").length,
+    checking: lines.filter((l) => l.state === "checking").length,
+    waiting: lines.filter((l) => l.state === "waiting").length,
+    lines,
+  };
+}
+
+// What the call in flight is for, in the words of the pass that is running.
+// "extract" reads the documents looking for passages; "judge" decides the
+// lines from what was found. Null when no call is in flight, rather than a
+// guess.
+export type NowDoing = { verb: string; refs: string[] } | null;
+
+export function nowDoing(p: RunProgress | undefined): NowDoing {
+  const refs = p?.currentRefs ?? [];
+  if (refs.length === 0) return null;
+  return {
+    verb: p?.passStage === "judge"
+      ? "Deciding these requirements from the passages it found"
+      : "Reading your documents, looking for anything that speaks to",
+    refs,
+  };
+}
+
+// Failures, pulled out of the run log rather than invented: the engine
+// already logs every failed batch with tone "bad", and those lines are the
+// thing a reader most needs while there is still time to act.
+export function failureLines(p: RunProgress | undefined, cap = 4): { rows: string[]; more: number } {
+  const bad = (p?.log ?? []).filter((l) => l.tone === "bad").map((l) => l.text);
+  return { rows: bad.slice(-cap), more: Math.max(0, bad.length - cap) };
+}
