@@ -386,3 +386,27 @@ describe("flagUnverifiedQuotes — PPD quote verification (Batch 4)", () => {
     expect(flagUnverifiedQuotes(comment, source)).toBe(comment);
   });
 });
+
+// A staged batch the USER skips is treated exactly like one whose call failed:
+// its points fall through to other windows, and anything that never gets a
+// verdict is reported as not assessed rather than as a negative finding.
+// Without this the only control for a stuck staged call was Stop.
+describe("a skipped staged batch never fabricates a verdict", () => {
+  it("reports the skip and leaves every unreached point not assessed", async () => {
+    const points = [
+      { ref: "6.1.1.DS1.a", text: "Point A" },
+      { ref: "6.1.1.DS1.b", text: "Point B" },
+    ] as never[];
+    // A call that never answers — the case the control exists for.
+    vi.mocked(chatComplete).mockImplementation(() => new Promise<string>(() => {}));
+    // The engine hands over an abort handle; we pull it immediately, which is
+    // what the page's "Skip this step and carry on" does.
+    const res = await runStagedOutcomeReviewAudit(points, "C001 document text", SETTINGS, {
+      onCallAbort: (fn) => { if (fn) setTimeout(fn, 0); },
+    });
+    expect(res.rows).toHaveLength(2);
+    expect(res.rows.every((r) => r.notAssessed === true)).toBe(true);
+    expect(res.rows.every((r) => r.outcomeEvident === false && r.reviewEvident === false)).toBe(true);
+    expect((res.windowErrors ?? []).join(" ")).toMatch(/skipped by user/i);
+  });
+});

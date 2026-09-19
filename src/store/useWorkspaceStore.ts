@@ -832,7 +832,9 @@ export type WorkspaceState = {
   // from holisticBand.matrixScores via setHolisticBand.
   applyOutcomeReviewResult: (subCriterionId: string) => number;
   // Live heartbeat for a running Outcomes & Review pass; null when idle.
-  outcomeReviewProgress: { subCriterionId: string; detail: string } | null;
+  // detail is the stage line; currentWindowFiles names the documents the call
+  // in flight is reading, so a stalled pass can say which files it is on.
+  outcomeReviewProgress: { subCriterionId: string; detail: string; currentWindowFiles?: string[] } | null;
   // Final Report AI improvement suggestions, keyed "itemId::dimensionKey"
   // (see ReportAiSuggestion). Persisted so they survive reload and match the
   // printed PDF; written ONLY by the report's explicit Generate button.
@@ -2730,7 +2732,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             memories,
             ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
             resolveChunkFile: (cid) => chunkFileNames[cid],
-            onProgress: (detail) => set({ outcomeReviewProgress: { subCriterionId, detail } }),
+            onProgress: (detail, windowFiles) => set({ outcomeReviewProgress: { subCriterionId, detail, currentWindowFiles: windowFiles } }),
+            onCallAbort: (fn) => { _currentAiCallAbort = fn; set({ canSkipAiCall: !!fn }); },
             signal: runAbort.signal,
           });
           const runWarnings = [

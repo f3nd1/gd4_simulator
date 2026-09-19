@@ -740,7 +740,7 @@ export function SelfCheck() {
   // object, and only one is running at a time.
   const liveProgress: RunProgress | undefined =
     phase === "policy" ? (ppdProgress ?? undefined)
-      : phase === "outcomes" ? (orProgress?.detail ? { detail: orProgress.detail } : undefined)
+      : phase === "outcomes" ? (orProgress?.detail ? { detail: orProgress.detail, currentWindowFiles: orProgress.currentWindowFiles } : undefined)
       : (phase === "records" || phase === "band") ? (evProgress ?? undefined) : undefined;
   const stall = stallState(now, liveProgress, runStartedAt || now, canSkipAiCall);
   // When the currently counted stage began. The finish estimate divides the
@@ -856,6 +856,10 @@ export function SelfCheck() {
         ".sc-step-help{position:absolute;z-index:20;top:26px;left:0;width:330px;max-width:80vw;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 8px 24px rgba(16,24,40,.12);padding:11px 13px;font-size:12.5px;font-weight:400;line-height:1.5;color:#475569;white-space:normal}",
         ".sc-run-button{height:42px;border:0;border-radius:9px;background:#7c3aed;color:#fff;font-weight:800;font-size:14px;padding:0 20px;white-space:nowrap;font-family:inherit}",
         ".sc-inputs-more{padding:8px 17px 16px}",
+        // Air between the blocks in here: the run-history card, the folder
+        // guidance and the running panel were butted up against each other.
+        ".sc-inputs-more>*+*{margin-top:10px}",
+        ".sc-run-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start;margin-bottom:12px}",
         "@media (max-width: 980px){",
         ".sc-inputs-body{grid-template-columns:1fr 1fr}",
         ".sc-run-field{grid-column:1/-1}",
@@ -960,6 +964,7 @@ export function SelfCheck() {
         "}",
         "@media (max-width: 640px){",
         ".sc-hero-split{grid-template-columns:1fr;gap:12px}",
+        ".sc-run-split{grid-template-columns:1fr;gap:12px}",
         ".sc-results-layout{gap:12px}",
         ".sc-hero{padding:14px}",
         ".sc-view-tabs{grid-template-columns:1fr}",
@@ -1262,30 +1267,12 @@ export function SelfCheck() {
                 </div>
               </div>
 
-              {/* WHICH DOCUMENTS, not just which stage. A run over 154 files
-                  showed one line ("Checking requirement 1 of 6") for 50
-                  minutes, and there was no way to see which file or which call
-                  it was on, let alone skip it. This is the ledger the Evidence
-                  Folder page has always had, with its per-file Skip. */}
-              {(liveProgress?.filesFound?.length ?? 0) > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  <FileLedger
-                    files={liveProgress!.filesFound!}
-                    isActive
-                    progress={{ currentFileName: liveProgress?.currentFile, currentFileAction: "Reading" }}
-                    onSkipFile={() => useWorkspaceStore.getState().skipCurrentFile()}
-                  />
-                </div>
-              )}
-
-              {/* What the request in flight is actually reading, when the run
-                  has moved past reading into judging. */}
-              {(liveProgress?.currentWindowFiles?.length ?? 0) > 0 && (
-                <p style={{ ...muted, margin: "0 0 10px" }}>
-                  <b style={{ color: INK }}>Now checking against:</b> {liveProgress!.currentWindowFiles!.join(", ")}
-                </p>
-              )}
-
+              {/* Two columns: the five stages on the left, the documents on
+                  the right. Stacked, the stage list sat under a file ledger
+                  that grows with the folder, so on a real run the stages were
+                  off the bottom of the screen. */}
+              <div className="sc-run-split">
+              <div style={{ minWidth: 0 }}>
               <ol style={{ listStyle: "none", padding: 0, margin: "0 0 12px" }}>
                 {visibleSteps.map((s, i) => {
                   const state = i < activeIdx ? "done" : i === activeIdx ? "now" : "todo";
@@ -1329,6 +1316,38 @@ export function SelfCheck() {
                   );
                 })}
               </ol>
+
+              </div>
+
+              <div style={{ minWidth: 0 }}>
+                {/* WHICH DOCUMENTS, not just which stage. A run over 154 files
+                    showed one line ("Checking requirement 1 of 6") for 50
+                    minutes, with no way to see which file or which call it was
+                    on, let alone skip it. This is the ledger the Evidence
+                    Folder page has always had, with its per-file Skip. */}
+                {(liveProgress?.filesFound?.length ?? 0) > 0 && (
+                  <FileLedger
+                    files={liveProgress!.filesFound!}
+                    isActive
+                    progress={{ currentFileName: liveProgress?.currentFile, currentFileAction: "Reading" }}
+                    onSkipFile={() => useWorkspaceStore.getState().skipCurrentFile()}
+                  />
+                )}
+
+                {/* What the request in flight is reading, once the run has
+                    moved from reading into judging. Every pass reports it now,
+                    including the results-and-review one, which used to say only
+                    "window 1/3 · batch 1/2". */}
+                {(liveProgress?.currentWindowFiles?.length ?? 0) > 0 && (
+                  <p style={{ ...muted, margin: (liveProgress?.filesFound?.length ?? 0) > 0 ? "8px 0 0" : 0 }}>
+                    <b style={{ color: INK }}>Now checking against:</b> {liveProgress!.currentWindowFiles!.join(", ")}
+                  </p>
+                )}
+                {(liveProgress?.filesFound?.length ?? 0) === 0 && (liveProgress?.currentWindowFiles?.length ?? 0) === 0 && (
+                  <p style={{ ...muted, margin: 0 }}>The documents this step is using appear here as it opens them.</p>
+                )}
+              </div>
+              </div>
 
               {/* Stall: the engine bumps a heartbeat on every event, so silence
                   is measurable rather than guessed. */}
@@ -2638,19 +2657,19 @@ function WaitingCat() {
         <path
           className="sc-cat-tail"
           d="M33 31 C40 31, 42 25, 39 21"
-          fill="none" stroke="#8ea0b5" strokeWidth="2.8" strokeLinecap="round"
+          fill="none" stroke="#c9922b" strokeWidth="2.8" strokeLinecap="round"
         />
         <g className="sc-cat-body">
           {/* haunch and chest, one sitting silhouette */}
-          <path d="M14 33 C13 24, 17 19, 23 19 C29 19, 33 24, 32 33 Z" fill="#b6c2d2" />
+          <path d="M14 33 C13 24, 17 19, 23 19 C29 19, 33 24, 32 33 Z" fill="#e0aa3e" />
           {/* the head is its own group: it tilts and turns on its own cycle,
               which is what makes the cat look like it is watching the run
               rather than sitting still and breathing. */}
           <g className="sc-cat-head">
-            <circle cx="23" cy="15" r="8" fill="#b6c2d2" />
+            <circle cx="23" cy="15" r="8" fill="#e8bb55" />
             {/* ears, each hinged at its own base so they twitch separately */}
-            <path className="sc-cat-ear-l" d="M16.5 10 L16 4.5 L21 8 Z" fill="#b6c2d2" />
-            <path className="sc-cat-ear-r" d="M29.5 10 L30 4.5 L25 8 Z" fill="#b6c2d2" />
+            <path className="sc-cat-ear-l" d="M16.5 10 L16 4.5 L21 8 Z" fill="#e8bb55" />
+            <path className="sc-cat-ear-r" d="M29.5 10 L30 4.5 L25 8 Z" fill="#e8bb55" />
             {/* eyes: two short strokes that squash shut on the blink */}
             <g className="sc-cat-eyes">
               <ellipse cx="20" cy="15" rx="1.3" ry="1.6" fill="#475569" />
@@ -2659,15 +2678,15 @@ function WaitingCat() {
             {/* nose */}
             <path d="M23 18 l-1.2 -1.4 h2.4 Z" fill="#a78bfa" />
             {/* whiskers, so the head turn reads as a turn */}
-            <g stroke="#8ea0b5" strokeWidth="0.7" strokeLinecap="round">
+            <g stroke="#b07d1f" strokeWidth="0.7" strokeLinecap="round">
               <path d="M19 18.4 L13.5 17.6" /><path d="M19 19.2 L13.8 19.8" />
               <path d="M27 18.4 L32.5 17.6" /><path d="M27 19.2 L32.2 19.8" />
             </g>
           </g>
         </g>
         {/* front paws: one of them kneads on a long cycle */}
-        <ellipse className="sc-cat-paw-l" cx="18" cy="33" rx="4" ry="2.2" fill="#d5dde7" />
-        <ellipse cx="28" cy="33" rx="4" ry="2.2" fill="#d5dde7" />
+        <ellipse className="sc-cat-paw-l" cx="18" cy="33" rx="4" ry="2.2" fill="#f4d79a" />
+        <ellipse cx="28" cy="33" rx="4" ry="2.2" fill="#f4d79a" />
       </g>
     </svg>
   );

@@ -1693,7 +1693,11 @@ function buildStagedPointsBlock(auditPoints: FlatAuditPoint[]): string {
 }
 
 // Shared opts shape for all three staged passes below.
-type StagedAuditOpts = { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined };
+// onProgress's second argument names the DOCUMENTS the call about to go out
+// covers, resolved from the chunk ids in that window. Without it a stalled
+// staged pass could only say "window 1 of 3 · batch 1 of 2", which tells the
+// person waiting nothing about which of their files it is stuck on.
+type StagedAuditOpts = { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string, windowFiles?: string[]) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined; onCallAbort?: CallAbortReg };
 
 // Per-ref accumulator across sliding windows: the merged verdict so far, the
 // positive-coverage notes collected (one per contributing window), and the
@@ -1782,6 +1786,10 @@ async function runWindowedStagedAudit<V, Row, P extends { ref: string } = FlatAu
     if (stopRequested()) { stoppedEarly = true; break; }
     totalCharsAssessed += win.end - win.start;
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()} of ${totalCharsAvailable.toLocaleString()} total]` : "";
+    // Which of the user's documents this window is made of, once per window.
+    const windowFiles = [...new Set(
+      chunkIdsInWindow(win.text).map((id) => opts.resolveChunkFile?.(id)).filter((n): n is string => !!n)
+    )];
 
     for (const [bi, batch] of batches.entries()) {
       if (stopRequested()) { stoppedEarly = true; break; }
@@ -1790,16 +1798,29 @@ async function runWindowedStagedAudit<V, Row, P extends { ref: string } = FlatAu
       // to refresh the audit heartbeat, so emitting only once per window let the
       // stuck-detector fire mid-window during normal (slow) operation, which
       // misled users into hitting "Skip pass" and cutting the run short.
-      opts.onProgress?.(`${cfg.label} audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
+      opts.onProgress?.(
+        `${cfg.label} audit — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`,
+        windowFiles,
+      );
       const user = cfg.buildUser(batch, win, windowLabel);
       const system = cfg.buildSystem(windows.length > 1 ? `${cfg.funcName} (window ${win.index + 1}/${win.total})` : cfg.funcName);
       if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
       try {
-        const content = await chatComplete(
+        // Raced against a skip, like the Option A calls: a staged pass is the
+        // longest part of a check, and a stuck call in it used to leave Stop
+        // as the only way out. A skipped batch is treated exactly like a
+        // failed one — no verdict is invented for its points.
+        const raced = await raceCallSkip(opts.onCallAbort, chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
           { schema: cfg.schema, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
-        );
+        ));
+        if (raced === CALL_SKIPPED) {
+          const label = windows.length > 1 ? `${cfg.label} window ${win.index + 1}/${win.total} batch ${bi + 1}/${batches.length}` : `${cfg.label} batch ${bi + 1}/${batches.length}`;
+          windowErrors.push(`${label} skipped by user — its audit points fall through to other windows or are reported as not assessed.`);
+          continue;
+        }
+        const content = raced;
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
         const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
@@ -3343,11 +3364,24 @@ Respond with JSON only:
     const system = judgeSystem(judgeBatches.length > 1 ? `runEvidenceAssessment (judge, batch ${bi + 1}/${judgeBatches.length})` : "runEvidenceAssessment (judge)");
     if (firstPromptSent && !firstPromptSent.includes("SYSTEM (judge):")) firstPromptSent += `\n\n════════ SECOND PASS (judge) ════════\n\nSYSTEM (judge):\n${system}\n\nUSER:\n${user}`;
     try {
-      const content = await chatComplete(
+      // The judge is the longest single call in a check, and it was the only
+      // one not raced against a skip: a user watching it hang was offered Stop
+      // and nothing else. A skipped judge batch leaves its lines with no
+      // verdict, which the code below reports as not assessed — never as a gap.
+      const raced = await raceCallSkip(opts.onCallAbort, chatComplete(
         [{ role: "system", content: system }, { role: "user", content: user }],
         settings,
         { schema: EVIDENCE_ASSESSMENT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: judgeTimeoutMs(user.length), signal: opts.signal }
-      );
+      ));
+      if (raced === CALL_SKIPPED) {
+        const label = judgeBatches.length > 1 ? `judge batch ${bi + 1}/${judgeBatches.length}` : "judge call";
+        windowErrors.push(`Evidence ${label} skipped by user — its requirement lines are reported as not assessed.`);
+        for (const r of batch) failedRefs.add(r.ref);
+        opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "Skipped by user.", stage: "judge" });
+        unitsDone++;
+        continue;
+      }
+      const content = raced;
       const parsed = parseJSONObject(content);
       const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
       // The call RETURNED but nothing parseable came back — same failure
