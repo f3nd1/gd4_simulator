@@ -38,7 +38,10 @@ describe("the Edge Function's copy of the domain rule", () => {
   });
 
   it("refuses a caller with no bearer token, and one whose domain is wrong", () => {
-    expect(SRC).toContain('if (!bearer) return json({ error: "Sign in with your United Ceres Google account." }, 401);');
+    // A missing bearer, and a bearer the auth service rejects, both 401 and
+    // both SAY why: the app can only show what this body carries.
+    expect(SRC).toMatch(/if \(!bearer\) \{[\s\S]*?\}, 401\);/);
+    expect(SRC).toMatch(/if \(error \|\| !data\?\.user\) \{[\s\S]*?\}, 401\);/);
     expect(SRC).toMatch(/if \(!emailIsAllowed\(email\)\) \{[\s\S]*?\}, 403\);/);
   });
 });

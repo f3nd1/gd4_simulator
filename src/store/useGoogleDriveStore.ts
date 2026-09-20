@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { readEdgeFunctionError } from "../lib/drive/edgeError";
 import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { persist } from "zustand/middleware";
 import { workspaceStorage } from "./supabaseStorage";
@@ -49,7 +50,11 @@ async function callDriveOauth(body: Record<string, unknown>): Promise<DriveOauth
       EDGE_FUNCTION_TIMEOUT_MS,
       "Google Drive re-authentication timed out — the drive-oauth server function never responded."
     );
-    if (error) return { error: error.message || "The drive-oauth Edge Function returned an error." };
+    // supabase-js reports EVERY non-2xx as "Edge Function returned a non-2xx
+    // status code" and hides the function's own explanation on the Response
+    // it carries. Read it: the function always says which account it refused,
+    // which secret is missing, or that it is not deployed.
+    if (error) return { error: await readEdgeFunctionError(error) };
     if (!data) return { error: "The drive-oauth Edge Function returned no data." };
     return data;
   } catch (err) {
@@ -104,7 +109,13 @@ export const useGoogleDriveStore = create<GoogleDriveState>()(
         const { clientId, accessToken } = get();
         if (!clientId || accessToken) return;
         const result = await callDriveOauth({ action: "refresh" });
-        if ("error" in result) return;
+        // RECORD the reason. This ran on every page load and returned in
+        // silence, so a background reconnect that the server was refusing
+        // looked identical to one that had simply never been set up: Drive
+        // just sat on "Not connected" with nothing said anywhere. It stays
+        // quiet on screen (no modal, no toast) but Settings, which is where
+        // anyone goes to look, can now show what happened.
+        if ("error" in result) { set({ lastError: result.error }); return; }
         set({ accessToken: result.accessToken, tokenExpiresAt: Date.now() + result.expiresInSeconds * 1000 });
       },
 

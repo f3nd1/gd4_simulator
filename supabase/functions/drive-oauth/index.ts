@@ -98,7 +98,15 @@ function corsHeaders(req: Request): Record<string, string> {
 }
 
 function adminClient() {
-  return createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  // Explicit auth options because this runs in Deno, not a browser: the
+  // defaults reach for localStorage to persist a session, start a refresh
+  // timer and try to read a session out of the URL, none of which exist
+  // here. Harmless while the client was only used for table reads; it is
+  // now also used to verify the caller's token, so the auth sub-client
+  // actually has to initialise cleanly.
+  return createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
 }
 
 // Google's token endpoint, for both the initial code exchange and every
@@ -147,13 +155,20 @@ Deno.serve(async (req) => {
   // publishable key and no user session gets nothing.
   const authHeader = req.headers.get("Authorization") ?? "";
   const bearer = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
-  if (!bearer) return json({ error: "Sign in with your United Ceres Google account." }, 401);
+  if (!bearer) {
+    return json({ error: "Sign in with your United Ceres Google account. (No sign-in was sent with this request.)" }, 401);
+  }
   {
     const { data, error } = await supabase.auth.getUser(bearer);
     const email = data?.user?.email ?? null;
     // getUser rejects the publishable key: it is not a user token, so there
-    // is no user on it.
-    if (error || !data?.user) return json({ error: "Sign in with your United Ceres Google account." }, 401);
+    // is no user on it. The reason is included because the app can only show
+    // what this body says, and "401" on its own sent one debugging round
+    // looking in the wrong place.
+    if (error || !data?.user) {
+      console.error("[drive-oauth] caller token rejected:", error?.message ?? "no user on the token");
+      return json({ error: `Sign in with your United Ceres Google account. (The sign-in sent with this request was not accepted: ${error?.message ?? "it carried no user"}.)` }, 401);
+    }
     if (!emailIsAllowed(email)) {
       return json({ error: `That account (${email ?? "unknown"}) is not a United Ceres account.` }, 403);
     }
