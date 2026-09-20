@@ -62,11 +62,17 @@ const h2: React.CSSProperties = { fontSize: 17, fontWeight: 700, margin: 0, colo
 // The run log's four tones, as the engine already emits them.
 const LOG_TONE: Record<string, string> = { info: "#475569", good: "#15803d", warn: "#92400e", bad: "#b91c1c" };
 
-// The three Audit support categories, in the order a reader needs them: what
-// was read, how the check works, what the full audit adds.
+// The three Audit support categories, in the order a reader needs them: the
+// band and the working behind it, then what was read, then what the full
+// audit adds.
+//
+// "How this assessment works" read as documentation. The tab is not
+// documentation: it holds this check's band, the arithmetic that produced it,
+// the four dimensions and what would move each one. It is a result, so it
+// says so.
 const SUPPORT_TABS = [
+  { key: "how", label: "How your band was worked out" },
   { key: "files", label: "Evidence & files" },
-  { key: "how", label: "How this assessment works" },
   { key: "outcomes", label: "Outcomes & review" },
 ] as const;
 type SupportTab = (typeof SUPPORT_TABS)[number]["key"];
@@ -212,9 +218,10 @@ export function SelfCheck() {
   // Whether the tab's "what this does not answer" line is open. Shut by
   // default: it is read once, not on every visit.
   const [viewNoteOpen, setViewNoteOpen] = useState(false);
-  // Which Audit support category is open. Files first: it is what follows
-  // naturally from reading a requirement's finding.
-  const [supportTab, setSupportTab] = useState<SupportTab>("files");
+  // Which Audit support category is open. Whichever the list puts first, so
+  // reordering the tabs moves the landing tab with them rather than opening
+  // the second one.
+  const [supportTab, setSupportTab] = useState<SupportTab>(SUPPORT_TABS[0].key);
   // Whether the run's activity log is open. Shut by default: the file list
   // above it answers most questions, and the log is what you open when it does
   // not.
@@ -2020,7 +2027,7 @@ export function SelfCheck() {
               <div className="sc-support-head">
                 <b style={{ fontSize: 14, color: INK }}>Audit support</b>
                 <p style={{ ...muted, margin: "3px 0 0" }}>
-                  The requirement above is the result. This is the supporting evidence, how the check works, and what the full audit adds.
+                  The requirement above is one line&rsquo;s result. This is the band for the whole area, the evidence behind it, and what the full audit adds.
                 </p>
               </div>
 
@@ -2131,7 +2138,7 @@ export function SelfCheck() {
               {supportTab === "how" && (
                 <div className="sc-support-body">
                   <p style={{ ...muted, margin: "0 0 4px" }}>
-                    What this check settles, what each result means, and the four EduTrust dimensions behind it.
+                    This check&rsquo;s band for the area, the arithmetic behind it, the four EduTrust dimensions it adds up, and what each result on the tabs above means.
                   </p>
             {/* The four combinations, counted, on the overall tab only: it is
                 the one place both halves are in view at once. */}
