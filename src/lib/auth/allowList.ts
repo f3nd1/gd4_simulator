@@ -23,9 +23,29 @@ export type AllowCheck =
   // wifi dropped is both wrong and alarming.
   | { allowed: "unknown"; reason: string };
 
+// The list has not been created on this project yet. PostgREST answers a
+// missing table with PGRST205 and "could not find the table ... in the schema
+// cache", which is accurate and tells a non-developer nothing about what to
+// do. It locked the whole team out once, on the deploy that shipped this
+// check before the SQL had been run, so the message names the file.
+export const TABLE_MISSING_HINT =
+  "The list of permitted people has not been created on this database yet. " +
+  "Run supabase/03-restrict-to-named-people.sql in the Supabase SQL Editor " +
+  "(dashboard, left sidebar, SQL Editor, New query, paste, Run), then reload this page.";
+
+function looksLikeMissingTable(err: { code?: string; message?: string }): boolean {
+  if (err.code === "PGRST205" || err.code === "42P01") return true;
+  const m = (err.message ?? "").toLowerCase();
+  return m.includes("schema cache") || m.includes("does not exist");
+}
+
 // Zero rows means not on the list: the read policy lets a signed-in person
 // see their own row and nothing else, so "no row" is the answer, not an
 // error. An actual error means the question never got answered.
+//
+// Either way this REFUSES. A missing table must never be treated as "let
+// them in" — the check failing open is the one outcome worse than the
+// lockout it caused.
 export async function checkAllowList(supabase: SupabaseClient, email: string): Promise<AllowCheck> {
   try {
     const { data, error } = await supabase
@@ -33,7 +53,7 @@ export async function checkAllowList(supabase: SupabaseClient, email: string): P
       .select("email")
       .eq("email_lc", email.trim().toLowerCase())
       .maybeSingle();
-    if (error) return { allowed: "unknown", reason: error.message };
+    if (error) return { allowed: "unknown", reason: looksLikeMissingTable(error) ? TABLE_MISSING_HINT : error.message };
     return { allowed: !!data };
   } catch (e) {
     return { allowed: "unknown", reason: e instanceof Error ? e.message : String(e) };

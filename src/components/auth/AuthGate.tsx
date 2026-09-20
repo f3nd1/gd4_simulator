@@ -9,7 +9,7 @@
 import { useState } from "react";
 import { useSession, signInWithGoogle, signOut } from "../../lib/auth/useSession";
 import { ALLOWED_EMAIL_DOMAIN, WRONG_DOMAIN_MESSAGE } from "../../lib/auth/domain";
-import { notOnListMessage } from "../../lib/auth/allowList";
+import { notOnListMessage, TABLE_MISSING_HINT } from "../../lib/auth/allowList";
 import { useSupabaseSettingsStore } from "../../store/useSupabaseSettingsStore";
 import { consumeSignInError } from "../../lib/supabaseClient";
 import { buildLabel } from "../../lib/buildInfo";
@@ -76,16 +76,26 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   // because the network dropped is wrong, and it would send somebody to Felix
   // over a problem he cannot fix.
   if (state.status === "check-failed") {
+    // A missing table and a dropped connection both land here, and they need
+    // opposite advice: one is "try again", the other is "a setup step has not
+    // been run". Saying "usually a connection problem" to somebody whose
+    // database simply has no list yet sends them looking in the wrong place,
+    // which is what the lockout on a43c855 cost.
+    const setupNotRun = state.reason === TABLE_MISSING_HINT;
     return (
       <div style={shell}>
         <div style={card}>
-          <h1 style={{ fontSize: 19, margin: 0, color: INK }}>Could not check your access</h1>
+          <h1 style={{ fontSize: 19, margin: 0, color: INK }}>
+            {setupNotRun ? "This app is not set up yet" : "Could not check your access"}
+          </h1>
           <p style={muted}>
-            You are signed in as <b style={{ color: INK }}>{state.email}</b>, but the app could not reach its
-            database to check whether you have access, so it is not showing anything. This is usually a
-            connection problem rather than a problem with your account.
+            You are signed in as <b style={{ color: INK }}>{state.email}</b>, but the app could not check
+            whether you have access, so it is not showing anything.
+            {setupNotRun ? " Nothing is wrong with your account." : " This is usually a connection problem rather than a problem with your account."}
           </p>
-          <p style={{ ...muted, fontSize: 12, fontFamily: "ui-monospace,monospace" }}>{state.reason}</p>
+          <p style={setupNotRun
+            ? { ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "10px 12px" }
+            : { ...muted, fontSize: 12, fontFamily: "ui-monospace,monospace" }}>{state.reason}</p>
           <button
             type="button"
             onClick={() => window.location.reload()}

@@ -70,9 +70,15 @@ const LOG_TONE: Record<string, string> = { info: "#475569", good: "#15803d", war
 // "How this assessment works" read as documentation. The tab is not
 // documentation: it holds this check's band, the arithmetic that produced it,
 // the four dimensions and what would move each one. It is a result, so it
-// says so.
+// says so — and as a noun phrase, like the two beside it. A sentence-shaped
+// label ("How your band was worked out") sat awkwardly between them; the
+// panel's own subheader still carries the longer explanation.
+//
+// These labels are the tab strip only. They reach no export and no printed
+// page: those are titled from VIEW_LABEL in lib/selfCheck.ts, which names the
+// three VIEWS (overview / procedure / records), not these tabs.
 const SUPPORT_TABS = [
-  { key: "how", label: "How your band was worked out" },
+  { key: "how", label: "Your band" },
   { key: "files", label: "Evidence & files" },
   { key: "outcomes", label: "Outcomes & review" },
 ] as const;
@@ -1232,6 +1238,20 @@ export function SelfCheck() {
         ".sc-rubric-band{display:block;font-size:11px;font-weight:700;color:#1f2733}",
         ".sc-rubric-card .sc-rubric-mark{display:inline;margin:0 0 0 6px}",
         "@media (max-width: 760px){.sc-rubric-wide{display:none}.sc-rubric-stack{display:grid;gap:10px}}",
+        // The combinations box. It was three stacked rows — title, counts,
+        // explanation — for two short things and one sentence. The title and
+        // the counts now share a line, which removes a whole row at every
+        // width.
+        //
+        // Two side-by-side COLUMNS were tried first and MEASURED TALLER than
+        // the original, 165px against 125px at 1280: the counts are one long
+        // unwrapped row, so a max-content column took the width and squeezed
+        // the sentence into a gutter that then ran to five lines.
+        ".sc-combo{border:1px solid #e2e8f0;border-radius:10px;padding:10px 13px;margin:12px 0;background:#fbfcfe}",
+        "@media (min-width: 900px){.sc-combo{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:20px;align-items:start}.sc-combo-note{margin:0}}",
+        ".sc-combo-head{display:flex;align-items:baseline;gap:4px 16px;flex-wrap:wrap}",
+        ".sc-combo-counts{display:flex;gap:3px 14px;flex-wrap:wrap;line-height:1.45}",
+        ".sc-combo-note{margin:5px 0 0}",
         ".sc-band-graphic{--g-ink:#1f2733;--g-mute:#64748b;--g-track:#e2e8f0;--g-on:#7c3aed;--g-hatch-bg:#f1f5f9;--g-hatch-line:#cbd5e1;--g-surface:#fff;--g-edge:#e2e8f0}",
         "@media (prefers-color-scheme: dark){.sc-band-graphic{--g-ink:#e2e8f0;--g-mute:#94a3b8;--g-track:#334155;--g-on:#a78bfa;--g-hatch-bg:#1e293b;--g-hatch-line:#475569;--g-surface:#0f172a;--g-edge:#334155}}",
       ].join("")}</style>
@@ -2162,18 +2182,20 @@ export function SelfCheck() {
             {/* The four combinations, counted, on the overall tab only: it is
                 the one place both halves are in view at once. */}
             {view === "overview" && combos && combos.unknown < counts.total && (
-              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fbfcfe" }}>
-                <b style={{ fontSize: 13 }}>Written procedure vs records</b>
-                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 7 }}>
-                  {(Object.keys(COMBINATION_LABEL) as Combination[]).filter((k) => combos[k] > 0).map((k) => (
-                    <span key={k} style={{ fontSize: 13, color: "#334155" }}>
-                      <b style={{ fontSize: 15 }}>{combos[k]}</b> {COMBINATION_LABEL[k]}
-                    </span>
-                  ))}
+              <div className="sc-combo">
+                <div className="sc-combo-head">
+                  <b style={{ fontSize: 13 }}>Written procedure vs records</b>
+                  <div className="sc-combo-counts">
+                    {(Object.keys(COMBINATION_LABEL) as Combination[]).filter((k) => combos[k] > 0).map((k) => (
+                      <span key={k} style={{ fontSize: 13, color: "#334155" }}>
+                        <b style={{ fontSize: 15 }}>{combos[k]}</b> {COMBINATION_LABEL[k]}
+                      </span>
+                    ))}
+                  </div>
                 </div>
                 {/* The rule itself is stated once, under the tabs. This says
                     only what each COUNT means, which that sentence does not. */}
-                <p style={{ ...muted, margin: "7px 0 0" }}>
+                <p className="sc-combo-note" style={muted}>
                   Documented but no records means the procedure is fine and the proof is missing. Records but nothing documented means it happens but the procedure does not say so. The Procedure and Records tabs show which requirement is which.
                 </p>
               </div>

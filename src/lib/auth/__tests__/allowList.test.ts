@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { checkAllowList, notOnListMessage } from "../allowList";
+import { checkAllowList, notOnListMessage, TABLE_MISSING_HINT } from "../allowList";
 
 // A stand-in for the one query checkAllowList makes, capturing the filter so
 // the lower-casing is pinned: addresses are typed by hand into the dashboard,
 // and a case mismatch here would lock out a person who IS on the list.
-function client(answer: { data: unknown; error: { message: string } | null }) {
+function client(answer: { data: unknown; error: { message: string; code?: string } | null }) {
   const seen: { column?: string; value?: string } = {};
   const c = {
     from: () => ({
@@ -41,6 +41,27 @@ describe("checking the allow-list", () => {
   it("says 'unknown' rather than 'refused' when the question could not be asked", async () => {
     const { c } = client({ data: null, error: { message: "network down" } });
     expect(await checkAllowList(c, "felix@unitedceres.edu.sg")).toEqual({ allowed: "unknown", reason: "network down" });
+  });
+
+  it("names the SQL to run when the table does not exist yet", async () => {
+    // This exact case locked the whole team out: the build shipped before the
+    // migration had been run, and the screen said only "could not find the
+    // table in the schema cache".
+    for (const err of [
+      { code: "PGRST205", message: "Could not find the table 'public.allowed_users' in the schema cache" },
+      { code: "42P01", message: 'relation "public.allowed_users" does not exist' },
+    ]) {
+      const { c } = client({ data: null, error: err });
+      const got = await checkAllowList(c, "felix@unitedceres.edu.sg");
+      expect(got).toEqual({ allowed: "unknown", reason: TABLE_MISSING_HINT });
+      expect(TABLE_MISSING_HINT).toContain("03-restrict-to-named-people.sql");
+    }
+  });
+
+  it("still refuses rather than letting anyone in when the table is missing", async () => {
+    const { c } = client({ data: null, error: { code: "PGRST205", message: "schema cache" } });
+    const got = await checkAllowList(c, "anyone@unitedceres.edu.sg");
+    expect(got.allowed).not.toBe(true);
   });
 
   it("treats a thrown error the same way", async () => {
