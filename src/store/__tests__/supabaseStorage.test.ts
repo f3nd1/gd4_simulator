@@ -7,7 +7,13 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const upsert = vi.fn();
 const maybeSingle = vi.fn();
+// Signed in by default. The adapter now refuses to read or write remotely
+// without a session, because an anonymous read comes back EMPTY under the
+// row-level policy and a store that hydrated empty would save its defaults
+// over the real row. The signed-out case is pinned in its own test below.
+let session: unknown = { user: { email: "felix@unitedceres.edu.sg" } };
 const client = {
+  auth: { getSession: () => Promise.resolve({ data: { session } }) },
   from: () => ({
     upsert: (row: unknown) => upsert(row),
     select: () => ({ eq: () => ({ maybeSingle: () => maybeSingle() }) }),
@@ -35,6 +41,7 @@ const KEY = "test-key";
 const put = (v: unknown) => workspaceStorage!.setItem(KEY, v as never);
 
 beforeEach(() => {
+  session = { user: { email: "felix@unitedceres.edu.sg" } };
   store.clear();
   upsert.mockReset();
   maybeSingle.mockReset();
@@ -125,7 +132,9 @@ describe("issue 7 — flushPendingSaves is a real durability barrier", () => {
     const inFlight = flushPendingSaves();          // starts the upload
     let settled = false;
     const barrier = flushPendingSaves().then(() => { settled = true; });
-    await Promise.resolve();
+    // The adapter now awaits the session before it uploads, so the upload
+    // starts a few microtasks later than it used to.
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     expect(settled).toBe(false);                   // must not resolve early
 
     release();
@@ -144,12 +153,52 @@ describe("issue 7 — flushPendingSaves is a real durability barrier", () => {
 
     let settled = false;
     const barrier = flushPendingSaves().then(() => { settled = true; });
-    await Promise.resolve();
+    // As above: the session is awaited before the upload starts.
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     expect(settled).toBe(false);
 
     release();
     await Promise.all([first, barrier]);
     expect(upsert).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(upsert.mock.calls[1][0])).toContain("second");
+  });
+});
+
+
+// ── The ordering bug the sign-in gate exposed ──────────────────────────────
+//
+// Reproduced on the built bundle at the real subpath: on the load that
+// follows the Google redirect, all 16 persisted stores hydrated BEFORE the
+// session existed, every read came back empty under the new policy, and
+// three stores then wrote their defaults back, including the main workspace
+// with an empty cycle.
+describe("the session comes before the stored state", () => {
+  it("does not ask the database until the session is settled", async () => {
+    session = null;
+    store.set(KEY, JSON.stringify({ local: true }));
+    const got = await workspaceStorage!.getItem(KEY);
+    // The local cache, not an empty remote answer dressed up as the truth.
+    expect(got).toEqual({ local: true });
+    expect(maybeSingle).not.toHaveBeenCalled();
+  });
+
+  it("reads the database once there IS a session", async () => {
+    maybeSingle.mockResolvedValue({ data: { data: { remote: true } }, error: null });
+    const got = await workspaceStorage!.getItem(KEY);
+    expect(maybeSingle).toHaveBeenCalled();
+    expect(got).toEqual({ remote: true });
+  });
+
+  it("NEVER publishes while signed out, and keeps the value for later", async () => {
+    upsert.mockResolvedValue({ error: null });
+    session = null;
+    put({ a: 1 });
+    await flushPendingSaves();
+    expect(upsert).not.toHaveBeenCalled();
+    // Queued, not dropped: it goes up once somebody is signed in.
+    session = { user: { email: "felix@unitedceres.edu.sg" } };
+    await flushPendingSaves();
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert.mock.calls[0][0]).toMatchObject({ id: KEY });
   });
 });

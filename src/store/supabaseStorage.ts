@@ -2,6 +2,7 @@ import { createJSONStorage } from "zustand/middleware";
 import { wellFormedJsonText } from "../lib/text/wellFormed";
 import type { StateStorage } from "zustand/middleware";
 import { getSupabaseClient } from "../lib/supabaseClient";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { useSaveStatusStore } from "../store/useSaveStatusStore";
 import { writeLocal, removeLocal, safeLocalStorage } from "./safeLocalStorage";
 import { writesBlocked } from "./hydrationGate";
@@ -84,6 +85,12 @@ async function drainKey(name: string): Promise<void> {
     const supabase = getSupabaseClient();
     // No client right now: keep the value queued rather than dropping it.
     if (!supabase) { markUnsynced(name); return; }
+    // NEVER publish while signed out. A store that hydrated from the local
+    // cache (or from nothing) and then saves would be writing its defaults
+    // over the real row, which is the shape of both workspace losses this
+    // repo has already had. Queued, not dropped: it uploads once a session
+    // exists.
+    if (!(await sessionSettled(supabase))) { markUnsynced(name); scheduleRetry(name); return; }
 
     let ok = false;
     try {
@@ -159,6 +166,39 @@ export async function flushPendingSaves(): Promise<void> {
 // persistence there is and the trade would be data loss.
 const NO_LOCAL_MIRROR = new Set(["ucc-gd4-checklist-verdicts:v1"]);
 
+
+// ── ORDERING: the session BEFORE the stored state ──────────────────────────
+//
+// Every persisted store hydrates when its module is imported, which is long
+// before React renders and therefore before the sign-in gate exists. On the
+// load that FOLLOWS a Google redirect the session arrives in the URL fragment
+// and Supabase establishes it asynchronously, so those reads used to go out
+// with no session at all.
+//
+// That was harmless while the table answered anyone. It is not harmless now
+// that the row-level policy requires a signed-in United Ceres account: the
+// read comes back EMPTY rather than failing, every store falls back to its
+// defaults, and zustand never hydrates a second time. Measured on the built
+// bundle at the real subpath: 16 reads on the redirect load, NONE of them
+// carrying a session, and three stores then saved their defaults back,
+// including ucc-gd4-workspace:v3 with an empty cycle.
+//
+// getSession() awaits the client's own initialisation (GoTrueClient.js:2362),
+// and that initialisation is what consumes the URL fragment. So awaiting it
+// is exactly "wait until we know who this is", whether the answer turns out
+// to be a user or nobody. It is not a second copy of anything and it stores
+// nothing new.
+async function sessionSettled(supabase: SupabaseClient): Promise<boolean> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    return !!data.session;
+  } catch {
+    // Auth unreachable: treat it as "nobody", which makes the read fall back
+    // to the local cache rather than hang.
+    return false;
+  }
+}
+
 // localStorage is always written as an offline cache and as the fallback
 // when Supabase isn't configured or a request fails, so the app keeps
 // working exactly as before if the database is unreachable.
@@ -166,6 +206,10 @@ const dbStorage: StateStorage = {
   getItem: async (name) => {
     const supabase = getSupabaseClient();
     if (!supabase) return localStorage.getItem(name);
+    // Wait for the session before asking the database, so a read never goes
+    // out anonymously and come back empty. Signed out, the local cache is the
+    // honest answer: the gate is about to ask for a sign-in anyway.
+    if (!(await sessionSettled(supabase))) return localStorage.getItem(name);
     // An unreachable host can take many seconds to actually reject (proxy/tunnel
     // timeouts), during which the UI would otherwise sit on blank default state.
     // Race against the local cache's load time so a slow/dead network never
