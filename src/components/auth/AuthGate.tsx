@@ -11,6 +11,7 @@ import { useSession, signInWithGoogle, signOut } from "../../lib/auth/useSession
 import { ALLOWED_EMAIL_DOMAIN, WRONG_DOMAIN_MESSAGE } from "../../lib/auth/domain";
 import { useSupabaseSettingsStore } from "../../store/useSupabaseSettingsStore";
 import { consumeSignInError } from "../../lib/supabaseClient";
+import { buildLabel } from "../../lib/buildInfo";
 
 const INK = "#1f2733";
 const shell: React.CSSProperties = {
@@ -89,6 +90,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         <p style={{ ...muted, fontSize: 12 }}>
           If your account is refused, ask Felix to add you. Nothing in this app is visible until you are signed in.
         </p>
+        <BuildStamp />
       </div>
     </div>
   );
@@ -129,7 +131,25 @@ function ConnectionSetup() {
           Both values are public and grant nothing by themselves. You still have to sign in
           with a United Ceres Google account before any data appears.
         </p>
+        <BuildStamp />
       </div>
     </div>
+  );
+}
+
+// Which build this browser is actually running, on the sign-in screen itself.
+//
+// The Change Log page carries the same stamp, but it sits BEHIND this gate: a
+// person who cannot sign in has no way to tell a genuine fault from a server
+// that has not been rebuilt, or from a browser still holding the previous
+// bundle. Both have now cost a debugging round each.
+function BuildStamp() {
+  return (
+    <p style={{ ...muted, fontSize: 11, marginTop: 14, paddingTop: 10, borderTop: "1px solid #eef2f7" }}>
+      Build <span style={{ fontFamily: "ui-monospace,monospace" }}>{buildLabel()}</span>
+      {". "}
+      If this is not the build you expect, the page was served from a cache: reload with
+      Ctrl and Shift and R (Cmd, Shift and R on a Mac).
+    </p>
   );
 }
