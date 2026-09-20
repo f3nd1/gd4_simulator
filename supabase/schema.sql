@@ -7,20 +7,42 @@ create table if not exists public.workspace_state (
 
 alter table public.workspace_state enable row level security;
 
--- No login for this app yet, so the publishable key needs full read/write on
--- this one table (requests with that key still hit Postgres as the "anon"
--- role, hence the policy names below). Anyone with the project's publishable
--- key and URL can read/write this table — fine for an internal prototype,
--- but revisit if this ever goes beyond a trusted internal link.
-create policy "anon read" on public.workspace_state for select using (true);
-create policy "anon insert" on public.workspace_state for insert with check (true);
-create policy "anon update" on public.workspace_state for update using (true);
-create policy "anon delete" on public.workspace_state for delete using (true);
+-- ACCESS RULES. The four "anon" policies that used to sit here gave anyone
+-- holding the publishable key full read, write and DELETE on this table, and
+-- that key ships in the browser bundle. The table holds audit findings,
+-- verbatim excerpts of student documents and the OpenAI key, so that was an
+-- open door.
+--
+-- They are replaced by the three policies below: only a signed-in United
+-- Ceres Google account. This is the check that actually protects the data,
+-- because it applies to every request, including one made with curl.
+--
+-- If you are UPGRADING an existing project, do not run this file. Run
+-- 01-urgent-drop-delete.sql now and 02-after-deploy-require-signin.sql once
+-- the sign-in build is live; running the second one early stops the current
+-- app saving anything.
+--
+-- "like '%@unitedceres.edu.sg'" anchors to the END of the address, so a
+-- lookalike domain does not match.
+create policy "ucc read" on public.workspace_state
+  for select to authenticated
+  using ((auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg');
+
+create policy "ucc insert" on public.workspace_state
+  for insert to authenticated
+  with check ((auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg');
+
+create policy "ucc update" on public.workspace_state
+  for update to authenticated
+  using ((auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg')
+  with check ((auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg');
+
+-- No delete policy on purpose: nothing in the app deletes a row.
 
 -- Holds ONE shared Google Drive OAuth refresh token for this whole
--- workspace (this app has no per-user login — see the note above — so there
--- is exactly one Drive connection to persist, not one per person; always a
--- single row with id = 'default'). Written and read ONLY by the drive-oauth
+-- workspace. Sign-in identifies the PERSON; the Drive connection is still one
+-- per workspace, not one per person, so this stays a single row with
+-- id = 'default'. Written and read ONLY by the drive-oauth
 -- Edge Function (supabase/functions/drive-oauth), using the service_role
 -- key, which bypasses RLS entirely. Deliberately NO policies are granted
 -- here for the anon role — unlike workspace_state above, the whole point of

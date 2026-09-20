@@ -1,4 +1,5 @@
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthGate } from "./components/auth/AuthGate";
 import { Layout } from "./components/layout/Layout";
 import { DevToolsRoute } from "./components/layout/DevToolsRoute";
 import { Dashboard } from "./pages/Dashboard";
@@ -39,6 +40,10 @@ import { SelfCheck } from "./pages/SelfCheck";
 
 export default function App() {
   return (
+    // EVERY route, including /self-check. The gate wraps the router rather
+    // than each route, so a page added later is covered by default instead of
+    // by remembering.
+    <AuthGate>
     <HashRouter>
       <Routes>
         {/* Deliberately OUTSIDE the Layout: a process owner checking their own
@@ -91,5 +96,6 @@ export default function App() {
         </Route>
       </Routes>
     </HashRouter>
+    </AuthGate>
   );
 }

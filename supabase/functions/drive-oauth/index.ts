@@ -34,6 +34,32 @@ const TABLE = "drive_oauth_tokens";
 // holds the single Drive connection for the whole workspace.
 const ROW_ID = "default";
 
+// ── WHO IS ALLOWED TO CALL THIS ────────────────────────────────────────────
+//
+// This endpoint mints Google Drive access tokens (scope drive.readonly) for
+// the account holding student records, and can revoke the whole workspace's
+// Drive connection. It used to check nothing: the platform's JWT gate is
+// satisfied by the PUBLISHABLE key, which ships in the browser bundle, and
+// CORS is enforced by browsers only and means nothing to curl. So anyone who
+// could load the app could mint a Drive token with it.
+//
+// It now identifies the caller itself: the Authorization bearer must be a
+// real signed-in user, and that user's email must be on the allowed domain.
+// The publishable key alone is no longer enough.
+//
+// The rule is duplicated from src/lib/auth/domain.ts rather than imported: an
+// Edge Function is deployed on its own and cannot reach the app's source. The
+// test at supabase/functions/drive-oauth/__tests__ pins the two copies
+// together so they cannot drift apart.
+const ALLOWED_EMAIL_DOMAIN = "unitedceres.edu.sg";
+
+export function emailIsAllowed(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const at = email.lastIndexOf("@");
+  if (at < 1) return false;
+  return email.slice(at + 1).toLowerCase() === ALLOWED_EMAIL_DOMAIN;
+}
+
 type ExchangeBody = { action: "exchange"; code: string };
 type RefreshBody = { action: "refresh" };
 type DisconnectBody = { action: "disconnect" };
@@ -113,12 +139,31 @@ Deno.serve(async (req) => {
     return json({ error: "Invalid JSON body" }, 400);
   }
 
+  // Service-role client: used both to identify the caller below and to read
+  // the stored refresh token afterwards.
+  const supabase = adminClient();
+
+  // Identify the caller BEFORE touching secrets or Google. A request with the
+  // publishable key and no user session gets nothing.
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const bearer = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+  if (!bearer) return json({ error: "Sign in with your United Ceres Google account." }, 401);
+  {
+    const { data, error } = await supabase.auth.getUser(bearer);
+    const email = data?.user?.email ?? null;
+    // getUser rejects the publishable key: it is not a user token, so there
+    // is no user on it.
+    if (error || !data?.user) return json({ error: "Sign in with your United Ceres Google account." }, 401);
+    if (!emailIsAllowed(email)) {
+      return json({ error: `That account (${email ?? "unknown"}) is not a United Ceres account.` }, 403);
+    }
+  }
+
   const clientId = Deno.env.get("GOOGLE_CLIENT_ID");
   const clientSecret = Deno.env.get("GOOGLE_CLIENT_SECRET");
   if (!clientId || !clientSecret) {
     return json({ error: "Server not configured: the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET secrets are not set on this Edge Function. See docs/google-drive-server-auth-setup.md." }, 500);
   }
-  const supabase = adminClient();
 
   if (body.action === "exchange") {
     if (!body.code) return json({ error: "Missing authorization code." }, 400);

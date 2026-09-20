@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { runScopesForSub, scopeTitle, itemIdsForScope, folderScopeId } from "../lib/evidenceScope";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
+import { SignedInAs } from "../components/auth/SignedInAs";
 import { parseFolderId } from "../lib/drive/driveClient";
 import { aiOfflineReason } from "../lib/ai/aiClient";
 import { downloadCsv } from "../lib/auditCsvExport";
@@ -1253,6 +1254,9 @@ export function SelfCheck() {
           <p style={{ ...muted, margin: "6px 0 0", fontSize: 11.5 }} title="The version of this page you are looking at. Quote it if you report a problem.">
             Build <span style={{ fontFamily: "ui-monospace,monospace" }}>{buildLabel()}</span>
           </p>
+          {/* This page is deliberately outside the Layout, so it carries its
+              own copy of the sign-out control. */}
+          <SignedInAs />
           {/* SNOOZABLE, and only here. This is the repeated reminder at the
               top of the page, which someone running the check weekly read on
               every visit. The same sentence beside a band qualifies that

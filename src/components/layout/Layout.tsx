@@ -8,6 +8,7 @@ import { useChangeLogStore } from "../../store/useChangeLogStore";
 import { useSaveStatusStore } from "../../store/useSaveStatusStore";
 import { flushPendingSaves } from "../../store/supabaseStorage";
 import { VisionBudgetPromptModal } from "../ui/VisionBudgetPromptModal";
+import { SignedInAs } from "../auth/SignedInAs";
 
 export function Layout() {
   const [navOpen, setNavOpen] = useState(
@@ -41,6 +42,9 @@ export function Layout() {
       <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Header onMenuClick={() => setNavOpen((o) => !o)} />
+        {/* The way out. Every page inside the Layout carries it; /self-check
+            sits outside the Layout and has its own copy in its header. */}
+        <div style={{ padding: "0 16px" }}><SignedInAs align="right" /></div>
         <SampleDataBanner />
         <LockedCycleBanner />
         <LocalSaveErrorBanner />
