@@ -1,6 +1,7 @@
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { useSaveStatusStore } from "../../store/useSaveStatusStore";
 import { GOLD, INK } from "../../lib/theme";
+import { SignedInAs } from "../auth/SignedInAs";
 
 type Props = { onMenuClick: () => void };
 
@@ -21,11 +22,15 @@ export function Header({ onMenuClick }: Props) {
           ☰
         </button>
         <span style={{ width: 10, height: 22, background: GOLD, borderRadius: 2 }} />
-        <h1 style={{ margin: 0, fontSize: "clamp(14px, 3.6vw, 18px)", fontWeight: 700 }}>UCC EduTrust GD4 Audit Workspace</h1>
+        <h1 className="truncate" style={{ margin: 0, minWidth: 0, fontSize: "clamp(14px, 3.6vw, 18px)", fontWeight: 700 }}>UCC EduTrust GD4 Audit Workspace</h1>
         <span className="hidden sm:inline-flex" style={{ marginLeft: "auto", alignItems: "center", gap: 10, fontSize: 12, color: "#aeb8c7" }}>
           {saveStatus !== "idle" && <span style={{ color: SAVE_COLOR[saveStatus] }}>● {SAVE_LABEL[saveStatus]}</span>}
           <span>{cycle.version} · {cycle.status}</span>
         </span>
+        {/* The way out, where people look for it. Never inside the
+            `hidden sm:` cluster above: a shared machine at phone width still
+            has to be signable-out of. */}
+        <span className="ml-auto sm:ml-0" style={{ flexShrink: 0 }}><SignedInAs tone="dark" /></span>
       </div>
       <div style={{ fontSize: 11, color: "#8694a6", marginTop: 4 }}>
         Internal EduTrust readiness simulation. AI verdicts are simulated and never finalise a result — not an official SSG/EduTrust outcome.

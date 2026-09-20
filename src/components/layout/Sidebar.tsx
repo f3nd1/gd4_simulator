@@ -118,6 +118,33 @@ export function Sidebar({ open, onClose }: Props) {
     );
   };
 
+  // The standalone feature link. Deliberately the only card-shaped thing in
+  // the sidebar: a process owner sent this URL has to find it without being
+  // told, and it must not read as one more numbered stage.
+  const FeatureLink = ({ item, onNavigate }: { item: NavItem; onNavigate: () => void }) => (
+    <NavLink
+      to={item.path}
+      title={item.hint}
+      className={({ isActive }) => (isActive ? "" : "navlink")}
+      onClick={onNavigate}
+      style={({ isActive }) => ({
+        display: "block",
+        textDecoration: "none",
+        padding: "9px 11px",
+        borderRadius: 10,
+        marginBottom: 12,
+        background: isActive ? GOLD : "#1e2b3d",
+        border: `1px solid ${isActive ? GOLD : "#33455e"}`,
+        color: isActive ? "#16202e" : "#e2e8f0",
+      })}
+    >
+      <span style={{ display: "block", fontSize: 13, fontWeight: 700 }}>{item.label}</span>
+      <span style={{ display: "block", fontSize: 10.5, fontWeight: 500, lineHeight: 1.35, marginTop: 2, opacity: 0.8 }}>
+        A practice check before the real audit
+      </span>
+    </NavLink>
+  );
+
   // A demoted "Tools & reference" tail link — smaller, dimmer, no badge.
   const ToolLink = ({ item }: { item: NavItem }) => (
     <NavLink
@@ -163,6 +190,10 @@ export function Sidebar({ open, onClose }: Props) {
       >
         <div style={{ width: 220, padding: "14px 10px" }}>
         {NAV.map((g) => {
+          // A `feature` group is one standalone link, no header and no
+          // collapse: it reads as a separate place rather than a section of
+          // the audit lead's journey.
+          if (g.feature) return <FeatureLink key={g.group} item={g.items[0]} onNavigate={closeOnMobile} />;
           const isCollapsed = collapsed.has(g.group);
           const isActiveGroup = g.group === activeGroup;
           const numbered = g.step != null;

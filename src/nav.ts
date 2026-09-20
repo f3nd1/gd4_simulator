@@ -2,7 +2,10 @@ export type NavItem = { path: string; label: string; hint: string };
 // A group's `items` are the ordered core steps (numbered when `step` is set);
 // `tools` is an optional, visually demoted "Tools & reference" tail of
 // side/reference/diagnostic pages that are NOT part of the numbered path.
-export type NavGroup = { group: string; step?: number; hint?: string; items: NavItem[]; tools?: NavItem[] };
+// `feature` marks a group the sidebar renders as a single prominent standalone
+// link instead of a collapsible section — for a destination that is neither a
+// numbered stage nor one of the audit lead's tools.
+export type NavGroup = { group: string; step?: number; hint?: string; feature?: boolean; items: NavItem[]; tools?: NavItem[] };
 
 // "Journey" IA (Option A): each numbered stage lists its CORE steps in the
 // recommended order in `items`, with optional/reference/diagnostic pages
@@ -22,10 +25,19 @@ export const NAV: NavGroup[] = [
     ],
     tools: [
       { path: "/analytics", label: "Data Dashboard", hint: "Charts across scores, bands, gates, findings and progress" },
-      // Listed so the audit lead can find the link to send out. The page itself
-      // renders outside this workspace shell — see App.tsx.
-      { path: "/self-check", label: "Process owner self-check", hint: "A one-page practice check a process owner runs on their own area, with no audit workspace around it" },
       { path: "/help", label: "Help & Guide", hint: "What every page is and how to use it" },
+    ],
+  },
+  // Most people who open this app never need anything below this line. It sat
+  // in Home's "Tools & reference" tail, under the audit lead's diagnostics,
+  // which is the wrong place for the only page most users will ever want.
+  // `feature` renders it as one standalone link with no collapsible header —
+  // it is a separate destination, not a fifth audit stage (Sidebar.tsx).
+  {
+    group: "Check your own area",
+    feature: true,
+    items: [
+      { path: "/self-check", label: "Check my area", hint: "A practice check on your own documents before the real audit, with a plain-English result. You do not need the rest of this workspace." },
     ],
   },
   {

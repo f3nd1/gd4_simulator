@@ -450,10 +450,11 @@ export function Dashboard() {
         </div>
       </Card>
 
-      {/* Process owners land on this Dashboard too, and the self-check lives in
-          the sidebar's Tools tail where a first-time visitor will not find it.
-          Deliberately tinted and unnumbered so it does not read as a fifth step
-          of the auditor workflow above. */}
+      {/* Process owners land on this Dashboard too. The sidebar now carries the
+          check as its own standalone item, but the sidebar is collapsed at
+          phone width, so this stays as the in-page route to it. Deliberately
+          tinted and unnumbered so it does not read as a fifth step of the
+          auditor workflow above. */}
       <Card style={{ gridColumn: "1 / -1", background: "#f5f3ff", borderColor: "#ddd6fe" }}>
         <h3 style={{ marginTop: 0, fontSize: 14, color: "#5b21b6" }}>Checking your own area? Start here</h3>
         <div style={{ fontSize: 12.5, color: "#4c1d95", marginBottom: 12, lineHeight: 1.55 }}>
@@ -473,7 +474,7 @@ export function Dashboard() {
             borderRadius: 9,
           }}
         >
-          Start my self-check →
+          Check my area &rarr;
         </Link>
       </Card>
 

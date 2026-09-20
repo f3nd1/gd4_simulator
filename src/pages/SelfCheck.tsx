@@ -1240,6 +1240,18 @@ export function SelfCheck() {
           column this wide it simply fits. */}
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
         <header style={{ marginBottom: 18 }}>
+          {/* This page renders outside the Layout, so it carries its own copy
+              of the two chrome controls the workspace header holds. The
+              workspace link is labelled by WHO it is for, not where it goes:
+              there is no permission system (deliberately), so a process owner
+              is steered by the wording, the way the blocked-run banner below
+              already does with "If you are the audit lead:". */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 14, flexWrap: "wrap", marginBottom: 10 }}>
+            <a href="#/" style={{ fontSize: 12, fontWeight: 700, color: "#475569", textDecoration: "none", border: "1px solid #cbd5e1", borderRadius: 7, padding: "4px 10px" }}>
+              Audit lead workspace &rarr;
+            </a>
+            <SignedInAs />
+          </div>
           <h1 style={{ fontSize: 25, margin: "0 0 6px", color: INK }}>Check your area before the audit</h1>
           <p style={{ ...muted, margin: 0, fontSize: 14 }}>
             A practice run on your own documents, so you can fix things before the real audit. It takes a few minutes.
@@ -1254,9 +1266,6 @@ export function SelfCheck() {
           <p style={{ ...muted, margin: "6px 0 0", fontSize: 11.5 }} title="The version of this page you are looking at. Quote it if you report a problem.">
             Build <span style={{ fontFamily: "ui-monospace,monospace" }}>{buildLabel()}</span>
           </p>
-          {/* This page is deliberately outside the Layout, so it carries its
-              own copy of the sign-out control. */}
-          <SignedInAs />
           {/* SNOOZABLE, and only here. This is the repeated reminder at the
               top of the page, which someone running the check weekly read on
               every visit. The same sentence beside a band qualifies that
