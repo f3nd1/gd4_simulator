@@ -18,26 +18,73 @@ alter table public.workspace_state enable row level security;
 -- because it applies to every request, including one made with curl.
 --
 -- If you are UPGRADING an existing project, do not run this file. Run
--- 01-urgent-drop-delete.sql now and 02-after-deploy-require-signin.sql once
--- the sign-in build is live; running the second one early stops the current
--- app saving anything.
+-- 01-urgent-drop-delete.sql now, 02-after-deploy-require-signin.sql once the
+-- sign-in build is live (running it early stops the current app saving
+-- anything), then 03-restrict-to-named-people.sql.
 --
--- "like '%@unitedceres.edu.sg'" anchors to the END of the address, so a
--- lookalike domain does not match.
-create policy "ucc read" on public.workspace_state
+-- WHO IS ALLOWED: named people, from public.allowed_users below — not
+-- everyone on the domain. Students and other staff also have
+-- @unitedceres.edu.sg addresses, so the domain alone is too wide. The domain
+-- test is kept in front of the list as a cheap first gate, so a mistake in
+-- the list cannot open the door to the whole internet.
+create table if not exists public.allowed_users (
+  email text primary key,
+  -- Addresses get typed by hand in the dashboard, so their case cannot be
+  -- relied on. Every comparison uses this instead of `email`.
+  email_lc text generated always as (lower(email)) stored,
+  note text,
+  added_at timestamptz not null default now()
+);
+
+create unique index if not exists allowed_users_email_lc_idx on public.allowed_users (email_lc);
+
+alter table public.allowed_users enable row level security;
+
+-- You may read YOUR OWN row and nobody else's: enough for the app to decide
+-- whether to let you in, and no way to enumerate who else has access. No
+-- write policies at all — the list is edited only from the Supabase
+-- dashboard, because letting the app grant access would be a permission
+-- system this team does not need.
+create policy "see only your own row" on public.allowed_users
   for select to authenticated
-  using ((auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg');
+  using (email_lc = lower(auth.jwt() ->> 'email'));
 
-create policy "ucc insert" on public.workspace_state
+-- The rule, written once, read by these policies AND (via the same table) by
+-- the drive-oauth Edge Function. NOT security definer: the read policy above
+-- already exposes exactly the one row this needs, so it needs no elevated
+-- rights and cannot be used to probe other addresses.
+create or replace function public.is_allowed_user()
+returns boolean
+language sql
+stable
+as $$
+  select (auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg'
+     and exists (
+       select 1 from public.allowed_users
+       where email_lc = lower(auth.jwt() ->> 'email')
+     );
+$$;
+
+create policy "allowed read" on public.workspace_state
+  for select to authenticated
+  using (public.is_allowed_user());
+
+create policy "allowed insert" on public.workspace_state
   for insert to authenticated
-  with check ((auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg');
+  with check (public.is_allowed_user());
 
-create policy "ucc update" on public.workspace_state
+create policy "allowed update" on public.workspace_state
   for update to authenticated
-  using ((auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg')
-  with check ((auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg');
+  using (public.is_allowed_user())
+  with check (public.is_allowed_user());
 
 -- No delete policy on purpose: nothing in the app deletes a row.
+
+-- Seed the list, so whoever sets this project up is not locked out. Add the
+-- rest from the dashboard: Table Editor > allowed_users > Insert row.
+insert into public.allowed_users (email, note) values
+  ('felix@unitedceres.edu.sg', 'Audit lead')
+on conflict (email) do nothing;
 
 -- Holds ONE shared Google Drive OAuth refresh token for this whole
 -- workspace. Sign-in identifies the PERSON; the Drive connection is still one

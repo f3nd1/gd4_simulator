@@ -87,6 +87,15 @@ a:hover {
   color: #ffffff !important;
 }
 
+/* The sidebar's one solid button (SELF_CHECK_ACCENT in lib/theme.ts). It must
+   NOT take .navlink's hover, which would replace the fill with slate; this
+   lifts the same accent instead. #c4b5fd behind the INK label is 8.89:1. */
+.navfeature:hover,
+.navfeature:focus-visible {
+  background: #c4b5fd;
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.3);
+}
+
 /* ---- Inputs: consistent focus ring so fields are easy to locate ---- */
 input:focus,
 select:focus,

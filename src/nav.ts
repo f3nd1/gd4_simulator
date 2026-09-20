@@ -17,6 +17,18 @@ export type NavGroup = { group: string; step?: number; hint?: string; feature?: 
 // "Getting started" stepper still keys off the four numbered stages, and the
 // Help page derives its structure from this NAV (items + tools).
 export const NAV: NavGroup[] = [
+  // FIRST, above Home: it is what most people who open this app are here for,
+  // and it used to sit in Home's "Tools & reference" tail beneath the audit
+  // lead's diagnostics. `feature` renders it as one standalone button with no
+  // collapsible header — a separate destination, not a fifth audit stage
+  // (Sidebar.tsx).
+  {
+    group: "Self-check",
+    feature: true,
+    items: [
+      { path: "/self-check", label: "Self-check", hint: "A practice check on your own documents before the real audit, with a plain-English result. You do not need the rest of this workspace." },
+    ],
+  },
   {
     group: "Home",
     items: [
@@ -26,18 +38,6 @@ export const NAV: NavGroup[] = [
     tools: [
       { path: "/analytics", label: "Data Dashboard", hint: "Charts across scores, bands, gates, findings and progress" },
       { path: "/help", label: "Help & Guide", hint: "What every page is and how to use it" },
-    ],
-  },
-  // Most people who open this app never need anything below this line. It sat
-  // in Home's "Tools & reference" tail, under the audit lead's diagnostics,
-  // which is the wrong place for the only page most users will ever want.
-  // `feature` renders it as one standalone link with no collapsible header —
-  // it is a separate destination, not a fifth audit stage (Sidebar.tsx).
-  {
-    group: "Check your own area",
-    feature: true,
-    items: [
-      { path: "/self-check", label: "Check my area", hint: "A practice check on your own documents before the real audit, with a plain-English result. You do not need the rest of this workspace." },
     ],
   },
   {

@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { useSession, signInWithGoogle, signOut } from "../../lib/auth/useSession";
 import { ALLOWED_EMAIL_DOMAIN, WRONG_DOMAIN_MESSAGE } from "../../lib/auth/domain";
+import { notOnListMessage } from "../../lib/auth/allowList";
 import { useSupabaseSettingsStore } from "../../store/useSupabaseSettingsStore";
 import { consumeSignInError } from "../../lib/supabaseClient";
 import { buildLabel } from "../../lib/buildInfo";
@@ -47,6 +48,56 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   // key, which are public values and grant nothing on their own: without a
   // UCC Google account, filling them in still shows no data.
   if (state.status === "unconfigured") return <ConnectionSetup />;
+
+  // A real United Ceres account that is not one of the named people. It must
+  // not look broken and must not describe what is inside, so it says only
+  // that the app is limited to the audit team, names the address they used so
+  // they can tell they picked the wrong account, and gives them a way out.
+  if (state.status === "not-on-list") {
+    return (
+      <div style={shell}>
+        <div style={card}>
+          <h1 style={{ fontSize: 19, margin: 0, color: INK }}>GD4 EduTrust audit</h1>
+          <p style={muted}>{notOnListMessage(state.email)}</p>
+          <button
+            type="button"
+            onClick={() => { void signOut(); }}
+            style={{ width: "100%", marginTop: 16, padding: "11px 14px", fontSize: 14, fontWeight: 700, borderRadius: 9, border: "1px solid #cbd5e1", background: "#fff", color: INK, cursor: "pointer" }}
+          >
+            Sign out and try another account
+          </button>
+          <BuildStamp />
+        </div>
+      </div>
+    );
+  }
+
+  // The list could not be read. Not a refusal: saying "you are not permitted"
+  // because the network dropped is wrong, and it would send somebody to Felix
+  // over a problem he cannot fix.
+  if (state.status === "check-failed") {
+    return (
+      <div style={shell}>
+        <div style={card}>
+          <h1 style={{ fontSize: 19, margin: 0, color: INK }}>Could not check your access</h1>
+          <p style={muted}>
+            You are signed in as <b style={{ color: INK }}>{state.email}</b>, but the app could not reach its
+            database to check whether you have access, so it is not showing anything. This is usually a
+            connection problem rather than a problem with your account.
+          </p>
+          <p style={{ ...muted, fontSize: 12, fontFamily: "ui-monospace,monospace" }}>{state.reason}</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            style={{ width: "100%", marginTop: 16, padding: "11px 14px", fontSize: 14, fontWeight: 700, borderRadius: 9, border: "1px solid #cbd5e1", background: "#fff", color: INK, cursor: "pointer" }}
+          >
+            Try again
+          </button>
+          <BuildStamp />
+        </div>
+      </div>
+    );
+  }
 
   const onSignIn = async () => {
     setBusy(true); setError("");

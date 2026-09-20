@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { getSupabaseClient, getSupabaseConfig } from "../supabaseClient";
 import { emailIsAllowed } from "./domain";
+import { checkAllowList } from "./allowList";
 
 export type AuthState =
   // Supabase URL/key are missing, so there is nobody to ask. The app cannot
@@ -19,6 +20,13 @@ export type AuthState =
   // Signed in with a Google account that is not ours. Kept as its own state
   // rather than folded into signed-out, so the screen can say WHY.
   | { status: "wrong-domain"; email: string }
+  // A real United Ceres account that is not one of the named people. Its own
+  // state, not folded into wrong-domain, because the screen has to say
+  // something different: their account is fine, their access is not.
+  | { status: "not-on-list"; email: string }
+  // The list could not be read at all. Separate again: refusing somebody
+  // because the network blipped is wrong, and saying so is worse.
+  | { status: "check-failed"; email: string; reason: string }
   | { status: "signed-in"; email: string; session: Session };
 
 export function useSession(): AuthState {
@@ -30,16 +38,27 @@ export function useSession(): AuthState {
     const supabase = getSupabaseClient();
     if (!supabase) { setState({ status: "unconfigured" }); return; }
     let live = true;
-    const apply = (session: Session | null) => {
+    const apply = async (session: Session | null) => {
       if (!live) return;
       const email = session?.user?.email ?? "";
-      if (!session) setState({ status: "signed-out" });
-      else if (!emailIsAllowed(email)) setState({ status: "wrong-domain", email });
+      if (!session) { setState({ status: "signed-out" }); return; }
+      if (!emailIsAllowed(email)) { setState({ status: "wrong-domain", email }); return; }
+      const check = await checkAllowList(supabase, email);
+      if (!live) return;
+      if (check.allowed === "unknown") setState({ status: "check-failed", email, reason: check.reason });
+      else if (!check.allowed) setState({ status: "not-on-list", email });
       else setState({ status: "signed-in", email, session });
     };
-    supabase.auth.getSession().then(({ data }) => apply(data.session)).catch(() => live && setState({ status: "signed-out" }));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => apply(session));
-    return () => { live = false; sub.subscription.unsubscribe(); };
+    const refresh = () => { void supabase.auth.getSession().then(({ data }) => apply(data.session)).catch(() => live && setState({ status: "signed-out" })); };
+    refresh();
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => { void apply(session); });
+    // Removing somebody from the list stops their data access on their very
+    // next request, because Postgres re-checks it every time. This is what
+    // also takes the screen away from them, rather than leaving them looking
+    // at stale data with every save failing until the session expires.
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { live = false; sub.subscription.unsubscribe(); document.removeEventListener("visibilitychange", onVisible); };
   }, [url, key]);
 
   return state;

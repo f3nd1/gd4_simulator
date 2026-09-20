@@ -44,14 +44,21 @@ const ROW_ID = "default";
 // could load the app could mint a Drive token with it.
 //
 // It now identifies the caller itself: the Authorization bearer must be a
-// real signed-in user, and that user's email must be on the allowed domain.
-// The publishable key alone is no longer enough.
+// real signed-in user, that user's email must be on the allowed domain, AND
+// that address must be one of the named people in public.allowed_users. The
+// publishable key alone is no longer enough, and neither is any UCC address —
+// students and other staff have those too.
 //
-// The rule is duplicated from src/lib/auth/domain.ts rather than imported: an
-// Edge Function is deployed on its own and cannot reach the app's source. The
-// test at supabase/functions/drive-oauth/__tests__ pins the two copies
-// together so they cannot drift apart.
+// The list is read from the SAME table the row-level policies use (see
+// supabase/03-restrict-to-named-people.sql), so there is one list, not a copy
+// here. The domain test below is kept in front of it as a cheap first gate.
+//
+// The domain rule is duplicated from src/lib/auth/domain.ts rather than
+// imported: an Edge Function is deployed on its own and cannot reach the
+// app's source. The test at src/lib/auth/__tests__/edgeFunctionDomain.test.ts
+// pins the two copies together so they cannot drift apart.
 const ALLOWED_EMAIL_DOMAIN = "unitedceres.edu.sg";
+const ALLOWED_USERS_TABLE = "allowed_users";
 
 export function emailIsAllowed(email: string | null | undefined): boolean {
   if (!email) return false;
@@ -171,6 +178,26 @@ Deno.serve(async (req) => {
     }
     if (!emailIsAllowed(email)) {
       return json({ error: `That account (${email ?? "unknown"}) is not a United Ceres account.` }, 403);
+    }
+    // Then the list itself. Matched on the generated lower-cased column, not
+    // on `email`, because addresses are typed by hand into the Supabase
+    // dashboard and their case cannot be relied on. `.eq` rather than a LIKE:
+    // an address can legitimately contain % and _, which a pattern match
+    // would treat as wildcards.
+    const { data: listed, error: listErr } = await supabase
+      .from(ALLOWED_USERS_TABLE)
+      .select("email")
+      .eq("email_lc", (email ?? "").trim().toLowerCase())
+      .maybeSingle();
+    // A failure to READ the list is not permission to skip it. This runs with
+    // the service-role key, so the only realistic cause is the table not
+    // existing yet, which must not silently open the door.
+    if (listErr) {
+      console.error("[drive-oauth] could not read the allowed-users list:", listErr.message);
+      return json({ error: `The server could not check whether your account is permitted (${listErr.message}). If this project has not had supabase/03-restrict-to-named-people.sql run on it yet, run it.` }, 500);
+    }
+    if (!listed) {
+      return json({ error: `That account (${email ?? "unknown"}) is not on the list of people permitted to use this app. Ask Felix to add you.` }, 403);
     }
   }
 

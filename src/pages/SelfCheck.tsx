@@ -1239,20 +1239,13 @@ export function SelfCheck() {
           column with negative margins to get its table readable; with the
           column this wide it simply fits. */}
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
-        <header style={{ marginBottom: 18 }}>
-          {/* This page renders outside the Layout, so it carries its own copy
-              of the two chrome controls the workspace header holds. The
-              workspace link is labelled by WHO it is for, not where it goes:
-              there is no permission system (deliberately), so a process owner
-              is steered by the wording, the way the blocked-run banner below
-              already does with "If you are the audit lead:". */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 14, flexWrap: "wrap", marginBottom: 10 }}>
-            <a href="#/" style={{ fontSize: 12, fontWeight: 700, color: "#475569", textDecoration: "none", border: "1px solid #cbd5e1", borderRadius: 7, padding: "4px 10px" }}>
-              Audit lead workspace &rarr;
-            </a>
-            <SignedInAs />
-          </div>
-          <h1 style={{ fontSize: 25, margin: "0 0 6px", color: INK }}>Check your area before the audit</h1>
+        {/* The chrome controls sit BESIDE the heading, not on a row of their
+            own above it: as their own row they pushed the whole page down by
+            roughly a third of the first screen before a word of it was read.
+            They wrap under the heading only when there is genuinely no room. */}
+        <header style={{ marginBottom: 12, display: "flex", alignItems: "flex-start", justifyContent: "space-between", columnGap: 16, rowGap: 6, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 320px", minWidth: 0 }}>
+          <h1 style={{ fontSize: "clamp(20px, 5vw, 25px)", margin: "0 0 6px", color: INK }}>Check your area before the audit</h1>
           <p style={{ ...muted, margin: 0, fontSize: 14 }}>
             A practice run on your own documents, so you can fix things before the real audit. It takes a few minutes.
           </p>
@@ -1266,6 +1259,19 @@ export function SelfCheck() {
           <p style={{ ...muted, margin: "6px 0 0", fontSize: 11.5 }} title="The version of this page you are looking at. Quote it if you report a problem.">
             Build <span style={{ fontFamily: "ui-monospace,monospace" }}>{buildLabel()}</span>
           </p>
+          </div>
+          {/* This page renders outside the Layout, so it carries its own copy
+              of the two chrome controls the workspace header holds. The
+              workspace link is labelled by WHO it is for, not where it goes:
+              there is no permission system (deliberately), so a process owner
+              is steered by the wording, the way the blocked-run banner below
+              already does with "If you are the audit lead:". */}
+          <div className="order-first sm:order-last w-full sm:w-auto" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, flexWrap: "wrap", flexShrink: 0 }}>
+            <a href="#/" style={{ fontSize: 12, fontWeight: 700, color: "#475569", textDecoration: "none", border: "1px solid #cbd5e1", borderRadius: 7, padding: "4px 10px" }}>
+              Audit lead workspace &rarr;
+            </a>
+            <SignedInAs />
+          </div>
           {/* SNOOZABLE, and only here. This is the repeated reminder at the
               top of the page, which someone running the check weekly read on
               every visit. The same sentence beside a band qualifies that
@@ -1275,7 +1281,7 @@ export function SelfCheck() {
               Deliberately NOT behind the guidance master switch: turning off
               tips should not turn off a disclaimer. */}
           {!disclaimerSnoozed(disclaimerSnoozedAt) && (
-            <p style={{ ...muted, marginTop: 8, background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <p className="order-last" style={{ ...muted, flexBasis: "100%", marginTop: 2, background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, display: "flex", alignItems: "flex-start", gap: 10 }}>
               <span style={{ flex: 1 }}>{SELF_CHECK_DISCLAIMER}</span>
               <button
                 type="button"

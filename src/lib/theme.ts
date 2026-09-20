@@ -2,6 +2,16 @@ export const GOLD = "#ce9e5d";
 export const BLUE = "#8295bd";
 export const INK = "#16202e";
 
+// The self-check accent, in the light tint this app already uses for it
+// against a DARK surface (the band graphic's dark-mode `--g-on`, the
+// "next band" outline). Named here because the sidebar's self-check button
+// needs it too, and three literals of the same colour is how they drift.
+// Against INK it measures 6.03:1 resting and 8.89:1 hovered, both with an
+// INK label — the purple this feature uses on white (#7c3aed) is only
+// 2.88:1 against the sidebar and would look bold without being readable.
+export const SELF_CHECK_ACCENT = "#a78bfa";
+export const SELF_CHECK_ACCENT_HOVER = "#c4b5fd";
+
 export type Tone = "good" | "progress" | "medium" | "high" | "critical" | "neutral";
 
 export const TONE: Record<Tone, { fg: string; bg: string }> = {
