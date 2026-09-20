@@ -10,6 +10,7 @@ import { useState } from "react";
 import { useSession, signInWithGoogle, signOut } from "../../lib/auth/useSession";
 import { ALLOWED_EMAIL_DOMAIN, WRONG_DOMAIN_MESSAGE } from "../../lib/auth/domain";
 import { useSupabaseSettingsStore } from "../../store/useSupabaseSettingsStore";
+import { consumeSignInError } from "../../lib/supabaseClient";
 
 const INK = "#1f2733";
 const shell: React.CSSProperties = {
@@ -29,7 +30,10 @@ const field: React.CSSProperties = {
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const state = useSession();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  // A real failure carried back in the landing URL. Without this the screen
+  // was a blank sign-in card with no hint that anything had gone wrong, which
+  // is what made a failed redirect so hard to read.
+  const [error, setError] = useState(() => consumeSignInError() ?? "");
 
   if (state.status === "signed-in") return <>{children}</>;
 
@@ -65,7 +69,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         )}
         {error && (
           <p style={{ ...muted, background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 8, padding: "10px 12px" }}>
-            Sign-in did not start: {error}
+            Sign-in did not finish: {error}
           </p>
         )}
 

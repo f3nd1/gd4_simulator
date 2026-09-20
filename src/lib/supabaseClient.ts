@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { useSupabaseSettingsStore } from "../store/useSupabaseSettingsStore";
+import { planCallbackUrl } from "./auth/callbackUrl";
 
 // .env.local (see .env.example) supplies a deploy-time default. Whatever the
 // user types into Settings > Supabase database is saved in this browser's
@@ -37,8 +38,40 @@ export function getSupabaseClient(): SupabaseClient | null {
     return null;
   }
   if (cachedClient && cachedUrl === url && cachedKey === key) return cachedClient;
+  // BEFORE createClient, because the client reads window.location during its
+  // own construction and a stale query-string error makes it throw the
+  // arriving session away. Called here rather than in main.tsx so it cannot
+  // be missed whichever code path creates the client first.
+  cleanCallbackUrl();
   cachedClient = createClient(url, key);
   cachedUrl = url;
   cachedKey = key;
   return cachedClient;
+}
+
+// The last genuine sign-in failure seen in the landing URL, for the sign-in
+// screen to show. Module state rather than a store: it is read once, on the
+// render that follows the redirect, and it must survive being captured before
+// React mounts.
+let lastSignInError: string | null = null;
+export function consumeSignInError(): string | null {
+  const e = lastSignInError;
+  lastSignInError = null;
+  return e;
+}
+
+let cleaned = false;
+export function cleanCallbackUrl(): void {
+  if (cleaned || typeof window === "undefined") return;
+  cleaned = true;
+  const plan = planCallbackUrl(window.location.href);
+  if (plan.signInError) lastSignInError = plan.signInError;
+  if (!plan.cleanedHref) return;
+  // replaceState, not assign: reloading here would send the browser back to
+  // the server and lose the fragment holding the session.
+  window.history.replaceState(window.history.state, "", plan.cleanedHref);
+  console.warn(
+    "[auth] A sign-in session arrived with a stale error left in the address from an earlier attempt. " +
+    `The error was dropped so the session could be used: ${plan.staleErrorRemoved}`
+  );
 }
