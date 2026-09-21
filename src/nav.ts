@@ -1,3 +1,5 @@
+import { ADMIN_ONLY_PATHS } from "./lib/auth/pageAccess";
+
 export type NavItem = { path: string; label: string; hint: string };
 // A group's `items` are the ordered core steps (numbered when `step` is set);
 // `tools` is an optional, visually demoted "Tools & reference" tail of
@@ -139,10 +141,11 @@ export const DEVELOPER_TOOL_PATHS = [
 // NAV with developer-only entries removed when the toggle is off. Filters
 // BOTH the core steps and the tools tail. Groups that end up with no items
 // and no tools are dropped entirely (no headerless stubs in the sidebar).
-// Routes only the admin may open. Listing one to somebody who will be refused
+// Routes only an admin may open, from the single list in lib/auth/pageAccess
+// (which also records which of them are genuinely write-locked in Postgres
+// and which are merely hidden). Listing one to somebody who will be refused
 // is a dead end, so the sidebar drops it; the route guard and, underneath it,
 // the database policies are what actually refuse.
-export const ADMIN_ONLY_PATHS = ["/people"];
 
 export function visibleNav(showDeveloperTools: boolean, isAdmin = true): NavGroup[] {
   const hidden = new Set([

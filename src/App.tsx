@@ -38,7 +38,7 @@ import { DataDashboard } from "./pages/DataDashboard";
 import { Help } from "./pages/Help";
 import { SelfCheck } from "./pages/SelfCheck";
 import { People } from "./pages/People";
-import { PeopleRoute } from "./components/layout/PeopleRoute";
+import { AdminRoute } from "./components/layout/AdminRoute";
 
 export default function App() {
   return (
@@ -57,16 +57,12 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/analytics" element={<DataDashboard />} />
           <Route path="/help" element={<Help />} />
-          <Route path="/profile-of-pei" element={<ProfileOfPei />} />
           <Route path="/draft-workspace" element={<DraftWorkspace />} />
           <Route path="/audit-cycle" element={<AuditCycle />} />
           <Route path="/auditors" element={<AuditorCreation />} />
           <Route path="/start-audit" element={<StartAudit />} />
           <Route path="/evidence-folder" element={<EvidenceFolder />} />
-          <Route path="/gd4-scoring-setup" element={<GD4ScoringSetup />} />
           <Route path="/gd4-library" element={<GD4Library />} />
-          <Route path="/pre-check-setup" element={<PreCheckChecklistSetup />} />
-          <Route path="/checklist-library" element={<DomainChecklistLibrary />} />
           <Route path="/evidence-intelligence" element={<EvidenceIntelligence />} />
           <Route path="/scorecard" element={<CriterionScorecard />} />
           <Route path="/rubric-banding" element={<RubricBanding />} />
@@ -79,28 +75,38 @@ export default function App() {
           {/* Diagnostic / superseded surfaces — inaccessible when developer
               tools are hidden in Settings (see DEVELOPER_TOOL_PATHS). The
               ChangeLog page keeps its own in-page guard for back-compat. */}
+          {/* Admin only, every one of them. The guard refuses rather than
+              redirects; lib/auth/pageAccess.ts is the single list, and says
+              which of these are write-locked in Postgres and which are only
+              hidden. */}
+          <Route element={<AdminRoute />}>
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/gd4-scoring-setup" element={<GD4ScoringSetup />} />
+            <Route path="/profile-of-pei" element={<ProfileOfPei />} />
+            <Route path="/checklist-library" element={<DomainChecklistLibrary />} />
+            <Route path="/pre-check-setup" element={<PreCheckChecklistSetup />} />
+            <Route path="/ai-memories" element={<AIMemories />} />
+            <Route path="/prompt-review" element={<PromptReview />} />
+            <Route path="/people" element={<People />} />
+            {/* Admin-only AND diagnostic: both guards, nested, so hiding the
+                developer tools still hides them from the admin too. */}
+            <Route element={<DevToolsRoute />}>
+              <Route path="/ai-calibration" element={<AICalibration />} />
+              <Route path="/change-log" element={<ChangeLog />} />
+            </Route>
+          </Route>
           <Route element={<DevToolsRoute />}>
             <Route path="/ai-review" element={<AIReview />} />
             <Route path="/human-decision-log" element={<HumanDecisionLog />} />
             <Route path="/run-log" element={<RunLog />} />
             <Route path="/ai-debug" element={<AIDebugLog />} />
-            <Route path="/ai-calibration" element={<AICalibration />} />
           </Route>
           {/* Version History merged into Draft Workspace; keep the old path working. */}
           <Route path="/version-history" element={<Navigate to="/draft-workspace" replace />} />
           <Route path="/final-report" element={<FinalReport />} />
           <Route path="/finalisation" element={<Finalisation />} />
           <Route path="/export" element={<ExportCentre />} />
-          <Route path="/settings" element={<Settings />} />
-          {/* Admin only. The guard refuses rather than redirects, and it is
-              convenience: the write policies on allowed_users are the control
-              (supabase/04-admin-manages-the-list.sql). */}
-          <Route element={<PeopleRoute />}>
-            <Route path="/people" element={<People />} />
-          </Route>
-          <Route path="/ai-memories" element={<AIMemories />} />
-          <Route path="/prompt-review" element={<PromptReview />} />
-          <Route path="/change-log" element={<ChangeLog />} />
+
         </Route>
       </Routes>
     </HashRouter>

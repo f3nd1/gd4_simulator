@@ -28,9 +28,10 @@ are in the list yourself. A missing table never is.
 | `03-restrict-to-named-people.sql` | **Before** the allow-list build | Narrows that to the named people in `allowed_users` |
 | `04-admin-manages-the-list.sql` | **Before** the People-screen build | Lets the admin add and remove people from inside the app |
 | `05-close-the-anon-hole.sql` | **Now.** No deploy needed either side | Removes any policy that is not on the expected list, including one an earlier Settings page told people to create |
+| `06-second-admin-and-locked-stores.sql` | **Before** the roles build | Adds `admin_grants` (root grants a second admin) and makes ten configuration rows admin-write-only |
 | `functions/drive-oauth/` | Deployed separately, see below | Mints Google Drive tokens; also reads `allowed_users` |
 
-`01` → `02` → `03` → `04` → `05` is the upgrade path for a project that already exists.
+`01` → `02` → `03` → `04` → `05` → `06` is the upgrade path for a project that already exists.
 `schema.sql` is the same thing for a project that does not.
 
 ## Running one, click by click
@@ -59,6 +60,9 @@ you can compare without having to remember it.
 | `allowed_users` | `see your own row, or all of them if admin` | SELECT | authenticated |
 | `allowed_users` | `only the admin adds` | INSERT | authenticated |
 | `allowed_users` | `only the admin removes` | DELETE | authenticated |
+| `admin_grants` | `see your own grant, or all of them if root` | SELECT | authenticated |
+| `admin_grants` | `only the root grants admin` | INSERT | authenticated |
+| `admin_grants` | `only the root revokes admin` | DELETE | authenticated |
 | `drive_oauth_tokens` | none at all | | |
 
 No DELETE on `workspace_state`: nothing in the app deletes a row, so granting
@@ -66,6 +70,12 @@ it would only widen what a mistake or a stolen session can do. No UPDATE on
 `allowed_users`: without it nobody can rename a row into somebody else's
 address. `drive_oauth_tokens` has RLS on and zero policies, so only the Edge
 Function's service-role key reaches the Google refresh token.
+
+No UPDATE on `admin_grants`: a grant is present or absent, never edited. Its
+policies ask `is_admin()` (the root constant) and never `is_any_admin()`,
+because a policy on a table cannot consult a function that reads that same
+table without recursing — which is also why additional admins live in their
+own table rather than as a column on `allowed_users`.
 
 **Any row showing `{public}` or `{anon}`, or a command of `ALL`, is a hole.**
 Policies are permissive and combine with OR, so one of those grants access

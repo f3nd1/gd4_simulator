@@ -7,6 +7,9 @@ import {
   removalBlockedReason, removalConsequence, type Person,
 } from "../lib/auth/peopleAdmin";
 import { INK } from "../lib/theme";
+import { listGrants, grantAdmin, revokeAdmin, GRANT_CONSEQUENCE, type Grant } from "../lib/auth/adminGrants";
+import { ADMIN_ONLY_PATHS, protectionFor, PROTECTION_LABEL, PROTECTION_MEANING, READ_CAVEAT, LOCKED_STORE_KEYS } from "../lib/auth/pageAccess";
+import { NAV } from "../nav";
 
 // Who can sign in, managed from inside the app instead of the Supabase
 // dashboard. The route guard (PeopleRoute) keeps non-admins out of the page,
@@ -29,6 +32,10 @@ export function People() {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState<Person | null>(null);
   const [done, setDone] = useState("");
+  const [grants, setGrants] = useState<Grant[]>([]);
+  const [grantDraft, setGrantDraft] = useState("");
+  const [grantMsg, setGrantMsg] = useState("");
+  const isRoot = isAdminEmail(email);
 
   const refresh = useCallback(async () => {
     const supabase = getSupabaseClient();
@@ -36,6 +43,7 @@ export function People() {
     const got = await listPeople(supabase);
     if ("error" in got) { setLoadError(got.error); return; }
     setLoadError(""); setPeople(got.people);
+    setGrants(await listGrants(supabase));
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -179,9 +187,115 @@ export function People() {
         </div>
       )}
 
+      {/* Granting admin is the ROOT's alone. A granted admin can manage the
+          sign-in list and the configuration pages, but cannot grant admin to
+          anybody, including themselves, so there is no escalation chain and
+          no way to lose the last admin. */}
+      {isRoot && (
+        <div style={card}>
+          <b style={{ fontSize: 14, color: INK }}>Extra admins{grants.length ? ` (${grants.length})` : ""}</b>
+          <p style={{ ...muted, margin: "6px 0 0" }}>{GRANT_CONSEQUENCE}</p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+            <input
+              value={grantDraft}
+              onChange={(e) => { setGrantDraft(e.target.value); setGrantMsg(""); }}
+              placeholder="name@unitedceres.edu.sg"
+              aria-label="Email address to make an admin"
+              style={{ flex: "1 1 260px", minWidth: 0, boxSizing: "border-box", padding: "9px 11px", fontSize: 13, border: "1px solid #cbd5e1", borderRadius: 8 }}
+            />
+            <button
+              type="button" disabled={busy}
+              onClick={() => { void (async () => {
+                const check = checkAddress(grantDraft, grants.map((g) => g.email));
+                if (!check.ok) { setGrantMsg(check.reason); return; }
+                const supabase = getSupabaseClient();
+                if (!supabase) return;
+                setBusy(true);
+                const res = await grantAdmin(supabase, check.email);
+                setBusy(false);
+                setGrantMsg(res.ok ? `${check.email} is now an admin.` : res.reason);
+                if (res.ok) setGrantDraft("");
+                await refresh();
+              })(); }}
+              style={{ flexShrink: 0, cursor: "pointer", fontSize: 13, fontWeight: 700, padding: "9px 18px", borderRadius: 8, border: "1px solid #6d28d9", background: "#6d28d9", color: "#fff" }}
+            >
+              Make admin
+            </button>
+          </div>
+          {grantMsg && <p style={{ ...muted, margin: "8px 0 0", color: grantMsg.includes("now an admin") ? "#166534" : "#991b1b" }}>{grantMsg}</p>}
+          <ul style={{ listStyle: "none", margin: grants.length ? "10px 0 0" : 0, padding: 0, display: "grid", gap: 8 }}>
+            {grants.map((g) => (
+              <li key={g.email} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", border: "1px solid #e2e8f0", borderRadius: 9, padding: "9px 12px" }}>
+                <span style={{ flex: "1 1 240px", minWidth: 0, fontSize: 13.5, fontWeight: 700, color: INK, overflowWrap: "anywhere" }}>{g.email}</span>
+                <button
+                  type="button" disabled={busy}
+                  onClick={() => { void (async () => {
+                    const supabase = getSupabaseClient();
+                    if (!supabase) return;
+                    setBusy(true);
+                    const res = await revokeAdmin(supabase, g.email);
+                    setBusy(false);
+                    setGrantMsg(res.ok ? `${g.email} is no longer an admin. They can still sign in.` : res.reason);
+                    await refresh();
+                  })(); }}
+                  style={{ flexShrink: 0, cursor: "pointer", fontSize: 12.5, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: "1px solid #cbd5e1", background: "#fff", color: "#991b1b" }}
+                >
+                  Take admin away
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* READ-ONLY on purpose. Tick boxes here would look like an access
+          control and would not be one: what protects the ten locked rows is a
+          policy in Postgres, which has to change in SQL anyway. A control
+          implying protection it cannot deliver gets trusted at exactly the
+          wrong moment. */}
+      <div style={card}>
+        <b style={{ fontSize: 14, color: INK }}>What a normal user cannot open</b>
+        <p style={{ ...muted, margin: "6px 0 0", background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 9, padding: "9px 11px" }}>
+          {READ_CAVEAT}
+        </p>
+        <ul style={{ listStyle: "none", margin: "10px 0 0", padding: 0, display: "grid", gap: 6 }}>
+          {ADMIN_ONLY_PATHS.map((path) => {
+            const label = NAV.flatMap((g) => [...g.items, ...(g.tools ?? [])]).find((i) => i.path === path)?.label ?? path;
+            const kind = protectionFor(path);
+            const rows = Object.entries(LOCKED_STORE_KEYS).filter(([, v]) => v.path === path);
+            return (
+              <li key={path} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: INK }}>{label}</span>
+                  <span style={{
+                    fontSize: 10.5, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase",
+                    borderRadius: 5, padding: "1px 6px",
+                    color: kind === "locked" ? "#166534" : "#92400e",
+                    background: kind === "locked" ? "#dcfce7" : "#fff7ed",
+                    border: `1px solid ${kind === "locked" ? "#bbf7d0" : "#fdba74"}`,
+                  }}>
+                    {PROTECTION_LABEL[kind]}
+                  </span>
+                </div>
+                <div style={{ ...muted, fontSize: 11.5, marginTop: 3 }}>{PROTECTION_MEANING[kind]}</div>
+                {rows.length > 0 && (
+                  <div style={{ ...muted, fontSize: 11.5, marginTop: 2 }}>
+                    Refused for a normal user: {rows.map(([, v]) => v.what.toLowerCase()).join("; ")}.
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        <p style={{ ...muted, fontSize: 11.5, marginTop: 10 }}>
+          This split is fixed in the app rather than set here, because changing it is a code and database change
+          together. Ask for a page to be moved and it takes a minute.
+        </p>
+      </div>
+
       <p style={{ ...muted, fontSize: 12 }}>
-        Signed in as {email}. To hand this over to somebody else, the admin address has to be changed in the
-        database; it cannot be changed from here, so nobody can give themselves control of the list.
+        Signed in as {email}{isRoot ? " (main admin)" : " (admin)"}. The main admin address is set in the database and
+        cannot be changed from here, so nobody can give themselves control of the list.
       </p>
     </div>
   );

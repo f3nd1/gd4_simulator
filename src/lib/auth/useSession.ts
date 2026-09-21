@@ -10,6 +10,7 @@ import type { Session } from "@supabase/supabase-js";
 import { getSupabaseClient, getSupabaseConfig } from "../supabaseClient";
 import { emailIsAllowed } from "./domain";
 import { checkAllowList } from "./allowList";
+import { isAnyAdmin } from "./adminGrants";
 
 export type AuthState =
   // Supabase URL/key are missing, so there is nobody to ask. The app cannot
@@ -27,7 +28,10 @@ export type AuthState =
   // The list could not be read at all. Separate again: refusing somebody
   // because the network blipped is wrong, and saying so is worse.
   | { status: "check-failed"; email: string; reason: string }
-  | { status: "signed-in"; email: string; session: Session };
+  // isAdmin is the ROOT or a holder of an admin_grants row. Cosmetic: it
+  // decides what is drawn. public.is_any_admin() in Postgres is what refuses
+  // a write, and it applies to a request made outside this app.
+  | { status: "signed-in"; email: string; session: Session; isAdmin: boolean };
 
 export function useSession(): AuthState {
   const { url, key } = getSupabaseConfig();
@@ -47,7 +51,13 @@ export function useSession(): AuthState {
       if (!live) return;
       if (check.allowed === "unknown") setState({ status: "check-failed", email, reason: check.reason });
       else if (!check.allowed) setState({ status: "not-on-list", email });
-      else setState({ status: "signed-in", email, session });
+      else {
+        // Never allowed to block entry: isAnyAdmin answers false on any
+        // failure, including the grants table not existing yet.
+        const admin = await isAnyAdmin(supabase, email);
+        if (!live) return;
+        setState({ status: "signed-in", email, session, isAdmin: admin });
+      }
     };
     const refresh = () => { void supabase.auth.getSession().then(({ data }) => apply(data.session)).catch(() => live && setState({ status: "signed-out" })); };
     refresh();
