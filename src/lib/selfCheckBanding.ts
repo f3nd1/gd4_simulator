@@ -110,20 +110,13 @@ export const DIMENSION_TAB_SOURCE: Record<BandDimensionRow["key"], string> = {
 // never scored.
 export const DIMENSION_NOT_READ = "The second read produced no verdicts on this run";
 
-// Graphic scale. These used to be full sentences on a line of their own under
-// every dimension name, which doubled the panel's height to repeat what the
-// "left arrow this tab" marker already says. Approach and Processes now carry
-// NOTHING, because the marker names them; the other two carry three words,
-// because no tab feeds them and an arrow on them would claim something false.
-// The full sentences are still one click away on the panel heading
-// (DIMENSION_TAB_SOURCE, below).
-export const DIMENSION_TAB_TAG: Record<BandDimensionRow["key"], string> = {
-  approach: "",
-  processes: "",
-  systemsOutcomes: "separate read",
-  review: "separate read",
-};
-export const DIMENSION_TAG_NOT_READ = "not read";
+// There is no per-row tag on the graphic any more. It carried "separate read"
+// on the two dimensions no tab feeds, which the caption printed under the
+// panel already says in a full sentence, and "not read" on an unassessed row,
+// which the band column already says as "not assessed by this check"
+// (assessedHere === checkedHere, above). Two duplicated words cost the whole
+// right-hand column; that width now goes to legible type. The full sentences
+// are still one click away on the panel heading (DIMENSION_TAB_SOURCE, below).
 
 // The Earned column for a dimension this run did not look at.
 export const NOT_ASSESSED_HERE = "not assessed";
@@ -266,12 +259,12 @@ export function bandCoverageNote(bandedItemId: string, allItemIds: string[], sub
 // An unassessed dimension is hatched across its whole track, which reads as
 // unknown, rather than left empty, which reads as zero.
 export type BandGraphic = {
-  segments: { key: BandDimensionRow["key"]; label: string; pct: number; max: number; assessedHere: boolean; checkedHere: boolean; band: ApsrDimensionScore | undefined; source: string }[];
+  segments: { key: BandDimensionRow["key"]; label: string; pct: number; max: number; assessedHere: boolean; checkedHere: boolean; band: ApsrDimensionScore | undefined }[];
 };
 
 export function bandGraphic(w: BandWorking): BandGraphic {
   return {
-    segments: w.rows.map((r) => ({ key: r.key, label: r.label, pct: r.pct, max: w.maxPct, assessedHere: r.assessedHere, checkedHere: r.checkedHere, band: r.band, source: r.checkedHere ? DIMENSION_TAB_TAG[r.key] : DIMENSION_TAG_NOT_READ })),
+    segments: w.rows.map((r) => ({ key: r.key, label: r.label, pct: r.pct, max: w.maxPct, assessedHere: r.assessedHere, checkedHere: r.checkedHere, band: r.band })),
   };
 }
 
@@ -370,28 +363,34 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
   // table is the content, and at the previous size the panel pushed it below
   // the fold. The type sits at the page's own scale (11px/10px) rather than
   // above every other heading on it.
-  // ROW dropped from 25 to 20: the source sentence that used to sit on a
-  // second line under every dimension name is gone (DIMENSION_TAB_TAG), so a
-  // row is one line again. VX moved left to give the band its own room.
-  const VX = 126, AX = 288, TW = 132, ROW = 20, TOP = 34, BARH = 9;
-  // The tag sits PAST the bar, in the slot the "left arrow this tab" marker
-  // used to occupy. It was previously placed at a fixed x inside the label
-  // column, which put "separate read" straight on top of "Band 2": the band
-  // text's width was never measured, and at 9.5px it runs well past where
-  // the tag started. Past the bar there is nothing to collide with, whatever
-  // either string turns out to be.
-  const anyTag = g.segments.some((seg) => seg.source);
-  const TAGX = AX + TW + 8;
-  const W = TAGX + (anyTag ? 72 : 0);
+  // The viewBox width is what actually sets the type's size on screen. The
+  // drawing is laid out in user units and then scaled to its container, which
+  // measures 416px on a desktop and 316px on a phone, so it is ALWAYS scaled
+  // down: at W = 500 a nominal 10px arrived as 8.3px, which is why the panel
+  // read as too small however the font-size was written. W is now 416, the
+  // desktop container's own width plus a little slack, so 13px arrives at
+  // 12.8px there and 9.7px on a phone. That fits only because the tag column
+  // was removed: its 72 units are what pays for the larger type.
+  //
+  // The columns below are set from the measured painted width of the longest
+  // string each one can hold, not from an estimate: label 140 ("Systems &
+  // Outcomes"), band 186 ("not assessed by this check", which is longer than
+  // any "Band n of 5 · n% of n%"), title 361. Enlarging the type without
+  // moving the columns is what put a label into the next column last time.
+  const VX = 160, AX = 360, TW = 54, ROW = 26, TOP = 44, BARH = 11;
+  const W = AX + TW + 10;
   const H = TOP + g.segments.length * ROW + 4;
   const hatchId = `scHatch${opts.idSuffix ?? ""}`;
   const t = (xx: number, yy: number, cls: string, txt: string) => `<text x="${xx}" y="${yy}" style="${cls}">${esc(txt)}</text>`;
-  const TITLE = `font-size:11px;font-weight:700;fill:${p.ink}`;
-  // ONE size for every word in the rows. The band was 13px against 9.5px
+  // The heading is the SAME size as the rows and is a heading by weight alone.
+  // One size in the whole panel, and it buys ~28 units of width for the bar.
+  // ONE size for every word in the panel. The band was 13px against 9.5px
   // neighbours, which read as uneven rather than as emphasis. It keeps the
   // emphasis through WEIGHT and INK colour against muted grey, which is the
-  // same distinction at the same scale.
-  const ROWPX = 10;
+  // same distinction at the same scale. 10px was uniform but too small to
+  // read comfortably, so the whole panel moved up together.
+  const ROWPX = 13;
+  const TITLE = `font-size:${ROWPX}px;font-weight:700;fill:${p.ink}`;
   const NAME = `font-size:${ROWPX}px;fill:${p.ink}`;
   const SMALL = `font-size:${ROWPX}px;fill:${p.mute}`;
   const BAND = `font-size:${ROWPX}px;font-weight:800;fill:${p.ink}`;
@@ -407,11 +406,11 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
       <line x1="0" y1="0" x2="0" y2="7" style="stroke:${p.hatchLine}" stroke-width="3"/>
     </pattern>
   </defs>
-  ${t(10, 14, TITLE, `${judged.length} of the ${g.segments.length} EduTrust dimensions ${judged.length === 1 ? "was" : "were"} judged here`)}
+  ${t(10, 18, TITLE, `${judged.length} of the ${g.segments.length} EduTrust dimensions ${judged.length === 1 ? "was" : "were"} judged here`)}
   ${/* Kept short: the rows below already name which two were judged, and with
        the names prefixed as well the line ran off the right edge of the
        drawing and lost "not added up into a band", which is the honest part. */ ""}
-  ${t(10, 27, SMALL, `out of the ${max}% each can earn · not added up into a band`)}
+  ${t(10, 35, SMALL, `out of the ${max}% each can earn · not added up into a band`)}
   ${g.segments.map((seg, i) => {
     const y = TOP + i * ROW;
     // Unassessed: the WHOLE track is hatched, which reads as unknown. An empty
@@ -424,18 +423,15 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
     // The band carries its own weight; the arithmetic after it is the
     // qualifier. One <text> with two tspans, so they flow without the
     // drawing having to guess how wide "Band 3" is.
-    const band = `<text x="${VX}" y="${y + 8}"><tspan style="${BAND}">${esc(segmentBandText(seg))}</tspan>${
+    const band = `<text x="${VX}" y="${y + 10}"><tspan style="${BAND}">${esc(segmentBandText(seg))}</tspan>${
       segmentDetailText(seg) ? `<tspan style="${SMALL}"> ${esc(segmentDetailText(seg))}</tspan>` : ""
     }</text>`;
-    // Two words, and only on the two dimensions no tab feeds.
-    const tag = seg.source ? t(TAGX, y + 8, SMALL, seg.source) : "";
-    // No "left arrow this tab" marker, and no bolded label either: the
-    // caption printed under this drawing already names the dimension this
-    // tab feeds, in a full sentence. A second, wordless copy of that beside
-    // the row was duplicating it, and the bold was the same claim with no
-    // explanation attached.
-    return `${t(10, y + 8, NAME, seg.label)}
-      ${tag}
+    // Name, band, bar. No marker, no bolded label and no tag: the caption
+    // printed under this drawing already names the dimension this tab feeds,
+    // in a full sentence, and the band column already says when a dimension
+    // was not assessed. Each of those was a second, shorter copy of something
+    // said properly elsewhere.
+    return `${t(10, y + 10, NAME, seg.label)}
       ${band}
       <rect x="${AX}" y="${y}" width="${TW}" height="${BARH}" rx="2" style="fill:${p.track}"/>
       ${fill}`;

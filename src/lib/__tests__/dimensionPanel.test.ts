@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   bandGraphic, bandGraphicSvg, SCREEN_BAND_PALETTE,
   PROCEDURE_FEEDS, OVERALL_FEEDS, RECORDS_FEEDS,
-  DIMENSION_TAB_TAG, DIMENSION_TAB_SOURCE,
+  DIMENSION_TAB_SOURCE,
   segmentBandText, segmentDetailText,
   type BandWorking,
 } from "../selfCheckBanding";
@@ -72,12 +72,16 @@ describe("the rows carry the band, not a paragraph", () => {
     expect(svg).not.toContain("a second look at those same documents");
   });
 
-  it("tags only the two dimensions no tab feeds, in three words", () => {
-    expect(DIMENSION_TAB_TAG.approach).toBe("");
-    expect(DIMENSION_TAB_TAG.processes).toBe("");
-    expect(DIMENSION_TAB_TAG.systemsOutcomes).toBe("separate read");
-    expect(DIMENSION_TAB_TAG.review).toBe(DIMENSION_TAB_TAG.systemsOutcomes);
-    expect(DIMENSION_TAB_TAG.systemsOutcomes.split(" ").length).toBeLessThanOrEqual(3);
+  it("carries no per-row tag at all, on any tab", () => {
+    // "separate read" repeated the caption under the panel, and "not read"
+    // repeated the band column's own "not assessed by this check".
+    for (const feeds of [OVERALL_FEEDS, PROCEDURE_FEEDS, RECORDS_FEEDS]) {
+      // Only what is DRAWN. The Overall caption legitimately uses the words
+      // "a separate read", and it is repeated into the aria-label.
+      const drawn = [...svgFor(feeds).matchAll(/<text[^>]*>(.*?)<\/text>/g)].map((m) => m[1]).join(" | ");
+      expect(drawn).not.toContain("separate read");
+      expect(drawn).not.toContain("not read");
+    }
   });
 
   it("keeps the full sentences exported for the info control", () => {
@@ -88,12 +92,15 @@ describe("the rows carry the band, not a paragraph", () => {
 
   it("sets every word in the rows at ONE size, and leans on weight instead", () => {
     const svg = svgFor(OVERALL_FEEDS);
-    // The band was 13px against 9.5px neighbours, which read as uneven.
+    // The band was 13px against 9.5px neighbours, which read as uneven. It is
+    // now uniform AND large enough to read: 10px was consistent but too small.
+    // Not one size in the ROWS: one size in the whole panel, title included.
     const sizes = new Set([...svg.matchAll(/font-size:([\d.]+)px/g)].map((m) => m[1]));
-    sizes.delete("11");      // the panel's own title line, above the rows
-    expect([...sizes]).toEqual(["10"]);
-    expect(svg).toMatch(/font-size:10px;font-weight:800[^"]*">Band 3</);
-    expect(heightOf(svg)).toBeLessThan(138);   // 138 was the height with the sentences
+    expect([...sizes]).toEqual(["13"]);
+    expect(svg).toMatch(/font-size:13px;font-weight:800[^"]*">Band 3</);
+    // One line per row still. A second line under each name would put a
+    // four-row panel past 200px; the sentences that used to be there did.
+    expect(heightOf(svg)).toBeLessThan(160);
   });
 });
 

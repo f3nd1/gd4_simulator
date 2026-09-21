@@ -241,6 +241,15 @@ describe("nothing the screen collapses is lost from the filed working paper", ()
     // caption the sighted reader gets, which says it in a sentence.
     expect(html).toMatch(new RegExp(`aria-label="${PROCEDURE_FEEDS.caption.slice(0, 40).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
     expect(html).not.toContain("Which dimension this tab feeds");
+    // The printed panel carries no per-row tag either, and prints at the same
+    // one size as the screen: it is the same builder, and this pins it.
+    // The dimension panel, not the tally bar: both print inside a
+    // .band-graphic div, and the tally bar comes first in the document.
+    const panel = [...html.matchAll(/<svg[\s\S]*?<\/svg>/g)].map((m) => m[0]).find((g) => g.includes("EduTrust dimensions"))!;
+    const drawn = [...panel.matchAll(/<text[^>]*>(.*?)<\/text>/g)].map((m) => m[1]).join(" | ");
+    expect(drawn).not.toContain("separate read");
+    expect(drawn).not.toContain("not read");
+    expect([...new Set([...panel.matchAll(/font-size:([\d.]+)px/g)].map((m) => m[1]))]).toEqual(["13"]);
   });
 
   it("puts the verdict first in the printed row, so a printed page scans the same way", () => {
