@@ -53,3 +53,23 @@ describe("admin-only routes in the nav", () => {
     expect(allPathsOf(visibleNav(false, true))).toContain("/people");
   });
 });
+
+// The sidebar's stage label drops the leading number, because the number
+// moved into the stage chip. NAV itself is untouched, so the Dashboard
+// stepper and the Help page still read g.group and g.step as before.
+describe("stage names in the sidebar", () => {
+  const stageName = (group: string) => group.replace(/^\d+\s*·\s*/, "");
+
+  it("strips the number from a numbered stage, and leaves the others alone", () => {
+    expect(stageName("1 · Set up")).toBe("Set up");
+    expect(stageName("4 · Close out")).toBe("Close out");
+    expect(stageName("Home")).toBe("Home");
+    expect(stageName("Settings")).toBe("Settings");
+  });
+
+  it("leaves NAV's own group names carrying their numbers", () => {
+    // The Dashboard's getting-started stepper keys off these.
+    expect(NAV.filter((g) => g.step != null).map((g) => g.group))
+      .toEqual(["1 · Set up", "2 · Audit & evidence", "3 · Findings & review", "4 · Close out"]);
+  });
+});

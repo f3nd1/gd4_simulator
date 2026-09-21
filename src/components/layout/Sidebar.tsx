@@ -11,6 +11,11 @@ import { GOLD, INK, SELF_CHECK_ACCENT } from "../../lib/theme";
 
 type Props = { open: boolean; onClose: () => void };
 
+// "1 · Set up" -> "Set up". The number moves into the stage chip, so leaving
+// it in the text too would print it twice. NAV is untouched: the Dashboard
+// stepper and the Help page still read g.group and g.step as they always did.
+const stageName = (group: string) => group.replace(/^\d+\s*·\s*/, "");
+
 export function Sidebar({ open, onClose }: Props) {
   const location = useLocation();
   const showDeveloperTools = useWorkspaceStore((s) => s.showDeveloperTools);
@@ -40,22 +45,21 @@ export function Sidebar({ open, onClose }: Props) {
 
   const inGroup = (paths: NavItem[]) => paths.some((i) => i.path === location.pathname);
   const activeGroup = NAV.find((g) => inGroup(g.items) || inGroup(g.tools ?? []))?.group;
-  // Only the section containing the current page starts expanded — collapsing
-  // the rest is what makes the nav navigable instead of a wall of links.
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(NAV.map((g) => g.group).filter((g) => g !== activeGroup)));
 
-  useEffect(() => {
-    if (activeGroup) setCollapsed((prev) => (prev.has(activeGroup) ? new Set([...prev].filter((g) => g !== activeGroup)) : prev));
-  }, [activeGroup]);
+  // Collapsed by default; the section holding the current page is open, and a
+  // section you open by hand stays open until you move to another page.
+  //
+  // This used to track the COLLAPSED set instead, and groups accumulated:
+  // navigating removed the new active group from that set but never put the
+  // one you had left back in, so after a few clicks every section was open
+  // and the sidebar was one long scroll. Tracking deliberate OVERRIDES and
+  // clearing them per page cannot drift that way, and it also lets the active
+  // section be closed, which the old shape could not do.
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  useEffect(() => { setOverrides({}); }, [location.pathname]);
 
-  function toggleGroup(group: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(group)) next.delete(group);
-      else next.add(group);
-      return next;
-    });
-  }
+  const isOpen = (group: string) => overrides[group] ?? group === activeGroup;
+  const toggleGroup = (group: string) => setOverrides((prev) => ({ ...prev, [group]: !(prev[group] ?? group === activeGroup) }));
 
   useEffect(() => {
     const isMobile = window.matchMedia("(max-width: 767px)").matches;
@@ -87,7 +91,9 @@ export function Sidebar({ open, onClose }: Props) {
           textDecoration: "none",
           fontSize: 13,
           fontWeight: 600,
-          padding: "8px 11px",
+          // Indented past the stage chip, so a step sits under its stage
+          // rather than beside it.
+          padding: "7px 11px 7px 18px",
           borderRadius: 8,
           marginBottom: 2,
           background: isActive ? GOLD : "transparent",
@@ -100,13 +106,15 @@ export function Sidebar({ open, onClose }: Props) {
             title={done ? "Done" : undefined}
             style={{
               flexShrink: 0,
-              width: 17,
-              height: 17,
+              width: 15,
+              height: 15,
+              // A circle, never the stage chip's square, and hollow unless
+              // the step's real done-signal is satisfied.
               borderRadius: 99,
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: done ? 11 : 10,
+              fontSize: done ? 10 : 9.5,
               fontWeight: 700,
               background: done ? "#15803d" : "transparent",
               color: done ? "#fff" : "#7e8da0",
@@ -208,7 +216,7 @@ export function Sidebar({ open, onClose }: Props) {
           // collapse: it reads as a separate place rather than a section of
           // the audit lead's journey.
           if (g.feature) return <FeatureLink key={g.group} item={g.items[0]} onNavigate={closeOnMobile} />;
-          const isCollapsed = collapsed.has(g.group);
+          const expanded = isOpen(g.group);
           const isActiveGroup = g.group === activeGroup;
           const numbered = g.step != null;
           const tools = g.tools ?? [];
@@ -231,12 +239,36 @@ export function Sidebar({ open, onClose }: Props) {
                   letterSpacing: 0.6,
                   color: isActiveGroup ? GOLD : "#6b7a92",
                   padding: "6px 11px",
+                  gap: 8,
                 }}
               >
-                {g.group}
-                <span style={{ fontSize: 9, transform: isCollapsed ? "rotate(-90deg)" : "none", display: "inline-block" }}>▾</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                  {/* A stage and a step inside it used to be the same shape:
+                      "1 · SET UP" beside a circled "1" read as two of the
+                      same thing. The stage number is now a FILLED SQUARE in
+                      the accent, the step number a HOLLOW CIRCLE in muted
+                      grey, so which is which is a glance rather than a read. */}
+                  {numbered && (
+                    <span
+                      aria-hidden
+                      style={{
+                        flexShrink: 0, width: 18, height: 18, borderRadius: 5,
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 11, fontWeight: 800, lineHeight: 1,
+                        background: isActiveGroup ? GOLD : "#334054",
+                        color: isActiveGroup ? "#16202e" : "#cdd5e0",
+                      }}
+                    >
+                      {g.step}
+                    </span>
+                  )}
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {stageName(g.group)}
+                  </span>
+                </span>
+                <span style={{ fontSize: 9, transform: expanded ? "none" : "rotate(-90deg)", display: "inline-block", flexShrink: 0 }}>▾</span>
               </button>
-              {!isCollapsed && (
+              {expanded && (
                 <>
                   {g.items.map((item, idx) => (
                     <CoreStep key={item.path} item={item} ordinal={numbered ? idx + 1 : undefined} />
