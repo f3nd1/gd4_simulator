@@ -40,9 +40,15 @@ import type {
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders, reconcileFolders } from "../data/folders";
+// Re-exported so existing importers of DEFAULT_AUDITORS keep working; the
+// list itself lives in src/data so a test can read it without pulling the
+// store (and through it driveClient's pdfjs Worker) into Node.
+export { DEFAULT_AUDITORS } from "../data/auditors";
+import { DEFAULT_AUDITORS } from "../data/auditors";
 import { DEPARTMENT_DIVISION, departmentForScope } from "../lib/departments";
 import type { PolicyDocEdit } from "../data/policyDocuments";
 import { EMPTY_PLAN_HEADER, type AuditPlanHeader, type AuditSession } from "../lib/auditPlan";
+import { DEFAULT_AREA_ASSIGNMENTS, type AreaAssignment } from "../data/areaAssignments";
 import { itemIdsForScope, folderScopeId, runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
 import { isStaleRun } from "../lib/runGeneration";
 import { summariseRun, appendRunSummary, type SelfCheckRunSummary } from "../lib/selfCheckRunLog";
@@ -629,18 +635,6 @@ const DEMO_CYCLE_FIELDS: Partial<AuditCycle> = {
   owner: "SQ",
 };
 
-// Single source of truth for the five preset auditors — one per review
-// perspective — used both by the Dashboard "Use demo data" seeding and the
-// Auditor Creation "Load preset auditors" button, so both routes produce
-// identical profiles (with perspectives) and a ready 5-seat review panel.
-export const DEFAULT_AUDITORS: AuditorProfile[] = [
-  { id: "AUD-1", auditCycleId: "cycle-1", name: "Rachel Tan", type: "Internal", departmentId: "SQ", role: "Audit Lead", strictness: 70, focusArea: "Overall audit setup and finalisation", checklistTemplateId: "Audit Lead Checklist", reviewPerspective: "strict-auditor" },
-  { id: "AUD-2", auditCycleId: "cycle-1", name: "Marcus Lim", type: "Internal", departmentId: "SGL", role: "Department Reviewer", strictness: 60, focusArea: "Leadership and governance evidence", checklistTemplateId: "Management Review Checklist", reviewPerspective: "optimistic-process-owner" },
-  { id: "AUD-3", auditCycleId: "cycle-1", name: "Priya Nair", type: "Internal", departmentId: "ALI / CM", role: "Department Reviewer", strictness: 75, focusArea: "Academic process evidence", checklistTemplateId: "Academic Process Checklist", reviewPerspective: "risk-challenger" },
-  { id: "AUD-4", auditCycleId: "cycle-1", name: "Faizal Rahman", type: "Internal", departmentId: "AD / AN", role: "Department Reviewer", strictness: 80, focusArea: "Student protection and contract evidence", checklistTemplateId: "Student Protection Checklist", reviewPerspective: "academic-qa-guardian" },
-  { id: "AUD-5", auditCycleId: "cycle-1", name: "Jennifer Wong", type: "External", departmentId: undefined, role: "External Reviewer", strictness: 85, focusArea: "Simulated SSG/EduTrust assessor view", checklistTemplateId: "GD4 Criterion Checklist", reviewPerspective: "management-reviewer" },
-];
-
 // Workspace-wide department directory, seeded from the acronyms and full
 // names already implied by the auditor data above. Person-in-charge is left
 // blank for the user to fill in via Audit Cycle.
@@ -692,6 +686,9 @@ export type WorkspaceState = {
   // prints is derived from the GD4 data, the roster and the registers.
   auditPlan: AuditPlanHeader;
   auditSessions: AuditSession[];
+  // Who is accountable for each GD4 area and who audits it, by roster id.
+  // Seeded from the approved workbook; edited on the Audit Plan page.
+  areaAssignments: Record<string, AreaAssignment>;
   versions: VersionEntry[];
   folders: EvidenceFolder[];
   itemReviews: Record<string, ItemAIVerdict>;
@@ -1065,6 +1062,7 @@ export type WorkspaceState = {
   loadPresetAuditors: (mode: "add" | "replace") => number;
 
   setAuditPlan: (patch: Partial<AuditPlanHeader>) => void;
+  setAreaAssignment: (scopeIds: string[], patch: Partial<AreaAssignment>) => void;
   addAuditSession: (s: AuditSession) => void;
   updateAuditSession: (id: string, patch: Partial<AuditSession>) => void;
   removeAuditSession: (id: string) => void;
@@ -1326,6 +1324,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       policyDocEdits: {},
       auditPlan: EMPTY_PLAN_HEADER,
       auditSessions: [],
+      areaAssignments: DEFAULT_AREA_ASSIGNMENTS,
       versions: [],
       folders: seedFolders(),
       itemReviews: {},
@@ -4589,6 +4588,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       },
 
       setAuditPlan: (patch) => set((s) => ({ auditPlan: { ...s.auditPlan, ...patch } })),
+      // Takes a LIST of scopes so the workbook's grouped rows ("2.4" covering
+      // three scopes) stay one edit for the user while remaining per-scope in
+      // storage.
+      setAreaAssignment: (scopeIds, patch) => set((s) => ({
+        areaAssignments: {
+          ...s.areaAssignments,
+          ...Object.fromEntries(scopeIds.map((id) => [id, { ...(s.areaAssignments?.[id] ?? { auditorIds: [] }), ...patch }])),
+        },
+      })),
       addAuditSession: (sess) => set((s) => ({ auditSessions: [...s.auditSessions, sess] })),
       updateAuditSession: (id, patch) => set((s) => ({ auditSessions: s.auditSessions.map((x) => (x.id === id ? { ...x, ...patch } : x)) })),
       removeAuditSession: (id) => set((s) => ({ auditSessions: s.auditSessions.filter((x) => x.id !== id) })),
@@ -8006,7 +8014,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
       // to a surviving item id) is untouched. The reconcile is idempotent, so a
       // workspace at an earlier version is safely brought up to the latest.
-      version: 12,
+      version: 13,
       migrate: (persisted, fromVersion) => {
         let s = persisted as WorkspaceState;
         if (!s) return s;
@@ -8244,6 +8252,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const div = DEPARTMENT_DIVISION[d.acronym];
               return div ? { ...d, divisionId: div } : d;
             }),
+          } as WorkspaceState;
+        }
+        if (fromVersion < 13) {
+          // Seed the PIC/auditor assignments and clear the invented demo
+          // roster. The five demo profiles (Rachel Tan and the rest) were
+          // being printed into real audit paperwork, and their departmentIds
+          // ("ALI / CM", "AD / AN") could never match a folder owner, so the
+          // independence check silently passed on every one.
+          //
+          // Only profiles that are EXACTLY the old demo ids are removed. An
+          // auditor the team added by hand is never touched, and a workspace
+          // that already holds real people keeps them.
+          const DEMO_IDS = new Set(["AUD-1", "AUD-2", "AUD-3", "AUD-4", "AUD-5"]);
+          const DEMO_NAMES = new Set(["rachel tan", "marcus lim", "priya nair", "faizal rahman", "jennifer wong"]);
+          const kept = (Array.isArray(s.auditors) ? s.auditors : []).filter(
+            (a) => !(a && DEMO_IDS.has(a.id) && DEMO_NAMES.has((a.name ?? "").trim().toLowerCase()))
+          );
+          s = {
+            ...s,
+            auditors: kept,
+            reviewPanelAuditorIds: (Array.isArray(s.reviewPanelAuditorIds) ? s.reviewPanelAuditorIds : []).filter((id) => kept.some((a) => a.id === id)),
+            activeAuditorId: kept.some((a) => a.id === s.activeAuditorId) ? s.activeAuditorId : null,
+            areaAssignments: (s.areaAssignments && typeof s.areaAssignments === "object" && Object.keys(s.areaAssignments).length)
+              ? s.areaAssignments
+              : DEFAULT_AREA_ASSIGNMENTS,
           } as WorkspaceState;
         }
         return s;

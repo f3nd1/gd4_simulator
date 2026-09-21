@@ -60,3 +60,31 @@ export function runAuditorDisplay(auditors: AuditorProfile[], activeAuditorId: s
   if (!a) return { text: "Unassigned — no auditor selected", unassigned: true };
   return { text: `${a.name} · ${perspectiveLabel(perspectiveOf(a))}`, unassigned: false };
 }
+
+// Independence as a three-way answer, for the surfaces that must say what they
+// do NOT know: the PIC table, the audit schedule and the exported workbook.
+//
+// independenceNotice() above answers only "is this a conflict", returning
+// undefined both when the auditor is independent AND when either department is
+// unset. On a warning banner that is the right shape. On a printed working
+// paper it is not: a blank department would print as "independent", which is a
+// claim the app cannot support. The old demo profiles carried ids like
+// "ALI / CM" that could never match a folder owner, so the check silently
+// passed on every one of them, and nothing said so.
+export type IndependenceStatus = "conflict" | "independent" | "unknown";
+
+export function independenceStatus(
+  auditorDepartment: string | undefined,
+  owningDepartment: string | undefined,
+): IndependenceStatus {
+  const dept = (auditorDepartment || "").trim().toLowerCase();
+  const owner = (owningDepartment || "").trim().toLowerCase();
+  if (!dept || !owner) return "unknown";
+  return dept === owner ? "conflict" : "independent";
+}
+
+export function independenceLabel(s: IndependenceStatus, owningDepartment?: string): string {
+  if (s === "conflict") return `Conflict: auditor is from ${owningDepartment}, the department that owns this area`;
+  if (s === "independent") return "Independent";
+  return "Cannot check: department not recorded";
+}

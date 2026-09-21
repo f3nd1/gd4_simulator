@@ -10,7 +10,8 @@ import {
   emptySession, sortedSessions, sessionSlot, dayNumbers, sessionScopes, planWarnings, sessionKind,
   type AuditSession,
 } from "../lib/auditPlan";
-import { buildAuditWorkbook, workbookBytes, workbookFileName, XLSX_MIME, SHEET_NAMES } from "../lib/auditWorkbook";
+import { workbookFileName, XLSX_MIME } from "../lib/auditWorkbook";
+import { workbookBuffer, SHEETS } from "../lib/auditWorkbookXlsx";
 import { downloadBinary } from "../lib/auditCsvExport";
 import { CalendarImportPanel } from "../components/ui/CalendarImportPanel";
 
@@ -42,14 +43,20 @@ export function AuditPlan() {
   const warnings = useMemo(() => planWarnings(header, sessions), [header, sessions]);
   const divisionOf = (a: string) => departments.find((d) => d.acronym === a)?.divisionId;
 
-  function exportWorkbook() {
-    const name = workbookFileName(cycle);
-    downloadBinary(
-      workbookBytes(buildAuditWorkbook({ cycle, header, sessions, auditors, departments, findings, closures, policyDocEdits })),
-      name,
-      XLSX_MIME,
-    );
-    setExported(name);
+  const assignments = useWorkspaceStore((s) => s.areaAssignments);
+  const [exporting, setExporting] = useState(false);
+
+  async function exportWorkbook() {
+    setExporting(true);
+    try {
+      const name = workbookFileName(cycle);
+      // ExcelJS is loaded only now, on the click, so its weight never reaches
+      // anyone who does not export a workbook.
+      downloadBinary(await workbookBuffer({ cycle, header, sessions, auditors, departments, assignments, findings, closures, policyDocEdits }), name, XLSX_MIME);
+      setExported(name);
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -118,13 +125,13 @@ export function AuditPlan() {
       <Card>
         <h3 style={{ margin: 0, fontSize: 14 }}>Export the audit set</h3>
         <p style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-          One Excel workbook with three sheets, matching the format your ISO audits already use:
-          {" "}{SHEET_NAMES.join(", ")}. The three sheets cross-reference each other by session number, which is why
+          One Excel workbook with five sheets, matching the approved GD4 IQA workbook:
+          {" "}{SHEETS.join(", ")}. The three sheets cross-reference each other by session number, which is why
           this is one file and not three. The findings log carries acknowledgement rather than an Official / Unofficial
           column, so an accepted nonconformity is still printed as a nonconformity.
         </p>
-        <button onClick={exportWorkbook} style={{ cursor: "pointer", border: "none", background: INK, color: "#fff", fontWeight: 700, padding: "9px 16px", borderRadius: 8 }}>
-          ⬇ Download workbook (.xlsx)
+        <button onClick={() => void exportWorkbook()} disabled={exporting} style={{ cursor: exporting ? "default" : "pointer", border: "none", background: INK, color: "#fff", fontWeight: 700, padding: "9px 16px", borderRadius: 8, opacity: exporting ? 0.6 : 1 }}>
+          {exporting ? "Building…" : "⬇ Download workbook (.xlsx)"}
         </button>
         {exported && <div style={{ fontSize: 11.5, color: "#166534", marginTop: 8 }}>Saved {exported}</div>}
         <p style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 10, marginBottom: 0 }}>
