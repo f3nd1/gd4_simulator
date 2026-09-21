@@ -12,8 +12,9 @@ import { NOTABLE_ADMIN_PATHS, protectionFor, PROTECTION_LABEL, PROTECTION_MEANIN
 import { listLocks, lockStore, unlockStore, unlockPhraseMatches, unlockWarning, type LockState } from "../lib/auth/storeLocks";
 import { NAV } from "../nav";
 
-// Who can sign in, managed from inside the app instead of the Supabase
-// dashboard. The route guard (PeopleRoute) keeps non-admins out of the page,
+// Users & access: the sign-in list, who else may manage it, and the page
+// locks, managed from inside the app instead of the Supabase dashboard.
+// The Layout guard keeps non-admins out of the page,
 // but the page is NOT what protects the list: the insert and delete policies
 // on allowed_users consult public.is_admin() on every write, including a write
 // made with curl and the publishable key that ships in this bundle. Editing
@@ -90,13 +91,19 @@ export function People() {
 
   return (
     <div style={{ maxWidth: 820 }}>
-      <h1 style={{ fontSize: 22, margin: "0 0 6px", color: INK }}>Who can sign in</h1>
+      <h1 style={{ fontSize: 22, margin: "0 0 6px", color: INK }}>Users &amp; access</h1>
+      {/* The opening sentence used to end "You are the only person who can
+          change it", which stopped being true the moment a second admin
+          became possible: a granted admin can add and remove people, and only
+          the MAIN admin can grant admin. The rename surfaced it. */}
       <p style={{ ...muted, margin: "0 0 4px" }}>
-        Everyone on this list can open the app with their United Ceres Google account. Everyone else is
-        refused, whatever they try. You are the only person who can change it.
+        Everyone on this list can open the app with their United Ceres Google account, and everyone else is
+        refused whatever they try. This page also sets who else can manage that list, and which settings the
+        database refuses to let a process owner change.
       </p>
       <p style={{ ...muted, margin: "0 0 16px", fontSize: 12 }}>
-        Changes take effect immediately. There is no invitation email: tell the person yourself once they are added.
+        Changes take effect immediately. There is no invitation email: tell the person yourself once they are
+        added. Any admin can change the sign-in list; only the main admin can make somebody else an admin.
       </p>
 
       {loadError && (

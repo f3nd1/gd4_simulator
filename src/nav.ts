@@ -107,7 +107,7 @@ export const NAV: NavGroup[] = [
     items: [
       { path: "/settings", label: "Settings", hint: "Configure Supabase, OpenAI and Google Drive integrations" },
       { path: "/gd4-scoring-setup", label: "GD4 Scoring Setup", hint: "Tune scoring weights, award thresholds and criteria points" },
-      { path: "/people", label: "Who can sign in", hint: "Add and remove the people allowed to open this app. Only the audit lead sees this." },
+      { path: "/people", label: "Users & access", hint: "The sign-in list, who else can manage it, and which settings the database refuses to let a process owner change. Admins only." },
     ],
     tools: [
       { path: "/ai-memories", label: "AI Memories", hint: "Manage calibration memories used to guide AI audit outputs" },
