@@ -32,9 +32,31 @@ Write commit messages with a full body: what changed, why, which mechanism was r
 ## Deployment (production)
 
 - Live at `https://apps.unitedceres.edu.sg/gd4_simulator/` — nginx `alias` to `/var/www/gd4_simulator/dist/` on the user's server, a subpath deployment.
-- To update, the user runs on the server: `cd /var/www/gd4_simulator && git pull && npm run build`. **Never add a `--base` flag** — `vite.config.ts` sets `base: './'` precisely so one build works at any subpath; overriding it re-breaks the asset-404 bug it fixed.
+- To update, the user runs on the server: `cd /var/www/gd4_simulator && git pull && npm run build` — plus `npm install` before the build whenever the change touched `package.json` (see the dependency rule below). **Never add a `--base` flag** — `vite.config.ts` sets `base: './'` precisely so one build works at any subpath; overriding it re-breaks the asset-404 bug it fixed.
 - After deploying, the browser may cache the old bundle: tell the user to hard-refresh (Ctrl/Cmd+Shift+R) or use incognito. The Change Log page shows the deployed commit hash (`__GIT_INFO__`, baked at build time) — use it to confirm which commit is actually live before debugging "the fix doesn't work".
 - Deploying new code does NOT recompute old audit results — the user must re-run the audit to see new engine behavior.
+
+### A new dependency and a deploy are a pair — say `npm install` every time
+
+`git pull && npm run build` **installs nothing**. A change that adds, removes
+or bumps anything in `package.json` therefore breaks on the server with
+`Cannot find module '<name>'` unless the handover says so. That has happened
+once (exceljs, cd4b45a, 2026-09-21): the code was fine, the instruction was
+not.
+
+**The rule: if `package.json` changed, the deploy is three steps, and the
+report says so at the TOP, not buried.**
+
+```bash
+cd /var/www/gd4_simulator && git pull && npm install && npm run build
+```
+
+`lib/__tests__/deployDependencies.test.ts` pins the whole dependency list and
+fails the moment it changes, with the three-step command in its failure
+message, so the omission cannot reach the server. Update the pinned list and
+the handover in the same change. `playwright-core` is deliberately NOT in
+`package.json` — it is a sandbox-only verification tool, installed with
+`npm install --no-save`, and the test pins that too.
 
 ### A deploy and a database change are a pair — state the order every time
 
