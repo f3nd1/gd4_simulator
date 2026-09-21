@@ -50,6 +50,7 @@ export const NAV: NavGroup[] = [
       { path: "/profile-of-pei", label: "Profile of PEI", hint: "Structured PEI background: ERF/EduTrust status, key personnel, financials, courses, student & staff profiles — also used as AI audit context" },
       { path: "/audit-cycle", label: "Audit Cycle", hint: "Set the audit cycle dates and lifecycle status" },
       { path: "/auditors", label: "Auditor Creation", hint: "Add the auditors who will run this audit" },
+      { path: "/audit-plan", label: "Audit Plan & Schedule", hint: "The human-led internal audit: sessions, times, auditees and the GD4 areas each covers — and the one-click export of the plan, checklist and findings log as a single Excel workbook" },
     ],
     tools: [
       { path: "/gd4-library", label: "GD4 Library", hint: "Reference: the full GD4 requirement text" },

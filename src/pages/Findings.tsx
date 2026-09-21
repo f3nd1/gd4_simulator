@@ -21,7 +21,8 @@ import type { Finding, FindingType, Severity, FindingDimension, GroupedFindingDr
 import { runLiveFindingObservation, AIClientError } from "../lib/ai/agentRuntime";
 import { effectiveSettings } from "../lib/ai/aiClient";
 import { lineApsr, findingDimension, computeRiskCategory } from "../lib/checklistBanding";
-import { resolveFindingType, resolveNcSeverity, findingTypeTone, ncSeverityTone } from "../lib/findingClassification";
+import { resolveFindingType, resolveNcSeverity, findingTypeTone, ncSeverityTone, isFindingClosed } from "../lib/findingClassification";
+import { acknowledgementState, acknowledgementGap, acknowledgementSummary, agreedActionNote, agreedActionOverdue } from "../lib/findingAcknowledgement";
 import { FINDINGS_SAMPLING_CAVEAT } from "../lib/samplingCaveat";
 
 const TYPES: (FindingType | "All")[] = ["All", "AFI", "Improvement Action", "Observation", "Quality Action", "Critical Readiness Risk"];
@@ -67,6 +68,9 @@ export function Findings() {
   const cycle = useWorkspaceStore((s) => s.cycle);
   const closures = useWorkspaceStore((s) => s.closures);
   const addCustomFinding = useWorkspaceStore((s) => s.addCustomFinding);
+  const auditors = useWorkspaceStore((s) => s.auditors);
+  const activeAuditorId = useWorkspaceStore((s) => s.activeAuditorId);
+  const actingAuditor = auditors.find((a) => a.id === activeAuditorId);
   const removeCustomFinding = useWorkspaceStore((s) => s.removeCustomFinding);
   const clearAllFindings = useWorkspaceStore((s) => s.clearAllFindings);
   const clearFindingsForSubCriterion = useWorkspaceStore((s) => s.clearFindingsForSubCriterion);
@@ -225,6 +229,11 @@ export function Findings() {
       managementDecisionNeeded: form.severity === "Critical" || form.severity === "High",
       status: "Open",
       source: "Manual",
+      // Who raised it, from the roster's acting auditor. Only the human path
+      // writes this, which is what keeps an AI verdict out of the auditor's
+      // findings log: an AI-raised finding has no auditor to put in the
+      // "Raised by" column and so cannot appear there.
+      ...(actingAuditor ? { raisedBy: { auditorId: actingAuditor.id, auditorName: actingAuditor.name } } : {}),
       createdAt: new Date().toISOString(),
       dimension: form.dimension || undefined,
       riskCategory: (form.riskCategory as "A" | "B" | "C" | "D") || undefined,
@@ -1062,6 +1071,96 @@ function GroupedDraftDetail({
 // The expandable per-finding report: the detailed root-cause / corrective /
 // preventive analysis plus the APSR rubric breakdown the audit produced, so the
 // "why" behind each finding is visible here, not just on the closure screen.
+// The auditee accepting a finding, with an agreed action and a date.
+//
+// This is what UCC's ISO log used an "Official / Unofficial" column for, done
+// without a field that downgrades a finding. Nothing here writes findingType,
+// ncSeverity, severity or status: an acknowledged NC is still an NC in every
+// count and every export. Deliberately editable on ANY finding, AI-raised
+// included — the auditee accepting an AI-raised gap is a real event worth
+// recording, and recording it changes nothing about the gap.
+function AcknowledgementPanel({ finding: f }: { finding: Finding }) {
+  const updateCustomFinding = useWorkspaceStore((s) => s.updateCustomFinding);
+  const closures = useWorkspaceStore((s) => s.closures);
+  const [open, setOpen] = useState(acknowledgementState(f) !== "none");
+  const state = acknowledgementState(f);
+  const gap = acknowledgementGap(f);
+  const actionNote = agreedActionNote(f);
+  const overdue = agreedActionOverdue(f, isFindingClosed(f, closures));
+  const set = (patch: Partial<Finding>) => updateCustomFinding(f.id, patch);
+
+  return (
+    <div style={{ marginTop: 8, border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff" }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{ width: "100%", textAlign: "left", cursor: "pointer", border: "none", background: "transparent", padding: "8px 10px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+      >
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>
+          {open ? "▾" : "▸"} Acknowledgement
+        </span>
+        {state === "acknowledged" && <Pill s="good">{acknowledgementSummary(f)}</Pill>}
+        {state === "partial" && <Pill s="medium">Not yet acknowledged</Pill>}
+        {state === "none" && <span style={{ fontSize: 11.5, color: "#94a3b8" }}>Not acknowledged by the auditee</span>}
+        {overdue && <Pill s="critical">Agreed action overdue</Pill>}
+      </button>
+      {open && (
+        <div style={{ padding: "0 10px 10px" }}>
+          <p style={{ fontSize: 11.5, color: "#6b7280", margin: "0 0 8px", lineHeight: 1.5 }}>
+            Record that the auditee has accepted this finding and what they have committed to do. This does not change
+            the finding: {f.findingType === "NC" ? "it stays a nonconformity" : "its type and severity are untouched"} and it
+            still counts in every report. What it changes is whether the finding is still open and unacknowledged.
+          </p>
+          <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))" }}>
+            <label style={{ fontSize: 11, color: "#475569" }}>
+              Acknowledged by
+              <input
+                aria-label={`Acknowledged by for ${f.id}`}
+                placeholder="Name and role at the auditee"
+                value={f.acknowledgedBy ?? ""}
+                onChange={(e) => set({ acknowledgedBy: e.target.value })}
+                style={{ ...inputStyle, width: "100%", marginTop: 2 }}
+              />
+            </label>
+            <label style={{ fontSize: 11, color: "#475569" }}>
+              Date acknowledged
+              <input
+                aria-label={`Date acknowledged for ${f.id}`}
+                type="date"
+                value={f.acknowledgedAt ?? ""}
+                onChange={(e) => set({ acknowledgedAt: e.target.value })}
+                style={{ ...inputStyle, width: "100%", marginTop: 2 }}
+              />
+            </label>
+            <label style={{ fontSize: 11, color: "#475569" }}>
+              Agreed action due
+              <input
+                aria-label={`Agreed action due for ${f.id}`}
+                type="date"
+                value={f.agreedDueDate ?? ""}
+                onChange={(e) => set({ agreedDueDate: e.target.value })}
+                style={{ ...inputStyle, width: "100%", marginTop: 2 }}
+              />
+            </label>
+          </div>
+          <label style={{ fontSize: 11, color: "#475569", display: "block", marginTop: 8 }}>
+            Agreed action
+            <textarea
+              aria-label={`Agreed action for ${f.id}`}
+              placeholder="What the auditee has committed to do about it"
+              value={f.agreedAction ?? ""}
+              onChange={(e) => set({ agreedAction: e.target.value })}
+              rows={2}
+              style={{ ...inputStyle, width: "100%", marginTop: 2, fontFamily: "inherit" }}
+            />
+          </label>
+          {gap && <div style={{ fontSize: 11.5, color: "#b45309", marginTop: 6 }}>{gap}</div>}
+          {actionNote && <div style={{ fontSize: 11.5, color: "#b45309", marginTop: 4 }}>{actionNote}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FindingDetail({ finding: f }: { finding: Finding }) {
   const req = GD4_REQUIREMENTS.find((r) => r.id === f.gd4ItemId);
   const apsr = f.apsr;
@@ -1133,6 +1232,7 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
       {f.criteriaUnverified && <div style={{ marginBottom: 2 }}><CriteriaUnverifiedFlag flagged /></div>}
       <Section label="Criteria — what the standard requires" text={f.criteria} />
       <Section label="Effect — regulatory / certification consequence" text={f.effect} />
+      <AcknowledgementPanel finding={f} />
       {(f.observation || f.criteria || f.effect) && (f.rootCause || f.corrective || f.preventive) && (
         <div style={{ borderTop: "1px solid #e2e8f0", margin: "8px 0" }} />
       )}

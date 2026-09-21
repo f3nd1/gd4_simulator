@@ -42,6 +42,7 @@ import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders, reconcileFolders } from "../data/folders";
 import { DEPARTMENT_DIVISION, departmentForScope } from "../lib/departments";
 import type { PolicyDocEdit } from "../data/policyDocuments";
+import { EMPTY_PLAN_HEADER, type AuditPlanHeader, type AuditSession } from "../lib/auditPlan";
 import { itemIdsForScope, folderScopeId, runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
 import { isStaleRun } from "../lib/runGeneration";
 import { summariseRun, appendRunSummary, type SelfCheckRunSummary } from "../lib/selfCheckRunLog";
@@ -686,6 +687,11 @@ export type WorkspaceState = {
   // Keyed by document code. An untouched code has no entry at all, so a later
   // change to the register is picked up automatically.
   policyDocEdits: Record<string, PolicyDocEdit>;
+  // The human-led internal audit plan: header block plus the timed schedule.
+  // The only part of UCC's audit set with no existing home; everything else it
+  // prints is derived from the GD4 data, the roster and the registers.
+  auditPlan: AuditPlanHeader;
+  auditSessions: AuditSession[];
   versions: VersionEntry[];
   folders: EvidenceFolder[];
   itemReviews: Record<string, ItemAIVerdict>;
@@ -1058,6 +1064,10 @@ export type WorkspaceState = {
   // added so the page can message the result.
   loadPresetAuditors: (mode: "add" | "replace") => number;
 
+  setAuditPlan: (patch: Partial<AuditPlanHeader>) => void;
+  addAuditSession: (s: AuditSession) => void;
+  updateAuditSession: (id: string, patch: Partial<AuditSession>) => void;
+  removeAuditSession: (id: string) => void;
   setPolicyDocEdit: (code: string, patch: PolicyDocEdit) => void;
   clearPolicyDocEdit: (code: string) => void;
   addDepartment: (d: Department) => void;
@@ -1310,6 +1320,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       auditors: [],
       departments: DEFAULT_DEPARTMENTS,
       policyDocEdits: {},
+      auditPlan: EMPTY_PLAN_HEADER,
+      auditSessions: [],
       versions: [],
       folders: seedFolders(),
       itemReviews: {},
@@ -4572,6 +4584,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         return toAdd.length;
       },
 
+      setAuditPlan: (patch) => set((s) => ({ auditPlan: { ...s.auditPlan, ...patch } })),
+      addAuditSession: (sess) => set((s) => ({ auditSessions: [...s.auditSessions, sess] })),
+      updateAuditSession: (id, patch) => set((s) => ({ auditSessions: s.auditSessions.map((x) => (x.id === id ? { ...x, ...patch } : x)) })),
+      removeAuditSession: (id) => set((s) => ({ auditSessions: s.auditSessions.filter((x) => x.id !== id) })),
       setPolicyDocEdit: (code, patch) => set((s) => ({
         policyDocEdits: { ...s.policyDocEdits, [code]: { ...s.policyDocEdits?.[code], ...patch } },
       })),
@@ -8216,6 +8232,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }),
             // Absent on every workspace stored before the register existed.
             policyDocEdits: (s.policyDocEdits && typeof s.policyDocEdits === "object") ? s.policyDocEdits : {},
+            auditPlan: { ...EMPTY_PLAN_HEADER, ...(s.auditPlan && typeof s.auditPlan === "object" ? s.auditPlan : {}) },
+            auditSessions: Array.isArray(s.auditSessions) ? s.auditSessions : [],
             departments: arr<Department>(s.departments).map((d) => {
               if (!d || d.divisionId) return d;
               const div = DEPARTMENT_DIVISION[d.acronym];

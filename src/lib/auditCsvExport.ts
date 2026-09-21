@@ -33,6 +33,21 @@ export function downloadBlob(content: string, filename: string, mime: string): v
   URL.revokeObjectURL(url);
 }
 
+// Triggers a browser file-save of BINARY content (an .xlsx workbook). The
+// text version above cannot carry one: a Blob built from a string mangles the
+// bytes. Shares the same URL->anchor->click->revoke sequence so there is still
+// one of those in the codebase.
+export function downloadBinary(data: ArrayBuffer, filename: string, mime: string): void {
+  const url = URL.createObjectURL(new Blob([data], { type: mime }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // Triggers a browser file-save of the given CSV text. UTF-8 BOM prefixed so
 // Excel opens it correctly instead of mis-detecting the encoding.
 export function downloadCsv(content: string, filename: string): void {

@@ -265,6 +265,31 @@ export type Finding = {
   // True once the header classification (findingType/ncSeverity) has been set
   // by a human, so a later panel run defers to it instead of overwriting.
   classificationManual?: boolean;
+  // ── Acknowledgement ──────────────────────────────────────────────────
+  //
+  // UCC's ISO findings log carries an "Official / Unofficial" column, with
+  // several NCs marked unofficial and one annotated "we are revamping our
+  // entire procedure". That column is deliberately NOT reproduced here: in an
+  // internal audit the finding is the auditor's call, and a field whose job is
+  // to mark your own NC as not counting will be used whenever a finding is
+  // inconvenient. The log would then record the negotiation rather than the
+  // fact.
+  //
+  // The legitimate need underneath it is real: the auditee accepts the finding
+  // and already has work under way. These four fields record exactly that.
+  // NOTHING here touches findingType or ncSeverity — an NC stays an NC and an
+  // acknowledged finding is still counted as one. What changes is the OPEN,
+  // UNACKNOWLEDGED count, which is the number a management review should be
+  // reading anyway.
+  acknowledgedBy?: string;    // who from the auditee accepted it
+  acknowledgedAt?: string;    // ISO date they accepted it
+  agreedAction?: string;      // what they have committed to do
+  agreedDueDate?: string;     // ISO date it is due by
+  // Who raised this finding, for the internal-audit findings log's "Raised by"
+  // column. Written ONLY on the human path, from the roster's acting auditor:
+  // no AI code path may set it, which is what stops an AI verdict appearing in
+  // an auditor's log as an auditor observation.
+  raisedBy?: { auditorId: string; auditorName: string };
   // Set when the latest panel run reached a different conclusion than fields
   // the user had manually edited — the finding shows a "review / apply panel
   // conclusion" notice instead of silently overwriting. Cleared once applied

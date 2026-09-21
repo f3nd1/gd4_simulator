@@ -5,6 +5,7 @@ import { DevToolsRoute } from "./components/layout/DevToolsRoute";
 import { Dashboard } from "./pages/Dashboard";
 import { DraftWorkspace } from "./pages/DraftWorkspace";
 import { AuditCycle } from "./pages/AuditCycle";
+import { AuditPlan } from "./pages/AuditPlan";
 import { AuditorCreation } from "./pages/AuditorCreation";
 import { EvidenceFolder } from "./pages/EvidenceFolder";
 import { StartAudit } from "./pages/StartAudit";
@@ -58,6 +59,7 @@ export default function App() {
           <Route path="/help" element={<Help />} />
           <Route path="/draft-workspace" element={<DraftWorkspace />} />
           <Route path="/audit-cycle" element={<AuditCycle />} />
+          <Route path="/audit-plan" element={<AuditPlan />} />
           <Route path="/auditors" element={<AuditorCreation />} />
           <Route path="/start-audit" element={<StartAudit />} />
           <Route path="/evidence-folder" element={<EvidenceFolder />} />
