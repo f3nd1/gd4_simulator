@@ -7,11 +7,12 @@ import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { runScopesForSub, scopeTitle } from "../lib/evidenceScope";
 import { departmentForScope, departmentPair } from "../lib/departments";
 import {
-  emptySession, sortedSessions, sessionSlot, dayNumbers, sessionScopes, planWarnings,
+  emptySession, sortedSessions, sessionSlot, dayNumbers, sessionScopes, planWarnings, sessionKind,
   type AuditSession,
 } from "../lib/auditPlan";
 import { buildAuditWorkbook, workbookBytes, workbookFileName, XLSX_MIME, SHEET_NAMES } from "../lib/auditWorkbook";
 import { downloadBinary } from "../lib/auditCsvExport";
+import { CalendarImportPanel } from "../components/ui/CalendarImportPanel";
 
 const ALL_SCOPES = GD4_SUB_CRITERIA.flatMap((s) => runScopesForSub(s.id));
 
@@ -84,6 +85,8 @@ export function AuditPlan() {
         </p>
       </Card>
 
+      <Card><CalendarImportPanel /></Card>
+
       <Card>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
           <h3 style={{ margin: 0, fontSize: 14 }}>Schedule ({sessions.length} session{sessions.length === 1 ? "" : "s"})</h3>
@@ -143,10 +146,19 @@ function SessionRow({ session: s, index, dayLabel, divisionOf, onChange, onRemov
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const scopes = sessionScopes(s);
+  const kind = sessionKind(s);
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, marginTop: 10, background: "#fff" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>Session {index}{dayLabel && ` · ${dayLabel}`}{sessionSlot(s) && ` · ${sessionSlot(s)}`}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>
+          {kind === "programme" ? "Programme day" : kind === "support" ? "Supporting slot" : `Session ${index}`}
+          {dayLabel && ` · ${dayLabel}`}{s.day && ` · ${s.day}`}{sessionSlot(s) && ` · ${sessionSlot(s)}`}
+          {s.activityType && ` · ${s.activityType}`}
+        </span>
+        {/* Kept verbatim from the calendar and shown on every row, so a
+            tentative plan can never be read as a confirmed one. */}
+        {s.status && <span style={{ fontSize: 10, fontWeight: 700, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 999, padding: "1px 7px" }}>{s.status}</span>}
+        {s.importKey && <span style={{ fontSize: 10, color: "#94a3b8" }}>from the calendar</span>}
         <button onClick={onRemove} style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff" }}>Remove</button>
       </div>
       <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))" }}>
@@ -167,6 +179,12 @@ function SessionRow({ session: s, index, dayLabel, divisionOf, onChange, onRemov
         </label>
       </div>
 
+      {(s.activity || s.focus) && (
+        <div style={{ fontSize: 11.5, color: "#475569", marginTop: 8, lineHeight: 1.6 }}>
+          {s.activity && <div><b>Activity:</b> {s.activity}</div>}
+          {s.focus && <div><b>Focus:</b> {s.focus}</div>}
+        </div>
+      )}
       <div style={{ marginTop: 8 }}>
         <button onClick={() => setPickerOpen((o) => !o)} style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "4px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#f8fafc", color: INK }}>
           {pickerOpen ? "▾" : "▸"} Areas to audit ({s.scopeIds.length})

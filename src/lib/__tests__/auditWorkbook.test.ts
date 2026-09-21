@@ -186,6 +186,14 @@ describe("the schedule helpers", () => {
     expect(d.get("2026-04-02")).toBe(2);
   });
 
+  it("does not warn about a supporting slot or a programme day", () => {
+    const w = planWarnings(EMPTY_PLAN_HEADER, [
+      sess({ id: "lunch", scopeIds: [], kind: "support", startTime: "12:30" }),
+      sess({ id: "buffer", scopeIds: [], kind: "programme", startTime: "" }),
+    ]).join(" ");
+    expect(w).not.toMatch(/covers? no GD4 area/);
+  });
+
   it("resolves a session's areas to department and real documents", () => {
     const [s] = sessionScopes(sess({ scopeIds: ["1.1"] }));
     expect(s.department).toBe("CG");
@@ -193,7 +201,10 @@ describe("the schedule helpers", () => {
   });
 
   it("warns about a session that audits nothing, and about duplicates", () => {
-    const w = planWarnings(EMPTY_PLAN_HEADER, [sess({ id: "a", scopeIds: [] }), sess({ id: "b" }), sess({ id: "c" })]);
+    // An AUDIT row with no area. A supporting slot or a programme day covering
+    // nothing is correct by design, and warning about those would fire on
+    // every lunch break in the imported IQA calendar.
+    const w = planWarnings(EMPTY_PLAN_HEADER, [sess({ id: "a", scopeIds: [], kind: "audit" }), sess({ id: "b" }), sess({ id: "c" })]);
     expect(w.join(" ")).toMatch(/1 session covers no GD4 area/);
     expect(w.join(" ")).toMatch(/Covered in more than one session: 4\.1/);
     expect(w.join(" ")).toMatch(/No lead auditor named/);

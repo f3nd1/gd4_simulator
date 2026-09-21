@@ -1068,6 +1068,10 @@ export type WorkspaceState = {
   addAuditSession: (s: AuditSession) => void;
   updateAuditSession: (id: string, patch: Partial<AuditSession>) => void;
   removeAuditSession: (id: string) => void;
+  // Applies a confirmed IQA-calendar import. Whole-list replacement rather
+  // than a per-row action so an import lands in ONE write: a half-applied
+  // calendar is a worse outcome than a refused one.
+  setAuditSessions: (list: AuditSession[]) => void;
   setPolicyDocEdit: (code: string, patch: PolicyDocEdit) => void;
   clearPolicyDocEdit: (code: string) => void;
   addDepartment: (d: Department) => void;
@@ -4588,6 +4592,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       addAuditSession: (sess) => set((s) => ({ auditSessions: [...s.auditSessions, sess] })),
       updateAuditSession: (id, patch) => set((s) => ({ auditSessions: s.auditSessions.map((x) => (x.id === id ? { ...x, ...patch } : x)) })),
       removeAuditSession: (id) => set((s) => ({ auditSessions: s.auditSessions.filter((x) => x.id !== id) })),
+      setAuditSessions: (list) => set({ auditSessions: list }),
       setPolicyDocEdit: (code, patch) => set((s) => ({
         policyDocEdits: { ...s.policyDocEdits, [code]: { ...s.policyDocEdits?.[code], ...patch } },
       })),

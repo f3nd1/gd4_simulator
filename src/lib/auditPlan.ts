@@ -37,6 +37,13 @@ export const EMPTY_PLAN_HEADER: AuditPlanHeader = {
 // One timed session. `scopeIds` are GD4 run scopes, so the areas, requirement
 // references, owning department and controlled documents are all derived from
 // the one source rather than typed again per audit.
+// What a row in the calendar actually is. Derived from what the row CONTAINS,
+// not from its Activity type text, which is the file's own vocabulary and will
+// change: an area makes it an audit, a time with no area makes it a supporting
+// slot (opening meeting, lunch, wrap-up), neither makes it a whole programme
+// day (self-check, PPD revisions, CAP rectification, buffer).
+export type SessionKind = "audit" | "support" | "programme";
+
 export type AuditSession = {
   id: string;
   day: string;          // ISO date
@@ -46,10 +53,32 @@ export type AuditSession = {
   auditorNames: string;
   scopeIds: string[];
   notes: string;
+  // ── Everything below arrived with the IQA calendar import. All optional, so
+  // a session added by hand before this existed keeps working untouched and no
+  // store migration is needed.
+  kind?: SessionKind;
+  dayLabel?: string;    // the file's own Day cell, kept verbatim so it round-trips
+  endTime?: string;     // the file's End cell; not recomputed from the duration
+  activityType?: string;
+  activity?: string;
+  focus?: string;
+  // "Tentative" and the like, kept verbatim and shown, so a tentative plan
+  // never reads as confirmed.
+  status?: string;
+  // Identity for re-import. Absent on a session added by hand, which is what
+  // stops an import ever touching one.
+  importKey?: string;
 };
 
+// Total over a session written before kind existed, and over one added by hand.
+export function sessionKind(s: AuditSession): SessionKind {
+  if (s.kind) return s.kind;
+  if (s.scopeIds?.length) return "audit";
+  return s.startTime ? "support" : "programme";
+}
+
 export function emptySession(): AuditSession {
-  return { id: `SESS-${Date.now().toString(36).toUpperCase()}`, day: "", startTime: "", durationMins: 60, auditeeFunction: "", auditorNames: "", scopeIds: [], notes: "" };
+  return { id: `SESS-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`, day: "", startTime: "", durationMins: 60, auditeeFunction: "", auditorNames: "", scopeIds: [], notes: "", kind: "audit" };
 }
 
 // Sessions in the order they actually run. Sessions with no day or time sort
@@ -67,6 +96,10 @@ export function sortedSessions(sessions: AuditSession[]): AuditSession[] {
 // is not a slot.
 export function sessionSlot(s: AuditSession): string {
   if (!s.startTime) return "";
+  // The file gives an End time of its own. Prefer it over recomputing from the
+  // duration: where the two disagree the file is the plan of record, and
+  // silently printing a different end time would be this app inventing one.
+  if (s.endTime) return `${s.startTime}-${s.endTime}`;
   const m = /^(\d{1,2}):(\d{2})$/.exec(s.startTime);
   if (!m || !s.durationMins) return s.startTime;
   const end = Number(m[1]) * 60 + Number(m[2]) + s.durationMins;
@@ -106,7 +139,7 @@ export function planWarnings(header: AuditPlanHeader, sessions: AuditSession[]):
   const out: string[] = [];
   if (!header.leadAuditor.trim()) out.push("No lead auditor named.");
   if (!sessions.length) out.push("The schedule has no sessions yet.");
-  const empty = sessions.filter((s) => !s.scopeIds?.length).length;
+  const empty = sessions.filter((s) => sessionKind(s) === "audit" && !s.scopeIds?.length).length;
   if (empty) out.push(`${empty} session${empty === 1 ? " covers" : "s cover"} no GD4 area, so nothing would be checked in ${empty === 1 ? "it" : "them"}.`);
   const undated = sessions.filter((s) => !s.day).length;
   if (undated) out.push(`${undated} session${undated === 1 ? " has" : "s have"} no date.`);
