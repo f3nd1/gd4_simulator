@@ -60,11 +60,23 @@ export type AuditSession = {
   dayLabel?: string;    // the file's own Day cell, kept verbatim so it round-trips
   endTime?: string;     // the file's End cell; not recomputed from the duration
   activityType?: string;
+  // The file's Criterion cell, kept verbatim. It looked like a derived value
+  // and is not: the calendar uses it as a BLOCK label, tagging the opening
+  // meeting, lunch and wrap-up rows of a C4 day as "C4" even though those rows
+  // carry no GD4 area to derive it from. Deriving it therefore blanked 34
+  // supporting rows on export. It is still cross-checked against the area
+  // where there IS one, so a row labelled C5 under area 4.1 is reported.
+  criterionLabel?: string;
   activity?: string;
   focus?: string;
   // "Tentative" and the like, kept verbatim and shown, so a tentative plan
   // never reads as confirmed.
   status?: string;
+  // The literal the file used to say "nobody yet" ("TBC", "TBA"). auditorNames
+  // stays empty so the roster never gains an auditor called TBC, but the word
+  // is remembered so the export writes back exactly what the file said. Once a
+  // real auditor is entered, auditorNames wins and this is not printed.
+  auditorsPlaceholder?: string;
   // Identity for re-import. Absent on a session added by hand, which is what
   // stops an import ever touching one.
   importKey?: string;

@@ -43,6 +43,13 @@ export function normaliseAuditors(raw: string): string {
   return UNASSIGNED.test(t) ? "" : t;
 }
 
+// The unassigned literal itself, so the export can write back exactly what the
+// file said instead of a blank. Empty when a real name was given.
+export function auditorsPlaceholder(raw: string): string {
+  const t = (raw ?? "").trim();
+  return UNASSIGNED.test(t) ? t : "";
+}
+
 export type CalendarRow = { rowNumber: number; cells: Record<string, string> };
 
 export type Disagreement = { rowNumber: number; scopeId: string; field: string; inFile: string; inRegister: string };
@@ -197,7 +204,9 @@ function collectDisagreements(rowNumber: number, scopeId: string, c: Record<stri
 // exact after that normalisation rather than fuzzy: a false "these agree" is
 // what would hide a real difference in ownership.
 function sameish(a: string, b: string): boolean {
-  const n = (v: string) => v.toLowerCase().replace(/^criterion\s*/, "").replace(/[&]/g, "and").replace(/[^a-z0-9;]+/g, " ").trim();
+  // "C4", "Criterion 4" and "4" are the same criterion written three ways;
+  // reporting those as disagreements would bury the real ones.
+  const n = (v: string) => v.toLowerCase().replace(/^criterion\s*/, "").replace(/^c(?=\d)/, "").replace(/[&]/g, "and").replace(/[^a-z0-9;]+/g, " ").trim();
   return n(a) === n(b);
 }
 
@@ -216,10 +225,12 @@ function sessionFromRow(c: Record<string, string>, kind: SessionKind, key: strin
     // owning department: an auditee is a person or function, not a department.
     auditeeFunction: prior?.auditeeFunction ?? "",
     auditorNames: normaliseAuditors(c.Auditors ?? ""),
+    auditorsPlaceholder: auditorsPlaceholder(c.Auditors ?? "") || undefined,
     scopeIds: scopeId ? [scopeId] : [],
     notes: prior?.notes ?? "",
     kind,
     activityType: (c["Activity type"] ?? "").trim(),
+    criterionLabel: (c.Criterion ?? "").trim() || undefined,
     activity: (c.Activity ?? "").trim(),
     focus: (c.Focus ?? "").trim(),
     status: (c.Status ?? "").trim(),
@@ -230,7 +241,9 @@ function sessionFromRow(c: Record<string, string>, kind: SessionKind, key: strin
 const COMPARED: [keyof AuditSession, string][] = [
   ["day", "Date"], ["dayLabel", "Day"], ["startTime", "Start"], ["endTime", "End"],
   ["durationMins", "Duration"], ["activityType", "Activity type"], ["activity", "Activity"],
-  ["focus", "Focus"], ["auditorNames", "Auditors"], ["status", "Status"],
+  ["focus", "Focus"], ["criterionLabel", "Criterion"],
+  ["auditorNames", "Auditors"], ["auditorsPlaceholder", "Auditors (unassigned)"],
+  ["status", "Status"],
 ];
 
 export function describeChanges(before: AuditSession, after: AuditSession): string[] {
@@ -270,7 +283,9 @@ export function calendarRowsOut(sessions: AuditSession[]): string[][] {
       s.endTime ?? "",
       s.durationMins ? String(s.durationMins) : "",
       s.activityType ?? "",
-      scopeId ? scopeId.split(".")[0] : "",
+      // The file's own label where it gave one, so a supporting row keeps the
+      // block it belongs to; derived from the area only when it did not.
+      s.criterionLabel || (scopeId ? scopeId.split(".")[0] : ""),
       scopeId,
       scopeId ? scopeTitle(scopeId) : "",
       dept ? departmentPair(dept) : "",
@@ -278,7 +293,9 @@ export function calendarRowsOut(sessions: AuditSession[]): string[][] {
       s.activity ?? "",
       s.focus ?? "",
       scopeId ? auditorMustBe(scopeId) : "",
-      s.auditorNames ?? "",
+      // A real name wins; otherwise write back the file's own "TBC", so the
+      // round trip is exact rather than silently blanking the cell.
+      s.auditorNames || s.auditorsPlaceholder || "",
       s.status ?? "",
     ];
   });

@@ -153,6 +153,40 @@ describe("status and auditors", () => {
     expect(normaliseAuditors("R. Lim")).toBe("R. Lim");
     expect(preview(csv(PROGRAMME)).create[0].auditorNames).toBe("");
   });
+
+  it("writes the file's own TBC back out, so the round trip is exact", () => {
+    const [s] = preview(csv(PROGRAMME)).create;
+    expect(s.auditorsPlaceholder).toBe("TBC");
+    expect(calendarRowsOut([s])[0][14]).toBe("TBC");
+  });
+
+  it("stops printing TBC once a real auditor is entered", () => {
+    const [s] = preview(csv(PROGRAMME)).create;
+    expect(calendarRowsOut([{ ...s, auditorNames: "R. Lim" }])[0][14]).toBe("R. Lim");
+  });
+
+  it("keeps the file's Criterion label on a row with no area to derive it from", () => {
+    // The calendar tags a C4 day's lunch and wrap-up rows "C4". Deriving the
+    // column blanked every one of those on export.
+    const lunch = `2026-10-12,Mon,12:30,13:30,60,Priority IQA: C4 / C5,C4,,,,,Lunch,,,TBC,Tentative`;
+    const [s] = preview(csv(lunch)).create;
+    expect(s.criterionLabel).toBe("C4");
+    expect(calendarRowsOut([s])[0][6]).toBe("C4");
+  });
+
+  it("still derives a criterion for a session added by hand", () => {
+    const byHand: AuditSession = { id: "H", day: "2026-11-02", startTime: "09:00", durationMins: 60, auditeeFunction: "", auditorNames: "", scopeIds: ["4.4"], notes: "" };
+    expect(calendarRowsOut([byHand])[0][6]).toBe("4");
+  });
+
+  it("treats C4, Criterion 4 and 4 as the same criterion", () => {
+    for (const c of ["C4", "Criterion 4", "4"]) {
+      const row = `2026-10-06,Tue,09:00,10:30,90,IQA,${c},4.1,,,,IQA,x,,R. Lim,Tentative`;
+      expect(preview(csv(row)).disagreements.filter((d) => d.field === "Criterion")).toEqual([]);
+    }
+    const wrong = `2026-10-06,Tue,09:00,10:30,90,IQA,C5,4.1,,,,IQA,x,,R. Lim,Tentative`;
+    expect(preview(csv(wrong)).disagreements.find((d) => d.field === "Criterion")).toMatchObject({ inFile: "C5", inRegister: "4" });
+  });
 });
 
 describe("re-import never duplicates", () => {
@@ -226,7 +260,7 @@ describe("round trip", () => {
 
   it("round-trips a programme day with its blank cells intact", () => {
     const [row] = calendarRowsOut(preview(csv(PROGRAMME)).create);
-    expect(row).toEqual(["2026-10-01", "Thu", "", "", "", "Self-check", "", "", "", "", "", "Process owner self-check", "All areas", "", "", "Tentative"]);
+    expect(row).toEqual(["2026-10-01", "Thu", "", "", "", "Self-check", "", "", "", "", "", "Process owner self-check", "All areas", "", "TBC", "Tentative"]);
   });
 });
 
