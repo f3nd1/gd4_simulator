@@ -59,6 +59,19 @@ export const PLAIN_VERDICT: Record<EvidenceVerdict, PlainVerdict> = {
 export const COULD_NOT_CHECK_NOTE =
   '"Could not check" is not a fail. Either the documents in your folder did not say either way, or the tool could not confirm what it found. Each row below says which, and what to do about it.';
 
+// Which of the two unjudged notes applies, if either. The screen and both
+// exports ask this, and they must agree: a run with nothing unjudged must
+// carry NO paragraph explaining "Could not check", because a warning about a
+// result that is not there reads as a result.
+//
+// On screen the COULD_NOT_CHECK_NOTE is folded behind a control on the count
+// it explains; MOSTLY_UNCHECKED_NOTE stays in the open, because a run that
+// came back mostly unjudged is about the whole result rather than one row.
+export function unjudgedNoteFor(counts: SelfCheckCounts): string {
+  if (counts.couldNotCheck === 0) return "";
+  return mostlyUnchecked(counts) ? MOSTLY_UNCHECKED_NOTE : COULD_NOT_CHECK_NOTE;
+}
+
 // The engine writes its own reason for an unjudged line, in its own words:
 // "the extraction pass returned 1 candidate passage ... none could be verified
 // as verbatim ... OCR/vision artifacts ... extraction defect". That is written
@@ -1044,10 +1057,7 @@ export function buildSelfCheckHtml(opts: {
     <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), PRINT_BAND_PALETTE, { idSuffix: "Feeds", feeds })}</div>
     <p class="muted">${escapeHtml(feeds.caption)}</p>`;
   const bandLine = view === "overview" ? bandLineOf(band, ownBandOf(bandWorking)) : VIEW_NOTE[view];
-  // Same condition as the screen: a run with nothing unjudged must not carry a
-  // paragraph explaining "Could not check", which reads as a warning about a
-  // result that is not there.
-  const unjudgedNote = counts.couldNotCheck === 0 ? "" : mostlyUnchecked(counts) ? MOSTLY_UNCHECKED_NOTE : COULD_NOT_CHECK_NOTE;
+  const unjudgedNote = unjudgedNoteFor(counts);
   return `
     <h1>Self-check: ${escapeHtml(areaLabel)}${view === "procedure-only" ? " (written procedure only)" : view === "overview" ? "" : ` — ${escapeHtml(VIEW_LABEL[view])}`}</h1>
     <p class="muted">${escapeHtml(areaDescription)}</p>

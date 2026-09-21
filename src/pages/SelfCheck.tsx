@@ -22,7 +22,7 @@ import { useScoringConfigStore } from "../store/useScoringConfigStore";
 import {
   toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv, buildSelfCheckHtml,
   selfCheckFilename, describeBlock, plainRunError, plainDetail, planFor, toProcedureRows, toRecordsRows,
-  SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE, NO_BAND_LINE,
+  SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE, NO_BAND_LINE, unjudgedNoteFor,
   VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, TABS_EXPLAINED, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
   citedText, missingText, expectedEvidenceGroups, VERDICT_LEGEND, tallySlices, feedsFor, SUMMARY_LABEL,
   splitMismatchWarning,
@@ -78,7 +78,7 @@ const LOG_TONE: Record<string, string> = { info: "#475569", good: "#15803d", war
 // page: those are titled from VIEW_LABEL in lib/selfCheck.ts, which names the
 // three VIEWS (overview / procedure / records), not these tabs.
 const SUPPORT_TABS = [
-  { key: "how", label: "Your band" },
+  { key: "how", label: "Band score" },
   { key: "files", label: "Evidence & files" },
   { key: "outcomes", label: "Outcomes & review" },
 ] as const;
@@ -177,6 +177,11 @@ export function SelfCheck() {
   const disclaimerSnoozedAt = useGuidanceStore((g) => g.disclaimerSnoozedAt);
   const snoozeDisclaimer = useGuidanceStore((g) => g.snoozeDisclaimer);
   const [scope, setScope] = useState("");
+  // The "could not check is not a fail" sentence, folded away. It only means
+  // anything to somebody who HAS such a row, and it was sitting full width in
+  // front of everybody on every run. Same control as the tab caveat above: a
+  // real button, so it works on click, on keyboard and on a phone.
+  const [cncNoteOpen, setCncNoteOpen] = useState(false);
   const [procLink, setProcLink] = useState("");
   const [evLink, setEvLink] = useState("");
   // Which half the result on screen came from. A procedure-only result answers
@@ -1976,8 +1981,20 @@ export function SelfCheck() {
                   <Tally n={counts.complies} label={VIEW_TALLY[view].complies} tone="good" />
                   {VIEW_TALLY[view].partly && <Tally n={counts.partly} label={VIEW_TALLY[view].partly!} tone="medium" />}
                   <Tally n={counts.doesNot} label={VIEW_TALLY[view].doesNot} tone="critical" />
-                  <Tally n={counts.couldNotCheck} label="could not check" tone="neutral" />
+                  {/* The explanation rides on the count it explains, and only
+                      when there is one. Nothing to say about zero rows. */}
+                  <Tally
+                    n={counts.couldNotCheck} label="could not check" tone="neutral"
+                    info={unjudgedNoteFor(counts) === COULD_NOT_CHECK_NOTE
+                      ? { open: cncNoteOpen, onToggle: () => setCncNoteOpen((v) => !v) }
+                      : undefined}
+                  />
                 </div>
+                {cncNoteOpen && unjudgedNoteFor(counts) === COULD_NOT_CHECK_NOTE && (
+                  <p style={{ ...muted, margin: "8px 0 0", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px" }}>
+                    {COULD_NOT_CHECK_NOTE}
+                  </p>
+                )}
 
                 {/* Half and half: the coverage bar for this tab on the left,
                     the ONE APSR graphic this tab gets on the right. There used
@@ -1997,12 +2014,6 @@ export function SelfCheck() {
                   )}
                 </div>
                 </div>
-
-            {counts.couldNotCheck > 0 && !mostlyUnchecked(counts) && (
-              <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px" }}>
-                {COULD_NOT_CHECK_NOTE}
-              </p>
-            )}
 
             {mostlyUnchecked(counts) && (
               <p style={{ ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af", borderRadius: 8, padding: "9px 11px" }}>
@@ -2195,8 +2206,12 @@ export function SelfCheck() {
                 </div>
                 {/* The rule itself is stated once, under the tabs. This says
                     only what each COUNT means, which that sentence does not. */}
+                {/* One sentence, down from three. The dropped third sentence
+                    pointed at the Procedure and Records tabs, which are two
+                    clicks away and named on screen; the two halves of the
+                    distinction are the part that is not obvious. */}
                 <p className="sc-combo-note" style={muted}>
-                  Documented but no records means the procedure is fine and the proof is missing. Records but nothing documented means it happens but the procedure does not say so. The Procedure and Records tabs show which requirement is which.
+                  Documented with no records means the proof is missing; records with nothing documented means it happens but your written procedure does not say so.
                 </p>
               </div>
             )}
@@ -3362,12 +3377,22 @@ function Svg({ html }: { html: string }) {
   return <div className="sc-band-graphic" style={{ marginTop: 6, overflowX: "auto" }} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-function Tally({ n, label, tone }: { n: number; label: string; tone: string }) {
+function Tally({ n, label, tone, info }: { n: number; label: string; tone: string; info?: { open: boolean; onToggle: () => void } }) {
   const t = TONE_BG[tone];
   return (
     <div style={{ background: t.bg, color: t.fg, borderRadius: 10, padding: "9px 14px", minWidth: 96 }}>
       <div style={{ fontSize: 21, fontWeight: 800, lineHeight: 1 }}>{n}</div>
       <div style={{ fontSize: 12, fontWeight: 600, marginTop: 3 }}>{label}</div>
+      {/* A button, not a title= tooltip: a tooltip needs a hover, which a
+          phone cannot give and which the user has already reported once. */}
+      {info && (
+        <button
+          type="button" onClick={info.onToggle} aria-expanded={info.open}
+          style={{ marginTop: 4, padding: 0, border: 0, background: "none", cursor: "pointer", font: "inherit", fontSize: 11.5, fontWeight: 700, color: t.fg, textDecoration: "underline", opacity: 0.85 }}
+        >
+          &#9432; {info.open ? "Hide" : "What this means"}
+        </button>
+      )}
     </div>
   );
 }

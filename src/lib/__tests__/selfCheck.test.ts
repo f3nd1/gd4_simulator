@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   PLAIN_VERDICT, toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv,
   buildSelfCheckHtml, selfCheckFilename, describeBlock, plainRunError, plainWhy, plainDetail, COULD_NOT_CHECK_NOTE,
+  unjudgedNoteFor, MOSTLY_UNCHECKED_NOTE,
   planFor, toProcedureRows, PPD_PLAIN_VERDICT, PROCEDURE_ONLY_NOTE, bandLineOf, NO_BAND_LINE,
   unjudgedBothSides, toRecordsRows, NO_EVIDENCE_FIRST_STEP,
   combinationOf, countCombinations, VIEW_TALLY, VIEW_NOTE, VIEW_LABEL, COMBINATION_LABEL, UNJUDGED_BOTH_SIDES_WHY,
@@ -611,5 +612,25 @@ describe("an unjudged pair explains both halves, not just the records", () => {
     const [r] = toSelfCheckRows([row({ verdict: "Not met", ppdVerdict: "Adequate", evidenceChunkIds: [], comment: "The extraction pass read every provided evidence document and returned no candidate passage for this line (0 extracted)." })]);
     expect(r.why).not.toBe(UNJUDGED_BOTH_SIDES_WHY);
     expect(r.why).toContain("Nothing in your records spoke to this requirement");
+  });
+});
+
+// Which unjudged note applies. The screen and both exports ask this one
+// function, so a run with nothing unjudged cannot end up carrying a paragraph
+// about "Could not check" on one surface and not the other.
+describe("unjudgedNoteFor", () => {
+  const counts = (couldNotCheck: number, total: number) =>
+    ({ complies: total - couldNotCheck, partly: 0, doesNot: 0, couldNotCheck, total });
+
+  it("says nothing at all when nothing came back unjudged", () => {
+    expect(unjudgedNoteFor(counts(0, 6))).toBe("");
+  });
+
+  it("explains the count when a few lines are unjudged", () => {
+    expect(unjudgedNoteFor(counts(1, 6))).toBe(COULD_NOT_CHECK_NOTE);
+  });
+
+  it("switches to the whole-run note when most of the run is unjudged", () => {
+    expect(unjudgedNoteFor(counts(6, 6))).toBe(MOSTLY_UNCHECKED_NOTE);
   });
 });
