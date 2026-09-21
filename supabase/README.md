@@ -26,9 +26,10 @@ are in the list yourself. A missing table never is.
 | `01-urgent-drop-delete.sql` | Any time, no deploy involved | Removes the ability to wipe the workspace with the publishable key |
 | `02-after-deploy-require-signin.sql` | **After** the sign-in build | Requires a signed-in United Ceres account on every request |
 | `03-restrict-to-named-people.sql` | **Before** the allow-list build | Narrows that to the named people in `allowed_users` |
+| `04-admin-manages-the-list.sql` | **Before** the People-screen build | Lets the admin add and remove people from inside the app |
 | `functions/drive-oauth/` | Deployed separately, see below | Mints Google Drive tokens; also reads `allowed_users` |
 
-`01` → `02` → `03` is the upgrade path for a project that already exists.
+`01` → `02` → `03` → `04` is the upgrade path for a project that already exists.
 `schema.sql` is the same thing for a project that does not.
 
 ## Running one, click by click

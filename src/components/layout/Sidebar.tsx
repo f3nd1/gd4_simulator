@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { visibleNav, type NavItem } from "../../nav";
+import { useSession } from "../../lib/auth/useSession";
+import { isAdminEmail } from "../../lib/auth/domain";
 import { useWorkspaceStore } from "../../store/useWorkspaceStore";
 import { useScored } from "../../hooks/useScored";
 import { useAllFindings } from "../../hooks/useAllFindings";
@@ -12,7 +14,8 @@ type Props = { open: boolean; onClose: () => void };
 export function Sidebar({ open, onClose }: Props) {
   const location = useLocation();
   const showDeveloperTools = useWorkspaceStore((s) => s.showDeveloperTools);
-  const NAV = visibleNav(showDeveloperTools);
+  const session = useSession();
+  const NAV = visibleNav(showDeveloperTools, session.status === "signed-in" && isAdminEmail(session.email));
 
   // ── Progress ticks — driven ONLY by real, detectable done-state ──────────
   // (see lib/navProgress.ts). A step without a reliable signal is number-only.

@@ -30,3 +30,26 @@ describe("developer-tools visibility", () => {
     expect(devToolsRedirect(true)).toBeNull();
   });
 });
+
+// The People page is admin-only. The sidebar and the Help page both derive
+// from NAV, so listing it to somebody who will be refused is a dead end in
+// two places at once. This is convenience, not protection: the insert and
+// delete policies on allowed_users are what actually refuse.
+describe("admin-only routes in the nav", () => {
+  const allPathsOf = (groups: ReturnType<typeof visibleNav>) =>
+    groups.flatMap((g) => [...g.items, ...(g.tools ?? [])]).map((i) => i.path);
+
+  it("shows the People page to the admin", () => {
+    expect(allPathsOf(visibleNav(true, true))).toContain("/people");
+  });
+
+  it("hides it from everybody else, developer tools on or off", () => {
+    expect(allPathsOf(visibleNav(true, false))).not.toContain("/people");
+    expect(allPathsOf(visibleNav(false, false))).not.toContain("/people");
+  });
+
+  it("still hides the developer pages independently of who you are", () => {
+    expect(allPathsOf(visibleNav(false, true))).not.toContain("/change-log");
+    expect(allPathsOf(visibleNav(false, true))).toContain("/people");
+  });
+});

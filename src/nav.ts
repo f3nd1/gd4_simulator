@@ -105,6 +105,7 @@ export const NAV: NavGroup[] = [
     items: [
       { path: "/settings", label: "Settings", hint: "Configure Supabase, OpenAI and Google Drive integrations" },
       { path: "/gd4-scoring-setup", label: "GD4 Scoring Setup", hint: "Tune scoring weights, award thresholds and criteria points" },
+      { path: "/people", label: "Who can sign in", hint: "Add and remove the people allowed to open this app. Only the audit lead sees this." },
     ],
     tools: [
       { path: "/ai-memories", label: "AI Memories", hint: "Manage calibration memories used to guide AI audit outputs" },
@@ -138,9 +139,18 @@ export const DEVELOPER_TOOL_PATHS = [
 // NAV with developer-only entries removed when the toggle is off. Filters
 // BOTH the core steps and the tools tail. Groups that end up with no items
 // and no tools are dropped entirely (no headerless stubs in the sidebar).
-export function visibleNav(showDeveloperTools: boolean): NavGroup[] {
-  if (showDeveloperTools) return NAV;
-  const keep = (i: NavItem) => !DEVELOPER_TOOL_PATHS.includes(i.path);
+// Routes only the admin may open. Listing one to somebody who will be refused
+// is a dead end, so the sidebar drops it; the route guard and, underneath it,
+// the database policies are what actually refuse.
+export const ADMIN_ONLY_PATHS = ["/people"];
+
+export function visibleNav(showDeveloperTools: boolean, isAdmin = true): NavGroup[] {
+  const hidden = new Set([
+    ...(showDeveloperTools ? [] : DEVELOPER_TOOL_PATHS),
+    ...(isAdmin ? [] : ADMIN_ONLY_PATHS),
+  ]);
+  if (hidden.size === 0) return NAV;
+  const keep = (i: NavItem) => !hidden.has(i.path);
   return NAV
     .map((g) => ({ ...g, items: g.items.filter(keep), tools: g.tools?.filter(keep) }))
     .filter((g) => g.items.length > 0 || (g.tools?.length ?? 0) > 0);

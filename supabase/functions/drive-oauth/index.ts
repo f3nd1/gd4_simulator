@@ -59,6 +59,11 @@ const ROW_ID = "default";
 // pins the two copies together so they cannot drift apart.
 const ALLOWED_EMAIL_DOMAIN = "unitedceres.edu.sg";
 const ALLOWED_USERS_TABLE = "allowed_users";
+// The admin short-circuits the list, exactly as public.is_allowed_user() does
+// in Postgres. Without this the two disagree: with the admin's own row
+// missing, the app would let them in and this function would refuse them
+// Google Drive, citing a migration they do not need to run.
+const ADMIN_EMAIL = "felix@unitedceres.edu.sg";
 
 export function emailIsAllowed(email: string | null | undefined): boolean {
   if (!email) return false;
@@ -179,6 +184,7 @@ Deno.serve(async (req) => {
     if (!emailIsAllowed(email)) {
       return json({ error: `That account (${email ?? "unknown"}) is not a United Ceres account.` }, 403);
     }
+    const isAdmin = (email ?? "").trim().toLowerCase() === ADMIN_EMAIL;
     // Then the list itself. Matched on the generated lower-cased column, not
     // on `email`, because addresses are typed by hand into the Supabase
     // dashboard and their case cannot be relied on. `.eq` rather than a LIKE:
@@ -192,11 +198,11 @@ Deno.serve(async (req) => {
     // A failure to READ the list is not permission to skip it. This runs with
     // the service-role key, so the only realistic cause is the table not
     // existing yet, which must not silently open the door.
-    if (listErr) {
+    if (listErr && !isAdmin) {
       console.error("[drive-oauth] could not read the allowed-users list:", listErr.message);
       return json({ error: `The server could not check whether your account is permitted (${listErr.message}). If this project has not had supabase/03-restrict-to-named-people.sql run on it yet, run it.` }, 500);
     }
-    if (!listed) {
+    if (!listed && !isAdmin) {
       return json({ error: `That account (${email ?? "unknown"}) is not on the list of people permitted to use this app. Ask Felix to add you.` }, 403);
     }
   }

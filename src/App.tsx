@@ -37,6 +37,8 @@ import { FinalReport } from "./pages/FinalReport";
 import { DataDashboard } from "./pages/DataDashboard";
 import { Help } from "./pages/Help";
 import { SelfCheck } from "./pages/SelfCheck";
+import { People } from "./pages/People";
+import { PeopleRoute } from "./components/layout/PeopleRoute";
 
 export default function App() {
   return (
@@ -90,6 +92,12 @@ export default function App() {
           <Route path="/finalisation" element={<Finalisation />} />
           <Route path="/export" element={<ExportCentre />} />
           <Route path="/settings" element={<Settings />} />
+          {/* Admin only. The guard refuses rather than redirects, and it is
+              convenience: the write policies on allowed_users are the control
+              (supabase/04-admin-manages-the-list.sql). */}
+          <Route element={<PeopleRoute />}>
+            <Route path="/people" element={<People />} />
+          </Route>
           <Route path="/ai-memories" element={<AIMemories />} />
           <Route path="/prompt-review" element={<PromptReview />} />
           <Route path="/change-log" element={<ChangeLog />} />

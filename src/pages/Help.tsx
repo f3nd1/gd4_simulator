@@ -4,6 +4,8 @@ import { Card } from "../components/ui/Card";
 import { ControlLegend } from "../components/ui/ControlLegend";
 import { INK, GOLD } from "../lib/theme";
 import { visibleNav } from "../nav";
+import { useSession } from "../lib/auth/useSession";
+import { isAdminEmail } from "../lib/auth/domain";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 
 // ─── Page-by-page reference (Users tab tail) ────────────────────────────────
@@ -534,7 +536,11 @@ function DevelopersTab() {
 
 export function Help() {
   const showDeveloperTools = useWorkspaceStore((s) => s.showDeveloperTools);
-  const NAV = visibleNav(showDeveloperTools);
+  // Same filter as the sidebar. This page derives its whole reference from
+  // NAV, so without the admin flag it would describe a page to somebody who
+  // is refused it.
+  const session = useSession();
+  const NAV = visibleNav(showDeveloperTools, session.status === "signed-in" && isAdminEmail(session.email));
   const [tab, setTab] = useState<"users" | "devs">("users");
   const tabBtn = (active: boolean) => ({
     cursor: "pointer", fontSize: 13, fontWeight: 700, padding: "7px 16px", borderRadius: 8,

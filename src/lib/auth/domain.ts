@@ -29,3 +29,20 @@ export function emailIsAllowed(email: string | null | undefined): boolean {
 
 export const WRONG_DOMAIN_MESSAGE =
   `That Google account is not a United Ceres account. Sign in with your @${ALLOWED_EMAIL_DOMAIN} address.`;
+
+// ── Who manages the allow-list ────────────────────────────────────────────
+//
+// COSMETIC, like everything else in this file: it decides whether the People
+// screen is drawn. The control is public.is_admin() in Postgres (see
+// supabase/04-admin-manages-the-list.sql), which the insert and delete
+// policies on allowed_users consult on every write, including a write made
+// with curl and the publishable key. Editing this constant in a browser grants
+// nothing: the screen appears and every button it offers is refused.
+//
+// A test pins this to the address inside that SQL function, because two copies
+// of a rule is how one of them quietly stops matching.
+export const ADMIN_EMAIL = "felix@unitedceres.edu.sg";
+
+export function isAdminEmail(email: string | null | undefined): boolean {
+  return !!email && email.trim().toLowerCase() === ADMIN_EMAIL;
+}

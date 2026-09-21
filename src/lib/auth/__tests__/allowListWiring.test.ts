@@ -8,13 +8,14 @@ import { readFileSync } from "node:fs";
 // build, a type-check or any other test — it would just quietly stop
 // refusing people.
 const SQL = readFileSync("supabase/03-restrict-to-named-people.sql", "utf8");
+const ADMIN_SQL = readFileSync("supabase/04-admin-manages-the-list.sql", "utf8");
 const SCHEMA = readFileSync("supabase/schema.sql", "utf8");
 const EDGE = readFileSync("supabase/functions/drive-oauth/index.ts", "utf8");
 const APP = readFileSync("src/lib/auth/allowList.ts", "utf8");
 
 describe("the allow-list is one list, read the same way everywhere", () => {
   it("names the same table in all three", () => {
-    for (const [what, src] of [["migration", SQL], ["schema", SCHEMA], ["edge function", EDGE], ["app", APP]] as const) {
+    for (const [what, src] of [["03", SQL], ["04", ADMIN_SQL], ["schema", SCHEMA], ["edge function", EDGE], ["app", APP]] as const) {
       expect(src, what).toContain("allowed_users");
     }
   });
@@ -35,18 +36,30 @@ describe("the allow-list is one list, read the same way everywhere", () => {
     expect(EDGE).toContain("if (!emailIsAllowed(email))");
   });
 
-  it("grants no way to write the list from the app or the browser", () => {
-    // Only a select policy exists. An insert/update/delete policy would let a
-    // signed-in person grant access to anyone, which is the permission system
-    // this deliberately does not have.
-    expect(SQL).toMatch(/create policy "see only your own row" on public\.allowed_users\s+for select to authenticated/);
-    expect(SQL).not.toMatch(/on public\.allowed_users\s+for (insert|update|delete|all)/);
-    expect(SCHEMA).not.toMatch(/on public\.allowed_users\s+for (insert|update|delete|all)/);
+  it("gates every write to the list behind the admin, never the screen", () => {
+    // 04 replaced "no write policies at all" with "only the admin writes".
+    // A write policy that did not name is_admin() would let any signed-in
+    // person grant themselves access with nothing but the publishable key.
+    for (const [what, src] of [["migration", ADMIN_SQL], ["schema", SCHEMA]] as const) {
+      expect(src, what).toMatch(/for insert to authenticated\s+with check \(public\.is_admin\(\)\)/);
+      expect(src, what).toMatch(/for delete to authenticated\s+using \(public\.is_admin\(\)/);
+    }
   });
 
-  it("lets a signed-in person see their own row only", () => {
+  it("grants no UPDATE on the list, so no row can be renamed into somebody else", () => {
+    for (const [what, src] of [["migration", ADMIN_SQL], ["schema", SCHEMA]] as const) {
+      expect(src, what).not.toMatch(/on public\.allowed_users\s+for (update|all)/);
+      expect(src, what).not.toMatch(/for update to authenticated\s+using \(public\.is_admin/);
+    }
+  });
+
+  it("lets a signed-in person see their own row, and the admin see all of them", () => {
+    for (const [what, src] of [["migration", ADMIN_SQL], ["schema", SCHEMA]] as const) {
+      expect(src, what).toContain("using (email_lc = lower(auth.jwt() ->> 'email') or public.is_admin())");
+    }
+    // 03 still carries the narrower original, which 04 drops and replaces.
     expect(SQL).toContain("using (email_lc = lower(auth.jwt() ->> 'email'))");
-    expect(SCHEMA).toContain("using (email_lc = lower(auth.jwt() ->> 'email'))");
+    expect(ADMIN_SQL).toContain('drop policy if exists "see only your own row" on public.allowed_users;');
   });
 
   it("points every workspace_state policy at the list, leaving none on the domain alone", () => {
@@ -60,16 +73,25 @@ describe("the allow-list is one list, read the same way everywhere", () => {
     expect(SQL).toContain('drop policy if exists "ucc read"   on public.workspace_state;');
   });
 
-  it("still grants no delete, on either table", () => {
-    expect(SQL).not.toMatch(/for delete/);
-    expect(SCHEMA).not.toMatch(/for delete/);
+  it("still grants no delete on workspace_state, whatever the list allows", () => {
+    // allowed_users gained a delete policy in 04, deliberately and
+    // admin-only. The audit data must not: nothing in the app deletes a
+    // workspace row, so granting it would only widen what a mistake or a
+    // stolen session can do.
+    for (const [what, src] of [["03", SQL], ["04", ADMIN_SQL], ["schema", SCHEMA]] as const) {
+      const onWorkspace = src.split(/create policy/).filter((b) => /on public\.workspace_state/.test(b));
+      for (const block of onWorkspace) expect(block, what).not.toMatch(/for delete/);
+    }
   });
 
   it("refuses rather than waves through when the Edge Function cannot read the list", () => {
     // A service-role read that errors means something is wrong with the
     // table, not that the caller is fine.
-    expect(EDGE).toMatch(/if \(listErr\) \{[\s\S]*?\}, 500\);/);
-    expect(EDGE).toMatch(/if \(!listed\) \{[\s\S]*?\}, 403\);/);
+    // The admin short-circuits the list here exactly as is_allowed_user()
+    // does in Postgres; everyone else still has to be on it, and a list that
+    // cannot be READ is still a refusal rather than a pass.
+    expect(EDGE).toMatch(/if \(listErr && !isAdmin\) \{[\s\S]*?\}, 500\);/);
+    expect(EDGE).toMatch(/if \(!listed && !isAdmin\) \{[\s\S]*?\}, 403\);/);
   });
 
   it("seeds the four people who must not be locked out", () => {

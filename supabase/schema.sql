@@ -49,29 +49,62 @@ create unique index if not exists allowed_users_email_lc_idx on public.allowed_u
 
 alter table public.allowed_users enable row level security;
 
--- You may read YOUR OWN row and nobody else's: enough for the app to decide
--- whether to let you in, and no way to enumerate who else has access. No
--- write policies at all — the list is edited only from the Supabase
--- dashboard, because letting the app grant access would be a permission
--- system this team does not need.
-create policy "see only your own row" on public.allowed_users
+-- WHO MANAGES THE LIST: one admin, named as a CONSTANT in a function rather
+-- than as a column or a row. Admin-ness is therefore not data, so nothing
+-- that can write data can grant it, and there is no "last admin row" to
+-- delete. It reads no table, which also keeps the policies below from
+-- recursing into the table they protect.
+--
+-- TO CHANGE THE ADMIN: edit the address and run this block again. Keep
+-- src/lib/auth/domain.ts's ADMIN_EMAIL in step; a test pins them together.
+create or replace function public.is_admin()
+returns boolean
+language sql
+stable
+as $$
+  select lower(auth.jwt() ->> 'email') = 'felix@unitedceres.edu.sg';
+$$;
+
+-- Your own row and nobody else's, so a signed-in person cannot enumerate who
+-- has access. The admin sees all of it, because the People screen has to show
+-- a list.
+create policy "see your own row, or all of them if admin" on public.allowed_users
   for select to authenticated
-  using (email_lc = lower(auth.jwt() ->> 'email'));
+  using (email_lc = lower(auth.jwt() ->> 'email') or public.is_admin());
+
+-- THIS is the control on who may change the list. The screen is convenience:
+-- anyone signed in can call this table directly with the publishable key,
+-- which ships in the browser bundle.
+create policy "only the admin adds" on public.allowed_users
+  for insert to authenticated
+  with check (public.is_admin());
+
+-- The second clause refuses the admin's OWN row, so "remove yourself" is
+-- impossible through the API and not merely discouraged in the screen.
+create policy "only the admin removes" on public.allowed_users
+  for delete to authenticated
+  using (public.is_admin() and email_lc <> lower(auth.jwt() ->> 'email'));
+
+-- NO update policy, deliberately: without it nobody can rename an existing
+-- row into somebody else's address.
 
 -- The rule, written once, read by these policies AND (via the same table) by
 -- the drive-oauth Edge Function. NOT security definer: the read policy above
--- already exposes exactly the one row this needs, so it needs no elevated
--- rights and cannot be used to probe other addresses.
+-- already exposes exactly the row this needs, so it needs no elevated rights.
+--
+-- The admin short-circuits BEFORE the row lookup, so emptying allowed_users
+-- entirely costs everyone else their access and costs the admin nothing.
 create or replace function public.is_allowed_user()
 returns boolean
 language sql
 stable
 as $$
-  select (auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg'
-     and exists (
-       select 1 from public.allowed_users
-       where email_lc = lower(auth.jwt() ->> 'email')
-     );
+  select public.is_admin()
+      or ((auth.jwt() ->> 'email') ilike '%@unitedceres.edu.sg'
+          and exists (
+            select 1 from public.allowed_users
+            where email_lc = lower(auth.jwt() ->> 'email')
+          ));
 $$;
 
 create policy "allowed read" on public.workspace_state
