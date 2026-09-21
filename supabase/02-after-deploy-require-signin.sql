@@ -1,4 +1,13 @@
--- STEP 2 of 2. RUN THIS ONLY AFTER the sign-in build is deployed and you have
+-- ═══════════════════════════════════════════════════════════════════════
+-- ORDER: DEPLOY FIRST, then run this.
+-- It requires every request to carry a sign-in, and only the sign-in build sends one. Run early and the live app stops saving.
+--
+-- The rule, every time: whichever one BREAKS IF IT ARRIVES ALONE goes
+-- first. New code that needs a new table -> SQL first. New SQL that needs
+-- new code -> deploy first. See supabase/README.md.
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- STEP 2 of 3. RUN THIS ONLY AFTER the sign-in build is deployed and you have
 -- signed in successfully. Running it before will stop the live app saving
 -- anything, because today's app has no session to present.
 --

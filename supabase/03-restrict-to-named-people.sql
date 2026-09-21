@@ -1,17 +1,18 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- ORDER: RUN THIS FIRST, then deploy.
+-- The app and the drive-oauth function both query allowed_users. A build that ships before the table exists locks everybody out, including you. That happened on a43c855.
+--
+-- The rule, every time: whichever one BREAKS IF IT ARRIVES ALONE goes
+-- first. New code that needs a new table -> SQL first. New SQL that needs
+-- new code -> deploy first. See supabase/README.md.
+-- ═══════════════════════════════════════════════════════════════════════
+
 -- STEP 3. Restrict sign-in to NAMED PEOPLE, not everyone with a
 -- @unitedceres.edu.sg address.
 --
--- RUN THIS BEFORE DEPLOYING THE BUILD THAT CHECKS THE LIST. Unlike 02, which
--- had to wait for its build, this one has to come FIRST: the app and the
--- drive-oauth function both query allowed_users, and a build that ships
--- before the table exists locks everybody out, including you. That happened
--- on a43c855. The rule for next time: when new code REQUIRES a new table,
--- the SQL goes first; when new SQL requires new code (02), the deploy goes
--- first.
---
 -- Running this before the deploy is safe for the old build: it only narrows
 -- who the policies accept, and the people seeded below are accepted either
--- way.
+-- way. That is why "SQL first" is the safe default whenever it is unclear.
 --
 -- WHY THIS EXISTS: students and other staff also have @unitedceres.edu.sg
 -- addresses, so the domain test in 02 is too wide. It is kept as a first gate

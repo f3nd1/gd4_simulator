@@ -36,6 +36,24 @@ Write commit messages with a full body: what changed, why, which mechanism was r
 - After deploying, the browser may cache the old bundle: tell the user to hard-refresh (Ctrl/Cmd+Shift+R) or use incognito. The Change Log page shows the deployed commit hash (`__GIT_INFO__`, baked at build time) — use it to confirm which commit is actually live before debugging "the fix doesn't work".
 - Deploying new code does NOT recompute old audit results — the user must re-run the audit to see new engine behavior.
 
+### A deploy and a database change are a pair — state the order every time
+
+`supabase/*.sql` files are not optional extras: each one is half of a change
+whose other half is a deploy. The wrong order has broken this app twice (02
+run early would have stopped the live app saving; 03 deployed early locked
+every user out, including the audit lead — a43c855). **The rule: whichever
+one breaks if it arrives alone goes first.** New code needing a new table →
+SQL first. New SQL needing new code → deploy first. When unclear, SQL first:
+a policy change that only narrows who is accepted is survivable by the old
+build, a missing table is not.
+
+Never hand the user a deploy instruction without saying which side of it the
+SQL goes on, even when you think it is obvious. Every file carries its own
+`-- ORDER:` banner and `supabase/README.md` holds the rule;
+`lib/auth/__tests__/migrationOrder.test.ts` fails if a new migration is added
+without one. `supabase functions deploy drive-oauth` is its own step and is
+NOT covered by `git pull && npm run build`.
+
 ## Architecture
 
 ### Key data

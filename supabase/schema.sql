@@ -1,3 +1,12 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- ORDER: RUN THIS FIRST, on a brand new project, then deploy.
+-- It creates every table the app reads. Nothing works before it.
+--
+-- The rule, every time: whichever one BREAKS IF IT ARRIVES ALONE goes
+-- first. New code that needs a new table -> SQL first. New SQL that needs
+-- new code -> deploy first. See supabase/README.md.
+-- ═══════════════════════════════════════════════════════════════════════
+
 -- Run this once in the Supabase SQL Editor for your project.
 create table if not exists public.workspace_state (
   id text primary key,
