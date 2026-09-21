@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { useGoogleDriveStore } from "../../store/useGoogleDriveStore";
@@ -8,8 +8,54 @@ import { useChangeLogStore } from "../../store/useChangeLogStore";
 import { useSaveStatusStore } from "../../store/useSaveStatusStore";
 import { flushPendingSaves } from "../../store/supabaseStorage";
 import { VisionBudgetPromptModal } from "../ui/VisionBudgetPromptModal";
+import { useSession } from "../../lib/auth/useSession";
+import { NORMAL_USER_HOME } from "../../lib/auth/pageAccess";
+import { ADMIN_ONLY_REFUSAL } from "../../lib/auth/peopleAdmin";
+import { INK } from "../../lib/theme";
 
 export function Layout() {
+  const session = useSession();
+  const { pathname } = useLocation();
+  // THE guard for the whole workspace, in one place rather than a list of
+  // thirty paths somebody has to remember to extend. Every page except the
+  // self-check renders inside this Layout, so a page added tomorrow is
+  // admin-only by default, which is the direction a mistake should fall.
+  //
+  // It decides what is DRAWN. What refuses a normal user's write to the ten
+  // configuration rows is a policy in Postgres, and that applies to a request
+  // made outside this app entirely (supabase/06-second-admin-and-locked-
+  // stores.sql).
+  if (session.status === "signed-in" && !session.isAdmin) {
+    // Signing in puts everyone on "/". Sending a process owner to a refusal
+    // on their very first screen would be a wall, so they land on the page
+    // they were given the address for.
+    if (pathname === "/") return <Navigate to={NORMAL_USER_HOME} replace />;
+    return <WorkspaceClosed />;
+  }
+  return <Workspace />;
+}
+
+// Deliberately rendered WITHOUT the workspace chrome: a sidebar full of pages
+// they cannot open is worse than no sidebar. Says nothing about what is
+// behind it, and offers the way back to their own page.
+function WorkspaceClosed() {
+  return (
+    <div style={{ minHeight: "100vh", background: "#f6f8fb", padding: 20, boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ width: "100%", maxWidth: 440, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "24px 22px", boxSizing: "border-box" }}>
+        <h1 style={{ fontSize: 18, margin: 0, color: INK }}>Not available</h1>
+        <p style={{ fontSize: 13.5, color: "#64748b", lineHeight: 1.6, margin: "8px 0 0" }}>{ADMIN_ONLY_REFUSAL}</p>
+        <a
+          href={`#${NORMAL_USER_HOME}`}
+          style={{ display: "inline-block", marginTop: 16, padding: "10px 16px", fontSize: 13.5, fontWeight: 700, borderRadius: 9, border: "1px solid #6d28d9", background: "#6d28d9", color: "#fff", textDecoration: "none" }}
+        >
+          Go to my self-check
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function Workspace() {
   const [navOpen, setNavOpen] = useState(
     () => typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches
   );

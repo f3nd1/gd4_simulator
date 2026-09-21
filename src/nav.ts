@@ -1,4 +1,4 @@
-import { ADMIN_ONLY_PATHS } from "./lib/auth/pageAccess";
+import { isAdminOnlyPath } from "./lib/auth/pageAccess";
 
 export type NavItem = { path: string; label: string; hint: string };
 // A group's `items` are the ordered core steps (numbered when `step` is set);
@@ -148,12 +148,9 @@ export const DEVELOPER_TOOL_PATHS = [
 // the database policies are what actually refuse.
 
 export function visibleNav(showDeveloperTools: boolean, isAdmin = true): NavGroup[] {
-  const hidden = new Set([
-    ...(showDeveloperTools ? [] : DEVELOPER_TOOL_PATHS),
-    ...(isAdmin ? [] : ADMIN_ONLY_PATHS),
-  ]);
-  if (hidden.size === 0) return NAV;
-  const keep = (i: NavItem) => !hidden.has(i.path);
+  const hiddenDevTools = new Set(showDeveloperTools ? [] : DEVELOPER_TOOL_PATHS);
+  if (isAdmin && hiddenDevTools.size === 0) return NAV;
+  const keep = (i: NavItem) => !hiddenDevTools.has(i.path) && (isAdmin || !isAdminOnlyPath(i.path));
   return NAV
     .map((g) => ({ ...g, items: g.items.filter(keep), tools: g.tools?.filter(keep) }))
     .filter((g) => g.items.length > 0 || (g.tools?.length ?? 0) > 0);

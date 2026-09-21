@@ -3,6 +3,7 @@ import { GD4_SUB_CRITERIA } from "../data/gd4Requirements";
 import { runScopesForSub, scopeTitle, itemIdsForScope, folderScopeId } from "../lib/evidenceScope";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { SignedInAs } from "../components/auth/SignedInAs";
+import { useSession } from "../lib/auth/useSession";
 import { parseFolderId } from "../lib/drive/driveClient";
 import { aiOfflineReason } from "../lib/ai/aiClient";
 import { downloadCsv } from "../lib/auditCsvExport";
@@ -177,6 +178,8 @@ export function SelfCheck() {
   const disclaimerSnoozedAt = useGuidanceStore((g) => g.disclaimerSnoozedAt);
   const snoozeDisclaimer = useGuidanceStore((g) => g.snoozeDisclaimer);
   const [scope, setScope] = useState("");
+  const authState = useSession();
+  const sessionIsAdmin = authState.status === "signed-in" && authState.isAdmin;
   // The "could not check is not a fail" sentence, folded away. It only means
   // anything to somebody who HAS such a row, and it was sitting full width in
   // front of everybody on every run. Same control as the tab caveat above: a
@@ -1292,9 +1295,14 @@ export function SelfCheck() {
               is steered by the wording, the way the blocked-run banner below
               already does with "If you are the audit lead:". */}
           <div className="order-first sm:order-last w-full sm:w-auto" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12, flexWrap: "wrap", flexShrink: 0 }}>
-            <a href="#/" style={{ fontSize: 12, fontWeight: 700, color: "#475569", textDecoration: "none", border: "1px solid #cbd5e1", borderRadius: 7, padding: "4px 10px" }}>
-              Audit lead workspace &rarr;
-            </a>
+            {/* Only for somebody who can actually open it. For a process
+                owner the workspace now refuses, so this link would have been
+                a round trip to a wall. */}
+            {sessionIsAdmin && (
+              <a href="#/" style={{ fontSize: 12, fontWeight: 700, color: "#475569", textDecoration: "none", border: "1px solid #cbd5e1", borderRadius: 7, padding: "4px 10px" }}>
+                Audit lead workspace &rarr;
+              </a>
+            )}
             <SignedInAs />
           </div>
           {/* SNOOZABLE, and only here. This is the repeated reminder at the

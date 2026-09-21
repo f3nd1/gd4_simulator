@@ -8,7 +8,7 @@ import {
 } from "../lib/auth/peopleAdmin";
 import { INK } from "../lib/theme";
 import { listGrants, grantAdmin, revokeAdmin, GRANT_CONSEQUENCE, type Grant } from "../lib/auth/adminGrants";
-import { ADMIN_ONLY_PATHS, protectionFor, PROTECTION_LABEL, PROTECTION_MEANING, READ_CAVEAT, LOCKED_STORE_KEYS } from "../lib/auth/pageAccess";
+import { NOTABLE_ADMIN_PATHS, protectionFor, PROTECTION_LABEL, PROTECTION_MEANING, READ_CAVEAT, EVERYTHING_ELSE_NOTE, LOCKED_STORE_KEYS } from "../lib/auth/pageAccess";
 import { NAV } from "../nav";
 
 // Who can sign in, managed from inside the app instead of the Supabase
@@ -259,7 +259,7 @@ export function People() {
           {READ_CAVEAT}
         </p>
         <ul style={{ listStyle: "none", margin: "10px 0 0", padding: 0, display: "grid", gap: 6 }}>
-          {ADMIN_ONLY_PATHS.map((path) => {
+          {NOTABLE_ADMIN_PATHS.map((path) => {
             const label = NAV.flatMap((g) => [...g.items, ...(g.tools ?? [])]).find((i) => i.path === path)?.label ?? path;
             const kind = protectionFor(path);
             const rows = Object.entries(LOCKED_STORE_KEYS).filter(([, v]) => v.path === path);
@@ -287,7 +287,8 @@ export function People() {
             );
           })}
         </ul>
-        <p style={{ ...muted, fontSize: 11.5, marginTop: 10 }}>
+        <p style={{ ...muted, fontSize: 12, marginTop: 10 }}>{EVERYTHING_ELSE_NOTE}</p>
+        <p style={{ ...muted, fontSize: 11.5, marginTop: 6 }}>
           This split is fixed in the app rather than set here, because changing it is a code and database change
           together. Ask for a page to be moved and it takes a minute.
         </p>

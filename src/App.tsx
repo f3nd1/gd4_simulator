@@ -38,7 +38,6 @@ import { DataDashboard } from "./pages/DataDashboard";
 import { Help } from "./pages/Help";
 import { SelfCheck } from "./pages/SelfCheck";
 import { People } from "./pages/People";
-import { AdminRoute } from "./components/layout/AdminRoute";
 
 export default function App() {
   return (
@@ -75,27 +74,22 @@ export default function App() {
           {/* Diagnostic / superseded surfaces — inaccessible when developer
               tools are hidden in Settings (see DEVELOPER_TOOL_PATHS). The
               ChangeLog page keeps its own in-page guard for back-compat. */}
-          {/* Admin only, every one of them. The guard refuses rather than
-              redirects; lib/auth/pageAccess.ts is the single list, and says
-              which of these are write-locked in Postgres and which are only
-              hidden. */}
-          <Route element={<AdminRoute />}>
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/gd4-scoring-setup" element={<GD4ScoringSetup />} />
-            <Route path="/profile-of-pei" element={<ProfileOfPei />} />
-            <Route path="/checklist-library" element={<DomainChecklistLibrary />} />
-            <Route path="/pre-check-setup" element={<PreCheckChecklistSetup />} />
-            <Route path="/ai-memories" element={<AIMemories />} />
-            <Route path="/prompt-review" element={<PromptReview />} />
-            <Route path="/people" element={<People />} />
-            {/* Admin-only AND diagnostic: both guards, nested, so hiding the
-                developer tools still hides them from the admin too. */}
-            <Route element={<DevToolsRoute />}>
-              <Route path="/ai-calibration" element={<AICalibration />} />
-              <Route path="/change-log" element={<ChangeLog />} />
-            </Route>
-          </Route>
+          {/* No per-route admin guard: EVERY route here renders inside the
+              Layout, and the Layout refuses anyone who is not an admin. One
+              seam instead of a list, so a route added below is admin-only by
+              default rather than by remembering. Only /self-check sits
+              outside, which is the point of it. */}
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/gd4-scoring-setup" element={<GD4ScoringSetup />} />
+          <Route path="/profile-of-pei" element={<ProfileOfPei />} />
+          <Route path="/checklist-library" element={<DomainChecklistLibrary />} />
+          <Route path="/pre-check-setup" element={<PreCheckChecklistSetup />} />
+          <Route path="/ai-memories" element={<AIMemories />} />
+          <Route path="/prompt-review" element={<PromptReview />} />
+          <Route path="/people" element={<People />} />
           <Route element={<DevToolsRoute />}>
+            <Route path="/ai-calibration" element={<AICalibration />} />
+            <Route path="/change-log" element={<ChangeLog />} />
             <Route path="/ai-review" element={<AIReview />} />
             <Route path="/human-decision-log" element={<HumanDecisionLog />} />
             <Route path="/run-log" element={<RunLog />} />

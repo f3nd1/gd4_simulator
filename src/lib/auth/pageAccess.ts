@@ -16,24 +16,27 @@
 
 export type PageProtection = "locked" | "hidden-only";
 
-// Admin-only. A DENY-list rather than an allow-list would be wrong here: a
-// page added later would silently become visible to everyone. This is the
-// full set, and a new page is admin-only until it is deliberately left out.
-export const ADMIN_ONLY_PATHS = [
-  "/settings",
-  "/gd4-scoring-setup",
-  "/people",
-  "/profile-of-pei",
-  "/checklist-library",
-  "/pre-check-setup",
-  "/ai-calibration",
-  "/prompt-review",
-  "/ai-memories",
-  "/change-log",
-] as const;
+// What a normal user may open. An ALLOW-list, and a very short one: normal
+// users are only ever process owners, and the self-check is the whole reason
+// they were given the address. Everything else in the workspace is the audit
+// lead's.
+//
+// An allow-list rather than a deny-list because a page added later must
+// default to CLOSED. A deny-list would quietly expose every new page to
+// everyone until somebody remembered to add it.
+//
+// /self-check renders outside the workspace Layout on purpose, so a process
+// owner never meets the audit chrome. That is also the seam the guard uses:
+// Layout refuses for everyone who is not an admin, which is why this list
+// does not have to name the thirty pages it is protecting.
+export const NORMAL_USER_PATHS = ["/self-check"] as const;
+
+// Where a process owner lands. Signing in puts everyone on "/", and sending
+// them to a refusal there would be a wall on their first screen.
+export const NORMAL_USER_HOME = "/self-check";
 
 // The rows Postgres refuses a normal user's write on, and the page each one
-// belongs to. Every path here MUST also be in ADMIN_ONLY_PATHS: a normal user
+// belongs to. No path here may be in NORMAL_USER_PATHS: a normal user
 // who reached one of these screens could type an edit and have it silently
 // refused, which is worse than not seeing the page. A test pins that.
 export const LOCKED_STORE_KEYS: Record<string, { path: string; what: string }> = {
@@ -62,8 +65,25 @@ export const NEVER_LOCKABLE: Record<string, string> = {
 };
 
 export function isAdminOnlyPath(path: string): boolean {
-  return (ADMIN_ONLY_PATHS as readonly string[]).includes(path);
+  return !(NORMAL_USER_PATHS as readonly string[]).includes(path);
 }
+
+// The admin-only pages worth naming on screen: the configuration ones, whose
+// protection differs page by page. Everything else in the workspace is also
+// admin-only now, which the panel says in one line rather than listing thirty
+// rows nobody reads.
+export const NOTABLE_ADMIN_PATHS = [
+  "/settings",
+  "/gd4-scoring-setup",
+  "/profile-of-pei",
+  "/checklist-library",
+  "/pre-check-setup",
+  "/ai-calibration",
+  "/prompt-review",
+  "/people",
+  "/ai-memories",
+  "/change-log",
+] as const;
 
 // What a given admin-only page actually gets: a database refusal, or only a
 // hidden link. Shown per page on the People screen, in those words.
@@ -83,5 +103,8 @@ export const PROTECTION_MEANING: Record<PageProtection, string> = {
 
 // Said once, at the top of the panel, because it is the thing most likely to
 // be assumed wrong.
+export const EVERYTHING_ELSE_NOTE =
+  "Every other page in the workspace is admin-only too, including the audit stages. A process owner only ever needs the self-check.";
+
 export const READ_CAVEAT =
   "Everyone who can sign in can read all of this data, whichever pages they can see. Hiding a page hides the page, never the data. That includes the OpenAI key, which cannot be hidden while a self-check has to use it.";
