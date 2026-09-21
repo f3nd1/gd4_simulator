@@ -32,26 +32,32 @@ describe("each tab marks the dimension it actually feeds", () => {
     expect(PROCEDURE_FEEDS.key).toBe("approach");
   });
 
-  it("Overall marks Processes, where it used to mark nothing", () => {
+  it("Overall names Processes, where it used to name nothing", () => {
     expect(feedsFor("overview")).toBe(OVERALL_FEEDS);
     expect(OVERALL_FEEDS.key).toBe("processes");
-    expect(svgFor(OVERALL_FEEDS)).toContain(ARROW);
+    // Recorded as data and said in the caption; no longer drawn as an arrow.
+    expect(OVERALL_FEEDS.caption).toMatch(/Processes is judged on/);
   });
 
-  it("Records marks NOTHING, because it feeds nothing on its own", () => {
+  it("Records names NOTHING, because it feeds nothing on its own", () => {
     expect(feedsFor("records")).toBe(RECORDS_FEEDS);
     expect(RECORDS_FEEDS.key).toBeUndefined();
-    // No arrow, but it still explains itself rather than going silent.
-    expect(svgFor(RECORDS_FEEDS)).not.toContain(ARROW);
     expect(RECORDS_FEEDS.caption).toMatch(/one half/i);
     expect(RECORDS_FEEDS.caption).toMatch(/Overall tab/);
   });
 
-  it("draws exactly one arrow when a tab feeds a dimension, and none otherwise", () => {
-    for (const f of [PROCEDURE_FEEDS, OVERALL_FEEDS]) {
-      expect(svgFor(f).split(ARROW).length - 1, f.key).toBe(1);
+  it("draws NO arrow on any tab, including the two that feed a dimension", () => {
+    for (const f of [PROCEDURE_FEEDS, OVERALL_FEEDS, RECORDS_FEEDS, undefined]) {
+      expect(svgFor(f).includes(ARROW), String(f?.key)).toBe(false);
     }
-    expect(svgFor().includes(ARROW)).toBe(false);
+  });
+
+  it("every caption still reads as a whole sentence with no arrow beside it", () => {
+    for (const f of [PROCEDURE_FEEDS, OVERALL_FEEDS, RECORDS_FEEDS]) {
+      expect(f.caption, f.key).toMatch(/^[A-Z].*\.$/s);
+      // Nothing in them points AT anything: they name the dimension instead.
+      expect(f.caption, f.key).not.toMatch(/\u2190|this tab feeds|marked|arrow/i);
+    }
   });
 });
 
@@ -80,9 +86,13 @@ describe("the rows carry the band, not a paragraph", () => {
     expect(DIMENSION_TAB_SOURCE.systemsOutcomes).toMatch(/second look/);
   });
 
-  it("gives the band its own weight, and is shorter for it", () => {
+  it("sets every word in the rows at ONE size, and leans on weight instead", () => {
     const svg = svgFor(OVERALL_FEEDS);
-    expect(svg).toMatch(/font-size:13px;font-weight:800[^"]*">Band 3</);
+    // The band was 13px against 9.5px neighbours, which read as uneven.
+    const sizes = new Set([...svg.matchAll(/font-size:([\d.]+)px/g)].map((m) => m[1]));
+    sizes.delete("11");      // the panel's own title line, above the rows
+    expect([...sizes]).toEqual(["10"]);
+    expect(svg).toMatch(/font-size:10px;font-weight:800[^"]*">Band 3</);
     expect(heightOf(svg)).toBeLessThan(138);   // 138 was the height with the sentences
   });
 });

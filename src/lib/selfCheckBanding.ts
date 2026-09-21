@@ -374,23 +374,32 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
   // second line under every dimension name is gone (DIMENSION_TAB_TAG), so a
   // row is one line again. VX moved left to give the band its own room.
   const VX = 126, AX = 288, TW = 132, ROW = 20, TOP = 34, BARH = 9;
-  const W = AX + TW + (opts.feeds?.key ? 66 : 8);
+  // The tag sits PAST the bar, in the slot the "left arrow this tab" marker
+  // used to occupy. It was previously placed at a fixed x inside the label
+  // column, which put "separate read" straight on top of "Band 2": the band
+  // text's width was never measured, and at 9.5px it runs well past where
+  // the tag started. Past the bar there is nothing to collide with, whatever
+  // either string turns out to be.
+  const anyTag = g.segments.some((seg) => seg.source);
+  const TAGX = AX + TW + 8;
+  const W = TAGX + (anyTag ? 72 : 0);
   const H = TOP + g.segments.length * ROW + 4;
   const hatchId = `scHatch${opts.idSuffix ?? ""}`;
   const t = (xx: number, yy: number, cls: string, txt: string) => `<text x="${xx}" y="${yy}" style="${cls}">${esc(txt)}</text>`;
   const TITLE = `font-size:11px;font-weight:700;fill:${p.ink}`;
-  const NAME = `font-size:10.5px;fill:${p.ink}`;
-  const SMALL = `font-size:9.5px;fill:${p.mute}`;
-  // The band is the main information in this panel. It was set in the same
-  // small grey as the percentage running on from it in one faint line.
-  const BAND = `font-size:13px;font-weight:800;fill:${p.ink}`;
-  // Where the "separate read" tag sits, past the longest dimension name.
-  const LABEL_W = 104;
+  // ONE size for every word in the rows. The band was 13px against 9.5px
+  // neighbours, which read as uneven rather than as emphasis. It keeps the
+  // emphasis through WEIGHT and INK colour against muted grey, which is the
+  // same distinction at the same scale.
+  const ROWPX = 10;
+  const NAME = `font-size:${ROWPX}px;fill:${p.ink}`;
+  const SMALL = `font-size:${ROWPX}px;fill:${p.mute}`;
+  const BAND = `font-size:${ROWPX}px;font-weight:800;fill:${p.ink}`;
   const max = g.segments[0]?.max ?? 25;
   const judged = g.segments.filter((s) => s.assessedHere).map((s) => s.label);
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;max-width:${W}px;${opts.minWidth ? `min-width:${opts.minWidth}px;` : ""}height:auto;font-family:inherit"
-  aria-label="${opts.feeds?.key ? `Which dimension this tab feeds: ${esc(g.segments.find((s) => s.key === opts.feeds!.key)?.label ?? "")}. ${esc(opts.feeds.caption)} ` : opts.feeds ? `${esc(opts.feeds.caption)} ` : "What this check assessed, by dimension. "}${esc(g.segments.map((s) => `${s.label}: ${segmentText(s)}`).join(". "))}. No overall band is given.">
+  aria-label="${opts.feeds ? `${esc(opts.feeds.caption)} ` : "What this check assessed, by dimension. "}${esc(g.segments.map((s) => `${s.label}: ${segmentText(s)}`).join(". "))}. No overall band is given.">
   <rect x="0" y="0" width="${W}" height="${H}" rx="8" style="fill:${p.surface};stroke:${p.edge}"/>
   <defs>
     <pattern id="${hatchId}" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -412,22 +421,24 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
       : `<rect x="${AX}" y="${y}" width="${TW}" height="${BARH}" rx="2" fill="url(#${hatchId})"/>`;
     // The marker is a word as well as a position, so which dimension the tab
     // feeds survives greyscale and a screen reader.
-    const fed = opts.feeds?.key !== undefined && opts.feeds.key === seg.key;
     // The band carries its own weight; the arithmetic after it is the
     // qualifier. One <text> with two tspans, so they flow without the
     // drawing having to guess how wide "Band 3" is.
     const band = `<text x="${VX}" y="${y + 8}"><tspan style="${BAND}">${esc(segmentBandText(seg))}</tspan>${
       segmentDetailText(seg) ? `<tspan style="${SMALL}"> ${esc(segmentDetailText(seg))}</tspan>` : ""
     }</text>`;
-    // Three words, and only on the two dimensions no tab feeds. Approach and
-    // Processes carry nothing, because the marker names them.
-    const tag = seg.source ? t(10 + LABEL_W, y + 8, `font-size:9px;fill:${p.mute}`, seg.source) : "";
-    return `${t(10, y + 8, fed ? `${NAME};font-weight:700` : NAME, seg.label)}
+    // Two words, and only on the two dimensions no tab feeds.
+    const tag = seg.source ? t(TAGX, y + 8, SMALL, seg.source) : "";
+    // No "left arrow this tab" marker, and no bolded label either: the
+    // caption printed under this drawing already names the dimension this
+    // tab feeds, in a full sentence. A second, wordless copy of that beside
+    // the row was duplicating it, and the bold was the same claim with no
+    // explanation attached.
+    return `${t(10, y + 8, NAME, seg.label)}
       ${tag}
       ${band}
       <rect x="${AX}" y="${y}" width="${TW}" height="${BARH}" rx="2" style="fill:${p.track}"/>
-      ${fill}
-      ${fed ? t(AX + TW + 6, y + 8, `font-size:10px;font-weight:700;fill:${p.ink}`, "\u2190 this tab") : ""}`;
+      ${fill}`;
   }).join("")}
 </svg>`;
 }

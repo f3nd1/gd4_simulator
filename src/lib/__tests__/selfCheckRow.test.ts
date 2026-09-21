@@ -234,8 +234,13 @@ describe("nothing the screen collapses is lost from the filed working paper", ()
     expect(html).toContain(PROCEDURE_FEEDS.caption);
     // The full dimension panel belongs to the whole area, not to one half of it.
     expect(html).not.toContain("<h2>What this check assessed</h2>");
-    // And the picture says which tab it is describing, for a screen reader too.
-    expect(html).toContain("Which dimension this tab feeds: Approach");
+    // And the picture says which tab it is describing, for a screen reader
+    // too. It used to prefix the aria-label with "Which dimension this tab
+    // feeds: Approach", which was the spoken twin of the arrow drawn beside
+    // the row. Both are gone; the aria-label now opens with the same full
+    // caption the sighted reader gets, which says it in a sentence.
+    expect(html).toMatch(new RegExp(`aria-label="${PROCEDURE_FEEDS.caption.slice(0, 40).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    expect(html).not.toContain("Which dimension this tab feeds");
   });
 
   it("puts the verdict first in the printed row, so a printed page scans the same way", () => {
