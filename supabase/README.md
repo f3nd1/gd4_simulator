@@ -27,9 +27,10 @@ are in the list yourself. A missing table never is.
 | `02-after-deploy-require-signin.sql` | **After** the sign-in build | Requires a signed-in United Ceres account on every request |
 | `03-restrict-to-named-people.sql` | **Before** the allow-list build | Narrows that to the named people in `allowed_users` |
 | `04-admin-manages-the-list.sql` | **Before** the People-screen build | Lets the admin add and remove people from inside the app |
+| `05-close-the-anon-hole.sql` | **Now.** No deploy needed either side | Removes any policy that is not on the expected list, including one an earlier Settings page told people to create |
 | `functions/drive-oauth/` | Deployed separately, see below | Mints Google Drive tokens; also reads `allowed_users` |
 
-`01` → `02` → `03` → `04` is the upgrade path for a project that already exists.
+`01` → `02` → `03` → `04` → `05` is the upgrade path for a project that already exists.
 `schema.sql` is the same thing for a project that does not.
 
 ## Running one, click by click
@@ -44,6 +45,31 @@ are in the list yourself. A missing table never is.
 Every file ends with a `select` that prints what it just did, so the results
 panel at the bottom tells you whether it worked without you having to go
 looking.
+
+## The policies that should exist, once everything is applied
+
+Anything not on this list is a hole. `05` prints exactly this at the end, so
+you can compare without having to remember it.
+
+| Table | Policy | Command | Role |
+|---|---|---|---|
+| `workspace_state` | `allowed read` | SELECT | authenticated |
+| `workspace_state` | `allowed insert` | INSERT | authenticated |
+| `workspace_state` | `allowed update` | UPDATE | authenticated |
+| `allowed_users` | `see your own row, or all of them if admin` | SELECT | authenticated |
+| `allowed_users` | `only the admin adds` | INSERT | authenticated |
+| `allowed_users` | `only the admin removes` | DELETE | authenticated |
+| `drive_oauth_tokens` | none at all | | |
+
+No DELETE on `workspace_state`: nothing in the app deletes a row, so granting
+it would only widen what a mistake or a stolen session can do. No UPDATE on
+`allowed_users`: without it nobody can rename a row into somebody else's
+address. `drive_oauth_tokens` has RLS on and zero policies, so only the Edge
+Function's service-role key reaches the Google refresh token.
+
+**Any row showing `{public}` or `{anon}`, or a command of `ALL`, is a hole.**
+Policies are permissive and combine with OR, so one of those grants access
+regardless of how strict every other policy is.
 
 ## The Edge Function
 

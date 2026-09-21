@@ -222,18 +222,28 @@ export function Settings() {
         <p style={{ fontSize: 12.5, color: "#6b7280" }}>
           Use only the <b>anon / publishable</b> key from your Supabase project's API settings. Never paste the{" "}
           <b>service_role / secret</b> key here — it bypasses row-level security and this key is sent straight from the
-          browser. Required table, run once in the Supabase SQL editor:
+          browser.
         </p>
-        <pre style={{ fontSize: 11, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, overflowX: "auto" }}>
-{`create table if not exists public.workspace_state (
-  id text primary key,
-  data jsonb not null,
-  updated_at timestamptz not null default now()
-);
-alter table public.workspace_state enable row level security;
-create policy "anon read/write" on public.workspace_state
-  for all using (true) with check (true);`}
-        </pre>
+        {/* The SQL that used to be printed here granted an unconditional
+            ALL policy, named anon read/write, to the public role. That gave
+            the entire workspace to anyone holding the publishable key. It
+            survived scripts 01 and 02 because both remove policies BY NAME
+            and this one was named differently, so it sat live underneath the
+            sign-in work protecting nothing.
+            supabase/05-close-the-anon-hole.sql removes it, by exclusion
+            rather than by name.
+
+            No SQL is printed here any more, on purpose. A copy of a security
+            rule inside the app is a second source of truth that nobody
+            updates when the real one changes, and this one was three
+            migrations out of date. The files are the source. */}
+        <div style={{ fontSize: 12.5, color: "#1e3a8a", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "9px 11px", marginBottom: 10 }}>
+          <b>Setting up the database?</b> The SQL lives in the <code>supabase/</code> folder of this project, not on this
+          page: <code>schema.sql</code> for a brand new project, or <code>01</code> to <code>05</code> in order for one
+          that already exists. <code>supabase/README.md</code> says which ones run before a deploy and which after.
+          Do not copy database policies from anywhere else: an earlier version of this page printed one that left the
+          whole workspace readable by anyone holding the key above.
+        </div>
 
         <div style={{ fontSize: 12, color: "#9a3412", background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 8, padding: "8px 11px", marginBottom: 10 }}>
           ⚠ <b>These two fields never sync anywhere — not even to Supabase.</b> They're what the app needs in order to
