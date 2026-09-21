@@ -40,6 +40,8 @@ import type {
 } from "../types";
 import { seedEvidence, blankEvidence } from "../data/seedEvidence";
 import { seedFolders, reconcileFolders } from "../data/folders";
+import { DEPARTMENT_DIVISION, departmentForScope } from "../lib/departments";
+import type { PolicyDocEdit } from "../data/policyDocuments";
 import { itemIdsForScope, folderScopeId, runScopesForSub, scopeTitle, scopeIdForItem } from "../lib/evidenceScope";
 import { isStaleRun } from "../lib/runGeneration";
 import { summariseRun, appendRunSummary, type SelfCheckRunSummary } from "../lib/selfCheckRunLog";
@@ -641,7 +643,11 @@ export const DEFAULT_AUDITORS: AuditorProfile[] = [
 // Workspace-wide department directory, seeded from the acronyms and full
 // names already implied by the auditor data above. Person-in-charge is left
 // blank for the user to fill in via Audit Cycle.
-const DEFAULT_DEPARTMENTS: Department[] = [
+// divisionId comes from DEPARTMENT_DIVISION rather than being repeated here,
+// so the tree has one definition and the folder seeding cannot disagree with
+// the directory about who sits under whom.
+const DEFAULT_DEPARTMENTS: Department[] = ([
+
   { id: "ALI", acronym: "ALI", fullName: "Academic and Learning Innovation", personInCharge: "" },
   { id: "CM", acronym: "CM", fullName: "Course Management", personInCharge: "" },
   { id: "CD", acronym: "CD", fullName: "Curriculum Development", personInCharge: "" },
@@ -661,7 +667,7 @@ const DEFAULT_DEPARTMENTS: Department[] = [
   { id: "SSO", acronym: "SSO", fullName: "Student Success and Outreach", personInCharge: "" },
   { id: "AD", acronym: "AD", fullName: "Admissions", personInCharge: "" },
   { id: "SS", acronym: "SS", fullName: "Student Support", personInCharge: "" },
-];
+] as Department[]).map((d) => (DEPARTMENT_DIVISION[d.acronym] ? { ...d, divisionId: DEPARTMENT_DIVISION[d.acronym] } : d));
 
 export type WorkspaceState = {
   cycle: AuditCycle;
@@ -673,6 +679,13 @@ export type WorkspaceState = {
   agents: AgentDefinition[];
   auditors: AuditorProfile[];
   departments: Department[];
+  // Version and last-updated for the codes in POLICY_DOCUMENTS, held as a DIFF
+  // against that shipped list — never a copy of it. A document's version
+  // changes whenever UCC revises it, so baking a value into the bundle would
+  // make it stale on the day it shipped and correctable only by a deploy.
+  // Keyed by document code. An untouched code has no entry at all, so a later
+  // change to the register is picked up automatically.
+  policyDocEdits: Record<string, PolicyDocEdit>;
   versions: VersionEntry[];
   folders: EvidenceFolder[];
   itemReviews: Record<string, ItemAIVerdict>;
@@ -1045,6 +1058,8 @@ export type WorkspaceState = {
   // added so the page can message the result.
   loadPresetAuditors: (mode: "add" | "replace") => number;
 
+  setPolicyDocEdit: (code: string, patch: PolicyDocEdit) => void;
+  clearPolicyDocEdit: (code: string) => void;
   addDepartment: (d: Department) => void;
   updateDepartment: (id: string, patch: Partial<Department>) => void;
   removeDepartment: (id: string) => void;
@@ -1294,6 +1309,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       agents: AGENTS,
       auditors: [],
       departments: DEFAULT_DEPARTMENTS,
+      policyDocEdits: {},
       versions: [],
       folders: seedFolders(),
       itemReviews: {},
@@ -4556,6 +4572,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         return toAdd.length;
       },
 
+      setPolicyDocEdit: (code, patch) => set((s) => ({
+        policyDocEdits: { ...s.policyDocEdits, [code]: { ...s.policyDocEdits?.[code], ...patch } },
+      })),
+      clearPolicyDocEdit: (code) => set((s) => {
+        const next = { ...s.policyDocEdits };
+        delete next[code];
+        return { policyDocEdits: next };
+      }),
       addDepartment: (d) => set((s) => ({ departments: [...s.departments, d] })),
       updateDepartment: (id, patch) => set((s) => ({ departments: s.departments.map((d) => (d.id === id ? { ...d, ...patch } : d)) })),
       removeDepartment: (id) => set((s) => ({ departments: s.departments.filter((d) => d.id !== id) })),
@@ -7961,7 +7985,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // the new sub-criteria. Everything keyed to an unchanged sub-criterion (or
       // to a surviving item id) is untouched. The reconcile is idempotent, so a
       // workspace at an earlier version is safely brought up to the latest.
-      version: 11,
+      version: 12,
       migrate: (persisted, fromVersion) => {
         let s = persisted as WorkspaceState;
         if (!s) return s;
@@ -8165,6 +8189,38 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   },
                 }
               : v)),
+          } as WorkspaceState;
+        }
+        if (fromVersion < 12) {
+          // Two fixes to data that was seeded wrong, not to anything a human
+          // decided.
+          //
+          // 1. Every folder was seeded owner "SQ", so independenceNotice()
+          //    compared against the wrong department on 24 of the 30 scopes.
+          //    Only folders STILL reading the blanket default are re-owned; a
+          //    folder whose owner was changed to anything else is left alone.
+          //    The narrow cost, stated rather than hidden: someone who
+          //    deliberately re-picked "SQ" on a scope UCC owns elsewhere loses
+          //    that choice and has to re-pick it. There is no stored signal
+          //    that separates a deliberate "SQ" from the default one.
+          // 2. Departments persisted before divisions existed get their
+          //    divisionId, matched by acronym only, so a department the team
+          //    added or renamed is untouched.
+          const arr = <T,>(x: unknown): T[] => (Array.isArray(x) ? (x as T[]) : []);
+          s = {
+            ...s,
+            folders: arr<EvidenceFolder>(s.folders).map((f) => {
+              if (!f || f.owner !== "SQ") return f;
+              const mapped = departmentForScope(folderScopeId(f));
+              return mapped && mapped !== "SQ" ? { ...f, owner: mapped } : f;
+            }),
+            // Absent on every workspace stored before the register existed.
+            policyDocEdits: (s.policyDocEdits && typeof s.policyDocEdits === "object") ? s.policyDocEdits : {},
+            departments: arr<Department>(s.departments).map((d) => {
+              if (!d || d.divisionId) return d;
+              const div = DEPARTMENT_DIVISION[d.acronym];
+              return div ? { ...d, divisionId: div } : d;
+            }),
           } as WorkspaceState;
         }
         return s;

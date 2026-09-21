@@ -1,6 +1,7 @@
 import type { EvidenceFolder } from "../types";
 import { GD4_SUB_CRITERIA } from "./gd4Requirements";
 import { runScopesForSub, scopeTitle, folderScopeId } from "../lib/evidenceScope";
+import { departmentForScope } from "../lib/departments";
 
 // One evidence folder per GD4 run-scope, named after the official numbering and
 // title so the folder structure maps 1:1 onto the official GD4 criteria, not an
@@ -22,7 +23,10 @@ export function seedFolders(): EvidenceFolder[] {
         folderName: perItem ? `${scopeId} ${scopeTitle(scopeId)}` : `${s.id} ${s.title}`,
         sourceSystem: "Google Drive" as const,
         folderLink: "",
-        owner: "SQ",
+        // The department that owns this area, from UCC's confirmed mapping.
+        // It used to be "SQ" on all 30, which made independenceNotice() warn
+        // an SQ auditor everywhere and everyone else nowhere.
+        owner: departmentForScope(scopeId),
         status: "In Progress" as const,
         lastCheckedDate: "",
       };

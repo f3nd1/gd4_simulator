@@ -36,6 +36,11 @@ export type Department = {
   acronym: string;
   fullName: string;
   personInCharge: string;
+  // The division above this department, by acronym (e.g. "SGL" for "CG"), so
+  // the app can show UCC's own "SGL-CG" form instead of it being typed per
+  // audit. Absent on a top-level unit, which then shows as itself — UCC's
+  // documents write GEP alone, never GEP-IG.
+  divisionId?: string;
 };
 
 export type AuditorType = "Internal" | "External" | "AI Agent";

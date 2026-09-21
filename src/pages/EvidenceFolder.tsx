@@ -19,6 +19,7 @@ import { PpdReviewContent, HybridGatePanel, ResultNavLinks, type PpdContentTab }
 import { useScored } from "../hooks/useScored";
 import { AUDIT_MODES, auditModeLabel } from "../lib/runModes";
 import { folderScopeId, itemIdsForScope, subOfScope, scopeTitle } from "../lib/evidenceScope";
+import { departmentPair, scopeDocumentViews, documentStamp } from "../lib/departments";
 import { flushPendingSaves } from "../store/supabaseStorage";
 import { typicalRunDurationSec, formatRoughDuration, estimateAuditSeconds } from "../lib/runLogCorrelation";
 import { TONE } from "../lib/theme";
@@ -2292,6 +2293,7 @@ function PathGuidance() {
 export function EvidenceFolder() {
   const folders        = useWorkspaceStore((s) => s.folders);
   const departments    = useWorkspaceStore((s) => s.departments);
+  const policyDocEdits = useWorkspaceStore((s) => s.policyDocEdits);
   const setFolderField = useWorkspaceStore((s) => s.setFolderField);
   const checkFolderAccess   = useWorkspaceStore((s) => s.checkFolderAccess);
   const probeFolder         = useWorkspaceStore((s) => s.probeFolder);
@@ -3045,10 +3047,22 @@ export function EvidenceFolder() {
                     </select>
                   ) : (
                     <button onClick={() => setEditingField({ id: f.id, field: "owner" })} title={tip("Owning department. Click to change.")} style={chipBtn}>
-                      Owner: {f.owner || "—"}
+                      Owner: {departmentPair(f.owner, (a) => departments.find((x) => x.acronym === a)?.divisionId) || "—"}
                     </button>
                   )}
                 </span>
+                {/* The real controlled documents for this area, from UCC's own
+                    register. Read-only here: a version belongs to the document,
+                    not to one audit, so it is edited once on Audit Cycle. */}
+                {scopeDocumentViews(folderScopeId(f), policyDocEdits).map((d) => (
+                  <span
+                    key={d.code}
+                    title={tip(`${d.title}${documentStamp(d) ? ` — ${documentStamp(d)}` : " — no version recorded yet"}. Recorded on the Audit Cycle page.`)}
+                    style={{ ...chipBtn, cursor: "default", color: d.edited ? "#334155" : "#64748b" }}
+                  >
+                    {d.code}{documentStamp(d) ? ` · ${documentStamp(d)}` : ""}
+                  </span>
+                ))}
               </div>
 
               <div className="ef-card-cols" style={{ padding: "2px 12px 8px 30px" }}>
