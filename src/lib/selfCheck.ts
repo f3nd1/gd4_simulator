@@ -13,7 +13,7 @@ import { toCsv } from "./auditCsvExport";
 import { buildStamp } from "./buildInfo";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
-import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
+import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, OVERALL_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
 import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
@@ -370,11 +370,17 @@ export function tallySlices(counts: SelfCheckCounts, view: SelfCheckView): Tally
   ];
 }
 
-// Which dimension this tab's verdicts feed. The overall tab feeds two and is
-// already shown in full below the table, so it takes no marker.
+// Which dimension this tab's verdicts feed.
+//
+// The overall tab used to return undefined, on the reasoning that it "feeds
+// two". It does not: Approach is written from the PROCEDURE verdict and
+// Processes from the COMBINED verdict, which is exactly what this tab shows.
+// So Overall marks Processes, and the Records tab — which holds only half of
+// that combined verdict — marks nothing, and says so.
 export function feedsFor(view: SelfCheckView): TabFeeds | undefined {
   if (view === "procedure" || view === "procedure-only") return PROCEDURE_FEEDS;
   if (view === "records") return RECORDS_FEEDS;
+  if (view === "overview") return OVERALL_FEEDS;
   return undefined;
 }
 
@@ -963,9 +969,12 @@ export function buildSelfCheckHtml(opts: {
   // paper and shown to people, so the graphic matters here more than on screen,
   // not less. Print palette, so a dark-mode browser can never send a dark chart
   // to a printer.
+  // The overall tab's ONE drawing, carrying its own "left arrow this tab"
+  // marker on Processes rather than getting a second drawing of its own.
   const bandHtml = !bandWorking || view !== "overview" ? "" : `
     <h2>What this check assessed</h2>
-    <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), PRINT_BAND_PALETTE, { idSuffix: "Print" })}</div>
+    <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), PRINT_BAND_PALETTE, { idSuffix: "Print", feeds: feedsFor("overview") })}</div>
+    ${feedsFor("overview") ? `<p class="muted">${escapeHtml(feedsFor("overview")!.caption)}</p>` : ""}
     ${bandCoverage ? `<p class="muted">${escapeHtml(bandCoverage)}</p>` : ""}
     <p class="muted">${escapeHtml(ROWS_DO_NOT_SUM_NOTE)}</p>
     <p class="muted">${escapeHtml(dimensionsNote(bandWorking))}</p>
@@ -1049,10 +1058,16 @@ export function buildSelfCheckHtml(opts: {
     <p class="muted">The official EduTrust GD4 expected-evidence list, quoted as published. It is not a judgement on anything you hold.</p>
     ${groups.map((g) => `<p><b>Requirement ${escapeHtml(g.itemId)}</b><br>${g.items.map((i) => escapeHtml(i)).join("<br>")}</p>`).join("")}`;
   const words = VIEW_TALLY[view];
-  // Which dimension THIS tab's verdicts feed, drawn on the two tabs that feed
-  // one. The overall tab shows all four in full further down instead.
+  // Which dimension THIS tab's verdicts feed.
+  //
+  // NOT on the overall tab: that view already draws the same four dimensions
+  // in full under "What this check assessed", and this section would print a
+  // SECOND identical drawing of one result. Overall's marker is passed into
+  // that existing drawing instead (bandHtml above). Two pictures of one
+  // result is the drift this file's own comments warn about, and making
+  // feedsFor answer for the overall tab is what nearly reintroduced it.
   const feeds = feedsFor(view);
-  const tabFeedsHtml = !feeds || !bandWorking ? "" : `
+  const tabFeedsHtml = !feeds || !bandWorking || view === "overview" ? "" : `
     <h3>What this tab feeds</h3>
     <div class="band-graphic">${bandGraphicSvg(bandGraphic(bandWorking), PRINT_BAND_PALETTE, { idSuffix: "Feeds", feeds })}</div>
     <p class="muted">${escapeHtml(feeds.caption)}</p>`;

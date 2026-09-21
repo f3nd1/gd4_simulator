@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { splitTrailingQuotes, samePassage, normalisePassage, mergeQuotes } from "../selfCheckEvidence";
 import { toSelfCheckRows, toProcedureRows, toRecordsRows, tallySlices, feedsFor, buildSelfCheckHtml, buildSelfCheckCsv, countSelfCheck, SELF_CHECK_HEADERS } from "../selfCheck";
-import { tallyBarSvg, bandGraphicSvg, bandGraphic, buildBandWorking, PRINT_BAND_PALETTE, PROCEDURE_FEEDS, RECORDS_FEEDS } from "../selfCheckBanding";
+import { tallyBarSvg, bandGraphicSvg, bandGraphic, buildBandWorking, PRINT_BAND_PALETTE, PROCEDURE_FEEDS, RECORDS_FEEDS, OVERALL_FEEDS } from "../selfCheckBanding";
 import type { EvidenceAssessmentRow, PPDReviewRow } from "../../types";
 
 // The shape the judge prompts actually produce: the reasoning field ENDS with
@@ -166,13 +166,18 @@ describe("every tab carries a picture of its own", () => {
   });
 
   // optionAChecklistWrite.ts:31-41 — Approach is written from the PROCEDURE
-  // verdict, Processes from the COMBINED one. So the records tab is one HALF
-  // of Processes and must not claim to produce it.
+  // verdict, Processes from the COMBINED one, which is what the OVERALL tab
+  // shows. The marker used to sit on Records, which holds only half of that
+  // combined verdict, and not on Overall, which produces it: wrong in both
+  // directions. Records now marks nothing and says why.
   it("names what each tab feeds, and does not overstate the records tab", () => {
     expect(feedsFor("procedure")).toBe(PROCEDURE_FEEDS);
     expect(feedsFor("procedure-only")).toBe(PROCEDURE_FEEDS);
     expect(feedsFor("records")).toBe(RECORDS_FEEDS);
-    expect(feedsFor("overview")).toBeUndefined();
+    expect(feedsFor("overview")).toBe(OVERALL_FEEDS);
+    expect(PROCEDURE_FEEDS.key).toBe("approach");
+    expect(OVERALL_FEEDS.key).toBe("processes");
+    expect(RECORDS_FEEDS.key).toBeUndefined();
     expect(PROCEDURE_FEEDS.caption).toMatch(/what Approach is judged on/);
     expect(RECORDS_FEEDS.caption).toMatch(/combined verdict/);
     expect(RECORDS_FEEDS.caption).toMatch(/one half of that/);

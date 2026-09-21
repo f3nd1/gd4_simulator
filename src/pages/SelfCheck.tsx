@@ -40,7 +40,7 @@ import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
 import { buildLabel } from "../lib/buildInfo";
 import { unassessedDimensions, dimensionStepLines, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_NEXT_LABEL, CLIMB_BEYOND_LABEL, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, type DimensionStepLine, type BandStepOption, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_NEXT_LABEL, CLIMB_BEYOND_LABEL, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, type DimensionStepLine, type BandStepOption, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, DIMENSION_TAB_SOURCE, DIMENSION_NOT_READ, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
 import { useGuidanceStore, disclaimerSnoozed, DISCLAIMER_SNOOZE_DAYS } from "../store/useGuidanceStore";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
@@ -185,6 +185,8 @@ export function SelfCheck() {
   // front of everybody on every run. Same control as the tab caveat above: a
   // real button, so it works on click, on keyboard and on a phone.
   const [cncNoteOpen, setCncNoteOpen] = useState(false);
+  // The per-dimension "where this came from" sentences, folded off the rows.
+  const [dimSourceOpen, setDimSourceOpen] = useState(false);
   const [procLink, setProcLink] = useState("");
   const [evLink, setEvLink] = useState("");
   // Which half the result on screen came from. A procedure-only result answers
@@ -2018,6 +2020,27 @@ export function SelfCheck() {
                     <div>
                       <Svg html={bandGraphicSvg(bandGraphic(bandWorking), SCREEN_BAND_PALETTE, feedsFor(view) ? { feeds: feedsFor(view) } : { minWidth: 380 })} />
                       {feedsFor(view) && <p style={{ ...muted, margin: "4px 0 0", fontSize: 11.5 }}>{feedsFor(view)!.caption}</p>}
+                      {/* The per-dimension source sentences used to be printed
+                          under every row, which doubled the drawing's height
+                          to repeat what the marker already says. They are not
+                          deleted, only folded: a reader who wants to know
+                          where a dimension came from is one click away. */}
+                      <button
+                        type="button" onClick={() => setDimSourceOpen((v) => !v)} aria-expanded={dimSourceOpen}
+                        style={{ marginTop: 5, padding: 0, border: 0, background: "none", cursor: "pointer", font: "inherit", fontSize: 11, fontWeight: 700, color: "#6d28d9", textDecoration: "underline" }}
+                      >
+                        &#9432; {dimSourceOpen ? "Hide" : "Where each dimension comes from"}
+                      </button>
+                      {dimSourceOpen && (
+                        <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0, display: "grid", gap: 4 }}>
+                          {bandWorking.rows.map((r) => (
+                            <li key={r.key} style={{ ...muted, fontSize: 11 }}>
+                              <b style={{ color: INK }}>{r.label}:</b>{" "}
+                              {r.checkedHere ? DIMENSION_TAB_SOURCE[r.key] : DIMENSION_NOT_READ}.
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   )}
                 </div>

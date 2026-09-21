@@ -256,8 +256,19 @@ describe("what this run already found about Review", () => {
     });
     expect(html).toContain("What this run already found about Review");
     expect(html).toContain("✗ Does not comply");
-    // No band anywhere near it.
-    expect(html).not.toMatch(/Review[\s\S]{0,400}Band \d of 5/);
+    // No band inside the Review FINDINGS section. Scoped to that section on
+    // purpose: the old check was "the word Review within 400 characters of a
+    // band" across the whole document, which caught the dimension panel's own
+    // aria-label describing Approach's band next to a caption that happens to
+    // mention Review. That is a legitimate, already-assessed dimension, not a
+    // Review band invented from line verdicts, and the guarantee here is about
+    // the latter.
+    const from = html.indexOf("What this run already found about Review");
+    expect(from).toBeGreaterThan(-1);
+    const nextHeading = html.slice(from + 1).search(/<h[123]\b/);
+    const section = nextHeading === -1 ? html.slice(from) : html.slice(from, from + 1 + nextHeading);
+    expect(section).not.toMatch(/Band \d/);
+    expect(section).toContain("✗ Does not comply");
   });
 
   // Deliberately absent for Systems & Outcomes: the words that would catch

@@ -110,16 +110,20 @@ export const DIMENSION_TAB_SOURCE: Record<BandDimensionRow["key"], string> = {
 // never scored.
 export const DIMENSION_NOT_READ = "The second read produced no verdicts on this run";
 
-// Graphic scale. The source sits on its own line under the dimension name with
-// the full width of the drawing to itself, so it carries the same sentence the
-// matrix opens with; only the "why no tab" clause is dropped for room.
+// Graphic scale. These used to be full sentences on a line of their own under
+// every dimension name, which doubled the panel's height to repeat what the
+// "left arrow this tab" marker already says. Approach and Processes now carry
+// NOTHING, because the marker names them; the other two carry three words,
+// because no tab feeds them and an arrow on them would claim something false.
+// The full sentences are still one click away on the panel heading
+// (DIMENSION_TAB_SOURCE, below).
 export const DIMENSION_TAB_TAG: Record<BandDimensionRow["key"], string> = {
-  approach: "from your written procedure, the Procedure tab",
-  processes: "from your procedure and records together, the Overall tab",
-  systemsOutcomes: SECOND_LOOK,
-  review: SECOND_LOOK,
+  approach: "",
+  processes: "",
+  systemsOutcomes: "separate read",
+  review: "separate read",
 };
-export const DIMENSION_TAG_NOT_READ = "not read on this run";
+export const DIMENSION_TAG_NOT_READ = "not read";
 
 // The Earned column for a dimension this run did not look at.
 export const NOT_ASSESSED_HERE = "not assessed";
@@ -310,22 +314,51 @@ function segmentText(seg: BandGraphic["segments"][number]): string {
   return `Band ${seg.band} of 5 · ${seg.pct}% of ${seg.max}%`;
 }
 
+// The same words, split so the drawing can weight them. The band is the
+// number a reader acts on and it was set in the same small grey as the
+// arithmetic beside it; the arithmetic is the qualifier, not the point.
+// Exported for the test that pins the two halves back to segmentText, so the
+// picture and the exports cannot start saying different things.
+export function segmentBandText(seg: BandGraphic["segments"][number]): string {
+  if (!seg.assessedHere) return "not assessed";
+  if (seg.band === undefined) return "not scored";
+  return `Band ${seg.band}`;
+}
+
+export function segmentDetailText(seg: BandGraphic["segments"][number]): string {
+  if (!seg.assessedHere) return "by this check";
+  if (seg.band === undefined) return "";
+  return `of 5 · ${seg.pct}% of ${seg.max}%`;
+}
+
 // Which dimension a tab's own verdicts feed, per optionAChecklistWrite.ts:31-41:
-// Approach is written from the PROCEDURE verdict (row.ppdVerdict) and Processes
-// from the COMBINED verdict (row.verdict). So the procedure tab feeds Approach
-// outright, while the records tab is one HALF of what becomes Processes — the
-// other half is the procedure verdict. The captions say which, because a tab
-// that claimed to produce a dimension on its own would be overstating itself.
-export type TabFeeds = { key: BandDimensionRow["key"]; caption: string };
+// Approach is written from the PROCEDURE verdict (row.ppdVerdict), and
+// Processes from the COMBINED verdict (row.verdict), which is what the Overall
+// tab shows.
+//
+// The marker used to sit on the RECORDS tab and not on Overall, which was
+// backwards in both directions at once. Records holds only half of what
+// becomes Processes, the other half being the procedure verdict, so an arrow
+// there claimed a dimension the tab does not produce; and Overall, which does
+// produce it, carried nothing — while the source line beneath it said in
+// words "which is the Overall tab". `key` is therefore optional: a tab that
+// feeds nothing outright gets the caption and NO arrow, rather than an arrow
+// pointing at something it only half answers.
+export type TabFeeds = { key?: BandDimensionRow["key"]; caption: string };
 
 export const PROCEDURE_FEEDS: TabFeeds = {
   key: "approach",
   caption: "This tab's verdicts are what Approach is judged on. The other three dimensions are not this tab's to answer.",
 };
 
-export const RECORDS_FEEDS: TabFeeds = {
+export const OVERALL_FEEDS: TabFeeds = {
   key: "processes",
-  caption: "Processes is judged on the combined verdict shown on the Overall tab. This tab is one half of that: the other half is what your written procedure says.",
+  caption: "This tab's combined verdicts are what Processes is judged on. Systems & Outcomes and Review come from a separate read, and no tab feeds them.",
+};
+
+// No key on purpose: this tab feeds nothing on its own.
+export const RECORDS_FEEDS: TabFeeds = {
+  caption: "No dimension is judged on this tab alone. Processes is judged on the combined verdict shown on the Overall tab, and this tab is one half of that: the other half is what your written procedure says.",
 };
 
 export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?: string; minWidth?: number; feeds?: TabFeeds } = {}): string {
@@ -337,19 +370,27 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
   // table is the content, and at the previous size the panel pushed it below
   // the fold. The type sits at the page's own scale (11px/10px) rather than
   // above every other heading on it.
-  const VX = 132, AX = 280, TW = 140, ROW = 25, TOP = 34, BARH = 9;
-  const W = AX + TW + (opts.feeds ? 66 : 8);
+  // ROW dropped from 25 to 20: the source sentence that used to sit on a
+  // second line under every dimension name is gone (DIMENSION_TAB_TAG), so a
+  // row is one line again. VX moved left to give the band its own room.
+  const VX = 126, AX = 288, TW = 132, ROW = 20, TOP = 34, BARH = 9;
+  const W = AX + TW + (opts.feeds?.key ? 66 : 8);
   const H = TOP + g.segments.length * ROW + 4;
   const hatchId = `scHatch${opts.idSuffix ?? ""}`;
   const t = (xx: number, yy: number, cls: string, txt: string) => `<text x="${xx}" y="${yy}" style="${cls}">${esc(txt)}</text>`;
   const TITLE = `font-size:11px;font-weight:700;fill:${p.ink}`;
   const NAME = `font-size:10.5px;fill:${p.ink}`;
-  const SMALL = `font-size:10px;fill:${p.mute}`;
+  const SMALL = `font-size:9.5px;fill:${p.mute}`;
+  // The band is the main information in this panel. It was set in the same
+  // small grey as the percentage running on from it in one faint line.
+  const BAND = `font-size:13px;font-weight:800;fill:${p.ink}`;
+  // Where the "separate read" tag sits, past the longest dimension name.
+  const LABEL_W = 104;
   const max = g.segments[0]?.max ?? 25;
   const judged = g.segments.filter((s) => s.assessedHere).map((s) => s.label);
 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block;max-width:${W}px;${opts.minWidth ? `min-width:${opts.minWidth}px;` : ""}height:auto;font-family:inherit"
-  aria-label="${opts.feeds ? `Which dimension this tab feeds: ${esc(g.segments.find((s) => s.key === opts.feeds!.key)?.label ?? "")}. ${esc(opts.feeds.caption)} ` : "What this check assessed, by dimension. "}${esc(g.segments.map((s) => `${s.label}: ${segmentText(s)}`).join(". "))}. No overall band is given.">
+  aria-label="${opts.feeds?.key ? `Which dimension this tab feeds: ${esc(g.segments.find((s) => s.key === opts.feeds!.key)?.label ?? "")}. ${esc(opts.feeds.caption)} ` : opts.feeds ? `${esc(opts.feeds.caption)} ` : "What this check assessed, by dimension. "}${esc(g.segments.map((s) => `${s.label}: ${segmentText(s)}`).join(". "))}. No overall band is given.">
   <rect x="0" y="0" width="${W}" height="${H}" rx="8" style="fill:${p.surface};stroke:${p.edge}"/>
   <defs>
     <pattern id="${hatchId}" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -371,11 +412,19 @@ export function bandGraphicSvg(g: BandGraphic, p: BandPalette, opts: { idSuffix?
       : `<rect x="${AX}" y="${y}" width="${TW}" height="${BARH}" rx="2" fill="url(#${hatchId})"/>`;
     // The marker is a word as well as a position, so which dimension the tab
     // feeds survives greyscale and a screen reader.
-    const fed = opts.feeds?.key === seg.key;
+    const fed = opts.feeds?.key !== undefined && opts.feeds.key === seg.key;
+    // The band carries its own weight; the arithmetic after it is the
+    // qualifier. One <text> with two tspans, so they flow without the
+    // drawing having to guess how wide "Band 3" is.
+    const band = `<text x="${VX}" y="${y + 8}"><tspan style="${BAND}">${esc(segmentBandText(seg))}</tspan>${
+      segmentDetailText(seg) ? `<tspan style="${SMALL}"> ${esc(segmentDetailText(seg))}</tspan>` : ""
+    }</text>`;
+    // Three words, and only on the two dimensions no tab feeds. Approach and
+    // Processes carry nothing, because the marker names them.
+    const tag = seg.source ? t(10 + LABEL_W, y + 8, `font-size:9px;fill:${p.mute}`, seg.source) : "";
     return `${t(10, y + 8, fed ? `${NAME};font-weight:700` : NAME, seg.label)}
-      ${/* Where this dimension's judgement came from, on the drawing itself. */ ""}
-      ${t(10, y + 19, `font-size:9px;fill:${p.mute}`, seg.source)}
-      ${t(VX, y + 8, SMALL, segmentText(seg))}
+      ${tag}
+      ${band}
       <rect x="${AX}" y="${y}" width="${TW}" height="${BARH}" rx="2" style="fill:${p.track}"/>
       ${fill}
       ${fed ? t(AX + TW + 6, y + 8, `font-size:10px;font-weight:700;fill:${p.ink}`, "\u2190 this tab") : ""}`;
