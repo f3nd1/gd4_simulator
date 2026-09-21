@@ -35,11 +35,14 @@ export const NORMAL_USER_PATHS = ["/self-check"] as const;
 // them to a refusal there would be a wall on their first screen.
 export const NORMAL_USER_HOME = "/self-check";
 
-// The rows Postgres refuses a normal user's write on, and the page each one
-// belongs to. No path here may be in NORMAL_USER_PATHS: a normal user
-// who reached one of these screens could type an edit and have it silently
-// refused, which is worse than not seeing the page. A test pins that.
-export const LOCKED_STORE_KEYS: Record<string, { path: string; what: string }> = {
+// The configuration rows that CAN be locked, and the page each one belongs
+// to. Whether a given one IS locked now lives in public.locked_stores and is
+// read at runtime (lib/auth/storeLocks.ts) — this is the catalogue the
+// People screen offers, not the state. No path here may be in
+// NORMAL_USER_PATHS: a normal user who reached one of these screens could
+// type an edit and have it silently refused, which is worse than not seeing
+// the page. A test pins that.
+export const LOCKABLE_STORES: Record<string, { path: string; what: string }> = {
   "ucc-gd4-ai-settings:v1":        { path: "/settings",           what: "The OpenAI key and model choices" },
   "ucc-gd4-google-drive:v1":       { path: "/settings",           what: "The Google Drive Client ID" },
   "ucc-gd4-scoring-config:v1":     { path: "/gd4-scoring-setup",  what: "Award thresholds and scoring weights" },
@@ -52,16 +55,30 @@ export const LOCKED_STORE_KEYS: Record<string, { path: string; what: string }> =
   "profile-of-pei-v2":             { path: "/profile-of-pei",     what: "The PEI profile used as AI context" },
 };
 
-// The rows a normal user writes in ordinary use, which is why they are NOT
-// locked. The first three are written on every page load with no action at
-// all; the fourth is written by a self-check run. Locking any of them would
-// give every normal user a permanent sync error for no gain.
+// The rows a normal user writes in ordinary use, which is why they can never
+// be locked. Refused by a CHECK CONSTRAINT on locked_stores rather than by a
+// policy, so it binds everybody including an admin and including the Supabase
+// dashboard: locking one would give every process owner a permanent sync
+// error and break the one page they have.
+//
+// Shown on the People screen, collapsed, rather than left out. A control that
+// is simply absent gets asked about later; one that says why it is absent
+// does not.
 export const NEVER_LOCKABLE: Record<string, string> = {
-  "ucc-gd4-workspace:v3": "Written constantly by every page, including the self-check",
-  "ucc-gd4-checklist:v2": "Written on every page load",
-  "ucc-gd4-finding-drafts:v1": "Written on every page load",
-  "ucc-gd4-changelog:v1": "Written on every page load",
+  "ucc-gd4-workspace:v3": "Every page writes this constantly, including the self-check",
+  "ucc-gd4-checklist:v2": "Written on every page load, before anyone touches anything",
+  "ucc-gd4-finding-drafts:v1": "Written on every page load, before anyone touches anything",
+  "ucc-gd4-changelog:v1": "Written on every page load, before anyone touches anything",
   "ucc-gd4-checklist-verdicts:v1": "Written by a self-check run",
+};
+
+// What each never-lockable row belongs to, for the collapsed list.
+export const NEVER_LOCKABLE_LABEL: Record<string, string> = {
+  "ucc-gd4-workspace:v3": "The whole workspace: cycle, findings, evidence, self-check results",
+  "ucc-gd4-checklist:v2": "Sub-Criterion Checklist lines",
+  "ucc-gd4-finding-drafts:v1": "Grouped finding drafts",
+  "ucc-gd4-changelog:v1": "The change log",
+  "ucc-gd4-checklist-verdicts:v1": "Audit Checklist Library verdicts",
 };
 
 export function isAdminOnlyPath(path: string): boolean {
@@ -85,18 +102,25 @@ export const NOTABLE_ADMIN_PATHS = [
   "/change-log",
 ] as const;
 
-// What a given admin-only page actually gets: a database refusal, or only a
-// hidden link. Shown per page on the People screen, in those words.
-export function protectionFor(path: string): PageProtection {
-  return Object.values(LOCKED_STORE_KEYS).some((v) => v.path === path) ? "locked" : "hidden-only";
+// What a given admin-only page actually gets RIGHT NOW: a database refusal,
+// or only a hidden link. Takes the live lock set, because the answer changes
+// the moment somebody toggles one; passing nothing means "not known yet",
+// which the screen must say rather than guess.
+export function protectionFor(path: string, lockedKeys?: ReadonlySet<string>): PageProtection | "unknown" {
+  const keys = Object.entries(LOCKABLE_STORES).filter(([, v]) => v.path === path).map(([k]) => k);
+  if (keys.length === 0) return "hidden-only";
+  if (!lockedKeys) return "unknown";
+  return keys.some((k) => lockedKeys.has(k)) ? "locked" : "hidden-only";
 }
 
-export const PROTECTION_LABEL: Record<PageProtection, string> = {
+export const PROTECTION_LABEL: Record<PageProtection | "unknown", string> = {
   locked: "Locked at the database",
   "hidden-only": "Hidden only",
+  unknown: "Checking…",
 };
 
-export const PROTECTION_MEANING: Record<PageProtection, string> = {
+export const PROTECTION_MEANING: Record<PageProtection | "unknown", string> = {
+  unknown: "The lock list could not be read, so this is not known. It is not a claim that the page is open.",
   locked: "A normal user cannot change this even with the page open in front of them. The database refuses the save.",
   "hidden-only": "The link is hidden and the address refuses, but the data behind it is still readable, and is written by the app for everyone.",
 };

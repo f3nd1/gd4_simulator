@@ -61,14 +61,21 @@ export const ADMIN_ONLY_REFUSAL =
 // ── The database calls ────────────────────────────────────────────────────
 
 export async function listPeople(supabase: SupabaseClient): Promise<{ people: Person[] } | { error: string }> {
-  const { data, error } = await supabase
-    .from("allowed_users")
-    .select("email, note, added_at")
-    .order("email");
-  if (error) return { error: error.message };
-  const people = (data ?? []).map((r) => ({
-    email: String(r.email), note: r.note == null ? null : String(r.note), addedAt: r.added_at == null ? null : String(r.added_at),
-  }));
+  let data: unknown[] | null = null;
+  try {
+    const res = await supabase.from("allowed_users").select("email, note, added_at").order("email");
+    if (res.error) return { error: res.error.message };
+    data = res.data as unknown[] | null;
+  } catch (e) {
+    // Never throw out of here: the People screen loads three lists side by
+    // side and one of them failing must not blank the other two.
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+  if (!Array.isArray(data)) return { error: "The sign-in list came back in an unexpected shape." };
+  const people = data.map((raw) => {
+    const r = raw as { email: unknown; note: unknown; added_at: unknown };
+    return { email: String(r.email), note: r.note == null ? null : String(r.note), addedAt: r.added_at == null ? null : String(r.added_at) };
+  });
   // The admin first, because the screen pins it. Then everyone else, as
   // ordered by the database.
   return { people: [...people].sort((a, b) => Number(isAdminEmail(b.email)) - Number(isAdminEmail(a.email))) };

@@ -29,9 +29,10 @@ are in the list yourself. A missing table never is.
 | `04-admin-manages-the-list.sql` | **Before** the People-screen build | Lets the admin add and remove people from inside the app |
 | `05-close-the-anon-hole.sql` | **Now.** No deploy needed either side | Removes any policy that is not on the expected list, including one an earlier Settings page told people to create |
 | `06-second-admin-and-locked-stores.sql` | **Before** the roles build | Adds `admin_grants` (root grants a second admin) and makes ten configuration rows admin-write-only |
+| `07-locks-live-in-a-table.sql` | **Before** the editable-locks build | Moves the locked list into `locked_stores`, so the People screen changes what the database refuses |
 | `functions/drive-oauth/` | Deployed separately, see below | Mints Google Drive tokens; also reads `allowed_users` |
 
-`01` → `02` → `03` → `04` → `05` → `06` is the upgrade path for a project that already exists.
+`01` → `02` → `03` → `04` → `05` → `06` → `07` is the upgrade path for a project that already exists.
 `schema.sql` is the same thing for a project that does not.
 
 ## Running one, click by click
@@ -63,6 +64,9 @@ you can compare without having to remember it.
 | `admin_grants` | `see your own grant, or all of them if root` | SELECT | authenticated |
 | `admin_grants` | `only the root grants admin` | INSERT | authenticated |
 | `admin_grants` | `only the root revokes admin` | DELETE | authenticated |
+| `locked_stores` | `anyone signed in may read the lock list` | SELECT | authenticated |
+| `locked_stores` | `only an admin locks` | INSERT | authenticated |
+| `locked_stores` | `only an admin unlocks` | DELETE | authenticated |
 | `drive_oauth_tokens` | none at all | | |
 
 No DELETE on `workspace_state`: nothing in the app deletes a row, so granting
@@ -70,6 +74,13 @@ it would only widen what a mistake or a stolen session can do. No UPDATE on
 `allowed_users`: without it nobody can rename a row into somebody else's
 address. `drive_oauth_tokens` has RLS on and zero policies, so only the Edge
 Function's service-role key reaches the Google refresh token.
+
+`locked_stores` is READABLE by everyone signed in, deliberately.
+`is_admin_only_row()` runs as the caller, so a normal user who could not see
+those rows would find every lock evaporate for exactly the people it exists
+to stop. Five store keys can never be locked at all, refused by a CHECK
+constraint rather than a policy, because a constraint binds everyone
+including the dashboard.
 
 No UPDATE on `admin_grants`: a grant is present or absent, never edited. Its
 policies ask `is_admin()` (the root constant) and never `is_any_admin()`,

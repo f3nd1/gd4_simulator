@@ -2,29 +2,59 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { NAV } from "../../../nav";
 import {
-  NORMAL_USER_PATHS, NORMAL_USER_HOME, NOTABLE_ADMIN_PATHS, LOCKED_STORE_KEYS, NEVER_LOCKABLE,
-  isAdminOnlyPath, protectionFor, PROTECTION_LABEL, READ_CAVEAT, EVERYTHING_ELSE_NOTE,
+  NORMAL_USER_PATHS, NORMAL_USER_HOME, NOTABLE_ADMIN_PATHS, LOCKABLE_STORES, NEVER_LOCKABLE, NEVER_LOCKABLE_LABEL,
+  isAdminOnlyPath, protectionFor, PROTECTION_LABEL, PROTECTION_MEANING, READ_CAVEAT, EVERYTHING_ELSE_NOTE,
 } from "../pageAccess";
 
 const SQL = readFileSync("supabase/06-second-admin-and-locked-stores.sql", "utf8");
-const lockedInSql = () => {
-  const fn = SQL.slice(SQL.indexOf("create or replace function public.is_admin_only_row"));
-  return [...fn.slice(0, fn.indexOf("$$;")).matchAll(/'([^']+)'/g)].map((m) => m[1]);
+const LOCKS_SQL = readFileSync("supabase/07-locks-live-in-a-table.sql", "utf8");
+// 07 moved the list out of the function and into a table. The function now
+// READS that table, so the seed is what has to match the app's catalogue.
+const seededInSql = () => {
+  const ins = LOCKS_SQL.slice(LOCKS_SQL.indexOf("insert into public.locked_stores"));
+  return [...ins.slice(0, ins.indexOf(";")).matchAll(/'([a-z0-9:.-]+)',\s+'migration 07'/g)].map((m) => m[1]);
+};
+const neverLockableInSql = () => {
+  const c = LOCKS_SQL.slice(LOCKS_SQL.indexOf("locked_stores_never_lockable check"));
+  return [...c.slice(0, c.indexOf("])")).matchAll(/'([a-z0-9:.-]+)'/g)].map((m) => m[1]);
 };
 
-describe("the locked rows are the same list in the app and in Postgres", () => {
+describe("the lock catalogue matches what the database was seeded with", () => {
   it("matches, key for key", () => {
-    expect(lockedInSql().sort()).toEqual(Object.keys(LOCKED_STORE_KEYS).sort());
+    expect(seededInSql().sort()).toEqual(Object.keys(LOCKABLE_STORES).sort());
   });
 
-  it("never locks a row a normal user writes in ordinary use", () => {
-    // Measured on the real build: these are written on page load with no
-    // action at all, or by a self-check run. Locking one gives every normal
-    // user a permanent sync error for no gain.
+  it("reads the live list from the table rather than its own source", () => {
+    // STABLE, not IMMUTABLE: an immutable function that reads a table can be
+    // folded to a constant, which would freeze the locks and make every
+    // later toggle a silent no-op.
+    const fn = LOCKS_SQL.slice(LOCKS_SQL.indexOf("create or replace function public.is_admin_only_row"));
+    const body = fn.slice(0, fn.indexOf("$$;"));
+    expect(body).toContain("from public.locked_stores");
+    expect(body).toMatch(/\bstable\b/);
+    expect(body).not.toMatch(/\bimmutable\b/);
+  });
+
+  it("refuses the never-lockable rows with a CONSTRAINT, which binds everyone", () => {
+    // A policy binds the caller; a constraint binds the admin and the
+    // Supabase dashboard too. Locking one of these would break every
+    // process owner on page load.
+    expect(neverLockableInSql().sort()).toEqual(Object.keys(NEVER_LOCKABLE).sort());
     for (const key of Object.keys(NEVER_LOCKABLE)) {
-      expect(Object.keys(LOCKED_STORE_KEYS), key).not.toContain(key);
-      expect(lockedInSql(), `${key} in SQL`).not.toContain(key);
+      expect(Object.keys(LOCKABLE_STORES), key).not.toContain(key);
+      expect(seededInSql(), `${key} seeded`).not.toContain(key);
+      expect(NEVER_LOCKABLE_LABEL[key], `${key} needs a label for the collapsed list`).toBeTruthy();
     }
+  });
+
+  it("lets only an admin change a lock, and everyone signed in read the list", () => {
+    // The read matters: is_admin_only_row runs as the CALLER, so a normal
+    // user who could not see these rows would find every lock evaporate for
+    // exactly the people it exists to stop.
+    expect(LOCKS_SQL).toMatch(/for select to authenticated\s+using \(public\.is_allowed_user\(\)\)/);
+    expect(LOCKS_SQL).toMatch(/for insert to authenticated\s+with check \(public\.is_any_admin\(\)\)/);
+    expect(LOCKS_SQL).toMatch(/for delete to authenticated\s+using \(public\.is_any_admin\(\)\)/);
+    expect(LOCKS_SQL).not.toMatch(/on public\.locked_stores\s+for (update|all)/);
   });
 });
 
@@ -32,7 +62,7 @@ describe("a locked row's page is never visible to the person who cannot write it
   it("every page owning a locked row is admin-only", () => {
     // Otherwise a normal user opens the screen, types an edit, and the save
     // is silently refused. Worse than not seeing the page.
-    for (const [key, { path }] of Object.entries(LOCKED_STORE_KEYS)) {
+    for (const [key, { path }] of Object.entries(LOCKABLE_STORES)) {
       expect(isAdminOnlyPath(path), `${key} -> ${path}`).toBe(true);
     }
   });
@@ -64,10 +94,18 @@ describe("a locked row's page is never visible to the person who cannot write it
 });
 
 describe("the screen is honest about what hiding does", () => {
-  it("labels a page with a locked row differently from one that is only hidden", () => {
-    expect(protectionFor("/settings")).toBe("locked");
-    expect(protectionFor("/change-log")).toBe("hidden-only");
+  it("labels a page from the LIVE lock set, not from a hard-coded list", () => {
+    const locked = new Set(["ucc-gd4-ai-settings:v1"]);
+    expect(protectionFor("/settings", locked)).toBe("locked");
+    expect(protectionFor("/settings", new Set())).toBe("hidden-only");
+    expect(protectionFor("/change-log", locked)).toBe("hidden-only");
     expect(PROTECTION_LABEL["hidden-only"]).toContain("Hidden only");
+  });
+
+  it("says it does not know rather than guessing when the list cannot be read", () => {
+    // A green "Locked" badge that is a guess is worse than no badge.
+    expect(protectionFor("/settings")).toBe("unknown");
+    expect(PROTECTION_MEANING.unknown).toMatch(/not a claim/i);
   });
 
   it("says the rest of the workspace is admin-only too, rather than listing thirty rows", () => {

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ADMIN_EMAIL, isAdminEmail } from "../domain";
-import { checkAddress, removalBlockedReason, removalConsequence, removePerson, addPerson, ADMIN_ONLY_REFUSAL } from "../peopleAdmin";
+import { checkAddress, removalBlockedReason, removalConsequence, removePerson, addPerson, listPeople, ADMIN_ONLY_REFUSAL } from "../peopleAdmin";
 
 describe("who the admin is", () => {
   it("is the same address the database uses, character for character", () => {
@@ -143,5 +143,32 @@ describe("a policy refusal on add", () => {
     } as unknown as SupabaseClient;
     const got = await addPerson(supabase, "renzo@unitedceres.edu.sg");
     expect(got.ok === false && got.reason).toBe("That person is already on the list.");
+  });
+});
+
+// The People screen loads the sign-in list, the admin grants and the lock
+// list side by side. listPeople must never THROW, or a bad answer to one
+// query would blank the other two: that is exactly what happened when the
+// lock panel sat on "Checking..." for ever with no explanation.
+describe("listPeople never throws out of the caller", () => {
+  it("reports a thrown error instead of propagating it", async () => {
+    const c = { from: () => { throw new Error("boom"); } } as unknown as SupabaseClient;
+    expect(await listPeople(c)).toEqual({ error: "boom" });
+  });
+
+  it("reports a non-array answer instead of dying on .map", async () => {
+    const c = {
+      from: () => ({ select: () => ({ order: () => Promise.resolve({ data: { email: "x" }, error: null }) }) }),
+    } as unknown as SupabaseClient;
+    const got = await listPeople(c);
+    expect("error" in got && got.error).toMatch(/unexpected shape/i);
+  });
+
+  it("still returns the people when the answer is normal", async () => {
+    const c = {
+      from: () => ({ select: () => ({ order: () => Promise.resolve({ data: [{ email: "a@unitedceres.edu.sg", note: null, added_at: null }], error: null }) }) }),
+    } as unknown as SupabaseClient;
+    const got = await listPeople(c);
+    expect("people" in got && got.people.map((p) => p.email)).toEqual(["a@unitedceres.edu.sg"]);
   });
 });

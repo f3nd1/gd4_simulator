@@ -8,7 +8,8 @@ import {
 } from "../lib/auth/peopleAdmin";
 import { INK } from "../lib/theme";
 import { listGrants, grantAdmin, revokeAdmin, GRANT_CONSEQUENCE, type Grant } from "../lib/auth/adminGrants";
-import { NOTABLE_ADMIN_PATHS, protectionFor, PROTECTION_LABEL, PROTECTION_MEANING, READ_CAVEAT, EVERYTHING_ELSE_NOTE, LOCKED_STORE_KEYS } from "../lib/auth/pageAccess";
+import { NOTABLE_ADMIN_PATHS, protectionFor, PROTECTION_LABEL, PROTECTION_MEANING, READ_CAVEAT, EVERYTHING_ELSE_NOTE, LOCKABLE_STORES, NEVER_LOCKABLE, NEVER_LOCKABLE_LABEL } from "../lib/auth/pageAccess";
+import { listLocks, lockStore, unlockStore, unlockPhraseMatches, unlockWarning, type LockState } from "../lib/auth/storeLocks";
 import { NAV } from "../nav";
 
 // Who can sign in, managed from inside the app instead of the Supabase
@@ -36,14 +37,29 @@ export function People() {
   const [grantDraft, setGrantDraft] = useState("");
   const [grantMsg, setGrantMsg] = useState("");
   const isRoot = isAdminEmail(email);
+  const [locks, setLocks] = useState<LockState | null>(null);
+  const [lockMsg, setLockMsg] = useState("");
+  const [unlocking, setUnlocking] = useState<{ storeKey: string; label: string; what: string } | null>(null);
+  const [unlockTyped, setUnlockTyped] = useState("");
+  const [showNeverLockable, setShowNeverLockable] = useState(false);
+  const lockedKeys = locks && "keys" in locks ? locks.keys : undefined;
 
+  // The three lists load INDEPENDENTLY. They used to run in sequence with an
+  // early return on the first failure, so one bad query left the lock panel
+  // saying "Checking..." for ever with no explanation of why. Each one owns
+  // its own error now.
   const refresh = useCallback(async () => {
     const supabase = getSupabaseClient();
     if (!supabase) { setLoadError("This app is not connected to its database."); return; }
-    const got = await listPeople(supabase);
-    if ("error" in got) { setLoadError(got.error); return; }
-    setLoadError(""); setPeople(got.people);
-    setGrants(await listGrants(supabase));
+    const [people, grantList, lockList] = await Promise.all([
+      listPeople(supabase).catch((e) => ({ error: e instanceof Error ? e.message : String(e) })),
+      listGrants(supabase),
+      listLocks(supabase),
+    ]);
+    if ("error" in people) setLoadError(people.error);
+    else { setLoadError(""); setPeople(people.people); }
+    setGrants(grantList);
+    setLocks(lockList);
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -160,6 +176,59 @@ export function People() {
         {done && <p style={{ ...muted, margin: "10px 0 0", color: done.includes("refused") ? "#991b1b" : "#166534" }}>{done}</p>}
       </div>
 
+      {unlocking && (
+        <div
+          role="dialog" aria-modal="true" aria-label="Unlock"
+          onClick={() => setUnlocking(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 120, background: "rgba(15,23,42,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 470, background: "#fff", borderRadius: 14, border: "1px solid #e2e8f0", padding: "22px 20px", boxSizing: "border-box" }}>
+            <h2 style={{ margin: 0, fontSize: 17, color: INK }}>Unlock {unlocking.label}?</h2>
+            {/* Unlocking widens who may change something; locking narrows it.
+                The friction goes on the dangerous direction only. */}
+            <p style={{ ...muted, margin: "10px 0 0", background: "#fff7ed", border: "1px solid #fdba74", color: "#92400e", borderRadius: 9, padding: "10px 12px" }}>
+              {unlockWarning(unlocking.label, unlocking.what)}
+            </p>
+            <label style={{ ...muted, display: "block", marginTop: 14, color: INK, fontWeight: 700, fontSize: 12.5 }}>
+              Type <b>{unlocking.label}</b> to confirm
+              <input
+                value={unlockTyped}
+                onChange={(e) => setUnlockTyped(e.target.value)}
+                aria-label={`Type ${unlocking.label} to confirm unlocking`}
+                style={{ width: "100%", boxSizing: "border-box", padding: "9px 11px", fontSize: 13, border: "1px solid #cbd5e1", borderRadius: 8, marginTop: 5 }}
+              />
+            </label>
+            <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                disabled={busy || !unlockPhraseMatches(unlockTyped, unlocking.label)}
+                onClick={() => { void (async () => {
+                  const supabase = getSupabaseClient();
+                  if (!supabase) return;
+                  setBusy(true);
+                  const res = await unlockStore(supabase, unlocking.storeKey);
+                  setBusy(false); setUnlocking(null);
+                  setLockMsg(res.ok ? `${unlocking.what} can now be changed by anyone who can sign in.` : res.reason);
+                  await refresh();
+                })(); }}
+                style={{
+                  flex: "1 1 170px", cursor: unlockPhraseMatches(unlockTyped, unlocking.label) ? "pointer" : "default",
+                  fontSize: 13, fontWeight: 700, padding: "10px 12px", borderRadius: 9,
+                  border: "1px solid #b91c1c",
+                  background: unlockPhraseMatches(unlockTyped, unlocking.label) ? "#b91c1c" : "#fca5a5", color: "#fff",
+                }}
+              >
+                Unlock it
+              </button>
+              <button type="button" onClick={() => setUnlocking(null)}
+                style={{ flex: "1 1 100px", cursor: "pointer", fontSize: 13, fontWeight: 700, padding: "10px 12px", borderRadius: 9, border: "1px solid #cbd5e1", background: "#fff", color: INK }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {confirming && (
         <div
           role="dialog" aria-modal="true" aria-label="Remove from the list"
@@ -258,11 +327,17 @@ export function People() {
         <p style={{ ...muted, margin: "6px 0 0", background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 9, padding: "9px 11px" }}>
           {READ_CAVEAT}
         </p>
+        {locks && "error" in locks && (
+          <p style={{ ...muted, margin: "8px 0 0", background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 9, padding: "9px 11px" }}>
+            {locks.error}
+          </p>
+        )}
+        {lockMsg && <p style={{ ...muted, margin: "8px 0 0", color: lockMsg.includes("refus") || lockMsg.includes("cannot") ? "#991b1b" : "#166534" }}>{lockMsg}</p>}
         <ul style={{ listStyle: "none", margin: "10px 0 0", padding: 0, display: "grid", gap: 6 }}>
           {NOTABLE_ADMIN_PATHS.map((path) => {
             const label = NAV.flatMap((g) => [...g.items, ...(g.tools ?? [])]).find((i) => i.path === path)?.label ?? path;
-            const kind = protectionFor(path);
-            const rows = Object.entries(LOCKED_STORE_KEYS).filter(([, v]) => v.path === path);
+            const kind = protectionFor(path, lockedKeys);
+            const rows = Object.entries(LOCKABLE_STORES).filter(([, v]) => v.path === path);
             return (
               <li key={path} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px" }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
@@ -270,23 +345,70 @@ export function People() {
                   <span style={{
                     fontSize: 10.5, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase",
                     borderRadius: 5, padding: "1px 6px",
-                    color: kind === "locked" ? "#166534" : "#92400e",
-                    background: kind === "locked" ? "#dcfce7" : "#fff7ed",
-                    border: `1px solid ${kind === "locked" ? "#bbf7d0" : "#fdba74"}`,
+                    color: kind === "locked" ? "#166534" : kind === "unknown" ? "#64748b" : "#92400e",
+                    background: kind === "locked" ? "#dcfce7" : kind === "unknown" ? "#f1f5f9" : "#fff7ed",
+                    border: `1px solid ${kind === "locked" ? "#bbf7d0" : kind === "unknown" ? "#e2e8f0" : "#fdba74"}`,
                   }}>
                     {PROTECTION_LABEL[kind]}
                   </span>
                 </div>
                 <div style={{ ...muted, fontSize: 11.5, marginTop: 3 }}>{PROTECTION_MEANING[kind]}</div>
-                {rows.length > 0 && (
-                  <div style={{ ...muted, fontSize: 11.5, marginTop: 2 }}>
-                    Refused for a normal user: {rows.map(([, v]) => v.what.toLowerCase()).join("; ")}.
-                  </div>
-                )}
+                {/* Each lockable row gets its own control: a page can own more
+                    than one, and AI Calibration owns three. */}
+                {lockedKeys && rows.map(([key, v]) => {
+                  const on = lockedKeys.has(key);
+                  return (
+                    <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+                      <span style={{ ...muted, flex: "1 1 220px", minWidth: 0, fontSize: 11.5 }}>{v.what}</span>
+                      <button
+                        type="button" disabled={busy}
+                        onClick={() => {
+                          setLockMsg("");
+                          if (on) { setUnlockTyped(""); setUnlocking({ storeKey: key, label, what: v.what }); return; }
+                          void (async () => {
+                            const supabase = getSupabaseClient();
+                            if (!supabase) return;
+                            setBusy(true);
+                            const res = await lockStore(supabase, key, email);
+                            setBusy(false);
+                            setLockMsg(res.ok ? `${v.what} is now admin-only.` : res.reason);
+                            await refresh();
+                          })();
+                        }}
+                        style={{
+                          flexShrink: 0, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: "5px 11px", borderRadius: 7,
+                          border: `1px solid ${on ? "#cbd5e1" : "#166534"}`,
+                          background: on ? "#fff" : "#166534", color: on ? "#991b1b" : "#fff",
+                        }}
+                      >
+                        {on ? "Unlock" : "Lock"}
+                      </button>
+                    </div>
+                  );
+                })}
               </li>
             );
           })}
         </ul>
+
+        {/* Collapsed, but present. A control that is simply absent gets asked
+            about later; one that says why it is absent does not. */}
+        <button
+          type="button" onClick={() => setShowNeverLockable((v) => !v)} aria-expanded={showNeverLockable}
+          style={{ marginTop: 10, padding: 0, border: 0, background: "none", cursor: "pointer", font: "inherit", fontSize: 12, fontWeight: 700, color: "#6d28d9", textDecoration: "underline" }}
+        >
+          &#9432; {showNeverLockable ? "Hide" : `Five things that can never be locked, and why`}
+        </button>
+        {showNeverLockable && (
+          <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0, display: "grid", gap: 5 }}>
+            {Object.entries(NEVER_LOCKABLE).map(([key, why]) => (
+              <li key={key} style={{ border: "1px solid #e2e8f0", background: "#f8fafc", borderRadius: 8, padding: "7px 10px" }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: INK }}>{NEVER_LOCKABLE_LABEL[key] ?? key}</div>
+                <div style={{ ...muted, fontSize: 11.5, marginTop: 2 }}>{why}. Locking it would give every process owner a permanent save error and break the self-check, so the database refuses it for everyone, including you.</div>
+              </li>
+            ))}
+          </ul>
+        )}
         <p style={{ ...muted, fontSize: 12, marginTop: 10 }}>{EVERYTHING_ELSE_NOTE}</p>
         <p style={{ ...muted, fontSize: 11.5, marginTop: 6 }}>
           This split is fixed in the app rather than set here, because changing it is a code and database change
