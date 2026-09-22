@@ -26,7 +26,7 @@ import { FeedbackModal } from "../components/ui/FeedbackModal";
 import { hasChecklist, computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysisChecklist";
 import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import { ppdVerdictTone, ppdVerdictLabel, evVerdictLabel } from "../lib/verdictTone";
-import type { PPDOverallVerdict, EvidenceVerdict, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, PPDReviewRow, EvidenceAssessmentRow, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue } from "../types";
+import type { PPDOverallVerdict, EvidenceVerdict, EvidenceAssessmentProgress, EvidenceDriftCheck, PPDReviewProgress, AuditFileRecord, PPDReviewRow, EvidenceAssessmentRow, EvidenceLineRunStatus, EvidenceRunLogLine, EvidenceRunIssue, EvidenceRedFlagKind } from "../types";
 
 // Task 2: a STABLE empty-array reference for "no history yet" — `?? []`
 // inline would allocate a new array on every selector call, and since
@@ -988,6 +988,16 @@ function EvidenceArrivalPanel({
   );
 }
 
+const RED_FLAG_LABEL: Record<EvidenceRedFlagKind, string> = {
+  "role-conflict": "Same person prepared and approved",
+  "impossible-timing": "Dates that cannot both be true",
+  "practice-differs-from-procedure": "Practice differs from the documented procedure",
+  "documents-disagree": "Two records state the same fact differently",
+  "only-good-examples": "Only successful examples shown",
+  "too-perfect": "Results with no variation",
+  "audit-proximity": "Created close to this review",
+};
+
 // One evidence line's expand-detail extras, rendered inside the matrix's own
 // clause-by-clause expand (LineageDiagram's renderExtra). The promise-check
 // list itself is NOT repeated here — evidenceSpine() already builds the
@@ -1000,6 +1010,28 @@ function EvRowExtra({ row, selectedId, setLineFeedback }: { row: EvidenceAssessm
   if (!row.verdict || row.verdict === "Not assessed" || row.assessmentFailed) return null;
   return (
     <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
+      {/* Concerns the assessment raised, shown SEPARATELY from the verdict and
+          saying so in the heading. The evidence prompts used to carry
+          "auto-downgrade" instructions for several of these, which meant a
+          suspicion quietly lowered a rating with nothing on screen to explain
+          it. Only a blank form or unfilled template still lowers a rating on
+          its own, because under GD4 that is not evidence at all. Every flag
+          here carries a quote already verified against the real document. */}
+      {row.redFlags && row.redFlags.length > 0 && (
+        <div style={{ marginBottom: 9, border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 7, padding: "7px 9px" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.3 }}>
+            ⚑ Raised for a closer look — does not change the verdict
+          </div>
+          {row.redFlags.map((fl, i) => (
+            <div key={i} style={{ marginTop: 5, fontSize: 12, color: "#78350f", lineHeight: 1.45 }}>
+              <b>{RED_FLAG_LABEL[fl.kind]}</b> — {fl.observation}
+              <div style={{ fontSize: 11.5, color: "#92400e", marginTop: 2, fontStyle: "italic" }}>
+                "{fl.quote}"{fl.chunkId ? ` · ${fl.chunkId}` : ""}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {row.comment && (
         <>
           <button

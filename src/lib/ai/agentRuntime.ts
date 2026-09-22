@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, ApsrWorkingScores, Band, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, SpecificChecklistLine, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, ApsrWorkingScores, Band, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, SpecificChecklistLine, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck, EvidenceRedFlag, EvidenceRedFlagKind } from "../../types";
 import { sliceWholeChars } from "../text/wellFormed";
 import { chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage, type ChatSchema } from "./aiClient";
 import { sObj, sArr, sStr, sBool, sEnum } from "./schemaHelpers";
@@ -89,6 +89,14 @@ const EVIDENCE_ASSESSMENT_SCHEMA: ChatSchema = { name: "evidence_assessment", sc
     })),
     verdict: sEnum("Met", "Partial", "Not met"),
     chunkIds: sArr(sStr), evidenceQuote: sStr, suggestedAction: sStr,
+    // Reported BESIDE the verdict, never inside it. The field sits after
+    // verdict on purpose: the decision procedure is settled before the model
+    // is asked what else it noticed, so a concern cannot pull the verdict
+    // down on its way past.
+    redFlags: sArr(sObj({
+      kind: sEnum("role-conflict", "impossible-timing", "practice-differs-from-procedure", "documents-disagree", "only-good-examples", "too-perfect", "audit-proximity"),
+      observation: sStr, quote: sStr, chunkId: sStr,
+    })),
   })),
 }) };
 
@@ -3065,6 +3073,34 @@ export type EvidenceAssessmentInput = {
   preCheckFlags?: string[];
 };
 
+// The runtime copy of the kind list, used to reject anything the model
+// invents outside the schema's enum.
+const RED_FLAG_KINDS: EvidenceRedFlagKind[] = [
+  "role-conflict", "impossible-timing", "practice-differs-from-procedure",
+  "documents-disagree", "only-good-examples", "too-perfect", "audit-proximity",
+];
+
+// Red flags are held to the same anti-invention rule as every other quoted
+// claim in this file: a flag whose quote does not verify against the real
+// evidence text is DROPPED, silently and entirely. A fabricated concern
+// standing next to a real verdict is worse than no concern at all, because a
+// reader has no way to tell the two apart.
+//
+// Exported for its own test rather than exercised through a whole judge pass
+// (the same reason lineExpands lives in lineageExport.ts).
+export function parseRedFlags(raw: unknown, evidenceDocText: string): EvidenceRedFlag[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Array<Record<string, unknown>>)
+    .filter((fl) => RED_FLAG_KINDS.includes(fl?.kind as EvidenceRedFlagKind) && typeof fl?.observation === "string" && fl.observation.trim())
+    .map((fl) => ({
+      kind: fl.kind as EvidenceRedFlagKind,
+      observation: (fl.observation as string).trim(),
+      quote: typeof fl.quote === "string" ? fl.quote.trim() : "",
+      chunkId: typeof fl.chunkId === "string" && fl.chunkId.trim() ? fl.chunkId.trim() : undefined,
+    }))
+    .filter((fl) => fl.quote && quoteExistsInSource(fl.quote, evidenceDocText));
+}
+
 export type EvidenceAssessmentLineResult = {
   ref: string;
   evidenceSummary: string;
@@ -3082,6 +3118,9 @@ export type EvidenceAssessmentLineResult = {
   // already identified, never a generic template. Only ever populated for
   // Partial/Not met (empty string for Met, per the prompt's own honesty rule).
   suggestedAction?: string;
+  // Concerns raised beside the verdict, never inside it — every one carries a
+  // quote verified against the real evidence text (see EvidenceRedFlag).
+  redFlags?: EvidenceRedFlag[];
   // Pass 1 visibility: candidate passages the extraction pass RETURNED for
   // this line vs how many survived verbatim verification. "N raw → 0
   // verified" (extraction defect) and "0 raw" (genuinely nothing found)
@@ -3182,12 +3221,18 @@ For each line return:
 - promiseChecks: one entry PER promise given for the line, promiseText copied exactly. evidence = the citation/description or "No record found in the evidence documents." quote = the ONE given passage that proves (or, for "contradicted", disproves) THIS specific promise, copied exactly as given — "" for "not evidenced" (nothing to quote), never invented, never another promise's quote. rationale = ONE short auditor-register sentence on WHY (distinct from the quote), or "" — do not pad. chunkId = that passage's chunk ID, or "". Empty array only when the line has no promises.
 - chunkIds: the chunk IDs of the passages the line verdict relies on. Empty if none.
 - evidenceQuote: for Met/Partial ONLY — the single given passage that most directly proves implementation for this line, copied exactly, or "".
+- redFlags: concerns you would RAISE but that do NOT decide this verdict. Report them here and nowhere else. Return [] when you have none — an empty list is the normal answer, and a flag you cannot quote must be left out entirely rather than described loosely.
+  Allowed kinds, all of which need a reading of the record rather than a text scan: "role-conflict" (the same person prepared, checked and approved), "impossible-timing" (dates that cannot both be true), "practice-differs-from-procedure" (the record shows a different process than the PPD describes), "documents-disagree" (two records state the same fact differently), "only-good-examples" (every sample shown is a success — no exception, rejection or failure anywhere), "too-perfect" (results with no variation at all), "audit-proximity" (created close to this review rather than through the period).
+  observation: what is OBSERVABLE and what would resolve it — e.g. "The same name appears as preparer and approver on C014; the approval of a different officer would resolve it." NEVER a motive: "approved by the preparer" is checkable, "falsified" is an accusation the records cannot support.
+  quote: the ONE given passage the flag rests on, copied exactly as given. A flag with no exact quote is dropped.
+  chunkId: that passage's chunk ID, or "".
+  These NEVER change this line's verdict and NEVER change a promise check. If a record shows the promise carried out, that promise is "evidenced" even where you raise a flag about the record. The only thing that still fails a promise on its own is a record with nothing filled in — a blank form or an unfilled template, which is not evidence of anything.
 - suggestedAction: for Partial or Not met ONLY — one or two sentences on the SPECIFIC evidence or action that would move this line to Met, grounded in the SAME gap you identified in comment/promiseChecks (name the specific record, how many items, which document/register — e.g. "Add owner and timeline fields to the remaining 17 unassigned actions in the Management Review Meeting minutes"), never generic advice like "add more evidence". If you cannot state something concrete, return "" — do not pad. "" for Met.
 
 ${NARRATIVE_STYLE_RULES}
 
 Respond with JSON only:
-{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[], "quote": string, "rationale": string, "chunkId": string}], "chunkIds": string[], "evidenceQuote": string, "suggestedAction": string}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
+{"results": [{"ref": string, "evidenceSummary": string, "verdict": "Met"|"Partial"|"Not met", "comment": string, "promiseChecks": [{"promiseText": string, "verdict": "evidenced"|"not evidenced"|"contradicted", "evidence": string, "chunkIds": string[], "quote": string, "rationale": string, "chunkId": string}], "chunkIds": string[], "evidenceQuote": string, "suggestedAction": string, "redFlags": [{"kind": string, "observation": string, "quote": string, "chunkId": string}]}]}${buildSystemPrompt("evidenceReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}
 
 ## Final decision procedure (repeated last so it is freshest — apply IN ORDER, stop at the first match)
 1. Any promise contradicted → "Not met".
@@ -3345,7 +3390,7 @@ Respond with JSON only:
   // best-verdict merge), so no single call ever has to process the whole
   // folder at once. Deferred because it touches the verdict-merge path and
   // this task is a call-configuration fix only.
-  type JudgedEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[]; evidenceQuote?: string; suggestedAction?: string };
+  type JudgedEv = { evidenceSummary: string; verdict: EvidenceVerdict; comment: string; chunkIds: string[]; promiseChecks?: PromiseCheck[]; evidenceQuote?: string; suggestedAction?: string; redFlags?: EvidenceRedFlag[] };
   const judgedByRef = new Map<string, JudgedEv>();
 
   // Only lines with at least one verified passage go to the judge; a line
@@ -3444,7 +3489,8 @@ Respond with JSON only:
                 };
               })
           : [];
-        judgedByRef.set(inp.ref, { evidenceSummary, verdict, comment, chunkIds, promiseChecks: promiseChecks.length > 0 ? promiseChecks : undefined, evidenceQuote, suggestedAction });
+        const redFlags = parseRedFlags(res.redFlags, evidenceDocText);
+        judgedByRef.set(inp.ref, { evidenceSummary, verdict, comment, chunkIds, promiseChecks: promiseChecks.length > 0 ? promiseChecks : undefined, evidenceQuote, suggestedAction, redFlags: redFlags.length > 0 ? redFlags : undefined });
         failedRefs.delete(inp.ref);
         batchVerdicts.push({ ref: inp.ref, verdict });
       }
@@ -3480,6 +3526,7 @@ Respond with JSON only:
           promiseChecks: best.promiseChecks,
           evidenceQuote: best.evidenceQuote,
           suggestedAction: best.suggestedAction || undefined,
+          redFlags: best.redFlags,
           extractionStats,
         };
       }
@@ -3494,6 +3541,7 @@ Respond with JSON only:
           chunkIds: [],
           promiseChecks: best.promiseChecks,
           suggestedAction: best.suggestedAction || undefined,
+          redFlags: best.redFlags,
           extractionStats,
         };
       }
@@ -3511,6 +3559,7 @@ Respond with JSON only:
           promiseChecks: best.promiseChecks,
           evidenceQuote: best.evidenceQuote,
           suggestedAction: best.suggestedAction || undefined,
+          redFlags: best.redFlags,
           extractionStats,
         };
       }
@@ -3529,10 +3578,11 @@ Respond with JSON only:
           promiseChecks: best.promiseChecks,
           evidenceQuote: best.evidenceQuote,
           suggestedAction: best.suggestedAction || undefined,
+          redFlags: best.redFlags,
           extractionStats,
         };
       }
-      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks, evidenceQuote: best.evidenceQuote, suggestedAction: best.suggestedAction || undefined, extractionStats };
+      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks, evidenceQuote: best.evidenceQuote, suggestedAction: best.suggestedAction || undefined, redFlags: best.redFlags, extractionStats };
     }
     if (failedRefs.has(inp.ref)) {
       // A failed/timed-out call is MISSING DATA, not a negative finding — the

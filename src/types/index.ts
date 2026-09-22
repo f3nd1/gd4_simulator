@@ -1093,6 +1093,39 @@ export type EvidenceVerdict = "Met" | "Partial" | "Not met" | "Not assessed";
 
 export type EvidenceFileRef = { name: string; url: string };
 
+// A concern an auditor would RAISE but that does not, by itself, decide
+// whether the requirement is met. Deliberately separate from `verdict`: the
+// evidence passes previously carried instructions to "auto-downgrade" on
+// several of these, which meant a suspicion silently lowered a band with no
+// visible reason. Now only one thing still lowers a rating on its own — a
+// blank form or unfilled template, which under GD4 is not evidence at all.
+// Everything else is reported here, next to the verdict but never inside it.
+//
+// The seven kinds are the ones CODE cannot check: they need a reading of what
+// the record says. The exact, repeatable checks (placeholders, approval
+// dates, running-number gaps, uniform results, copied wording, figures that
+// disagree) are deterministic detectors in preAnalysisChecklist.ts instead.
+export type EvidenceRedFlagKind =
+  | "role-conflict"                  // the same person prepared, checked and approved
+  | "impossible-timing"              // dates that cannot both be true
+  | "practice-differs-from-procedure"// the record shows a different process than the PPD describes
+  | "documents-disagree"             // two records state the same fact differently
+  | "only-good-examples"             // every sample shown is a success; no exceptions, rejections or failures
+  | "too-perfect"                    // results with no variation at all
+  | "audit-proximity";               // created close to the review rather than through the period
+
+export type EvidenceRedFlag = {
+  kind: EvidenceRedFlagKind;
+  // What is observable, and what would resolve it. Never an accusation of
+  // motive: the records cannot support one.
+  observation: string;
+  // Verbatim excerpt the flag rests on, kept ONLY when it verifies against
+  // the real document text. A flag whose quote cannot be verified is dropped
+  // entirely rather than shown — an invented red flag is worse than none.
+  quote: string;
+  chunkId?: string;
+};
+
 export type EvidenceAssessmentRow = {
   gdRef: string;              // FlatAuditPoint ref, e.g. "1.2.1.DS1"
   gd4ItemId: string;
@@ -1128,6 +1161,10 @@ export type EvidenceAssessmentRow = {
   // action can pull it in as the proposed corrective step without needing a
   // new field.
   suggestedAction?: string;
+  // Concerns raised alongside the verdict, never inside it (see
+  // EvidenceRedFlag). Optional/additive: runs from before this field render
+  // with no flags shown, never a crash.
+  redFlags?: EvidenceRedFlag[];
 };
 
 export type EvidenceAssessmentResult = {

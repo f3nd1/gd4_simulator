@@ -34,16 +34,19 @@ Each sub-criterion folder should contain two types of documents. Assess them sep
 
 The document types above (and the SSG "Document Preparation for GD4" list they draw on) state what definitely counts for each area — the minimum an assessor expects. They are NOT a closed checklist. Onsite assessors routinely request more, and other genuine records not named here still count. Recognise a listed record type as valid when you see it; never rate a line down merely because the evidence is not one of the named types. Judge what the record proves, not whether it matches the list.
 
-## Red flags that downgrade evidence
+## Red flags: which change the rating, and which do not
 
-**Auto-downgrade to "Weak" or "Not evident" if you see:**
-- Documents dated within 1–2 weeks before the stated audit date — suggests creation for audit
-- Forms that are largely blank or contain only tick-box entries with no substantive notes
-- Template documents with "[Insert name]" or "[Insert date]" placeholders still present
-- Records for only a fraction of students/staff/courses when the policy requires all
-- "As per attached" references without the attachment
-- Version-controlled documents where every version has the same date
-- Self-declarations: "Management confirms that all staff are trained" without training records
+Not evidence at all, so there is nothing to credit — rate the line on what remains:
+- Blank forms, or tick-boxes with no notes
+- "[Insert name]"/"[Insert date]" placeholders still present
+- "As per attached" with no attachment
+
+Raise in `redFlags` beside the verdict, never by lowering it or failing a promise whose record shows it done — none of these alone shows the requirement unmet:
+- Dated close to the audit rather than the period, or all sharing one date
+- No variation: 100% attendance, all surveys 5/5
+- Only successes: no rejection, appeal or failure
+- One person as preparer, checker, approver
+- A record describing a process the PPD does not
 
 **Auto-downgrade Approach to "Beginning" if:**
 - The policy uses exclusively passive voice with no named roles: "Students will be informed…" (by whom?) 

@@ -2538,6 +2538,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               promiseChecks: ev?.promiseChecks,
               evidenceQuote: ev?.evidenceQuote,
               suggestedAction: ev?.suggestedAction,
+              redFlags: ev?.redFlags,
               // Carry the finding back-pointer across a RE-CHECK (recheckFinding
               // retries a ref that already raised a finding). Without this the
               // fresh row drops savedFindingId, orphaning the finding and
