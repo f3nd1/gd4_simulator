@@ -36,7 +36,13 @@
 
 export type ChecklistSourceKind = "regulatory" | "fps" | "contract" | "gd4" | "finding-pattern";
 export type ChecklistMode = "auto" | "manual";
-export type DetectionKey = "nric" | "date-sequencing" | "record-count" | "date-discrepancy" | "none";
+export type DetectionKey =
+  | "nric" | "date-sequencing" | "record-count" | "date-discrepancy"
+  // Auditor's Investigation Guide §5 red flags — see the block above
+  // DETECTION_REGISTRY for why each of these is code and not AI.
+  | "placeholder-text" | "approval-sequence" | "sequence-gaps"
+  | "too-uniform" | "identical-blocks" | "figure-mismatch"
+  | "none";
 
 // A file as seen by the checklist: identity + whatever extracted text the
 // pre-flight warmed into the cache (null when not yet read / image / scanned).
@@ -254,6 +260,225 @@ export function detectDateTimeDiscrepancy(files: DetectFile[], now: Date = new D
   return { status: "clear", message: `Checked ${dated.length} dated file(s) — no postdating or audit-proximity discrepancy found.` };
 }
 
+// ── Auditor's Investigation Guide §5 red flags ───────────────────────────────
+//
+// These six are CODE, not AI, on purpose. Date order, running-number gaps,
+// repeated identical text and figures that disagree are exact, repeatable and
+// cannot be invented. The AI stays reserved for judgement: is the content
+// substantive, is the reasoning recorded, does practice match procedure.
+//
+// They are registered below like every other detector here, so they inherit
+// the three things already settled in this module: flags are ADVISORY
+// (computeFlaggedPreCheckItems is the single definition of "flagged", and a
+// flag rides into prompts as context, never as a verdict override);
+// "unknown" is a real answer for a check that cannot run on the files
+// present; and every flag names the files it is based on.
+//
+// WORDING RULE, pinned by a test: a flag says what could be QUESTIONED,
+// quotes the evidence, and names what would resolve it. It never asserts a
+// motive — "dated after the document it approves" is observable,
+// "backdated" is an accusation the files cannot support.
+
+const refs = (fs: DetectFile[]) => fs.map((f) => ({ name: f.name, driveFileId: f.driveFileId }));
+
+// The three-part shape every §5 flag message takes (question, evidence, resolution).
+function redFlag(question: string, evidence: string, resolve: string, files: DetectFile[]): DetectOutcome {
+  return { status: "flag", message: `${question} ${evidence} ${resolve}`, fileRefs: refs(files) };
+}
+
+// 1. Unfilled template text and blank fields. Under GD4 this is not merely a
+// question: an unfilled template is not evidence at all (evidence-standards.md),
+// which is why its wording is firmer than the other five.
+const PLACEHOLDERS = [
+  /\[\s*(?:insert|enter|name|date|type|specify|add)\b[^\]]{0,40}\]/gi,
+  /<\s*(?:insert|enter|name|date)\b[^>]{0,40}>/gi,
+  /\b(?:xxx+|yyyy|dd\/mm\/yyyy|mm\/dd\/yyyy)\b/gi,
+  /\b(?:to be confirmed|to be advised|tbc|tba)\b/gi,
+  /\blorem ipsum\b/gi,
+];
+
+export function detectPlaceholderText(files: DetectFile[]): DetectOutcome {
+  const scannable = withText(files);
+  if (scannable.length === 0) return { status: "unknown", message: NO_TEXT_MSG };
+  const hits: { file: DetectFile; sample: string }[] = [];
+  for (const f of scannable) {
+    for (const re of PLACEHOLDERS) {
+      const m = (f.text as string).match(re);
+      if (m && m.length) { hits.push({ file: f, sample: m[0].trim() }); break; }
+    }
+  }
+  if (hits.length === 0) return { status: "clear", message: "No unfilled template placeholders or TBC markers found in the extracted text." };
+  const shown = hits.slice(0, 3).map((h) => `"${h.sample}" in ${h.file.name}`).join("; ");
+  return {
+    status: "flag",
+    message: `${hits.length} file(s) still contain unfilled template text or a TBC marker. Found ${shown}. Under GD4 an unfilled template is not evidence: complete the record or replace it before relying on it.`,
+    fileRefs: refs(hits.map((h) => h.file)),
+  };
+}
+
+// 2. An approval dated after the thing it approved (guide §4: "When, and was
+// it before the thing it approved?"). Only pairs where BOTH dates were read
+// confidently are compared; anything else is excluded rather than guessed at.
+const APPROVAL_NAME = /approval|approved|sign[-\s]?off|authoris|authoriz|endorse|vetting|minutes/i;
+const APPROVAL_DATE = /(?:approved|authoris\w*|endorsed|signed)\s*(?:on|date|:)?\s*([0-9]{1,2}[\s/-][A-Za-z0-9]{3,9}[\s/-][0-9]{2,4})/i;
+
+export function detectApprovalAfterEvent(files: DetectFile[]): DetectOutcome {
+  const scannable = withText(files);
+  if (scannable.length === 0) return { status: "unknown", message: NO_TEXT_MSG };
+  const approvals = scannable.filter((f) => APPROVAL_NAME.test(f.name));
+  const others = scannable.filter((f) => !APPROVAL_NAME.test(f.name));
+  if (approvals.length === 0 || others.length === 0) {
+    return { status: "unknown", message: "Couldn't identify both an approval record and a document it would approve — check the approval-before-publication sequence manually." };
+  }
+  const pairs: { a: DetectFile; b: DetectFile; ad: Date; bd: Date }[] = [];
+  for (const a of approvals) {
+    const m = APPROVAL_DATE.exec(a.text as string);
+    const ad = m ? extractDates(m[1])[0] ?? null : findDocumentDate(a.text as string);
+    if (!ad) continue;
+    for (const b of others) {
+      const bd = findDocumentDate(b.text as string);
+      if (bd && ad.getTime() > bd.getTime()) pairs.push({ a, b, ad, bd });
+    }
+  }
+  if (!pairs.length) return { status: "clear", message: "Every approval record whose date could be read is dated on or before the document it approves." };
+  const p = pairs[0];
+  return redFlag(
+    "An approval is dated after the document it would approve, which an auditor would question.",
+    `"${p.a.name}" carries an approval date of ${fmt(p.ad)}, while "${p.b.name}" is dated ${fmt(p.bd)}${pairs.length > 1 ? ` (and ${pairs.length - 1} further pair(s))` : ""}.`,
+    "Provide the approval that was in force when the earlier document was issued, or confirm the dates.",
+    pairs.flatMap((x) => [x.a, x.b]),
+  );
+}
+
+// 3. Gaps in a running number (guide §5: "running numbers that skip"). Only
+// reported when the series is long enough for a gap to mean something: a
+// handful of numbers with a break is as likely to be two unrelated series.
+const MIN_SERIES = 5;
+const SERIES_RE = /\b([A-Z]{2,6}[-/])(\d{3,6})\b/g;
+
+export function detectSequenceGaps(files: DetectFile[]): DetectOutcome {
+  const scannable = withText(files);
+  if (scannable.length === 0) return { status: "unknown", message: NO_TEXT_MSG };
+  const series = new Map<string, { nums: Set<number>; files: Set<DetectFile> }>();
+  for (const f of scannable) {
+    for (const m of (f.text as string).matchAll(SERIES_RE)) {
+      const key = m[1].toUpperCase();
+      const entry = series.get(key) ?? { nums: new Set<number>(), files: new Set<DetectFile>() };
+      entry.nums.add(Number(m[2]));
+      entry.files.add(f);
+      series.set(key, entry);
+    }
+  }
+  const long = [...series.entries()].filter(([, v]) => v.nums.size >= MIN_SERIES);
+  if (!long.length) return { status: "unknown", message: `No running-number series of ${MIN_SERIES} or more was found in the extracted text — check record numbering manually.` };
+  for (const [key, v] of long) {
+    const nums = [...v.nums].sort((a, b) => a - b);
+    const missing: number[] = [];
+    for (let n = nums[0]; n <= nums[nums.length - 1]; n++) if (!v.nums.has(n)) missing.push(n);
+    // A sparse set is not a gap: reported only when the numbers present
+    // outnumber the ones absent, so a series that simply jumps is not read
+    // as missing records.
+    if (missing.length && missing.length <= nums.length) {
+      return redFlag(
+        "A running-number series skips values, which an auditor would ask about.",
+        `${key} runs from ${nums[0]} to ${nums[nums.length - 1]} but ${missing.length} number(s) are absent: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? "…" : ""}.`,
+        "Provide the missing records, or the register showing they were voided or never issued.",
+        [...v.files],
+      );
+    }
+  }
+  return { status: "clear", message: `Running-number series found (${long.map(([k]) => k).join(", ")}) with no gaps in the numbers present.` };
+}
+
+// 4. Results too uniform to look like a measurement (guide §5: "100%
+// attendance; every survey 5/5"). An observation, never an accusation: a
+// small genuinely perfect cohort is entirely possible, which is why the
+// wording asks for the population rather than doubting the number.
+const PERFECT_PCT = /\b(100(?:\.0+)?)\s*%/g;
+const PERFECT_SCORE = /\b([45](?:\.0+)?)\s*(?:\/|out of\s*)\s*5\b/g;
+
+export function detectTooUniform(files: DetectFile[]): DetectOutcome {
+  const scannable = withText(files);
+  if (scannable.length === 0) return { status: "unknown", message: NO_TEXT_MSG };
+  const hit: { file: DetectFile; what: string; n: number }[] = [];
+  for (const f of scannable) {
+    const pcts = [...(f.text as string).matchAll(PERFECT_PCT)];
+    if (pcts.length >= 3) hit.push({ file: f, what: "100%", n: pcts.length });
+    const fives = [...(f.text as string).matchAll(PERFECT_SCORE)].filter((m) => m[1].startsWith("5"));
+    if (fives.length >= 3) hit.push({ file: f, what: "5/5", n: fives.length });
+  }
+  if (!hit.length) return { status: "clear", message: "No file reports three or more perfect results (100% or 5/5) in its extracted text." };
+  const h = hit[0];
+  return redFlag(
+    "A set of results is uniformly perfect, which an auditor would want to see the population behind.",
+    `"${h.file.name}" reports ${h.what} ${h.n} times.`,
+    "Provide the response rate and the full population, so the figures can be reconciled against the records.",
+    hit.map((x) => x.file),
+  );
+}
+
+// 5. The same substantial passage in two different records (guide §5's
+// "identical" records, and §3's "substantive: specific to this case, not
+// copied wording"). Compares normalised paragraphs of at least MIN_BLOCK
+// characters, so shared headers and standard clauses do not trip it.
+const MIN_BLOCK = 180;
+
+export function detectIdenticalBlocks(files: DetectFile[]): DetectOutcome {
+  const scannable = withText(files);
+  if (scannable.length < 2) return { status: "unknown", message: "Fewer than two files with readable text — repeated-wording comparison needs at least two." };
+  const seen = new Map<string, DetectFile>();
+  for (const f of scannable) {
+    for (const para of (f.text as string).split(/\n\s*\n/)) {
+      const norm = para.replace(/\s+/g, " ").trim();
+      if (norm.length < MIN_BLOCK) continue;
+      const prior = seen.get(norm);
+      if (prior && prior !== f) {
+        return redFlag(
+          "Two records share a substantial passage word for word, which an auditor would ask about.",
+          `"${prior.name}" and "${f.name}" both contain: "${norm.slice(0, 120)}…".`,
+          "Confirm each record was written for its own case, or point to the standard clause it is drawn from.",
+          [prior, f],
+        );
+      }
+      if (!prior) seen.set(norm, f);
+    }
+  }
+  return { status: "clear", message: `No passage of ${MIN_BLOCK} characters or more appears word for word in two different files.` };
+}
+
+// 6. The same labelled figure stated two different ways (guide §5: "numbers
+// that don't agree"). Only a label carrying different values in two DIFFERENT
+// files is reported; a figure present in one file has nothing to disagree with.
+const LABELLED = /\b(total(?:\s+\w+){0,2}|number of \w+|enrolment|enrolments|headcount|response rate|attendance rate)\b\s*[:=]?\s*([0-9][0-9,]{0,9}(?:\.[0-9]+)?)/gi;
+
+export function detectFigureMismatch(files: DetectFile[]): DetectOutcome {
+  const scannable = withText(files);
+  if (scannable.length < 2) return { status: "unknown", message: "Fewer than two files with readable text — figures can only be reconciled across two or more." };
+  const byLabel = new Map<string, Map<string, DetectFile>>();
+  for (const f of scannable) {
+    for (const m of (f.text as string).matchAll(LABELLED)) {
+      const label = m[1].toLowerCase().replace(/\s+/g, " ").trim();
+      const value = m[2].replace(/,/g, "");
+      const vals = byLabel.get(label) ?? new Map<string, DetectFile>();
+      if (!vals.has(value)) vals.set(value, f);
+      byLabel.set(label, vals);
+    }
+  }
+  for (const [label, vals] of byLabel) {
+    const distinctFiles = new Set([...vals.values()]);
+    if (vals.size >= 2 && distinctFiles.size >= 2) {
+      const entries = [...vals.entries()];
+      return redFlag(
+        "The same figure is stated differently in two records, which an auditor would reconcile.",
+        `"${label}" reads ${entries.map(([v, f]) => `${v} in ${f.name}`).join(" and ")}.`,
+        "Confirm which figure is correct and what the difference represents.",
+        [...distinctFiles],
+      );
+    }
+  }
+  return { status: "clear", message: "No labelled figure was found with two different values across files." };
+}
+
 // Named registry so a persisted item can reference a detector by a stable
 // string key instead of an unserialisable function reference. Add a new
 // detector here (and a new DetectionKey) rather than inline in an item.
@@ -262,6 +487,12 @@ const DETECTION_REGISTRY: Partial<Record<DetectionKey, (files: DetectFile[]) => 
   "date-sequencing": detectDateSequencing,
   "record-count": detectRecordCount,
   "date-discrepancy": (files) => detectDateTimeDiscrepancy(files),
+  "placeholder-text": detectPlaceholderText,
+  "approval-sequence": detectApprovalAfterEvent,
+  "sequence-gaps": detectSequenceGaps,
+  "too-uniform": detectTooUniform,
+  "identical-blocks": detectIdenticalBlocks,
+  "figure-mismatch": detectFigureMismatch,
 };
 
 // ── Pure query helpers — take the (store-held) checklist data as a parameter ──
@@ -373,6 +604,72 @@ export const UNIVERSAL_CHECKLIST: ChecklistItemDef[] = [
     sourceKind: "finding-pattern",
     mode: "auto",
     detectionKey: "date-discrepancy",
+    verified: true,
+    scope: "universal",
+  },
+  {
+    id: "universal-placeholder-text",
+    title: "Unfilled template text / TBC markers",
+    description: "Scans the extracted text for placeholders a real record would not still carry: [insert name], <date>, xxx, dd/mm/yyyy, TBC/TBA, lorem ipsum. Under GD4 a blank form or unfilled template is not evidence of anything, so this is the one §5 red flag that is more than advisory — the record has to be completed or replaced.",
+    source: "Auditor's Investigation Guide §5 — blank forms and unfilled templates; evidence-standards.md",
+    sourceKind: "finding-pattern",
+    mode: "auto",
+    detectionKey: "placeholder-text",
+    verified: true,
+    scope: "universal",
+  },
+  {
+    id: "universal-approval-sequence",
+    title: "Approval dated after what it approved",
+    description: "Compares the approval/sign-off date in any file that names itself an approval (approval, sign-off, endorsement, minutes) against the document date of the files it would approve. Only pairs where BOTH dates read confidently are compared; anything else is left to a manual check rather than guessed at. Advisory: it reports a sequence, not a motive.",
+    source: "Auditor's Investigation Guide §4 — \"when, and was it before the thing it approved?\"",
+    sourceKind: "finding-pattern",
+    mode: "auto",
+    detectionKey: "approval-sequence",
+    verified: true,
+    scope: "universal",
+  },
+  {
+    id: "universal-sequence-gaps",
+    title: "Gaps in a running number",
+    description: "Looks for a reference series (e.g. INV-001, PPD-1042) of five or more numbers and reports values missing from its range — the classic sign of a record that exists but was not produced. A short or sparse series is reported as \"unknown\" rather than flagged, because two unrelated series look the same as one with holes.",
+    source: "Auditor's Investigation Guide §5 — running numbers that skip",
+    sourceKind: "finding-pattern",
+    mode: "auto",
+    detectionKey: "sequence-gaps",
+    verified: true,
+    scope: "universal",
+  },
+  {
+    id: "universal-too-uniform",
+    title: "Results that are uniformly perfect",
+    description: "Counts perfect results (100%, 5/5) in each file and flags any that report three or more. A small genuinely perfect cohort is entirely possible, so this asks for the response rate and the population behind the figure rather than doubting it — advisory only, never a downgrade on its own.",
+    source: "Auditor's Investigation Guide §5 — too perfect (100% attendance, every survey 5/5)",
+    sourceKind: "finding-pattern",
+    mode: "auto",
+    detectionKey: "too-uniform",
+    verified: true,
+    scope: "universal",
+  },
+  {
+    id: "universal-identical-blocks",
+    title: "Identical wording across records",
+    description: "Compares normalised paragraphs of 180 characters or more across files and reports any that appear word for word in two different records — the §3 \"substantive\" test: a record should be specific to its own case, not copied wording. The 180-character floor keeps shared headers and standard clauses from tripping it.",
+    source: "Auditor's Investigation Guide §5 — identical records; §3 substantive test",
+    sourceKind: "finding-pattern",
+    mode: "auto",
+    detectionKey: "identical-blocks",
+    verified: true,
+    scope: "universal",
+  },
+  {
+    id: "universal-figure-mismatch",
+    title: "The same figure stated two ways",
+    description: "Reconciles labelled numbers (total, number of…, enrolment, headcount, response rate, attendance rate) across files and reports a label carrying different values in two different records. A figure that appears in only one file has nothing to disagree with and is not reported.",
+    source: "Auditor's Investigation Guide §5 — numbers that don't agree; §6 reconcile the figures",
+    sourceKind: "finding-pattern",
+    mode: "auto",
+    detectionKey: "figure-mismatch",
     verified: true,
     scope: "universal",
   },

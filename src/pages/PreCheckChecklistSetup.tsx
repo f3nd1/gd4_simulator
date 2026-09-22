@@ -6,6 +6,7 @@ import { usePreCheckChecklistStore } from "../store/usePreCheckChecklistStore";
 import { useAllFindings } from "../hooks/useAllFindings";
 import { detectRecurringPatterns, buildPromotedChecklistItemFields, type RecurringPattern } from "../lib/recurringFindings";
 import type { ChecklistItemDef, ChecklistMode, ChecklistSourceKind, DetectionKey } from "../lib/preAnalysisChecklist";
+import { UNIVERSAL_CHECKLIST } from "../lib/preAnalysisChecklist";
 
 // CRUD setup page for the per-sub-criterion pre-analysis checklist — the SAME
 // data (usePreCheckChecklistStore) the run-flow's Pre-check step reads via
@@ -40,6 +41,12 @@ const DETECTION_LABEL: Record<DetectionKey, string> = {
   "date-sequencing": "Contract-vs-receipt date sequencing",
   "record-count": "Management-review record count (by file name)",
   "date-discrepancy": "Date/time discrepancy scan (policy-vs-evidence, audit-proximity)",
+  "placeholder-text": "Unfilled template text / TBC marker scan",
+  "approval-sequence": "Approval-dated-after-document scan",
+  "sequence-gaps": "Running-number gap scan",
+  "too-uniform": "Uniformly-perfect-results scan (100%, 5/5)",
+  "identical-blocks": "Identical-wording-across-records scan",
+  "figure-mismatch": "Same-figure-stated-two-ways scan",
   "none": "No automated detection — manual only",
 };
 
@@ -232,9 +239,10 @@ export function PreCheckChecklistSetup() {
           an unverified <b>draft</b> (see the badge in the checklist panel) until approved below.
         </p>
         <p style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 4 }}>
-          Note: this page manages per-item checks only. A separate <b>🌐 universal</b> layer (currently: the date/time
-          discrepancy scan) always runs on every sub-criterion in addition to whatever's listed here — see
-          preAnalysisChecklist.ts's <code>UNIVERSAL_CHECKLIST</code>.
+          Note: this page manages per-item checks only. A separate <b>🌐 universal</b> layer of{" "}
+          {UNIVERSAL_CHECKLIST.length} check{UNIVERSAL_CHECKLIST.length === 1 ? "" : "s"} always runs on every
+          sub-criterion in addition to whatever's listed here: {UNIVERSAL_CHECKLIST.map((i) => i.title).join(", ")} —
+          see preAnalysisChecklist.ts's <code>UNIVERSAL_CHECKLIST</code>.
         </p>
 
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>

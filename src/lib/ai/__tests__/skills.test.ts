@@ -46,3 +46,21 @@ describe("tunable rule injection reaches the assessment prompt", () => {
     expect(without).not.toContain("TUNABLE ASSESSMENT RULES");
   });
 });
+
+// Both files existed for months but were only listed under the
+// interviewFieldwork module, which no call site selects — so the passes that
+// actually decide Met/Not met never saw either. Pinned here so the wiring
+// cannot be dropped again silently.
+describe("interview-and-fieldwork.md + sample-testing-methodology.md reach the evidence passes", () => {
+  it("both are injected for evidenceReview", () => {
+    const prompt = buildSystemPrompt("evidenceReview");
+    expect(prompt).toContain("=== SKILL: interview-and-fieldwork.md ===");
+    expect(prompt).toContain("=== SKILL: sample-testing-methodology.md ===");
+  });
+
+  it("neither reaches ppdReview, which reads policy documents only", () => {
+    const prompt = buildSystemPrompt("ppdReview");
+    expect(prompt).not.toContain("=== SKILL: interview-and-fieldwork.md ===");
+    expect(prompt).not.toContain("=== SKILL: sample-testing-methodology.md ===");
+  });
+});

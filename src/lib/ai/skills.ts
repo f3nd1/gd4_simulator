@@ -141,7 +141,16 @@ const MODULE_SKILLS: Record<SkillModule, { capped: string[]; uncapped: string[] 
     // ICA thresholds). Uncapped for the same mid-table-truncation reason.
     // common-ssg-finding-patterns primes the verdict passes with the gap
     // patterns real assessors raised at this PEI.
-    capped:   [evidenceRetrievalSkill, sourceCitationSkill, evidenceTimelinessSkill, commonFindingPatternsSkill],
+    // interview-and-fieldwork + sample-testing-methodology were written for a
+    // module no call site ever used, so the passes that actually decide
+    // Met/Not met never saw either. They carry the two sceptical-auditor
+    // habits nothing else in the prompt supplies: an oral or written
+    // ASSERTION is not evidence of the thing it asserts, and a conclusion
+    // drawn from 2 of 400 records has no coverage. Both change what the
+    // evidence passes say — sample-testing's response-rate thresholds in
+    // particular bear on Systems & Outcomes — so a re-run is needed to see
+    // their effect; deploying them does not recompute old results.
+    capped:   [evidenceRetrievalSkill, sourceCitationSkill, evidenceTimelinessSkill, commonFindingPatternsSkill, interviewFieldworkSkill, sampleTestingSkill],
     uncapped: [regulatoryReferencesSkill],
   },
   // Option A's PPD (policy documentation) passes previously reused the
@@ -180,6 +189,9 @@ const MODULE_SKILLS: Record<SkillModule, { capped: string[]; uncapped: string[] 
     capped:   [evidenceLedgerSkill],
     uncapped: [],
   },
+  // Kept as a named module although no call site selects it: both its skills
+  // are now injected through evidenceReview above, which is where the verdicts
+  // are actually decided.
   interviewFieldwork: {
     capped:   [interviewFieldworkSkill, sampleTestingSkill],
     uncapped: [],
