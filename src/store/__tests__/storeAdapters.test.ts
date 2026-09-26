@@ -24,6 +24,7 @@ const EXPECTED: Record<string, { key: string; adapter: Adapter; syncs: boolean }
   usePreCheckChecklistStore: { key: "ucc-gd4-precheck-checklist:v1", adapter: "workspaceStorage",  syncs: true },
   useDomainChecklistStore:   { key: "ucc-gd4-domain-checklist:v1",   adapter: "workspaceStorage",  syncs: true },
   useChecklistVerdictStore:  { key: "ucc-gd4-checklist-verdicts:v1", adapter: "workspaceStorage",  syncs: true },
+  useFileTextCacheStore:     { key: "ucc-gd4-file-text-cache:v1",    adapter: "workspaceStorage",  syncs: true },
   useBenchmarkAfiStore:      { key: "ucc-gd4-custom-benchmark:v1",   adapter: "workspaceStorage",  syncs: true },
   useWorksheetQuestionStore: { key: "ucc-gd4-worksheet-cache:v1",    adapter: "workspaceStorage",  syncs: true },
   usePromptReviewStore:      { key: "ucc-gd4-prompt-review:v1",      adapter: "workspaceStorage",  syncs: true },

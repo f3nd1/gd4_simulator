@@ -1575,6 +1575,29 @@ export async function raceCallSkip<T>(onCallAbort: CallAbortReg | undefined, cal
   finally { onCallAbort(null); }
 }
 
+// One skip registration for a GROUP of calls that run at the same time.
+//
+// raceCallSkip above registers per call, into a SINGLE slot: with several
+// calls in flight the last registration overwrites the others and the first
+// `finally` clears the slot, so the Skip button would point at nothing. A
+// parallel group therefore registers once and Skip abandons the group, which
+// is also what "skip this step" now means on screen: the window's extract
+// calls, not one invisible batch of it.
+export function makeCallSkip(onCallAbort: CallAbortReg | undefined): {
+  skip: Promise<typeof CALL_SKIPPED> | null;
+  release: () => void;
+} {
+  if (!onCallAbort) return { skip: null, release: () => {} };
+  let resolveSkip!: () => void;
+  const skip = new Promise<typeof CALL_SKIPPED>((res) => { resolveSkip = () => res(CALL_SKIPPED); });
+  onCallAbort(resolveSkip);
+  return { skip, release: () => onCallAbort(null) };
+}
+
+export function raceSkip<T>(skip: Promise<typeof CALL_SKIPPED> | null, call: Promise<T>): Promise<T | typeof CALL_SKIPPED> {
+  return skip ? Promise.race([call, skip]) : call;
+}
+
 // Shared assessor-register rule appended to every staged-audit prompt. Brings
 // the staged (Option B) notes to the same standard as the Option A prompts —
 // Technique 1 (decompose and name the missing obligation), Technique 4 (named
@@ -2666,8 +2689,13 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     if (stopRequested()) { stoppedEarly = true; break; }
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()}]` : "";
 
-    for (const [bi, batch] of batches.entries()) {
-      if (stopRequested()) { stoppedEarly = true; break; }
+    // Independent per batch — see the matching comment in runEvidenceAssessment:
+    // batches cover different requirement lines, so a ref's candidates still
+    // arrive in window order and the judge's input is unchanged.
+    const group = makeCallSkip(opts.onCallAbort);
+    try {
+    await Promise.all(batches.map(async (batch, bi) => {
+      if (stopRequested()) { stoppedEarly = true; return; }
       opts.onProgress?.(`PPD extraction — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
       opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((r) => r.ref), chunkIds: chunkIdsInWindow(win.text), stage: "extract" });
       const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText}`).join("\n");
@@ -2675,7 +2703,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       const system = extractSystem(windows.length > 1 ? `runPPDRequirementsReview (extract, window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview (extract)");
       if (!firstPromptSent) firstPromptSent = `SYSTEM (extract):\n${system}\n\nUSER:\n${user}`;
       try {
-        const raced = await raceCallSkip(opts.onCallAbort, chatComplete(
+        const raced = await raceSkip(group.skip, chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
           { schema: PPD_EXTRACT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
@@ -2685,7 +2713,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           windowErrors.push(`${label} skipped by user — its points fall through to other windows or are marked not assessed.`);
           for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
           opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "Skipped by user.", stage: "extract" });
-          continue;
+          return;
         }
         const content = raced;
         const parsed = parseJSONObject(content);
@@ -2699,7 +2727,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           console.error("[PPDRequirementsReview]", label, "no parseable results");
           for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
           opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it.", stage: "extract" });
-          continue;
+          return;
         }
         const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
         for (const [idx, r] of batch.entries()) {
@@ -2749,7 +2777,8 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         }
       } catch (err) {
         // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
-        if (stopRequested()) { stoppedEarly = true; break; }
+        // One batch's failure never cancels its siblings.
+        if (stopRequested()) { stoppedEarly = true; return; }
         const msg = err instanceof Error ? err.message : String(err);
         const label = windows.length > 1 ? `PPD extraction window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD extraction batch ${bi + 1}/${batches.length}`;
         windowErrors.push(`${label} failed — ${msg}`);
@@ -2757,7 +2786,8 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
         opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg, stage: "extract" });
       }
-    }
+    }));
+    } finally { group.release(); }
     if (stoppedEarly) break;
 
     // Technique 2 — internal contradiction hunt, one dedicated call per
@@ -3301,8 +3331,14 @@ Respond with JSON only:
   for (const win of windows) {
     if (stopRequested()) { stoppedEarly = true; break; }
     const windowLabel = windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}, chars ${win.start.toLocaleString()}–${win.end.toLocaleString()}]` : "";
-    for (const [bi, batch] of batches.entries()) {
-      if (stopRequested()) { stoppedEarly = true; break; }
+    // A window's batches cover DIFFERENT requirement lines, so they are
+    // independent: each one's candidates are pooled under its own refs, and
+    // the order a ref's candidates arrive in is still window order. Running
+    // them together changes wall clock, not what the judge later sees.
+    const group = makeCallSkip(opts.onCallAbort);
+    try {
+    await Promise.all(batches.map(async (batch, bi) => {
+      if (stopRequested()) { stoppedEarly = true; return; }
       const firstLine = bi * REQ_BATCH_SIZE + 1;
       const lastLine = Math.min(inputs.length, firstLine + batch.length - 1);
       const lineLabel = inputs.length === 1 ? "line 1 of 1" : `lines ${firstLine}–${lastLine} of ${inputs.length}`;
@@ -3314,7 +3350,7 @@ Respond with JSON only:
       const system = extractSystem(windows.length > 1 ? `runEvidenceAssessment (extract, window ${win.index + 1}/${win.total})` : "runEvidenceAssessment (extract)");
       if (!firstPromptSent) firstPromptSent = `SYSTEM (extract):\n${system}\n\nUSER:\n${user}`;
       try {
-        const raced = await raceCallSkip(opts.onCallAbort, chatComplete(
+        const raced = await raceSkip(group.skip, chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
           { schema: EVIDENCE_EXTRACT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
@@ -3325,7 +3361,7 @@ Respond with JSON only:
           for (const r of batch) if (!extractedOk.has(r.ref)) failedRefs.add(r.ref);
           opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "Skipped by user.", stage: "extract" });
           unitsDone++;
-          continue;
+          return;
         }
         const content = raced;
         const parsed = parseJSONObject(content);
@@ -3339,7 +3375,7 @@ Respond with JSON only:
           opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it.", stage: "extract" });
           console.error("[EvidenceAssessment]", label, "no parseable results");
           unitsDone++;
-          continue;
+          return;
         }
         const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
         for (const [idx, r] of batch.entries()) {
@@ -3366,7 +3402,10 @@ Respond with JSON only:
         }
       } catch (err) {
         // Cancel/abort is a stop, not a failure — see runStagedPolicyAudit.
-        if (stopRequested()) { stoppedEarly = true; break; }
+        // One batch failing must never cancel its siblings: the completed work
+        // is kept and only this batch's lines fall through (same rule as the
+        // staged path's parallel batches).
+        if (stopRequested()) { stoppedEarly = true; return; }
         const msg = err instanceof Error ? err.message : String(err);
         const label = windows.length > 1 ? `extract window ${win.index + 1}/${win.total}` : "extract call";
         windowErrors.push(`Evidence ${label} failed — ${msg}`);
@@ -3375,7 +3414,8 @@ Respond with JSON only:
         console.error("[EvidenceAssessment]", label, msg);
       }
       unitsDone++;
-    }
+    }));
+    } finally { group.release(); }
     if (stoppedEarly) break;
     windowsCompleted++;
   }

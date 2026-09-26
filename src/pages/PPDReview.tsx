@@ -15,6 +15,7 @@ import { findingTypeForStatus, findingTypeTone } from "../lib/findingClassificat
 import { ppdResultSummary } from "../lib/ppdSelection";
 import { auditModeLabel } from "../lib/runModes";
 import { exportOptionASummaryCsv, exportFileLedgerCsvFor, downloadCsv, auditCsvFilename } from "../lib/auditCsvExport";
+import { RunTimelinePanel } from "../components/ui/RunTimelinePanel";
 import { LineageDiagram } from "../components/ui/LineageDiagram";
 import { OfficialRequirements } from "../components/ui/OfficialRequirements";
 import { RunStepper, ppdRunStep, evidenceRunStep } from "../components/ui/RunStepper";
@@ -666,6 +667,7 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
               </label>
             )}
           </div>
+          <RunTimelinePanel runLog={viewedResult!.runLog} durationMs={viewedResult!.durationMs} />
 
           {/* Requirement → PPD lineage map (reuses this run's row data) — the
               only view of these 13 lines on this tab: per-sub-part expand
@@ -1256,6 +1258,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
             )}
           </div>
         )}
+        <RunTimelinePanel runLog={viewedAssessment.runLog} durationMs={viewedAssessment.durationMs} />
         <button
           onClick={handleCompile}
           disabled={compileDisabled}

@@ -1035,6 +1035,20 @@ export type PPDReviewRow = {
 };
 
 export type PPDReviewResult = {
+  // The run's own timestamped activity log, kept after the run ends.
+  //
+  // It used to be discarded: the log lives on the transient progress object,
+  // which finish() sets to null, so the only durable timing left was
+  // durationMs for the whole pass. That made "where does a 25-minute run
+  // actually go?" unanswerable from inside the app. Keeping it turns every
+  // future run into its own measurement (see lib/runTimeline.ts).
+  //
+  // Bounded at source (EV_LOG_CAP = 60 entries) and stripped from ARCHIVED
+  // runs by partialize, so it rides on the current result only — 20 archived
+  // runs per scope times 30 scopes of full logs is megabytes of persisted
+  // state for no benefit.
+  runLog?: EvidenceRunLogLine[];
+
   subCriterionId: string;
   rows: PPDReviewRow[];
   runAt: string;
@@ -1168,6 +1182,20 @@ export type EvidenceAssessmentRow = {
 };
 
 export type EvidenceAssessmentResult = {
+  // The run's own timestamped activity log, kept after the run ends.
+  //
+  // It used to be discarded: the log lives on the transient progress object,
+  // which finish() sets to null, so the only durable timing left was
+  // durationMs for the whole pass. That made "where does a 25-minute run
+  // actually go?" unanswerable from inside the app. Keeping it turns every
+  // future run into its own measurement (see lib/runTimeline.ts).
+  //
+  // Bounded at source (EV_LOG_CAP = 60 entries) and stripped from ARCHIVED
+  // runs by partialize, so it rides on the current result only — 20 archived
+  // runs per scope times 30 scopes of full logs is megabytes of persisted
+  // state for no benefit.
+  runLog?: EvidenceRunLogLine[];
+
   subCriterionId: string;
   rows: EvidenceAssessmentRow[];
   runAt: string;

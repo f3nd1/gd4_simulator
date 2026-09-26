@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { sliceWholeChars } from "../lib/text/wellFormed";
 import { blockWritesIfHydrationFailed } from "./hydrationGate";
+import { getCachedFileText, putCachedFileText, useFileTextCacheStore } from "./useFileTextCacheStore";
 import { persist } from "zustand/middleware";
 import { workspaceStorage, flushPendingSaves } from "./supabaseStorage";
 import type {
@@ -1512,7 +1513,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       skipCurrentAuditStage: () => set({ auditSkipStageFlag: true }),
 
-      clearFileTextCache: () => set({ fileTextCache: {} }),
+      clearFileTextCache: () => { useFileTextCacheStore.getState().clear(); set({ fileTextCache: {} }); },
       removeFileTextCacheEntry: (key) =>
         set((s) => {
           const { [key]: _removed, ...rest } = s.fileTextCache;
@@ -1632,7 +1633,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.ppdReviewResults[subCriterionId] : undefined;
             return {
               ppdReviewResults: rows
-                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs } }
+                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, runLog: st.ppdReviewProgress?.subCriterionId === subCriterionId ? st.ppdReviewProgress.log : undefined } }
                 : st.ppdReviewResults,
               ppdReviewHistory: prev
                 ? { ...st.ppdReviewHistory, [subCriterionId]: [prev, ...(st.ppdReviewHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
@@ -1753,7 +1754,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "reading" };
             patchPpd({ currentFile: readFileName, detail: `Reading ${readFileName}…`, filesFound: [...fileRecords], canSkipCurrentFile: true });
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
-            const cached = get().fileTextCache[cacheKey];
+            const cached = cachedFileText(get().fileTextCache, cacheKey);
             // Same processingMode bookkeeping runEvidenceAssessment/auditFolderContents/
             // auditFolderStaged already do — feeds FileLedger's "♻ Cached" badge and
             // AIReview's cached/fresh summary. Previously this loop looked up `cached`
@@ -2102,7 +2103,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.evidenceAssessments[subCriterionId] : undefined;
             return {
               evidenceAssessments: rows
-                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNote ? [coverageNote] : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs } }
+                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNote ? [coverageNote] : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, runLog: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? st.evidenceAssessmentProgress.log : undefined } }
                 : st.evidenceAssessments,
               evidenceAssessmentHistory: prev
                 ? { ...st.evidenceAssessmentHistory, [subCriterionId]: [prev, ...(st.evidenceAssessmentHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
@@ -2267,7 +2268,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "reading" };
             patchEv({ currentFile: readFileName, detail: `Reading ${readFileName}…`, pct: Math.min(24, 4 + Math.round((filesReadCount / Math.max(1, evidenceFiles.length)) * 20)), filesFound: [...fileRecords], canSkipCurrentFile: true });
             const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
-            const cached = get().fileTextCache[cacheKey];
+            const cached = cachedFileText(get().fileTextCache, cacheKey);
             const processingMode = cached ? "reused" : "new";
             let body: string | null;
             let readMethod: "text" | "vision" | undefined;
@@ -2718,8 +2719,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (runAbort.signal.aborted) { finish(null, "Run cancelled."); return; }
             let text: string | null = null;
             if (rec.driveFileId) {
-              const exact = get().fileTextCache[`${rec.driveFileId}:${rec.driveModifiedTime ?? ""}`];
-              const hit = exact ?? Object.entries(get().fileTextCache).find(([k]) => k.startsWith(`${rec.driveFileId}:`))?.[1];
+              const exact = cachedFileText(get().fileTextCache, `${rec.driveFileId}:${rec.driveModifiedTime ?? ""}`);
+              const hit = exact
+                ?? Object.entries(get().fileTextCache).find(([k]) => k.startsWith(`${rec.driveFileId}:`))?.[1]
+                ?? Object.entries(useFileTextCacheStore.getState().entries ?? {}).find(([k]) => k.startsWith(`${rec.driveFileId}:`))?.[1];
               text = hit?.text ?? null;
             }
             if ((text == null || !text.trim()) && rec.driveFileId) {
@@ -4736,7 +4739,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             set({ probeProgress: { folderId: id, current: fi + 1, total } });
             if (IMAGE_MIME_TYPES.has(f.mimeType)) { probeFiles.push({ name: f.path.split("/").pop() || f.path, path: f.path, bucket: classifyFileBucket(f.path), readable: true, driveFileId: f.id }); continue; }
             const cacheKey = `${f.id}:${f.modifiedTime ?? ""}`;
-            const cached = get().fileTextCache[cacheKey];
+            const cached = cachedFileText(get().fileTextCache, cacheKey);
             let readable = true; let readError: string | undefined; let readVia: "vision" | undefined;
             if (cached) {
               readable = !!cached.text;
@@ -5215,7 +5218,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // File caching: if we have previously extracted text for this exact
           // file+version, reuse it and skip the Drive download entirely.
           const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
-          const cachedEntry = get().fileTextCache[cacheKey];
+          const cachedEntry = cachedFileText(get().fileTextCache, cacheKey);
           // A PDF cached with ~no text (from before the vision fallback existed,
           // or a run with no key) must NOT be reused as empty when we could now
           // read it via vision — treat it as a cache miss and re-read.
@@ -6471,7 +6474,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           setProgress("reading", { filesTotal, filesRead: fi, filesSkipped: skipped.length, filesFound: [...fileRecords], stageDetail: `Reading file ${fi + 1} of ${filesTotal}: ${file.path.split("/").pop() || file.path}`, lastHeartbeatAt: Date.now(), canSkipCurrentFile: true });
 
           const cacheKey = `${file.id}:${file.modifiedTime ?? ""}`;
-          const cachedEntry = get().fileTextCache[cacheKey];
+          const cachedEntry = cachedFileText(get().fileTextCache, cacheKey);
           // A PDF cached with ~no text (pre-vision-fallback, or a no-key run) is
           // re-read rather than reused-as-empty when vision can now read it.
           const cacheIsEmptyScannedPdf = !!cachedEntry && file.mimeType === "application/pdf" && (cachedEntry.text ?? "").trim().length < 50;
@@ -8301,10 +8304,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // uncapped, and OPTION_A_RUN_HISTORY_CAP runs of that is exactly the
         // large-blob-in-persisted-state growth the single-result cap above
         // exists to prevent.
+        // runLog is dropped from ARCHIVED runs: 60 entries x 20 archived runs
+        // x 30 scopes x two passes is megabytes of persisted state, and the
+        // timing question is always about the run you are looking at.
         const capPpdHistory = (r: Record<string, PPDReviewResult[]>) =>
-          Object.fromEntries(entries(r).map(([k, arr]) => [k, (arr ?? []).map((v) => ({ ...v, promptSent: capPersistedText(v?.promptSent) }))]));
+          Object.fromEntries(entries(r).map(([k, arr]) => [k, (arr ?? []).map((v) => ({ ...v, promptSent: capPersistedText(v?.promptSent), runLog: undefined }))]));
         const capEvHistory = (r: Record<string, EvidenceAssessmentResult[]>) =>
-          Object.fromEntries(entries(r).map(([k, arr]) => [k, (arr ?? []).map((v) => ({ ...v, promptSent: capPersistedText(v?.promptSent) }))]));
+          Object.fromEntries(entries(r).map(([k, arr]) => [k, (arr ?? []).map((v) => ({ ...v, promptSent: capPersistedText(v?.promptSent), runLog: undefined }))]));
         return {
           ...s,
           fileTextCache: {},
@@ -8346,3 +8352,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }
   )
 );
+
+// Extracted-text lookup: this session's in-memory cache first, then the copy
+// that survives a reload (useFileTextCacheStore). Before that second tier
+// existed, closing the tab meant re-downloading every file from Drive and
+// re-sending every scanned page to the vision model.
+//
+// A read-through helper rather than seeding the in-memory cache at startup:
+// hydration finishes asynchronously, so a seed can land after a run has
+// already begun, and a miss that should have been a hit is invisible.
+function cachedFileText(mem: WorkspaceState["fileTextCache"], key: string) {
+  return mem[key] ?? getCachedFileText(key);
+}
+
+// Mirrors every in-memory cache write into the persisted store. A subscription
+// rather than an edit at each of the seven write sites, so a write site added
+// later cannot silently skip persistence.
+useWorkspaceStore.subscribe((st, prev) => {
+  if (st.fileTextCache === prev.fileTextCache) return;
+  for (const [key, entry] of Object.entries(st.fileTextCache)) {
+    if (prev.fileTextCache[key] === entry) continue;
+    if (!entry?.text) continue;
+    putCachedFileText(key, {
+      text: entry.text, charCount: entry.charCount, fileKind: entry.fileKind,
+      fileName: entry.fileName, filePath: entry.filePath, cachedAt: entry.cachedAt ?? Date.now(),
+      pdfQuality: entry.pdfQuality, readMethod: entry.readMethod, visionModel: entry.visionModel,
+    });
+  }
+});

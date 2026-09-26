@@ -164,7 +164,7 @@ export async function flushPendingSaves(): Promise<void> {
 // the local mirror bought very little and cost the most. Only skipped while
 // Supabase is actually available - without it, localStorage is the only
 // persistence there is and the trade would be data loss.
-const NO_LOCAL_MIRROR = new Set(["ucc-gd4-checklist-verdicts:v1"]);
+const NO_LOCAL_MIRROR = new Set(["ucc-gd4-checklist-verdicts:v1", "ucc-gd4-file-text-cache:v1"]);
 
 
 // ── ORDERING: the session BEFORE the stored state ──────────────────────────
