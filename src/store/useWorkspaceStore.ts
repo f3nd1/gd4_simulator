@@ -6,6 +6,7 @@ import { windowCoverageNote } from "../lib/coverageNote";
 import { buildAiRunLog, appendFullCall, type FullCallText } from "../lib/aiRunLogExport";
 import { RUN_LOG_CAP_PER_PASS } from "../lib/runTranscript";
 import { contentKey } from "../lib/contentKey";
+import { beginFileReadTiming, fileReadTiming } from "../lib/drive/driveClient";
 import { lastAdminVerdict } from "../lib/auth/adminGrants";
 import type { AiCallRecord } from "../types";
 import { downloadJson } from "../lib/auditCsvExport";
@@ -1747,6 +1748,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // a real 5.5 run was 41% of an 18-minute check.
         let listingMs = 0;
         let readMs = 0;
+        // The Drive half of readMs, and how many PDF pages the sequential text
+        // extractor walked. readMs minus this is parsing time.
+        let driveMs = 0;
+        let pagesRead = 0;
 
         const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[], contradictions?: PPDContradiction[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
@@ -1797,7 +1802,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.ppdReviewResults[subCriterionId] : undefined;
             return {
               ppdReviewResults: rows
-                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, stageTimings: { listingMs, readMs }, runLog: st.ppdReviewProgress?.subCriterionId === subCriterionId ? st.ppdReviewProgress.log : undefined, aiCallLog: AI_CALLS.length > 0 ? AI_CALLS : undefined } }
+                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, stageTimings: { listingMs, readMs, driveMs, pagesRead }, runLog: st.ppdReviewProgress?.subCriterionId === subCriterionId ? st.ppdReviewProgress.log : undefined, aiCallLog: AI_CALLS.length > 0 ? AI_CALLS : undefined } }
                 : st.ppdReviewResults,
               ppdReviewHistory: prev
                 ? { ...st.ppdReviewHistory, [subCriterionId]: [prev, ...(st.ppdReviewHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
@@ -1981,12 +1986,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (!readToken) { clearTimeout(hardCapTimer); finish(null, false, DRIVE_EXPIRED_MID_RUN); return; }
               try {
                 _currentFileAbort = resolveSkip;
+                beginFileReadTiming();
                 const raced = await Promise.race([
                   readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), ppdVisionCtx),
                   skipSignal,
                   hardCap,
                 ]);
                 _currentFileAbort = null;
+                { const t = fileReadTiming(); driveMs += t.driveMs; pagesRead += t.pageCount ?? 0; }
                 if (raced === FILE_SKIPPED || raced === FILE_TIMED_OUT) {
                   body = null;
                   skipNote = raced === FILE_SKIPPED ? skipReasonForCause(skipCause, 0) : `Read hung and was auto-skipped after ${Math.round(DRIVE_FILE_HARD_CAP_MS / 60_000)} minutes (the file may be corrupt or too complex to parse) — not assessed.`;
@@ -2312,6 +2319,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // a real 5.5 run was 41% of an 18-minute check.
         let listingMs = 0;
         let readMs = 0;
+        // The Drive half of readMs, and how many PDF pages the sequential text
+        // extractor walked. readMs minus this is parsing time.
+        let driveMs = 0;
+        let pagesRead = 0;
         const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, coverageNotes?: string[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           const runAtIso = new Date().toISOString();
@@ -2344,7 +2355,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.evidenceAssessments[subCriterionId] : undefined;
             return {
               evidenceAssessments: rows
-                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNotes?.length ? coverageNotes : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, stageTimings: { listingMs, readMs }, runLog: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? st.evidenceAssessmentProgress.log : undefined, aiCallLog: AI_CALLS.length > 0 ? AI_CALLS : undefined } }
+                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNotes?.length ? coverageNotes : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, stageTimings: { listingMs, readMs, driveMs, pagesRead }, runLog: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? st.evidenceAssessmentProgress.log : undefined, aiCallLog: AI_CALLS.length > 0 ? AI_CALLS : undefined } }
                 : st.evidenceAssessments,
               evidenceAssessmentHistory: prev
                 ? { ...st.evidenceAssessmentHistory, [subCriterionId]: [prev, ...(st.evidenceAssessmentHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
@@ -2578,12 +2589,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               if (!readToken) { clearTimeout(hardCapTimer); finish(null, false, DRIVE_EXPIRED_MID_RUN); return false; }
               try {
                 _currentFileAbort = resolveSkip;
+                beginFileReadTiming();
                 const raced = await Promise.race([
                   readDriveFileWithVision(file, readToken, timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS), evVisionCtx),
                   skipSignal,
                   hardCap,
                 ]);
                 _currentFileAbort = null;
+                { const t = fileReadTiming(); driveMs += t.driveMs; pagesRead += t.pageCount ?? 0; }
                 if (raced === FILE_SKIPPED || raced === FILE_TIMED_OUT) {
                   body = null;
                   skipNote = raced === FILE_SKIPPED ? skipReasonForCause(skipCause, 0) : `Read hung and was auto-skipped after ${Math.round(DRIVE_FILE_HARD_CAP_MS / 60_000)} minutes (the file may be corrupt or too complex to parse) — not assessed.`;

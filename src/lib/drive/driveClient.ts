@@ -219,8 +219,30 @@ export class DriveApiError extends Error {
 // read so smaller files read first and don't starve the vision budget.
 export type DriveFile = { id: string; name: string; mimeType: string; modifiedTime?: string; size?: string };
 
+// WHERE THE TIME IN A READ ACTUALLY GOES, split at the one seam that matters:
+// waiting for Google, against parsing what came back. readMs measured the two
+// together, so "192.8 seconds on one PDF" could not be attributed, and neither
+// of us could tell a slow download from a slow parse. Measure before touching
+// the page loop.
+//
+// A module-level accumulator rather than a threaded parameter because there
+// are eight file-type branches and every one of them would have to carry it.
+// Safe because file reads are strictly sequential: the run loop awaits each
+// file before starting the next. The AI calls that DO run in parallel never
+// touch driveFetch.
+// ponytail: module accumulator, thread it through if reads ever go parallel.
+let _driveMs = 0;
+let _pageCount: number | undefined;
+
+export function beginFileReadTiming(): void { _driveMs = 0; _pageCount = undefined; }
+export function fileReadTiming(): { driveMs: number; pageCount?: number } {
+  return { driveMs: _driveMs, ...(_pageCount === undefined ? {} : { pageCount: _pageCount }) };
+}
+
 async function driveFetch(url: string, accessToken: string, signal?: AbortSignal): Promise<Response> {
+  const at = Date.now();
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal });
+  _driveMs += Date.now() - at;
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     // Google returns structured JSON ({ error: { message, errors: [...] } })
@@ -358,6 +380,10 @@ export async function extractPdfText(bytes: ArrayBuffer): Promise<string> {
   const loadingTask = pdfjsLib.getDocument({ data: bytes });
   const pdf = await loadingTask.promise;
   try {
+    // How many pages the sequential loop below actually walked. Recorded so a
+    // slow read can be divided by something real instead of estimated from
+    // the character count.
+    _pageCount = (_pageCount ?? 0) + pdf.numPages;
     const pages: string[] = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
@@ -457,7 +483,10 @@ export async function exportFileText(
   }
   if (file.mimeType === "application/pdf") {
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
-    return extractPdfText(await res.arrayBuffer());
+    const bodyAt = Date.now();
+    const bytes = await res.arrayBuffer();
+    _driveMs += Date.now() - bodyAt;
+    return extractPdfText(bytes);
   }
   if (file.mimeType === DOCX_MIME) {
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);

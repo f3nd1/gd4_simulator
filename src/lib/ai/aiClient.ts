@@ -43,6 +43,10 @@ export class AITruncatedError extends AIClientError {}
 // automatically for any model that refuses it.
 const MAX_COMPLETION_TOKENS = 32_000;
 
+// One fixed value for the whole app, so two runs of the same area ask for the
+// same sampling. The number itself is arbitrary and carries no meaning.
+const REQUEST_SEED = 20260927;
+
 const DEFAULT_MODEL = "gpt-5-mini";
 
 // Fallback used by verdict-deciding calls when a settings object predates the
@@ -246,6 +250,7 @@ export async function chatComplete(
   // otherwise, which silently broke the prompt reviser), json_object for
   // everything else (unchanged legacy behaviour).
   let noMaxTokens = false;
+  let noSeed = false;
   const buildBody = (format: "schema" | "json" | "text"): Record<string, unknown> => {
     // THE GUARD. A lone surrogate anywhere in the prompt makes JSON.stringify
     // emit an escape that is valid JSON syntax but not decodable UTF-8, and
@@ -272,6 +277,17 @@ export async function chatComplete(
     // deterministic, the check makes it visible, and the caller's split-retry
     // makes it cost a retry instead of a batch.
     if (!noMaxTokens) body.max_completion_tokens = MAX_COMPLETION_TOKENS;
+    // BEST EFFORT, AND NOTHING MAY CLAIM OTHERWISE. A fixed seed asks OpenAI
+    // to sample the same way for the same input; it is explicitly documented
+    // as best-effort, it is ignored by some models, and it guarantees nothing.
+    // On gpt-5.x no temperature can be sent at all, so this is the only
+    // stability lever that exists, and it is a weak one.
+    //
+    // The rule that rides with it: no screen, no export and no copy anywhere
+    // may state or imply that a result is reproducible. A test greps the
+    // user-facing copy for that claim, because a promise of stability this
+    // cannot keep is worse than the variance it is trying to reduce.
+    if (!noSeed) body.seed = REQUEST_SEED;
     return body;
   };
 
@@ -291,6 +307,12 @@ export async function chatComplete(
   // downstream parse/verification path is unchanged and handles both).
   // A model that will not take max_completion_tokens must not fail outright:
   // drop it and send again. The truncation check below still works without it.
+  // A model that refuses seed must not fail outright, same as the cap above.
+  if (!got.res.ok && got.res.status === 400 && /seed/i.test(got.text)) {
+    noSeed = true;
+    got = await post(buildBody(opts?.plainText ? "text" : opts?.schema ? "schema" : "json"));
+  }
+
   if (!got.res.ok && got.res.status === 400 && /max_completion_tokens|max_tokens/i.test(got.text)) {
     noMaxTokens = true;
     got = await post(buildBody(opts?.plainText ? "text" : opts?.schema ? "schema" : "json"));

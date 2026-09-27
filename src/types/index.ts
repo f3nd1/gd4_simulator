@@ -1080,7 +1080,10 @@ export type PPDReviewResult = {
   // model. Measured on a real 5.5 run: 7m 33s of model time inside an 18m 28s
   // check, so a panel built from call time alone will always blame the model.
   // Everything else in the breakdown is derived from aiCallLog.
-  stageTimings?: { listingMs: number; readMs: number };
+  // driveMs is the part of readMs spent waiting for Google; readMs minus it is
+  // parsing. pagesRead is how many PDF pages the sequential text extractor
+  // walked, so a slow read can be divided by something real.
+  stageTimings?: { listingMs: number; readMs: number; driveMs?: number; pagesRead?: number };
   runLog?: EvidenceRunLogLine[];
 
   subCriterionId: string;
@@ -1250,7 +1253,10 @@ export type EvidenceAssessmentResult = {
   // model. Measured on a real 5.5 run: 7m 33s of model time inside an 18m 28s
   // check, so a panel built from call time alone will always blame the model.
   // Everything else in the breakdown is derived from aiCallLog.
-  stageTimings?: { listingMs: number; readMs: number };
+  // driveMs is the part of readMs spent waiting for Google; readMs minus it is
+  // parsing. pagesRead is how many PDF pages the sequential text extractor
+  // walked, so a slow read can be divided by something real.
+  stageTimings?: { listingMs: number; readMs: number; driveMs?: number; pagesRead?: number };
   runLog?: EvidenceRunLogLine[];
 
   subCriterionId: string;
@@ -1365,7 +1371,10 @@ export type OutcomeReviewPassResult = {
   // always, no document text ever.
   aiCallLog?: AiCallRecord[];
   durationMs?: number;
-  stageTimings?: { listingMs: number; readMs: number };
+  // driveMs is the part of readMs spent waiting for Google; readMs minus it is
+  // parsing. pagesRead is how many PDF pages the sequential text extractor
+  // walked, so a slow read can be divided by something real.
+  stageTimings?: { listingMs: number; readMs: number; driveMs?: number; pagesRead?: number };
   promptSent?: string;
   chunkFileNames?: Record<string, string>;
   // Coverage/read problems from the run (files missing from the session text

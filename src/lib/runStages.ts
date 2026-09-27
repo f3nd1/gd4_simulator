@@ -14,7 +14,7 @@ import type { EvidenceAssessmentResult, OutcomeReviewPassResult, PPDReviewResult
 // would make the panel lie in exactly the way it already did.
 
 export type StageRow = {
-  key: "listing" | "reading" | "ocr" | "model" | "outcomes" | "between" | "unaccounted";
+  key: "listing" | "download" | "reading" | "ocr" | "model" | "outcomes" | "between" | "unaccounted";
   label: string;
   detail: string;
   ms: number;
@@ -78,10 +78,15 @@ export function buildRunStages(args: { ppd?: PPDReviewResult; evidence?: Evidenc
   const outcomes = sumCalls(outcome, false);
   // OCR happens INSIDE the read loop, so it is carved out of it rather than
   // added on top. Double-counting it would push the residual negative.
-  const downloadExtract = Math.max(0, readTotal - ocr);
+  // Now split at the seam that matters: waiting for Google, against parsing
+  // what came back. A run from before the split reports driveMs 0, so the
+  // whole of it stays in the parsing row rather than being invented.
+  const driveMs = (ppd?.stageTimings?.driveMs ?? 0) + (evidence?.stageTimings?.driveMs ?? 0);
+  const parseMs = Math.max(0, readTotal - ocr - driveMs);
   const between = span.betweenMs ?? 0;
+  const pagesRead = (ppd?.stageTimings?.pagesRead ?? 0) + (evidence?.stageTimings?.pagesRead ?? 0);
 
-  const measured = listing + downloadExtract + ocr + model + outcomes + between;
+  const measured = listing + driveMs + parseMs + ocr + model + outcomes + between;
   // SIGNED on purpose. Clamping at zero would break the one contract this
   // panel has, that its rows add up to the total in its header: when the
   // measured stages overlap they total MORE than the wall clock, and the only
@@ -91,7 +96,8 @@ export function buildRunStages(args: { ppd?: PPDReviewResult; evidence?: Evidenc
   const pct = (ms: number) => (wallMs > 0 ? Math.round((ms / wallMs) * 1000) / 10 : 0);
   const rows: StageRow[] = [
     { key: "listing", label: "Listing your Drive folders", detail: "Asking Google what is in each folder.", ms: listing, pct: pct(listing) },
-    { key: "reading", label: "Downloading and reading documents", detail: "Fetching each file and pulling the text out of it. Excludes the scanned pages below, which are counted separately.", ms: downloadExtract, pct: pct(downloadExtract) },
+    { key: "download", label: "Waiting for Google Drive", detail: "Downloading each file. Nothing in this row is work this app does.", ms: driveMs, pct: pct(driveMs) },
+    { key: "reading", label: "Pulling the text out of documents", detail: `Reading each file's text once it has arrived. Excludes the scanned pages below, which are counted separately.${pagesRead > 0 ? ` ${pagesRead.toLocaleString("en-SG")} PDF pages were walked, one at a time.` : ""}`, ms: parseMs, pct: pct(parseMs) },
     { key: "ocr", label: "Reading scanned pages and images", detail: "Sending page images to the vision model because no text could be extracted.", ms: ocr, pct: pct(ocr) },
     { key: "model", label: "Checking against the requirements", detail: "Every other request to the model: looking for passages, then deciding each requirement.", ms: model, pct: pct(model) },
     { key: "outcomes", label: "Checking results and review records", detail: "The third pass, over the same documents again, looking for outcome data and records of review.", ms: outcomes, pct: pct(outcomes) },

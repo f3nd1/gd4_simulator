@@ -58,7 +58,12 @@ export function recommendFromConsistency(r: ConsistencyTestResult): Recommendati
     return [{
       id: `cons-${r.subCriterionId}-ok`, severity: "ok",
       title: `Agreement ${r.agreementPct}% — at or above the ${AGREEMENT_TARGET}% target`,
-      reasoning: `Option ${r.path} is reproducible on ${r.subCriterionId} at temperature ${(r.temperature ?? 0.1).toFixed(2)}. No tuning needed.`,
+      // NOT "is reproducible". That is a promise about future runs made from a
+      // handful of past ones, and on a gpt-5.x model no temperature is sent at
+      // all, so nothing here controls sampling. Say what was observed and stop
+      // there: a claim of stability this cannot keep is worse than the
+      // variance it describes.
+      reasoning: `Option ${r.path} agreed with itself on every run tried for ${r.subCriterionId}${r.effectiveTemperature == null ? " (this model ignores the temperature setting and chooses its own sampling)" : ` at temperature ${r.effectiveTemperature.toFixed(2)}`}. No tuning needed on this evidence. A later run can still differ.`,
       evidence: [r.summary],
     }];
   }

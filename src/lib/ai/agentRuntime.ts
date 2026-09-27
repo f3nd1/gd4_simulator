@@ -1687,6 +1687,28 @@ function buildDocWindows(text: string): DocWindow[] {
 // covers, via its own chunkId -> file-name map, for a live "currently
 // processing: <files>" indicator. Shared by runPPDRequirementsReview and
 // runEvidenceAssessment rather than duplicated.
+// A STABLE ORDER for the passages the judge is shown.
+//
+// Extract batches within a window run in parallel (Promise.all below) and
+// addCandidate appends in COMPLETION order, so with identical documents,
+// identical windows and identical extracted passages the judge's prompt
+// differed between runs on network timing alone: passage (1) in one run was
+// passage (3) in the next, and the prompt numbers them. Models are order
+// sensitive, so that was a source of verdict drift nobody could see from the
+// log, independent of temperature.
+//
+// Ordered by chunk id, then by where the quote actually sits in the source,
+// then by the quote itself so the comparison is total. Nothing is added or
+// removed: this changes the ORDER the judge reads them in and nothing else.
+function stableCandidateOrder<T extends { quote: string; chunkId?: string }>(cands: T[], sourceText: string): T[] {
+  const at = new Map<T, number>();
+  for (const c of cands) at.set(c, sourceText.indexOf(c.quote.slice(0, 120)));
+  return [...cands].sort((a, b) =>
+    (a.chunkId ?? "").localeCompare(b.chunkId ?? "")
+    || (at.get(a)! - at.get(b)!)
+    || a.quote.localeCompare(b.quote));
+}
+
 function chunkIdsInWindow(text: string): string[] {
   const seen = new Set<string>();
   const re = /\[CHUNK:([^\]]+)\]/g;
@@ -2997,7 +3019,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     if (stopRequested()) { stoppedEarly = true; break; }
     opts.onProgress?.(`PPD verdicts — batch ${bi + 1}/${judgeBatches.length} (judging verified extracts)`);
     const pointsBlock = batch.map((r, i) => {
-      const cands = candByRef.get(r.ref) ?? [];
+      const cands = stableCandidateOrder(candByRef.get(r.ref) ?? [], policyDocText);
       const candLines = cands.map((c, ci) => `   (${ci + 1}) [${c.chunkId ?? "no chunk"}${c.clause ? ` · ${c.clause}` : ""}]${c.aspect ? ` (${c.aspect})` : ""} "${c.quote}"`).join("\n");
       return `[${r.ref}] (${i + 1}) ${r.requirementText}\n  Verified PPD passages:\n${candLines}`;
     }).join("\n\n");
@@ -3659,7 +3681,7 @@ Respond with JSON only:
     if (stopRequested()) { stoppedEarly = true; break; }
     opts.onProgress?.(`Judging verified evidence — batch ${bi + 1}/${judgeBatches.length}…`, Math.round((unitsDone / totalUnits) * 100));
     const pointsBlock = batch.map((r, i) => {
-      const cands = candByRef.get(r.ref) ?? [];
+      const cands = stableCandidateOrder(candByRef.get(r.ref) ?? [], evidenceDocText);
       const candLines = cands.map((c, ci) => `   (${ci + 1}) [${c.chunkId ?? "no chunk"} · ${c.kind}]${c.aspect ? ` (${c.aspect})` : ""} "${c.quote}"`).join("\n");
       return `${lineBlock(r, i)}\n  Verified evidence passages:\n${candLines}`;
     }).join("\n\n");
