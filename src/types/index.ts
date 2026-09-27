@@ -1069,6 +1069,12 @@ export type PPDReviewResult = {
   // runs by partialize, so it rides on the current result only — 20 archived
   // runs per scope times 30 scopes of full logs is megabytes of persisted
   // state for no benefit.
+  // The two stages that make no AI call of their own, so a time breakdown can
+  // account for the WHOLE run rather than only the part that talked to the
+  // model. Measured on a real 5.5 run: 7m 33s of model time inside an 18m 28s
+  // check, so a panel built from call time alone will always blame the model.
+  // Everything else in the breakdown is derived from aiCallLog.
+  stageTimings?: { listingMs: number; readMs: number };
   runLog?: EvidenceRunLogLine[];
 
   subCriterionId: string;
@@ -1233,6 +1239,12 @@ export type EvidenceAssessmentResult = {
   // runs by partialize, so it rides on the current result only — 20 archived
   // runs per scope times 30 scopes of full logs is megabytes of persisted
   // state for no benefit.
+  // The two stages that make no AI call of their own, so a time breakdown can
+  // account for the WHOLE run rather than only the part that talked to the
+  // model. Measured on a real 5.5 run: 7m 33s of model time inside an 18m 28s
+  // check, so a panel built from call time alone will always blame the model.
+  // Everything else in the breakdown is derived from aiCallLog.
+  stageTimings?: { listingMs: number; readMs: number };
   runLog?: EvidenceRunLogLine[];
 
   subCriterionId: string;

@@ -41,6 +41,7 @@ import { RunTimelinePanel } from "../components/ui/RunTimelinePanel";
 import { findFolderMixups, folderMixupWarning } from "../lib/driveGuard";
 import { buildAiRunLog, summariseAiRunLog, DOC_TEXT_WARNING } from "../lib/aiRunLogExport";
 import { buildRunTranscript, uncitedFiles, UNCITED_NOTE, type TranscriptRow, type UncitedFile } from "../lib/runTranscript";
+import { buildRunStages, type RunStages } from "../lib/runStages";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef, type RunDiff } from "../lib/selfCheckHistory";
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
@@ -624,6 +625,7 @@ export function SelfCheck() {
   // name things it never reads just to stay current. It is a map lookup.
   const logHasText = captureFullPrompts && useWorkspaceStore.getState().hasCapturedText(scope);
   const uncited = useMemo(() => uncitedFiles({ ppd: ppdExisting, evidence: procedureOnlyResult ? undefined : existing }), [ppdExisting, existing, procedureOnlyResult]);
+  const runStages = useMemo(() => buildRunStages({ ppd: ppdExisting, evidence: procedureOnlyResult ? undefined : existing }), [ppdExisting, existing, procedureOnlyResult]);
   const transcript = useMemo(
     () => buildRunTranscript({ ppd: ppdExisting, evidence: procedureOnlyResult ? undefined : existing }),
     [ppdExisting, existing, procedureOnlyResult],
@@ -1189,6 +1191,24 @@ export function SelfCheck() {
         ".sc-filter[data-on]{background:#172033;color:#fff;border-color:#172033}",
         ".sc-search{flex:1;min-width:220px;height:36px;border:1px solid #cfd8e6;border-radius:9px;padding:0 11px;font:inherit;font-size:13px;background:#fff}",
         ".sc-view-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:16px}",
+        // ── Where did the time go? ──────────────────────────────────────
+        ".sc-stages{border:1px solid #dfe5ee;border-radius:11px;background:#fff;margin-top:12px;overflow:hidden}",
+        ".sc-stages-head{width:100%;display:flex;align-items:baseline;gap:10px;padding:11px 14px;background:#f8fafc;border:0;border-bottom:1px solid #eef2f6;font:inherit;font-size:13.5px;color:#334155;cursor:pointer;text-align:left}",
+        ".sc-stages-total{color:#65728a;font-size:12px;margin-left:auto}",
+        ".sc-stages-chev{color:#8490a3;font-size:11px}",
+        ".sc-stages-body{padding:12px 14px}",
+        ".sc-stages-note{margin:0 0 10px;color:#65728a;font-size:11.5px;line-height:1.5}",
+        ".sc-stage-row+.sc-stage-row{margin-top:11px}",
+        ".sc-stage-top{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;color:#334155;flex-wrap:wrap}",
+        ".sc-stage-label{font-weight:700;min-width:0}",
+        ".sc-stage-ms{color:#65728a;font-variant-numeric:tabular-nums;white-space:nowrap}",
+        ".sc-stage-bar{height:7px;background:#eef2f7;border-radius:99px;overflow:hidden;margin:4px 0 3px}",
+        ".sc-stage-bar>div{height:100%;background:#7c3aed;border-radius:99px}",
+        // Unaccounted is amber, not purple: it is the row that says what the
+        // check cannot yet see, and it must not look like another measurement.
+        ".sc-stage-row[data-un] .sc-stage-bar>div{background:#b45309}",
+        ".sc-stage-row[data-un] .sc-stage-label{color:#92400e}",
+        ".sc-stage-detail{color:#8490a3;font-size:11.5px;line-height:1.45}",
         // ── "What the check did", collapsed under the support tabs ───────
         // A row, not a tab. The three tabs above it are about the content of
         // the judgement; this is about the machine, and a peer position would
@@ -2084,6 +2104,11 @@ export function SelfCheck() {
               {area.scope} {area.title} · {procedureOnlyResult ? "written procedure only" : "procedure and records"} · checked {shownRun?.label || ranAt}
               {shownRun?.duration && ` · took ${shownRun.duration}`}
             </p>
+            {/* The stage breakdown sits ABOVE the commentary timeline: the
+                question "where did 18 minutes go?" is answered by the stages,
+                and the timeline is the line-by-line detail behind them. The
+                timeline alone could only ever report model time. */}
+            <RunStagesPanel stages={runStages} />
             <RunTimelinePanel runLog={runTimelineLog} durationMs={runTimelineMs || undefined} />
 
             {/* The supplied design: a sticky sidebar of jump links and exports
@@ -3147,6 +3172,50 @@ function ClimbList({ options }: { options: BandStepOption[] }) {
 // this whole panel exists to avoid.
 //
 // No document text anywhere: names, counts, durations, refs and verdicts only.
+// Where the time in a check went, across the WHOLE wall clock.
+//
+// Its predecessor summed AI call durations, so a check whose model time was 41%
+// of its run reported the model as 100% of the problem. Every row here is a
+// measured stage, and the last one carries whatever is left over rather than
+// letting the panel quietly not add up.
+function RunStagesPanel({ stages }: { stages: RunStages }) {
+  const [open, setOpen] = useState(false);
+  if (stages.wallMs <= 0) return null;
+  const fmt = (ms: number) => {
+    const sign = ms < 0 ? "-" : "";
+    const a = Math.abs(ms);
+    return a < 60_000 ? `${sign}${Math.round(a / 1000)}s` : `${sign}${Math.floor(a / 60_000)}m ${Math.round((a % 60_000) / 1000)}s`;
+  };
+  return (
+    <div className="sc-stages">
+      <button type="button" className="sc-stages-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <b>Where did the time go?</b>
+        <span className="sc-stages-total">{fmt(stages.wallMs)} in all{stages.wallMeasured ? "" : " (added up)"}</span>
+        <span className="sc-stages-chev" aria-hidden>{open ? "\u25b4" : "\u25be"}</span>
+      </button>
+      {open && (
+        <div className="sc-stages-body">
+          {stages.note && <p className="sc-stages-note">{stages.note}</p>}
+          {stages.rows.map((r) => (
+            <div key={r.key} className="sc-stage-row" data-un={r.key === "unaccounted" || undefined}>
+              <div className="sc-stage-top">
+                <span className="sc-stage-label">{r.label}</span>
+                <span className="sc-stage-ms">{fmt(r.ms)} · {r.pct}%</span>
+              </div>
+              <div className="sc-stage-bar"><div style={{ width: `${Math.min(100, Math.abs(r.pct))}%` }} /></div>
+              <div className="sc-stage-detail">{r.detail}</div>
+            </div>
+          ))}
+          <p className="sc-stages-note">
+            These rows add up to the total above. Anything the check does not yet measure is in
+            <b> Unaccounted</b> rather than spread across the others.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RunTranscriptPanel({ rows, uncited }: { rows: TranscriptRow[]; uncited: UncitedFile[] }) {
   const [narrative, setNarrative] = useState(true);
   const shown = narrative ? rows : rows.filter((r) => r.kind !== "narrative");

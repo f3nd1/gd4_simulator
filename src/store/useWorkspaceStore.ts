@@ -1728,6 +1728,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const AI_CALLS: AiCallRecord[] = [];
         // Shared by the OCR reads and by the engine, so the log is one series.
         let AI_SEQ = 0;
+        // Wall clocks for the two stages that make no AI call of their own.
+        // Without them the breakdown can only ever report model time, which on
+        // a real 5.5 run was 41% of an 18-minute check.
+        let listingMs = 0;
+        let readMs = 0;
 
         const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[], contradictions?: PPDContradiction[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
@@ -1778,7 +1783,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.ppdReviewResults[subCriterionId] : undefined;
             return {
               ppdReviewResults: rows
-                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, runLog: st.ppdReviewProgress?.subCriterionId === subCriterionId ? st.ppdReviewProgress.log : undefined, aiCallLog: AI_CALLS.length > 0 ? AI_CALLS : undefined } }
+                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, stageTimings: { listingMs, readMs }, runLog: st.ppdReviewProgress?.subCriterionId === subCriterionId ? st.ppdReviewProgress.log : undefined, aiCallLog: AI_CALLS.length > 0 ? AI_CALLS : undefined } }
                 : st.ppdReviewResults,
               ppdReviewHistory: prev
                 ? { ...st.ppdReviewHistory, [subCriterionId]: [prev, ...(st.ppdReviewHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
@@ -1834,7 +1839,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set({ driveBlockedReason: null });
           if (!token || !policyId) { finish(null, false, DRIVE_EXPIRED_MID_RUN); return; } // should be unreachable past the guard; never strand busy
 
+          const listAt = Date.now();
           const allFiles = await listFolderFilesRecursive(policyId, token, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS));
+          listingMs = Date.now() - listAt;
           // If policyLink is a dedicated folder, every file in it is policy;
           // if it's the shared single-folder convention (folderLink doubling
           // as both), keep only files under the "Policy & Procedure" subfolder.
@@ -2020,6 +2027,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // phase begins (mirrors runEvidenceAssessment's reset).
           patchPpd({ currentFile: undefined, canSkipCurrentFile: false });
           if (docParts.length === 0) { finish(null, false, "No readable text could be extracted from the Policy & Procedure files."); return; }
+          readMs = Date.now() - listAt - listingMs;
           const policyDocText = docParts.join("\n\n=== POLICY & PROCEDURE ===\n\n");
 
           const aiSettings = useAISettingsStore.getState();
@@ -2261,6 +2269,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const AI_CALLS: AiCallRecord[] = [];
         // Shared by the OCR reads and by the engine, so the log is one series.
         let AI_SEQ = 0;
+        // Wall clocks for the two stages that make no AI call of their own.
+        // Without them the breakdown can only ever report model time, which on
+        // a real 5.5 run was 41% of an 18-minute check.
+        let listingMs = 0;
+        let readMs = 0;
         const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, coverageNotes?: string[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           const runAtIso = new Date().toISOString();
@@ -2293,7 +2306,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.evidenceAssessments[subCriterionId] : undefined;
             return {
               evidenceAssessments: rows
-                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNotes?.length ? coverageNotes : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, runLog: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? st.evidenceAssessmentProgress.log : undefined, aiCallLog: AI_CALLS.length > 0 ? AI_CALLS : undefined } }
+                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNotes?.length ? coverageNotes : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, stageTimings: { listingMs, readMs }, runLog: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? st.evidenceAssessmentProgress.log : undefined, aiCallLog: AI_CALLS.length > 0 ? AI_CALLS : undefined } }
                 : st.evidenceAssessments,
               evidenceAssessmentHistory: prev
                 ? { ...st.evidenceAssessmentHistory, [subCriterionId]: [prev, ...(st.evidenceAssessmentHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
@@ -2397,7 +2410,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             lineVerdict: {}, filesRead: [], log: [], ai: { calls: 0, totalTokens: 0 },
           });
           logEv(isRetry ? `Retrying ${lineRefs.length} line${lineRefs.length === 1 ? "" : "s"}: ${lineRefs.join(", ")} — the complete evidence file set is re-read/re-sent, not a subset.` : "Listing the Actual Evidence folder…");
+          const listAt = Date.now();
           const allFiles = await listFolderFilesRecursive(evidenceId, token, "", 0, timeoutSignal(runAbort.signal, DRIVE_LIST_TIMEOUT_MS));
+          listingMs = Date.now() - listAt;
           // Dedicated evidence folder -> all files are evidence; shared
           // single-folder convention -> keep only the "Actual Evidence" bucket.
           // Smallest-first so large scans don't exhaust the vision budget before
@@ -2623,6 +2638,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Per-file ledger for this Option A evidence run, in the same
           // AuditFileRecord shape the staged path uses so the CSVs line up.
           const fileLedger: AuditFileRecord[] = fileRecords;
+          readMs = Date.now() - listAt - listingMs;
           const evidenceDocText = docParts.join("\n\n=== ACTUAL EVIDENCE ===\n\n");
           logEv(`Read ${filesReadCount} file${filesReadCount === 1 ? "" : "s"} — assessing ${lineRefs.length} requirement line${lineRefs.length === 1 ? "" : "s"}.`);
           // detail is reset here too — without it the overlay's live line kept
