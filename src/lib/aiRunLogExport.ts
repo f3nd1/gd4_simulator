@@ -1,6 +1,7 @@
 import type { AiCallRecord, AuditFileRecord, PPDReviewResult, EvidenceAssessmentResult, OutcomeReviewPassResult } from "../types";
 import { buildRunStages } from "./runStages";
 import { buildStamp } from "./buildInfo";
+import { ONE_READING_SHORT } from "./selfCheck";
 
 // The downloadable record of one area's run.
 //
@@ -101,9 +102,17 @@ export type AiRunLog = {
 };
 
 // One pass is one reading. Verdicts in this file are not a fixed property of
-// the documents: two runs on the same 39 documents moved two of them.
+// the documents: three runs of 6.2 on the same two documents, byte-identical in
+// character count, file order and chunk ids, moved five of its ten records
+// lines while all ten procedure lines held. That is one area measured once.
+// (The earlier note here said "two runs on the same 39 documents moved two of
+// them", which was the 5.5 observation that started this and is superseded by
+// the 6.2 measurement.)
+//
+// Composed from ONE_READING_SHORT rather than restating it, so the log, the CSV
+// and the printed page cannot drift to three different numbers.
 const RUN_LOG_CAVEAT =
-  "Verdicts in this log are one reading of the documents. A second run on the same documents can reach a different verdict on some lines. This is an internal practice check, never an official SSG or EduTrust result.";
+  `${ONE_READING_SHORT} This is an internal practice check, never an official SSG or EduTrust result.`;
 
 const NO_TEXT_NOTE =
   "This log contains NO document text: no prompts, no AI responses, no evidence. Only which calls ran, over which window, how long they took and what they produced. Nothing in it should identify a student.";

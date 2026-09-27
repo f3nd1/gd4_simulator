@@ -638,13 +638,20 @@ export const VIEW_TALLY: Record<SelfCheckView, { complies: string; partly: strin
 // Deliberately NOT quantified. There is no measured noise floor yet, and a
 // number invented to sound careful would be the same fault in a new coat. When
 // the repeat-run figure exists, it replaces the vague clause.
+// The number is a measurement, not a property of the tool, and the wording has
+// to keep it that way. Three runs of 6.2 on the same two byte-identical
+// documents (38,450 and 451,389 characters, same file order, same chunk ids)
+// moved five of the ten records lines while all ten procedure lines held. One
+// area, measured once. "usually the borderline ones" used to sit here and was
+// an invention: nothing had been measured when it was written, and it implied a
+// pattern across areas that still does not exist.
 export const ONE_READING_NOTE =
-  "One reading. These verdicts come from one pass over your documents. A second run on the same documents can reach a different answer on some lines, usually the borderline ones. Treat a verdict as this check's reading, not a fixed property of your evidence.";
+  "One reading. These verdicts come from one pass over your documents, and a second run can reach a different answer on some lines. Measured once, on one area: three runs of 6.2 moved five of its ten records lines, while all ten procedure lines held. That is one area measured once, not a rate to expect elsewhere.";
 
 // The short form, for the two exports that travel without the page around
 // them. The CSV is the worst case: a spreadsheet column reads as data.
 export const ONE_READING_SHORT =
-  "One reading. A second run on the same documents can reach a different verdict on some lines.";
+  "One reading. A second run on the same documents can reach a different verdict on some lines. Measured once, on area 6.2 only: five of its ten records lines moved across three runs.";
 
 export const TABS_EXPLAINED: Record<"overview" | "procedure" | "records", { hint: string; text: string }> = {
   // `hint` rides on the tab button, so all three meanings are visible at once

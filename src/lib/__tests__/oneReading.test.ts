@@ -16,12 +16,33 @@ const band = { kind: "auditor", band: 3, name: "Meeting Expectation", totalPct: 
 // Drive, moved two verdicts downwards. Nothing anywhere told a reader that
 // could happen, and this tool prepares people for a real EduTrust audit.
 describe("a verdict is presented as one reading, not as settled", () => {
-  it("says what it is, and says it can move, without a number it has not measured", () => {
+  it("says what it is and says it can move", () => {
     expect(ONE_READING_NOTE).toMatch(/one pass over your documents/i);
     expect(ONE_READING_NOTE).toMatch(/can reach a different answer/i);
-    // No invented figure. The repeat-run number does not exist yet, and one
-    // made up to sound careful would be the same fault in a new coat.
-    expect(ONE_READING_NOTE).not.toMatch(/\b\d+\s*%|\b\d+ of \d+\b/);
+  });
+
+  // The number now exists: three runs of 6.2 on the same two documents moved
+  // five of its ten records lines. It is a property of ONE area measured ONCE,
+  // and the wording has to say so, because "five of ten lines move" read as a
+  // property of the tool would be a claim nothing supports.
+  it("carries the measured number and says what it was measured on", () => {
+    for (const note of [ONE_READING_NOTE, ONE_READING_SHORT]) {
+      expect(note, note).toMatch(/measured once/i);
+      expect(note, note).toMatch(/6\.2/);
+      expect(note, note).toMatch(/five of (its|the) ten/i);
+      expect(note, note).toMatch(/three runs/i);
+    }
+    // Only the long form has room to say it outright; the short form says
+    // "on area 6.2 only", which does the same job in four words.
+    expect(ONE_READING_NOTE).toMatch(/not a rate to expect elsewhere/i);
+    expect(ONE_READING_SHORT).toMatch(/6\.2 only/i);
+  });
+
+  it("never generalises the number beyond the one area", () => {
+    for (const note of [ONE_READING_NOTE, ONE_READING_SHORT]) {
+      // Each of these would turn one measurement into a rate.
+      expect(note, note).not.toMatch(/\busually\b|\btypically\b|\bon average\b|\bgenerally\b|\baround (a |one )?(half|third|quarter)\b/i);
+    }
   });
 
   it("does not contradict itself one line below", () => {
@@ -91,8 +112,11 @@ describe("it travels with every export, because they leave the page behind", () 
 
   it("is a field of the AI run log, which is what gets quoted back later", () => {
     const log = buildAiRunLog({ area: "5.5" });
-    expect(log.caveat).toMatch(/one reading of the documents/i);
+    // Composed from the same constant, so the three exports cannot end up
+    // quoting three different numbers.
+    expect(log.caveat).toContain(ONE_READING_SHORT);
     expect(log.caveat).toMatch(/can reach a different verdict/i);
+    expect(log.caveat).toMatch(/never an official SSG or EduTrust result/i);
     // Distinct from privacyNote: one is about what the file contains, the
     // other about what its verdicts mean.
     expect(log.caveat).not.toBe(log.privacyNote);
