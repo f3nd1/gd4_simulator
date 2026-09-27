@@ -11,7 +11,7 @@ import { flushPendingSaves } from "../store/supabaseStorage";
 import { buildWordingCapture, captureFilename } from "../lib/wordingCapture";
 import { printHtmlInNewTab, PRINTABLE_DOC_CSS, POPUP_BLOCKED_MESSAGE } from "../lib/printableDoc";
 import {
-  formatElapsed, activityLine, countedFor, stallState, fileStageSummary, SLOW_TITLE,
+  formatElapsed, activityLine, countedFor, stallState, stallControl, fileStageSummary, SLOW_TITLE,
   waitingMessage, roughRemaining, lineProgress, nowDoing, failureLines, linePassLabel,
   type RunProgress, type StageKey, type LiveLine,
 } from "../lib/selfCheckProgress";
@@ -908,7 +908,12 @@ export function SelfCheck() {
   // object, and only one is running at a time.
   const liveProgress: RunProgress | undefined =
     phase === "policy" ? (ppdProgress ?? undefined)
-      : phase === "outcomes" ? (orProgress?.detail ? { detail: orProgress.detail, currentWindowFiles: orProgress.currentWindowFiles } : undefined)
+      // Passed through whole, not rebuilt from two fields. The stub dropped
+      // heartbeatAt, currentFile and canSkipCurrentFile, so during the
+      // results-and-review pass the stall panel had no heartbeat to measure
+      // (it fired against the start of the RUN) and no file to offer, and fell
+      // through to "Stop the check" while a single file hung.
+      : phase === "outcomes" ? (orProgress ?? undefined)
       : (phase === "records" || phase === "band") ? (evProgress ?? undefined) : undefined;
   // EVERY file this run has opened, across all its passes, not just the pass in
   // flight. The live pane read one progress object, so the file list vanished
@@ -1918,13 +1923,13 @@ export function SelfCheck() {
                     still the file the reader wants to move past. Same two
                     actions the stall panel offers.
 
-                    HIDDEN once the stall panel appears, because the panel
-                    offers the identical action a few lines below with the
-                    explanation of what skipping does attached, and the two
-                    were on screen together. Not deleted: the panel only shows
-                    after a minute of silence, and before that this is the
-                    only way to move past a file that is merely slow. */}
-                {(liveProgress?.canSkipCurrentFile || canSkipAiCall) && stall.level === "none" && (
+                    Hidden ONLY when the stall panel is offering the identical
+                    action a few lines below, with the explanation of what
+                    skipping does attached. It used to be hidden the moment the
+                    panel appeared at all, whatever the panel was offering — so
+                    a stall the panel could only answer with "Stop the check"
+                    also took away the skip that was sitting right there. */}
+                {(liveProgress?.canSkipCurrentFile || canSkipAiCall) && stallControl(stall) !== "skip" && stallControl(stall) !== "skip-call" && (
                   <div style={{ marginTop: 8 }}>
                     <button
                       type="button"

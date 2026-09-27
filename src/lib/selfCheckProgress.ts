@@ -162,6 +162,16 @@ export type StallState =
       controlNote: string;
     };
 
+// Which control the stall panel is currently offering, or null when it is not
+// showing. Exists so the inline skip button can stand down for the panel's
+// copy of the SAME action without having to narrow the union in JSX — and so
+// that "the panel is showing" and "the panel is offering a skip" stay two
+// different questions. Conflating them is what let a Stop-only stall hide a
+// perfectly good Skip button.
+export function stallControl(s: StallState): "skip" | "skip-call" | "cancel" | null {
+  return s.level === "none" ? null : s.control;
+}
+
 export function stallState(now: number, p: RunProgress | undefined, startedAt: number, canSkipCall = false): StallState {
   const last = p?.heartbeatAt ?? startedAt;
   const quiet = now - last;

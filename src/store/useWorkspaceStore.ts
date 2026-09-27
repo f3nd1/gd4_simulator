@@ -906,7 +906,17 @@ export type WorkspaceState = {
   // Live heartbeat for a running Outcomes & Review pass; null when idle.
   // detail is the stage line; currentWindowFiles names the documents the call
   // in flight is reading, so a stalled pass can say which files it is on.
-  outcomeReviewProgress: { subCriterionId: string; detail: string; currentWindowFiles?: string[] } | null;
+  // Carries the SAME three control fields as the other two passes.
+  //
+  // It used to carry only detail + currentWindowFiles, and that was the whole
+  // of the "a hung file offers only Stop" bug: with no heartbeat the stall
+  // panel measured quiet time from the start of the RUN and fired at once, and
+  // with no currentFile/canSkipCurrentFile it could not offer the file skip, so
+  // it fell through to "Stop the check" and one bad file cost the whole run.
+  outcomeReviewProgress: {
+    subCriterionId: string; detail: string; currentWindowFiles?: string[];
+    currentFile?: string; canSkipCurrentFile?: boolean; heartbeatAt?: number;
+  } | null;
   // Final Report AI improvement suggestions, keyed "itemId::dimensionKey"
   // (see ReportAiSuggestion). Persisted so they survive reload and match the
   // printed PDF; written ONLY by the report's explicit Generate button.
@@ -2780,7 +2790,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const ev = s.evidenceAssessments[subCriterionId];
         if (!ev) return; // the button only renders with an Option A result
 
-        set({ busy: "outcomereview" + subCriterionId, auditBlockedReason: null, outcomeReviewProgress: { subCriterionId, detail: "Preparing documents…" } });
+        set({ busy: "outcomereview" + subCriterionId, auditBlockedReason: null, outcomeReviewProgress: { subCriterionId, detail: "Preparing documents…", heartbeatAt: Date.now() } });
         const runId = `OR-${subCriterionId}-${Date.now().toString(36).toUpperCase()}`;
         const runAbort = new AbortController();
         _currentRunAbort = runAbort;
@@ -2885,26 +2895,58 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               text = hit?.text ?? null;
             }
             if ((text == null || !text.trim()) && rec.driveFileId) {
-              set({ outcomeReviewProgress: { subCriterionId, detail: `Re-reading ${rec.name}…` } });
+              // The file being re-read is NAMED and marked skippable, exactly as
+              // the other two passes do it. Without this the page could only
+              // offer Stop while this pass hung on one file.
+              set({ outcomeReviewProgress: { subCriterionId, detail: `Re-reading ${rec.name}…`, currentFile: rec.name, canSkipCurrentFile: true, heartbeatAt: Date.now() } });
               if (readToken === undefined) readToken = await useGoogleDriveStore.getState().getFreshToken();
               if (readToken) {
+                // Manual skip, same race as readAndRecordFile: the abandoned
+                // read runs on to its own timeout in the background (nothing
+                // awaits it) rather than being forcibly aborted, so this stays
+                // control-layer only. One hung file costs the file, not the run.
+                const OR_FILE_SKIPPED = Symbol("or-file-skipped");
+                let resolveSkip!: (cause: AbortCause) => void;
+                const skipSignal = new Promise<typeof OR_FILE_SKIPPED>((resolve) => { resolveSkip = () => resolve(OR_FILE_SKIPPED); });
+                // Hard ceiling as well: pdfjs ignores the AbortSignal, so the
+                // read timeout alone cannot stop a hung parse, and nobody should
+                // have to sit watching for the Skip button to appear.
+                let orHardCapTimer: ReturnType<typeof setTimeout> | undefined;
+                const orHardCap = new Promise<typeof OR_FILE_SKIPPED>((resolve) => { orHardCapTimer = setTimeout(() => resolve(OR_FILE_SKIPPED), DRIVE_FILE_HARD_CAP_MS); });
                 try {
-                  const r = await readDriveFileWithVision(
-                    { id: rec.driveFileId, name: rec.name, mimeType: rec.mimeType, modifiedTime: rec.driveModifiedTime },
-                    readToken,
-                    timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS),
-                    // Text tier only: no vision budget for this lightweight
-                    // fallback — an image/scanned file lands in `missing`
-                    // and is reported, matching the honesty rule.
-                    { canDescribeImages: false, visionSettings: effectiveSettings(aiSettings, { purpose: "vision" }), visionModelId: "", budget: { count: 0, max: 0 }, maxPerFile: 0 }
-                  );
-                  text = r.text;
-                  if (text && text.trim()) {
-                    const cached = text;
-                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [`${rec.driveFileId}:${rec.driveModifiedTime ?? ""}`]: { text: cached, charCount: cached.length, fileKind: rec.mimeType, fileName: rec.name, filePath: rec.path, cachedAt: Date.now(), readMethod: r.readMethod } } }));
+                  _currentFileAbort = resolveSkip;
+                  const raced = await Promise.race([
+                    readDriveFileWithVision(
+                      { id: rec.driveFileId, name: rec.name, mimeType: rec.mimeType, modifiedTime: rec.driveModifiedTime },
+                      readToken,
+                      timeoutSignal(runAbort.signal, DRIVE_FILE_TIMEOUT_MS),
+                      // Text tier only: no vision budget for this lightweight
+                      // fallback — an image/scanned file lands in `missing`
+                      // and is reported, matching the honesty rule.
+                      { canDescribeImages: false, visionSettings: effectiveSettings(aiSettings, { purpose: "vision" }), visionModelId: "", budget: { count: 0, max: 0 }, maxPerFile: 0 }
+                    ),
+                    skipSignal,
+                    orHardCap,
+                  ]);
+                  _currentFileAbort = null;
+                  // A skipped or timed-out read leaves `text` null, which falls
+                  // through to `missing` below and is reported by name — the
+                  // same honest outcome an unreadable file already gets.
+                  if (raced !== OR_FILE_SKIPPED) {
+                    text = raced.text;
+                    if (text && text.trim()) {
+                      const cached = text;
+                      set((st) => ({ fileTextCache: { ...st.fileTextCache, [`${rec.driveFileId}:${rec.driveModifiedTime ?? ""}`]: { text: cached, charCount: cached.length, fileKind: rec.mimeType, fileName: rec.name, filePath: rec.path, cachedAt: Date.now(), readMethod: raced.readMethod } } }));
+                    }
                   }
-                } catch { /* falls through to missing */ }
+                } catch { _currentFileAbort = null; /* falls through to missing */ }
+                clearTimeout(orHardCapTimer);
               }
+              // Cleared whichever way the read ended, or the panel keeps
+              // offering to skip a file nothing is reading.
+              set((st) => ({ outcomeReviewProgress: st.outcomeReviewProgress?.subCriterionId === subCriterionId
+                ? { ...st.outcomeReviewProgress, currentFile: undefined, canSkipCurrentFile: false, heartbeatAt: Date.now() }
+                : st.outcomeReviewProgress }));
             }
             if (text == null || !text.trim()) {
               missing.push(rec.name);
@@ -2942,7 +2984,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             memories,
             ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
             resolveChunkFile: (cid) => chunkFileNames[cid],
-            onProgress: (detail, windowFiles) => set({ outcomeReviewProgress: { subCriterionId, detail, currentWindowFiles: windowFiles } }),
+            onProgress: (detail, windowFiles) => set({ outcomeReviewProgress: { subCriterionId, detail, currentWindowFiles: windowFiles, heartbeatAt: Date.now() } }),
             onCallAbort: (fn) => { _currentAiCallAbort = fn; set({ canSkipAiCall: !!fn }); },
             signal: runAbort.signal,
           });
