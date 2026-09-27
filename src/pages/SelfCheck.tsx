@@ -40,6 +40,7 @@ import { FileLedger } from "./EvidenceFolder";
 import { RunTimelinePanel } from "../components/ui/RunTimelinePanel";
 import { findFolderMixups, folderMixupWarning } from "../lib/driveGuard";
 import { buildAiRunLog, summariseAiRunLog, DOC_TEXT_WARNING } from "../lib/aiRunLogExport";
+import { buildRunTranscript, type TranscriptRow } from "../lib/runTranscript";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef, type RunDiff } from "../lib/selfCheckHistory";
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
@@ -198,6 +199,11 @@ export function SelfCheck() {
   // a different question and must never be dressed as a full one.
   const [mode, setMode] = useState<"full" | "procedure-only">("full");
   const [tab, setTab] = useState<SelfCheckView>("overview");
+  // The record of what the check did. Deliberately its own boolean rather than
+  // a fourth SelfCheckView: that union names the three verdict views, and it
+  // feeds tallySlices, the CSV and the printed page. A record is not a verdict
+  // and must not be able to become one by type.
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   // NOT state: derived from the run being shown, so it survives a reload and
   // follows you into an archived check. Held in useState it was lost on every
   // refresh, taking the dimension panel, its detail table, the band card and
@@ -617,6 +623,10 @@ export function SelfCheck() {
   // finishes rather than when any prop does, so a dependency list would have to
   // name things it never reads just to stay current. It is a map lookup.
   const logHasText = captureFullPrompts && useWorkspaceStore.getState().hasCapturedText(scope);
+  const transcript = useMemo(
+    () => buildRunTranscript({ ppd: ppdExisting, evidence: procedureOnlyResult ? undefined : existing }),
+    [ppdExisting, existing, procedureOnlyResult],
+  );
   const aiLogSummary = useMemo(
     () => summariseAiRunLog(buildAiRunLog({ area: scope, ppd: ppdExisting, evidence: existing })),
     [scope, ppdExisting, existing],
@@ -1178,6 +1188,37 @@ export function SelfCheck() {
         ".sc-filter[data-on]{background:#172033;color:#fff;border-color:#172033}",
         ".sc-search{flex:1;min-width:220px;height:36px;border:1px solid #cfd8e6;border-radius:9px;padding:0 11px;font:inherit;font-size:13px;background:#fff}",
         ".sc-view-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:16px}",
+        // ── The record tab, set apart from the three verdicts ─────────────
+        // The three above answer "what is my result?" in three vocabularies.
+        // This one answers "what did the check do?", which is not a fourth
+        // opinion on the evidence, and must not be read as one. So it is on
+        // its own row, behind a rule, half the width, quiet, and labelled as a
+        // record rather than with a verdict hint.
+        ".sc-record-tab-row{display:flex;align-items:center;gap:10px;margin-top:10px;padding-top:10px;border-top:1px dashed #d8dfea}",
+        ".sc-record-tab{border:1px solid #cfd8e6;border-radius:10px;padding:8px 13px;text-align:left;cursor:pointer;font:inherit;background:#f8fafc;color:#4b5870;display:flex;align-items:baseline;gap:8px;white-space:nowrap;flex-shrink:0}",
+        ".sc-record-tab[data-on]{background:#eef2f7;border-color:#8490a3;color:#1f2937}",
+        ".sc-record-tab-note{font-size:11.5px;color:#8490a3;min-width:0}",
+        "@media (max-width: 720px){.sc-record-tab-row{flex-direction:column;align-items:stretch}.sc-record-tab{justify-content:center}}",
+        // ── The transcript itself ───────────────────────────────────────
+        ".sc-tx{margin-top:12px;border:1px solid #dfe5ee;border-radius:11px;overflow:hidden}",
+        ".sc-tx-rows{max-height:620px;overflow-y:auto}",
+        ".sc-tx-row{display:flex;gap:10px;padding:7px 12px;border-top:1px solid #f1f4f9;font-size:12.5px;line-height:1.5;align-items:baseline}",
+        ".sc-tx-row:first-child{border-top:0}",
+        ".sc-tx-at{color:#94a3b8;font-variant-numeric:tabular-nums;flex-shrink:0;font-size:11.5px;min-width:62px}",
+        ".sc-tx-body{min-width:0;flex:1;overflow-wrap:anywhere}",
+        ".sc-tx-detail{color:#65728a;font-size:11.5px;margin-top:1px}",
+        // A pass heading is a divider, not a row: it is the one thing a reader
+        // scrolling a 200-row record uses to find their place.
+        ".sc-tx-row[data-kind=pass]{background:#1f2937;color:#fff;font-weight:800;font-size:13.5px;padding:10px 12px}",
+        ".sc-tx-row[data-kind=pass] .sc-tx-detail{color:#c7d0de}",
+        ".sc-tx-row[data-kind=pass] .sc-tx-at{color:#8fa0b8}",
+        ".sc-tx-row[data-kind=step]{background:#f8fafc;font-weight:750;color:#334155}",
+        ".sc-tx-row[data-kind=gap]{background:#fffbeb;color:#92400e;border-left:4px solid #b45309}",
+        ".sc-tx-row[data-kind=gap] .sc-tx-detail{color:#a16207}",
+        ".sc-tx-row[data-kind=narrative]{color:#64748b;font-size:11.5px}",
+        ".sc-tx-verdicts{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}",
+        ".sc-tx-v{font-size:11px;border:1px solid #dfe5ee;border-radius:999px;padding:2px 8px;background:#fff;color:#4b5870}",
+        ".sc-tx-v[data-changed]{border-color:#d6bc8a;background:#fffbeb;color:#92400e;font-weight:700}",
         ".sc-view-tab{border:1px solid;border-radius:10px;padding:10px 12px;text-align:left;cursor:pointer;font:inherit;min-width:0}",
         ".sc-view-tab strong{display:block;font-size:13.5px;line-height:1.2}",
         ".sc-view-tab span{display:block;font-size:11.5px;margin-top:3px;line-height:1.35}",
@@ -2107,7 +2148,7 @@ export function SelfCheck() {
                       {(["overview", "procedure", "records"] as const).map((k) => (
                         <button
                           key={k} type="button" aria-pressed={tab === k}
-                          onClick={() => { setTab(k); setFilter("all"); setQuery(""); }}
+                          onClick={() => { setTab(k); setTranscriptOpen(false); setFilter("all"); setQuery(""); }}
                           className="sc-view-tab"
                           style={{
                             borderColor: tab === k ? INK : "#cfd8e6", background: tab === k ? INK : "#fff",
@@ -2121,7 +2162,25 @@ export function SelfCheck() {
                     </div>
                   )}
 
-                  {!procedureOnlyResult && (
+                  {/* BELOW the three, behind a rule, on its own row and half
+                      their weight. The three above are three vocabularies for
+                      one result; this is not a fourth opinion on the evidence,
+                      and a reader must not be able to mistake it for one.
+                      Rendered for a procedure-only run too, where the verdict
+                      strip above is hidden entirely. */}
+                  <div className="sc-record-tab-row">
+                    <button
+                      type="button" aria-pressed={transcriptOpen}
+                      onClick={() => setTranscriptOpen((v) => !v)}
+                      className="sc-record-tab" data-on={transcriptOpen || undefined}
+                    >
+                      <strong>What the check did</strong>
+                      <span style={{ fontSize: 11.5, opacity: 0.8 }}>{transcriptOpen ? "Hide the record" : "A record, not a verdict"}</span>
+                    </button>
+                    <span className="sc-record-tab-note">{transcript.summary}</span>
+                  </div>
+
+                  {!procedureOnlyResult && !transcriptOpen && (
                     <div className="sc-view-subheader">
                       <b>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
                       {/* What this tab does NOT settle. It was a yellow box of
@@ -2203,6 +2262,13 @@ export function SelfCheck() {
               </div>
             )}
 
+                {/* THE RECORD, in place of the result. Everything from the
+                    counts down is this run's verdicts; the record is what the
+                    check DID to reach them, so the two are never both on
+                    screen claiming the same space. */}
+                {transcriptOpen && <RunTranscriptPanel rows={transcript.rows} />}
+
+                {!transcriptOpen && (<>
                 {/* A procedure-only result answers "is it written down?", so it is
                     counted in those words. "Complies" on a run that never opened a
                     record would be a claim nobody made. */}
@@ -2263,7 +2329,10 @@ export function SelfCheck() {
                     </div>
                   )}
                 </div>
+                </>)}
                 </div>
+
+                {!transcriptOpen && (<>
 
             {mostlyUnchecked(counts) && (
               <p style={{ ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af", borderRadius: 8, padding: "9px 11px" }}>
@@ -2309,6 +2378,7 @@ export function SelfCheck() {
                     </p>
                   )}
                 </div>
+                </>)}
 
             {/* ── AUDIT SUPPORT ────────────────────────────────────────────
                 Everything below the requirement above is supporting material,
@@ -3048,6 +3118,76 @@ function ClimbList({ options }: { options: BandStepOption[] }) {
 
 // One requirement line on the live board: where it has got to, never what it
 // was judged. The state is a word and a mark as well as a colour.
+// The record of what the check did: every document it opened, in order, with
+// its result; every request it made, with what came back; and the running
+// commentary as colour beside them.
+//
+// Built from aiCallLog + fileLedger (both uncapped) rather than from the
+// commentary, which keeps only its last RUN_LOG_CAP_PER_PASS lines per pass and
+// so loses its own beginning on a folder of any size. Where something IS
+// missing the builder emits a "gap" row saying so, and those render as the one
+// thing on this panel that is coloured — a silent hole is the failure mode
+// this whole panel exists to avoid.
+//
+// No document text anywhere: names, counts, durations, refs and verdicts only.
+function RunTranscriptPanel({ rows }: { rows: TranscriptRow[] }) {
+  const [narrative, setNarrative] = useState(true);
+  const shown = narrative ? rows : rows.filter((r) => r.kind !== "narrative");
+  const narrativeCount = rows.filter((r) => r.kind === "narrative").length;
+  if (rows.length === 0) {
+    return (
+      <div className="sc-tx" style={{ padding: 16 }}>
+        <p style={{ ...muted, margin: 0 }}>There is no record for this run.</p>
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 16 }}>
+      <b style={{ fontSize: 14, color: INK }}>What the check did</b>
+      <p style={{ ...muted, margin: "4px 0 0", fontSize: 12.5 }}>
+        Every document this check opened and every request it made, in order. It holds no document text: names, counts,
+        timings and verdicts only.
+      </p>
+      {narrativeCount > 0 && (
+        <label style={{ ...muted, display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, cursor: "pointer" }}>
+          <input type="checkbox" checked={narrative} onChange={(e) => setNarrative(e.currentTarget.checked)} />
+          Show the running commentary ({narrativeCount} {narrativeCount === 1 ? "line" : "lines"})
+        </label>
+      )}
+      <div className="sc-tx">
+        <div className="sc-tx-rows">
+          {shown.map((r) => (
+            <div key={r.id} className="sc-tx-row" data-kind={r.kind}>
+              {/* A time only where one is genuinely recorded. The file ledger
+                  keeps order, not a clock, so those rows are blank here rather
+                  than carrying an invented one. */}
+              <span className="sc-tx-at">{r.at ? new Date(r.at).toLocaleTimeString("en-SG", { hour12: false }) : ""}</span>
+              <span className="sc-tx-body">
+                <span style={r.tone && r.kind !== "pass" ? { color: LOG_TONE[r.tone] } : undefined}>{r.label}</span>
+                {r.detail && <span className="sc-tx-detail" style={{ display: "block" }}>{r.detail}</span>}
+                {r.verdicts && r.verdicts.length > 0 && (
+                  <span className="sc-tx-verdicts">
+                    {r.verdicts.map((v) => (
+                      <span key={v.ref} className="sc-tx-v" data-changed={v.changed || undefined}
+                        title={v.changed ? `The service answered "${v.model}". The check recorded "${v.final}" after its own checks ran.` : undefined}>
+                        {v.ref}: {v.changed ? `${v.model} \u2192 ${v.final}` : v.model}
+                      </span>
+                    ))}
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <p style={{ ...muted, margin: "6px 0 0", fontSize: 11.5 }}>
+        A changed verdict (<b style={{ color: "#92400e" }}>amber</b>) is one the check moved after the answer came back,
+        for example where a positive verdict cited nothing. The recorded verdict is the one on your result.
+      </p>
+    </div>
+  );
+}
+
 function LiveLineRow({ line, req }: { line: LiveLine; req?: { text: string; parent?: string } }) {
   const MARK = { checked: "\u2713", checking: "\u25cf", waiting: "\u25cb" } as const;
   const LABEL = { checked: "checked", checking: "being checked", waiting: "still to do" } as const;

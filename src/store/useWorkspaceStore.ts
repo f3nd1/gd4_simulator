@@ -4,6 +4,7 @@ import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { getCachedFileText, putCachedFileText, useFileTextCacheStore } from "./useFileTextCacheStore";
 import { windowCoverageNote } from "../lib/coverageNote";
 import { buildAiRunLog, appendFullCall, type FullCallText } from "../lib/aiRunLogExport";
+import { RUN_LOG_CAP_PER_PASS } from "../lib/runTranscript";
 import { lastAdminVerdict } from "../lib/auth/adminGrants";
 import type { AiCallRecord } from "../types";
 import { downloadJson } from "../lib/auditCsvExport";
@@ -1672,7 +1673,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // curEv/patchEv/logEv, so the detailed live-activity fields (stage,
         // files, per-line status, log) survive every pct/detail tick instead of
         // being wiped by a plain replace.
-        const PPD_LOG_CAP = 60;
+        // The cap the transcript tab has to disclose when it is hit, so the
+        // number and the sentence explaining it cannot drift apart.
+        const PPD_LOG_CAP = RUN_LOG_CAP_PER_PASS;
         const curPpd = (): PPDReviewProgress => {
           const p = get().ppdReviewProgress;
           return p && p.subCriterionId === subCriterionId ? p : { subCriterionId, detail: "" };
@@ -2306,7 +2309,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Merge-based progress updaters so the detailed live-activity fields
         // (stage, window, per-line status, files, log, AI usage) survive every
         // update — a plain replace would wipe them on each pct tick.
-        const EV_LOG_CAP = 60;
+        const EV_LOG_CAP = RUN_LOG_CAP_PER_PASS;
         const curEv = (): EvidenceAssessmentProgress => {
           const p = get().evidenceAssessmentProgress;
           return p && p.subCriterionId === subCriterionId ? p : { subCriterionId, pct: 0, detail: "" };
