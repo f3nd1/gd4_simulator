@@ -452,8 +452,8 @@ function DevelopersTab() {
         </DevBlock>
         <DevBlock title="Vision budget + reading order + the 10-minute cap">
           <Code>DEFAULT_VISION_IMAGE_BUDGET = 30</Code> (<Code>useWorkspaceStore.ts</Code>, one constant — it was four drifting literals of 10), 5 pages max per file.
-          Files are read smallest-first (<Code>orderBySizeForVisionBudget</Code> in <Code>lib/drive/textUtils.ts</Code>) so one large scan cannot starve the rest —
-          budget exhaustion produced false "no evidence found" gaps. On exhaustion the run BLOCKS on <Code>visionBudgetPrompt</Code>{" "}
+          Files are read smallest-first, then by name, then by file id (<Code>orderBySizeForVisionBudget</Code> in <Code>lib/drive/textUtils.ts</Code>) so one large scan cannot starve the rest —
+          budget exhaustion produced false "no evidence found" gaps. The name and id tiebreaks exist because the Drive listing sends no <Code>orderBy</Code>: with size alone, two runs of a folder of same-size files could read them in a different order, which moves the chunk ids and the window boundaries. On exhaustion the run BLOCKS on <Code>visionBudgetPrompt</Code>{" "}
           (modal mounted globally in Layout — it was once mounted per-page and an invisible prompt hung a 6-hour run). <Code>DRIVE_FILE_HARD_CAP_MS</Code> (10 min)
           races every per-file read alongside the user's Skip so no single file can hang a run; budget-skipped ledger rows say the read was attempted and is recoverable.
         </DevBlock>

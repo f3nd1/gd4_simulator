@@ -310,11 +310,30 @@ export async function extractXlsxEmbeddedImages(buffer: ArrayBuffer): Promise<Em
 // scanned PDFs early in the Drive listing would otherwise burn the whole
 // per-run vision budget before smaller/more-relevant files are read, producing
 // false "no evidence found" gaps. `size` is a byte string from Drive; native
-// Google Docs have no size → treated as 0 (sort first, harmless — they read as
-// typed text and never touch the vision budget). Stable: equal sizes keep
-// listing order. Pure copy, no mutation of the input array.
-export function orderBySizeForVisionBudget<T extends { size?: string }>(files: T[]): T[] {
-  return [...files].sort((a, b) => (Number(a.size ?? 0) || 0) - (Number(b.size ?? 0) || 0));
+// Google Docs have no size, treated as 0 (sort first, harmless: they read as
+// typed text and never touch the vision budget).
+//
+// TOTAL ORDER, size then name then id. It used to sort on size alone and let
+// equal sizes keep listing order, and the listing has no order to keep: the
+// Drive query in driveClient.ts sends no orderBy, so two runs of the same
+// folder can return same-size files in either order. That is not cosmetic.
+// File order fixes how the text is concatenated, which fixes the part splits,
+// the C001... chunk ids and the 55k window boundaries, so an unpinned order
+// means two runs of one folder can put a requirement's evidence in different
+// windows and reach different verdicts. Measured on a 6.2 run with two files
+// of different sizes the order held, which is why this hid; a folder of 39
+// near-identical exports is exactly where it would not.
+//
+// Name then id, not name alone: the same filename can appear in two
+// subfolders. The id is a Drive file id, unique, so the order is total.
+// Codepoint comparison rather than localeCompare, which varies by locale and
+// would sort differently on a different machine. Pure copy, no mutation.
+export function orderBySizeForVisionBudget<T extends { size?: string; name?: string; id?: string }>(files: T[]): T[] {
+  const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+  return [...files].sort((a, b) =>
+    ((Number(a.size ?? 0) || 0) - (Number(b.size ?? 0) || 0))
+    || cmp(a.name ?? "", b.name ?? "")
+    || cmp(a.id ?? "", b.id ?? ""));
 }
 
 
