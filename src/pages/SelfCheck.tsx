@@ -25,7 +25,7 @@ import {
   toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv, buildSelfCheckHtml,
   selfCheckFilename, describeBlock, plainRunError, plainDetail, planFor, toProcedureRows, toRecordsRows,
   SELF_CHECK_DISCLAIMER, COULD_NOT_CHECK_NOTE, MOSTLY_UNCHECKED_NOTE, NO_BAND_LINE, unjudgedNoteFor,
-  VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, TABS_EXPLAINED, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
+  VIEW_LABEL, VIEW_TALLY, VIEW_NOTE, TABS_EXPLAINED, ONE_READING_NOTE, COMBINATION_LABEL, countCombinations, unjudgedBothSides,
   citedText, missingText, expectedEvidenceGroups, VERDICT_LEGEND, tallySlices, feedsFor, SUMMARY_LABEL,
   splitMismatchWarning,
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
@@ -1165,6 +1165,10 @@ export function SelfCheck() {
         ".sc-workspace-heading h3{font-size:14px;margin:0;color:#172033}",
         ".sc-workspace-position{font-size:12px;color:#65728a;margin-left:auto;white-space:nowrap}",
         ".sc-selected-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:#7c3aed;margin-bottom:5px}",
+        // Inside the subheader, above the tab's own sentence: amber so it
+        // reads as a qualification rather than more explanation, and it must
+        // not look like the privacy notice, which is a different thing again.
+        ".sc-one-reading{border-left:3px solid #b45309;background:#fffbeb;color:#92400e;padding:7px 10px;border-radius:0 7px 7px 0;font-size:12px;line-height:1.5;margin:0 0 9px}",
         ".sc-view-subheader{margin-top:10px;border:1px solid #dfe5ee;background:#f8fafc;border-radius:9px;padding:9px 11px;font-size:12.5px;color:#4b5870}",
         ".sc-view-subheader b{color:#172033}",
         ".sc-main{min-width:0}",
@@ -2216,6 +2220,15 @@ export function SelfCheck() {
                       that question is "how was it reached". */}
                   {!procedureOnlyResult && (
                     <div className="sc-view-subheader">
+                      {/* SAID ONCE, AND HERE. This block already carries "what
+                          this tab means" and already changes per tab, so the
+                          caveat sits next to the verdicts without the page
+                          becoming a wall of disclaimer. It is NOT the same
+                          claim as the "internal practice check" banner above:
+                          that one says the result is not official, which a
+                          reader can accept while still believing it is what
+                          their documents say. */}
+                      <div className="sc-one-reading">{ONE_READING_NOTE}</div>
                       <b>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
                       {/* What this tab does NOT settle. It was a yellow box of
                           its own under the counts. A title attribute was tried

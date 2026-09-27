@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
+import { ONE_READING_SHORT,
   PLAIN_VERDICT, toSelfCheckRows, countSelfCheck, mostlyUnchecked, buildSelfCheckCsv,
   buildSelfCheckHtml, selfCheckFilename, describeBlock, plainRunError, plainWhy, plainDetail, COULD_NOT_CHECK_NOTE,
   unjudgedNoteFor, MOSTLY_UNCHECKED_NOTE,
@@ -85,8 +85,25 @@ describe("downloads", () => {
   const someBand = { kind: "auditor", band: 3, name: "Meeting Expectation", totalPct: 50 } as const;
   it("writes the agreed CSV header and quotes a comma so columns cannot shift", () => {
     const csv = buildSelfCheckCsv("5.4 Student Learning", rows, someBand);
-    expect(csv.split("\r\n")[0]).toBe(SELF_CHECK_HEADERS.join(","));
+    // The header row is now the SECOND line, not the first. Deliberate: a
+    // caveat below the headers is a data row, and the first thing anybody does
+    // to a spreadsheet is sort it. This file is a working paper, not a machine
+    // table: it already ends with a band line, a legend and a disclaimer.
+    expect(csv.split("\r\n")[1]).toBe(SELF_CHECK_HEADERS.join(","));
     expect(csv).toContain('"Nothing found, and a comma."');
+  });
+
+  // What a verdict IS, above the data, where sorting cannot move it. Two runs
+  // on the same 39 documents moved two verdicts; a spreadsheet column reads as
+  // data and this is the copy that reaches a colleague without the page.
+  it("puts the one-reading caveat on the very first line, above the headers", () => {
+    const csv = buildSelfCheckCsv("5.4 Student Learning", rows, someBand);
+    const first = csv.split("\r\n")[0];
+    expect(first.startsWith("#")).toBe(true);
+    expect(first).toContain(ONE_READING_SHORT);
+    // Both claims, because they are different ones: not repeatable, and not
+    // official.
+    expect(first).toContain(SELF_CHECK_DISCLAIMER);
   });
   // A spreadsheet gets forwarded and printed on its own. Without these two it
   // reads like a bare verdict list somebody could pass off as an outcome.

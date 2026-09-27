@@ -623,11 +623,34 @@ export const VIEW_TALLY: Record<SelfCheckView, { complies: string; partly: strin
 // "Not met" whatever the records show, rule 3 caps a partly documented line at
 // "Partial" however complete the evidence, and only rule 4 lets the records
 // decide. Kept to one sentence each; the counter below the tabs does the rest.
+// WHAT A VERDICT IS, said once, next to the verdict.
+//
+// The page asserted verdicts as settled facts: a tick, a cross, a tally, a
+// spreadsheet column. Two runs on the same 39 documents, 1h45m apart with
+// nothing changed in Drive, moved 5.5.1.DS1.b from Partial to Not met and
+// 5.5.1.DS3 from Met to Partial. Nothing anywhere told a reader that could
+// happen, and this tool is used to prepare for a real EduTrust audit.
+//
+// The existing "internal practice check only" banner does NOT cover this: it
+// says the result is not official, which a reader can accept while still
+// believing it is what their documents say. Those are two different claims.
+//
+// Deliberately NOT quantified. There is no measured noise floor yet, and a
+// number invented to sound careful would be the same fault in a new coat. When
+// the repeat-run figure exists, it replaces the vague clause.
+export const ONE_READING_NOTE =
+  "One reading. These verdicts come from one pass over your documents. A second run on the same documents can reach a different answer on some lines, usually the borderline ones. Treat a verdict as this check's reading, not a fixed property of your evidence.";
+
+// The short form, for the two exports that travel without the page around
+// them. The CSV is the worst case: a spreadsheet column reads as data.
+export const ONE_READING_SHORT =
+  "One reading. A second run on the same documents can reach a different verdict on some lines.";
+
 export const TABS_EXPLAINED: Record<"overview" | "procedure" | "records", { hint: string; text: string }> = {
   // `hint` rides on the tab button, so all three meanings are visible at once
   // whichever tab is open; `text` is the subheader for the tab actually open.
   overview: {
-    hint: "The final result for each requirement",
+    hint: "The combined result for each requirement",
     text: "The two together, and the one that counts. If your procedure does not cover a requirement it does not comply whatever your records show; if it covers it only partly the line can go no higher than partly complies; and where the procedure is adequate, your records decide.",
   },
   procedure: {
@@ -932,7 +955,7 @@ export function buildSelfCheckCsv(
       ...gaps.map((g) => pad([g.ref, g.text])),
     ]),
   ];
-  return toCsv(SELF_CHECK_HEADERS, [
+  return `# ${ONE_READING_SHORT} ${SELF_CHECK_DISCLAIMER}\r\n` + toCsv(SELF_CHECK_HEADERS, [
     ...rows.map((r) => pad([areaLabel, r.ref, r.requirement, r.label, r.summary, [r.why, r.cappedNote].filter(Boolean).join("\n\n"), r.fix, citedText(r.working), missingText(r.working), (r.expected ?? []).join("; ")])),
     blank,
     ...trailer.map((t) => pad([t])),
@@ -1141,6 +1164,7 @@ export function buildSelfCheckHtml(opts: {
     <h1>Self-check: ${escapeHtml(areaLabel)}${view === "procedure-only" ? " (written procedure only)" : view === "overview" ? "" : ` — ${escapeHtml(VIEW_LABEL[view])}`}</h1>
     <p class="muted">${escapeHtml(areaDescription)}</p>
     <p class="muted">Checked on ${escapeHtml(ranAt)}${timing ? ` · took ${escapeHtml(timing)}` : ""} · ${escapeHtml(buildStamp())}</p>
+    <p class="one-reading">${escapeHtml(ONE_READING_NOTE)}</p>
     <p><b>${counts.complies} ${words.complies}${words.partly ? ` · ${counts.partly} ${words.partly}` : ""} · ${counts.doesNot} ${words.doesNot} · ${counts.couldNotCheck} could not check</b></p>
     <p>${escapeHtml(bandLine)}</p>
     ${unjudgedNote ? `<p class="muted">${escapeHtml(unjudgedNote)}</p>` : ""}

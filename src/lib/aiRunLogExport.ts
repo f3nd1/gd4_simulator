@@ -80,6 +80,9 @@ export type AiRunLog = {
   fullPromptsIncluded: boolean;
   /** Says in the file itself what the file does and does not contain. */
   privacyNote: string;
+  /** What a verdict in this log IS. The log is the artefact most likely to be
+   *  quoted back later, and it travels without the page's caveats. */
+  caveat: string;
   passes: AiRunLogPass[];
   /** THE SAME breakdown the page shows, in the file. It was on screen and
    *  absent from the export, so a reader could not check the figures or
@@ -88,6 +91,11 @@ export type AiRunLog = {
   timeBreakdown: { wallMs: number; wallMeasured: boolean; note?: string; rows: { key: string; label: string; ms: number; pct: number }[] };
   fullText?: FullCallText[];
 };
+
+// One pass is one reading. Verdicts in this file are not a fixed property of
+// the documents: two runs on the same 39 documents moved two of them.
+const RUN_LOG_CAVEAT =
+  "Verdicts in this log are one reading of the documents. A second run on the same documents can reach a different verdict on some lines. This is an internal practice check, never an official SSG or EduTrust result.";
 
 const NO_TEXT_NOTE =
   "This log contains NO document text: no prompts, no AI responses, no evidence. Only which calls ran, over which window, how long they took and what they produced. Nothing in it should identify a student.";
@@ -154,6 +162,7 @@ export function buildAiRunLog(args: {
     area: args.area,
     fullPromptsIncluded: !!full,
     privacyNote: full ? WITH_TEXT_NOTE : NO_TEXT_NOTE,
+    caveat: RUN_LOG_CAVEAT,
     passes,
     timeBreakdown: (() => {
       const st = buildRunStages({ ppd: args.ppd, evidence: args.evidence, outcome: args.outcome });

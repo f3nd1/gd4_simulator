@@ -30,6 +30,14 @@ export const POPUP_BLOCKED_MESSAGE =
 // The shared print stylesheet for generated audit documents, so the lineage
 // export and the official-requirements export look like one family.
 export const PRINTABLE_DOC_CSS = `
+/* The "one reading" caveat, in the header block. Boxed and kept with the
+   heading on a page break: the sheet travels to people who never saw the page
+   it came from, and a caveat that prints on its own at the foot of page one is
+   a caveat nobody reads. */
+.one-reading{border:1px solid #d6bc8a;background:#fffbeb;color:#92400e;
+  padding:7px 10px;border-radius:6px;font-size:11px;line-height:1.5;
+  margin:8px 0 10px;break-inside:avoid;break-after:avoid}
+
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; }
   body { font-family: -apple-system, Segoe UI, Arial, sans-serif; color: #1e293b; margin: 24px; font-size: 12px; }
   h1 { font-size: 16px; margin: 0 0 2px; }
