@@ -268,6 +268,27 @@ function FileRow({ file, isReading, onSkipFile, resolveText, showParent }: { fil
             ⚠ {partialReadLabel(file.partialRead)}
           </span>
         )}
+        {/* THE AUDIT TRAIL OF A DE-DUPLICATED READ. The same document sitting
+            in several Drive folders is now read once, so both halves of that
+            have to stay visible: the copy says which file it matched, and the
+            file that WAS read says where else the same text was found. One
+            read, all folders shown. */}
+        {file.duplicateOf && (
+          <span
+            title={`The same document text as ${file.duplicateOf}. It was read once and both copies carry the same result.`}
+            style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#eef2f7", color: "#475569", fontWeight: 700, flexShrink: 0 }}
+          >
+            same as above
+          </span>
+        )}
+        {file.alsoAt && file.alsoAt.length > 0 && (
+          <span
+            title={`The same document text was also found at:\n${file.alsoAt.join("\n")}\nIt was read once.`}
+            style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#eef2f7", color: "#475569", fontWeight: 700, flexShrink: 0 }}
+          >
+            also in {file.alsoAt.length} more
+          </span>
+        )}
         {file.suspectedScannedPdf && (
           <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#fef3c7", color: "#92400e", fontWeight: 600, flexShrink: 0 }} title="Suspected scanned PDF">Scan?</span>
         )}

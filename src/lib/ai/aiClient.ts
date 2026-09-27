@@ -32,6 +32,17 @@ export function addUsage(a: AIUsage | undefined, b: AIUsage | undefined): AIUsag
 
 export class AIClientError extends Error {}
 
+// The reply hit the output ceiling and stopped mid-JSON. Its own class because
+// the caller's answer is different from every other failure: split the batch
+// and try again, rather than marking the whole batch failed.
+export class AITruncatedError extends AIClientError {}
+
+// Deliberately above the largest reply measured on a real run (91,574
+// characters, roughly 24,000 tokens) rather than a round guess, so the cap
+// does not manufacture truncations that were not happening before. Dropped
+// automatically for any model that refuses it.
+const MAX_COMPLETION_TOKENS = 32_000;
+
 const DEFAULT_MODEL = "gpt-5-mini";
 
 // Fallback used by verdict-deciding calls when a settings object predates the
@@ -234,6 +245,7 @@ export async function chatComplete(
   // word "json" somewhere in the messages — OpenAI rejects the request
   // otherwise, which silently broke the prompt reviser), json_object for
   // everything else (unchanged legacy behaviour).
+  let noMaxTokens = false;
   const buildBody = (format: "schema" | "json" | "text"): Record<string, unknown> => {
     // THE GUARD. A lone surrogate anywhere in the prompt makes JSON.stringify
     // emit an escape that is valid JSON syntax but not decodable UTF-8, and
@@ -248,6 +260,18 @@ export async function chatComplete(
     }
     const temp = opts?.temperature ?? 0.2;
     if (supportsTemperature(model)) body.temperature = temp;
+    // AN EXPLICIT OUTPUT CEILING. Without one the limit is whatever the model
+    // defaults to, which is invisible from here, so a reply that ran long was
+    // truncated mid-JSON, failed to parse, and cost every verdict in the
+    // batch. Measured on a real 5.5 run: one judge reply of 91,574 characters,
+    // roughly 24,000 tokens, with no cap anywhere in the request.
+    //
+    // Set ABOVE the largest reply observed, and the 400 fallback below drops
+    // it if a model will not accept it, so a cap can never make a call fail
+    // outright. Paired with the finish_reason check: the cap makes truncation
+    // deterministic, the check makes it visible, and the caller's split-retry
+    // makes it cost a retry instead of a batch.
+    if (!noMaxTokens) body.max_completion_tokens = MAX_COMPLETION_TOKENS;
     return body;
   };
 
@@ -265,6 +289,13 @@ export async function chatComplete(
   // Older models reject json_schema with a 400 that names response_format —
   // fall back ONCE to plain json_object so the call still succeeds (the
   // downstream parse/verification path is unchanged and handles both).
+  // A model that will not take max_completion_tokens must not fail outright:
+  // drop it and send again. The truncation check below still works without it.
+  if (!got.res.ok && got.res.status === 400 && /max_completion_tokens|max_tokens/i.test(got.text)) {
+    noMaxTokens = true;
+    got = await post(buildBody(opts?.plainText ? "text" : opts?.schema ? "schema" : "json"));
+  }
+
   if (!got.res.ok && got.res.status === 400 && opts?.schema) {
     if (/response_format|json_schema|schema/i.test(got.text)) {
       got = await post(buildBody("json"));
@@ -280,6 +311,16 @@ export async function chatComplete(
   const data = JSON.parse(got.text || "{}");
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new AIClientError("OpenAI response did not contain a message.");
+  // NEVER CHECKED UNTIL NOW. finish_reason "length" means the reply stopped
+  // mid-sentence because it hit the output ceiling. The JSON is then a
+  // fragment, the parse fails, and the caller marked every ref in the batch
+  // as failed with no idea why. Raised as its own error so a caller can split
+  // the batch and try again.
+  if (data?.choices?.[0]?.finish_reason === "length") {
+    throw new AITruncatedError(
+      `The reply was cut off at the output limit after ${content.length.toLocaleString("en-SG")} characters, so it could not be read.`,
+    );
+  }
   if (opts?.onUsage && data?.usage) {
     opts.onUsage({
       model: typeof data.model === "string" ? data.model : model,

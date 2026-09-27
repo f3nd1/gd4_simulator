@@ -7,7 +7,7 @@
 
 import type { AgentDefinition, ItemEvidence, AISettings, ApsrWorkingScores, Band, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, SpecificChecklistLine, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck, EvidenceRedFlag, EvidenceRedFlagKind, AiCallRecord } from "../../types";
 import { sliceWholeChars } from "../text/wellFormed";
-import { chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage, type ChatSchema } from "./aiClient";
+import { AITruncatedError, chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage, type ChatSchema } from "./aiClient";
 import { sObj, sArr, sStr, sBool, sEnum } from "./schemaHelpers";
 import type { SimulatedItemVerdict, SimulatedClosureVerdict, EvidenceFillDraft, FolderAuditLineVerdict } from "./simulateAI";
 import { deriveApsrStatus, apsrReason } from "./simulateAI";
@@ -2935,7 +2935,14 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
   const judgeBatches: PPDRequirementInput[][] = [];
   for (let i = 0; i < judgeInputs.length; i += REQ_BATCH_SIZE) judgeBatches.push(judgeInputs.slice(i, i + REQ_BATCH_SIZE));
 
-  for (const [bi, batch] of judgeBatches.entries()) {
+  // A QUEUE, not a fixed list. A reply cut off at the output ceiling used to
+  // cost every verdict in its batch; now the batch is halved and re-queued, so
+  // a truncation costs a retry. Guarded: a batch of one that still truncates
+  // cannot be split again and is reported as the failure it is.
+  const judgeQueue = judgeBatches.map((b, i) => ({ batch: b, bi: i, split: 0 }));
+  const totalJudgeBatches = judgeBatches.length;
+  while (judgeQueue.length > 0) {
+    const { batch, bi, split } = judgeQueue.shift()!;
     if (stopRequested()) { stoppedEarly = true; break; }
     opts.onProgress?.(`PPD verdicts — batch ${bi + 1}/${judgeBatches.length} (judging verified extracts)`);
     const pointsBlock = batch.map((r, i) => {
@@ -3025,7 +3032,16 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     } catch (err) {
       if (stopRequested()) { stoppedEarly = true; break; }
       const msg = err instanceof Error ? err.message : String(err);
-      windowErrors.push(`PPD judge batch ${bi + 1}/${judgeBatches.length} failed — ${msg}`);
+      // Same split-and-retry as the records judge below: a reply cut off at
+      // the output ceiling costs a retry, not a batch of verdicts.
+      if (err instanceof AITruncatedError && batch.length > 1) {
+        const mid = Math.ceil(batch.length / 2);
+        judgeQueue.unshift({ batch: batch.slice(mid), bi, split: split + 1 }, { batch: batch.slice(0, mid), bi, split: split + 1 });
+        jLog("failed", "", `${msg} Retrying as two smaller batches.`);
+        opts.onProgress?.(`A reply was cut off; retrying PPD judge batch ${bi + 1} in two halves…`);
+        continue;
+      }
+      windowErrors.push(`PPD judge batch ${bi + 1}/${totalJudgeBatches} failed — ${msg}`);
       console.error("[PPDRequirementsReview]", "judge batch failed", msg);
       for (const r of batch) judgeFailedRefs.add(r.ref);
       opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg, stage: "judge" });
@@ -3581,7 +3597,14 @@ Respond with JSON only:
   const judgeBatches: EvidenceAssessmentInput[][] = [];
   for (let i = 0; i < judgeInputs.length; i += REQ_BATCH_SIZE) judgeBatches.push(judgeInputs.slice(i, i + REQ_BATCH_SIZE));
 
-  for (const [bi, batch] of judgeBatches.entries()) {
+  // A QUEUE, not a fixed list. A reply cut off at the output ceiling used to
+  // cost every verdict in its batch; now the batch is halved and re-queued, so
+  // a truncation costs a retry. Guarded: a batch of one that still truncates
+  // cannot be split again and is reported as the failure it is.
+  const judgeQueue = judgeBatches.map((b, i) => ({ batch: b, bi: i, split: 0 }));
+  const totalJudgeBatches = judgeBatches.length;
+  while (judgeQueue.length > 0) {
+    const { batch, bi, split } = judgeQueue.shift()!;
     if (stopRequested()) { stoppedEarly = true; break; }
     opts.onProgress?.(`Judging verified evidence — batch ${bi + 1}/${judgeBatches.length}…`, Math.round((unitsDone / totalUnits) * 100));
     const pointsBlock = batch.map((r, i) => {
@@ -3607,7 +3630,7 @@ Respond with JSON only:
         { schema: EVIDENCE_ASSESSMENT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { jTokens = u; usage = addUsage(usage, u); }, timeoutMs: judgeTimeoutMs(user.length), signal: opts.signal }
       ));
       if (raced === CALL_SKIPPED) {
-        const label = judgeBatches.length > 1 ? `judge batch ${bi + 1}/${judgeBatches.length}` : "judge call";
+        const label = totalJudgeBatches > 1 ? `judge batch ${bi + 1}/${totalJudgeBatches}` : "judge call";
         windowErrors.push(`Evidence ${label} skipped by user — its requirement lines are reported as not assessed.`);
         for (const r of batch) failedRefs.add(r.ref);
         opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "Skipped by user.", stage: "judge" });
@@ -3623,7 +3646,7 @@ Respond with JSON only:
       // silently absorbed: every ref in the batch fell through to the
       // generic per-ref !res branch below with NO diagnostic captured).
       if (results.length === 0) {
-        const label = judgeBatches.length > 1 ? `judge batch ${bi + 1}/${judgeBatches.length}` : "judge call";
+        const label = totalJudgeBatches > 1 ? `judge batch ${bi + 1}/${totalJudgeBatches}` : "judge call";
         windowErrors.push(`Evidence ${label} returned no parseable verdicts — the AI reply was empty or not valid JSON.`);
         console.error("[EvidenceAssessment]", label, "no parseable results");
         for (const r of batch) failedRefs.add(r.ref);
@@ -3686,7 +3709,19 @@ Respond with JSON only:
     } catch (err) {
       if (stopRequested()) { stoppedEarly = true; break; }
       const msg = err instanceof Error ? err.message : String(err);
-      const label = judgeBatches.length > 1 ? `judge batch ${bi + 1}/${judgeBatches.length}` : "judge call";
+      const label = totalJudgeBatches > 1 ? `judge batch ${bi + 1}/${totalJudgeBatches}` : "judge call";
+      // Cut off at the output ceiling: halve the batch and try again rather
+      // than losing every verdict in it. A single line that still truncates
+      // cannot be split, so it falls through and is reported as the failure
+      // it is. This is the whole point of the cap: a truncation now costs a
+      // retry, where before it cost a batch.
+      if (err instanceof AITruncatedError && batch.length > 1) {
+        const mid = Math.ceil(batch.length / 2);
+        judgeQueue.unshift({ batch: batch.slice(mid), bi, split: split + 1 }, { batch: batch.slice(0, mid), bi, split: split + 1 });
+        jLog("failed", "", `${msg} Retrying as two smaller batches.`);
+        opts.onProgress?.(`A reply was cut off; retrying ${label} in two halves…`);
+        continue;
+      }
       windowErrors.push(`Evidence ${label} failed — ${msg}`);
       for (const inp of batch) if (!judgedByRef.has(inp.ref)) failedRefs.add(inp.ref);
       opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: msg, stage: "judge" });

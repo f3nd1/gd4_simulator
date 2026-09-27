@@ -5,6 +5,7 @@ import { getCachedFileText, putCachedFileText, useFileTextCacheStore } from "./u
 import { windowCoverageNote } from "../lib/coverageNote";
 import { buildAiRunLog, appendFullCall, type FullCallText } from "../lib/aiRunLogExport";
 import { RUN_LOG_CAP_PER_PASS } from "../lib/runTranscript";
+import { contentKey } from "../lib/contentKey";
 import { lastAdminVerdict } from "../lib/auth/adminGrants";
 import type { AiCallRecord } from "../types";
 import { downloadJson } from "../lib/auditCsvExport";
@@ -1897,6 +1898,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             driveFileId: file.id, driveModifiedTime: file.modifiedTime,
           }));
           patchPpd({ filesTotal: policyFiles.length, filesFound: [...fileRecords], stage: "reading" });
+          // POLICY BUCKET ONLY. The evidence pass keeps its own map, and the
+          // two must never be shared: see contentKey.ts.
+          const seenPolicyContent = new Map<string, { fi: number; chunkIds: string[] }>();
           // Vision context so this loop reads scanned/image-only PDFs, standalone
           // images and Office-embedded pictures — the same three-tier capability
           // the staged/full-audit paths already have (readDriveFileWithVision).
@@ -2004,6 +2008,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               logPpd(readErrored ? `FAILED to read ${fileName} (Drive error: ${readErrorMsg})` : `Skipped ${fileName}${skipNote === "Skipped by user" ? " (by user)" : skipNote?.startsWith("Read hung") ? " (hung read auto-skipped)" : " (empty)"}`, readErrored ? "bad" : "warn");
               continue;
             }
+            // One copy of the same text per bucket. Its own map, never shared
+            // with the evidence pass: see contentKey.ts for why collapsing
+            // across buckets would switch off the both-folders warning.
+            const ckey = contentKey(body);
+            const already = seenPolicyContent.get(ckey);
+            if (already) {
+              fileRecords[already.fi] = {
+                ...fileRecords[already.fi],
+                alsoAt: [...(fileRecords[already.fi].alsoAt ?? []), file.path],
+              };
+              fileRecords[fi] = {
+                ...fileRecords[fi], readStatus: "read", auditStatus: "audited", charCount: body.length,
+                readMethod: readMethodUsed, processingMode: "reused",
+                ...(ppdPartialRead ? { partialRead: ppdPartialRead } : {}),
+                chunkIds: already.chunkIds, duplicateOf: fileRecords[already.fi].path,
+              };
+              patchPpd({ filesFound: [...fileRecords] });
+              logPpd(`${fileName} is the same document as ${fileRecords[already.fi].name} — read once, not again`, "info");
+              continue;
+            }
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
             const fileChunkIds: string[] = [];
             for (let pi = 0; pi < totalParts; pi++) {
@@ -2016,6 +2040,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               chunkFileNames[chunkId] = fileName;
               fileChunkIds.push(chunkId);
             }
+            seenPolicyContent.set(ckey, { fi, chunkIds: fileChunkIds });
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", auditStatus: "audited", charCount: body.length, readMethod: readMethodUsed, processingMode, ...(ppdPartialRead ? { partialRead: ppdPartialRead } : {}), chunkIds: fileChunkIds };
             patchPpd({ filesFound: [...fileRecords] });
             logPpd(ppdPartialRead
@@ -2454,6 +2479,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             chunkIds: [],
           }));
           patchEv({ filesTotal: evidenceFiles.length, filesFound: [...fileRecords] });
+          // Content key -> the first file that produced it. THIS PASS ONLY, so
+          // the policy bucket is untouched. See contentKey.ts for why that is
+          // load-bearing.
+          const seenContent = new Map<string, { fi: number; chunkIds: string[] }>();
           let filesReadCount = 0;
           // Drive read ERRORS, kept separate from genuinely empty files, so the
           // run summary can flag incompleteness — see runPPDReview.
@@ -2582,6 +2611,38 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             logEv(`Read ${readFileName}${cached ? " (cached)" : ""}`, "good");
             const fileName = readFileName;
             const fileUrl = `https://drive.google.com/file/d/${file.id}/view`;
+            // ONE COPY OF THE SAME TEXT PER BUCKET. The same PDF sitting in
+            // three Drive folders was chunked three times and sent to the model
+            // three times: measured on a real 5.5 run as 55,184 characters of
+            // provably duplicate reading. Matched on CONTENT, never on name,
+            // because that run also held two different files sharing a name.
+            //
+            // Bucket-scoped by construction: this map is built inside the
+            // evidence pass and the policy pass keeps its own. Collapsing
+            // across buckets would switch off the both-folders warning, which
+            // is built from the two ledgers finding the same document in each.
+            const ckey = contentKey(body);
+            const already = seenContent.get(ckey);
+            if (already) {
+              // Every path is still recorded, so nothing disappears from the
+              // audit trail: one read, all folders shown.
+              fileRecords[already.fi] = {
+                ...fileRecords[already.fi],
+                alsoAt: [...(fileRecords[already.fi].alsoAt ?? []), file.path],
+              };
+              fileRecords[fi] = {
+                ...fileRecords[fi], readStatus: "read", charCount: body.length,
+                processingMode: "reused", ...(readMethod ? { readMethod } : {}), ...(pdfQuality ?? {}),
+                ...(partialRead ? { partialRead } : {}),
+                // The SAME chunk ids, so a verdict citing this text cites this
+                // file too and the never-quoted list cannot accuse it wrongly.
+                chunkIds: already.chunkIds,
+                duplicateOf: fileRecords[already.fi].path,
+              };
+              logEv(`${readFileName} is the same document as ${fileRecords[already.fi].name} — read once, not again`, "info");
+              patchEv({ filesFound: [...fileRecords] });
+              return false;
+            }
             const totalParts = Math.ceil(body.length / MAX_PART_CHARS) || 1;
             const chunkIds: string[] = [];
             for (let pi = 0; pi < totalParts; pi++) {
@@ -2595,6 +2656,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               chunkFileRefs[chunkId] = { name: fileName, url: fileUrl };
               chunkIds.push(chunkId);
             }
+            seenContent.set(ckey, { fi, chunkIds });
             fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode, ...(readMethod ? { readMethod } : {}), ...(pdfQuality ?? {}), ...(partialRead ? { partialRead } : {}), chunkIds };
             if (partialRead) logEv(`Read ${readFileName} IN PART — ${partialRead.read.toLocaleString()} of ${partialRead.total.toLocaleString()} ${partialRead.kind}`, "warn");
             patchEv({ filesFound: [...fileRecords] });

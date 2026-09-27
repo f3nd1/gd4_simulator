@@ -85,6 +85,11 @@ function readDetail(rec: AuditFileRecord): string {
   else if (rec.suspectedScannedPdf) parts.push("looks like a scanned PDF");
   if (rec.extractedTextQuality && rec.extractedTextQuality !== "high") parts.push(`text quality ${rec.extractedTextQuality}`);
   if (rec.processingMode === "reused") parts.push("reused from an earlier read");
+  // The audit trail of a de-duplicated read. The same document in several Drive
+  // folders is read ONCE now, so both halves of that have to stay visible or a
+  // folder silently disappears from the record.
+  if (rec.duplicateOf) parts.push(`the same document as ${rec.duplicateOf.split("/").pop() || rec.duplicateOf}, read once`);
+  if (rec.alsoAt && rec.alsoAt.length > 0) parts.push(`also found in ${rec.alsoAt.length} other folder${rec.alsoAt.length === 1 ? "" : "s"}, read once`);
   return parts.filter(Boolean).join(" · ");
 }
 

@@ -760,6 +760,12 @@ export type AuditFileRecord = {
   // applies a cap, and rendered by the File Ledger, the ledger CSV, the run
   // warnings and any requirement line citing the file.
   partialRead?: { kind: "rows" | "pages"; read: number; total: number };
+  // The same document text was found at these other paths too, and was read
+  // ONCE. Both fields exist so nothing disappears from the audit trail when a
+  // file sits in several Drive folders: the ledger still lists every folder it
+  // was found in. Bucket-scoped, always — see contentKey.ts.
+  alsoAt?: string[];
+  duplicateOf?: string;
 };
 
 // A discrete chunk of evidence extracted from one file, assigned a stable ID
