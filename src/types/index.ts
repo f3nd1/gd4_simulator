@@ -1190,6 +1190,12 @@ export type EvidenceAssessmentRow = {
   // EvidenceRedFlag). Optional/additive: runs from before this field render
   // with no flags shown, never a crash.
   redFlags?: EvidenceRedFlag[];
+  // Of the verified passages pooled for this line, how many were actual
+  // implementation records and how many were policy text. See
+  // EvidenceAssessmentLineResult.passageKinds for why this is stored: without
+  // it the Records tab counted citations and called policy prose a record.
+  // Absent on runs from before it existed.
+  passageKinds?: { record: number; policy: number };
 };
 
 export type EvidenceAssessmentResult = {

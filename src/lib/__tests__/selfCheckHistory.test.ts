@@ -378,12 +378,18 @@ describe("the bar says what the reader is looking at", () => {
   // Each tab counts in its own vocabulary, and the heading has to follow it.
   it("speaks each tab's own language", () => {
     expect(tallyHeadline(tallySlices(c(0, 0, 8, 0), "procedure"))).toBe("All 8 requirement lines are not documented");
-    expect(tallyHeadline(tallySlices(c(8, 0, 0, 0), "records"))).toBe("All 8 requirement lines have records");
-    expect(tallyHeadline(tallySlices(c(0, 0, 8, 0), "records"))).toBe("All 8 requirement lines have no records");
+    expect(tallyHeadline(tallySlices(c(8, 0, 0, 0), "records"))).toBe("All 8 requirement lines are shown by your records");
+    expect(tallyHeadline(tallySlices(c(0, 0, 8, 0), "records"))).toBe("All 8 requirement lines are not shown by your records");
   });
 
   it("stays grammatical on a single line, and says nothing when there is nothing", () => {
     expect(tallyHeadline(tallySlices(c(0, 1, 0, 0), "overview"))).toBe("The only requirement line partly complies");
+    // The records labels are clauses, not verbs, so the singular is not the
+    // label: "The only requirement line records do not show it" was the
+    // alternative. "could not check" had the same defect on every tab.
+    expect(tallyHeadline(tallySlices(c(0, 0, 1, 0), "records"))).toBe("The only requirement line is not shown by your records");
+    expect(tallyHeadline(tallySlices(c(1, 0, 0, 0), "records"))).toBe("The only requirement line is shown by your records");
+    expect(tallyHeadline(tallySlices(c(0, 0, 0, 1), "overview"))).toBe("The only requirement line could not be checked");
     expect(tallyHeadline(tallySlices(c(0, 0, 0, 0), "overview"))).toBe("");
   });
 

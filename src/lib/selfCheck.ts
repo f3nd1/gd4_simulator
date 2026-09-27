@@ -350,8 +350,8 @@ export const VERDICT_LEGEND: Record<SelfCheckView, VerdictLegendLine[]> = {
     { icon: "?", label: "Could not check", meaning: "The procedure pass reached no verdict for this line. It is not a fail." },
   ],
   records: [
-    { icon: "✓", label: "Records found", meaning: "At least one record in your folder speaks to this requirement. It does NOT mean the requirement is met: the procedure must cover it too, and the record must actually satisfy it. The Overall tab is the combined answer." },
-    { icon: "✗", label: "No records found", meaning: "Every file that could be read was searched and none of them spoke to this requirement." },
+    { icon: "✓", label: "Records show it", meaning: "A record in your folder shows this actually happening — not merely a policy saying it will. It does NOT mean the requirement is met: the procedure must cover it too. The Overall tab is the combined answer." },
+    { icon: "✗", label: "Records do not show it", meaning: "Nothing in your records folder shows this happening. Either nothing about it was found at all, or what was found was policy wording rather than a record of it being done." },
     { icon: "?", label: "Could not check", meaning: "Your records were not checked for this line, usually because the check did not answer for it." },
   ],
 };
@@ -486,22 +486,73 @@ export function toProcedureRows(rows: PPDReviewRow[], ctx: SelfCheckContext = {}
 // the four real combinations visible: documented and evidenced, documented but
 // not evidenced, evidenced but not documented, neither.
 export const RECORDS_PLAIN_VERDICT: Record<"found" | "none" | "unknown", PlainVerdict> = {
-  found: { label: "Records found", tone: "good", isGap: false, icon: "✓" },
-  none: { label: "No records found", tone: "critical", isGap: true, icon: "✗" },
+  // "Records show it", not "Records found". The old wording was true of the
+  // wrong thing: a line could have passages found and none of them a record.
+  found: { label: "Records show it", tone: "good", isGap: false, icon: "✓" },
+  none: { label: "Records do not show it", tone: "critical", isGap: true, icon: "✗" },
   unknown: { label: "Could not check", tone: "neutral", isGap: false, icon: "?" },
 };
+
+// What the RECORDS side of the run actually decided for one line.
+//
+// This used to be `evidenceChunkIds.length > 0` — "did the pass cite
+// anything". It cannot tell an implementation record from a paragraph of
+// policy prose, so a 6.1 run whose every passage was policy text showed
+// "Records found" with a green tick directly above its own explanation
+// reading "no actual audit plans, schedules, checklists, or audit records
+// were provided". The Overall tab said Not met at the same time, which is
+// what the judge actually decided.
+//
+// It now reports the judge's own decision, in the judge's own order:
+//   1. A failed or unjudged line is unknown, never a negative.
+//   2. With promise checks, the answer IS the promise checks: a promise is
+//      "evidenced" only when a RECORD passage showed it carried out
+//      (agentRuntime's judge prompt, rule 4a).
+//   3. With no promises, the stored record/policy split answers it directly.
+//   4. Older rows stored neither, so the answer is inferred ONLY where the
+//      inference is sound, and admitted as unknown where it is not:
+//        - "Met" means a record passage evidenced it. Rule 4b can reach Met no
+//          other way, and the hard-gates only ever downgrade a Met, so this
+//          direction is safe.
+//        - Nothing cited at all means nothing was found, record or otherwise.
+//        - Anything else (Partial or Not met WITH citations) is genuinely
+//          ambiguous: it is either "only policy passages were found" or "a
+//          record was found and the line was capped for some other reason".
+//          Guessing here is what produced the wrong label in the first place,
+//          so it says "Could not check" and the re-run supplies the real
+//          answer.
+export function recordsOutcome(r: EvidenceAssessmentRow): "found" | "none" | "unknown" {
+  if (r.assessmentFailed || r.verdict === "Not assessed") return "unknown";
+  const checks = r.promiseChecks ?? [];
+  if (checks.length > 0) return checks.some((c) => c.verdict === "evidenced") ? "found" : "none";
+  if (r.passageKinds) return r.passageKinds.record > 0 ? "found" : "none";
+  if (r.verdict === "Met") return "found";
+  if ((r.evidenceChunkIds?.length ?? 0) === 0) return "none";
+  return "unknown";
+}
+
+// Why the records side landed where it did, in the person's own terms. Says
+// what was actually found rather than only what was missing: "3 passages, all
+// policy text" is a different instruction to the reader than "nothing found".
+export function recordsWhy(r: EvidenceAssessmentRow, unreadableFiles: number): string {
+  const engine = (r.evidenceSummary || "").trim();
+  const checks = r.promiseChecks ?? [];
+  const unmet = checks.filter((c) => c.verdict !== "evidenced").length;
+  const kinds = r.passageKinds;
+  const policyOnly = !!kinds && kinds.record === 0 && kinds.policy > 0;
+  const lead = policyOnly
+    ? `${kinds.policy} passage${kinds.policy === 1 ? "" : "s"} about this were found in your records folder, but ${kinds.policy === 1 ? "it was" : "all of them were"} policy wording rather than a record of it happening.`
+    : checks.length > 0 && unmet > 0
+      ? `${unmet} of ${checks.length} thing${checks.length === 1 ? "" : "s"} your procedure promises ${unmet === 1 ? "was" : "were"} not shown happening by any record in your folder.`
+      : "";
+  if (lead) return engine ? `${lead} ${engine}` : lead;
+  return engine || qualifyForUnreadable("Every document in your records folder was read, and none of them mentioned this requirement.", unreadableFiles);
+}
 
 export function toRecordsRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckContext = {}): SelfCheckRow[] {
   const ppdByRef = new Map((ctx.ppdRows ?? []).map((p) => [p.ref, p]));
   return rows.map((r) => {
-    const cited = (r.evidenceChunkIds?.length ?? 0) > 0;
-    // An unjudged PAIR is deliberately NOT unknown here. What made the combined
-    // verdict undecidable was the procedure side; the records side really did
-    // run and really did find nothing, and saying "could not check" beside
-    // "every document was read and none mentioned it" contradicts itself.
-    const kind = r.assessmentFailed || r.verdict === "Not assessed"
-      ? "unknown"
-      : cited ? "found" : "none";
+    const kind = recordsOutcome(r);
     const plain = RECORDS_PLAIN_VERDICT[kind];
     return {
       partialNote: linePartialReadNote(partialFilesForLine(r.evidenceChunkIds, ctx.evidenceLedger)),
@@ -516,9 +567,9 @@ export function toRecordsRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckConte
       ...splitWhy(
         r.assessmentFailed
           ? "The checking service did not answer for this one, so your records were not checked. Run the check again."
-          : cited
+          : kind === "found"
             ? (r.evidenceSummary || "").trim() || "A record covering this was found in your folder."
-            : qualifyForUnreadable("Every document in your records folder was read, and none of them mentioned this requirement.", ctx.unreadableFiles ?? 0),
+            : recordsWhy(r, ctx.unreadableFiles ?? 0),
         buildWorking(r, ppdByRef.get(r.gdRef), ctx.evidenceChunkFileNames),
         "a document in your records",
       ),
@@ -563,7 +614,7 @@ export const VIEW_TALLY: Record<SelfCheckView, { complies: string; partly: strin
   // the count read as two different vocabularies.
   procedure: { complies: "documented", partly: "partly documented", doesNot: "not documented" },
   "procedure-only": { complies: "documented", partly: "partly documented", doesNot: "not documented" },
-  records: { complies: "records found", partly: null, doesNot: "no records found" },
+  records: { complies: "records show it", partly: null, doesNot: "records do not show it" },
 };
 
 // What the three tabs are, where a reader meets them. The Overall sentence is
@@ -1198,6 +1249,9 @@ export function classifyRunWarning(w: string): RunWarningKind {
   if (/were read only in part|read only in part/i.test(w)) return "readLess";
   if (/sliding window/i.test(w)) return "readLess";
   if (/wrong subfolder/i.test(w)) return "misfiled";
+  // folderMixupWarning's two shapes: the same document read by both passes,
+  // and a procedure sitting in the records folder.
+  if (/read as BOTH your written procedure|read like a written procedure/i.test(w)) return "misfiled";
   return "incomplete";
 }
 

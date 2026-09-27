@@ -114,7 +114,7 @@ describe("a state is never signalled by colour alone", () => {
   it("renames the procedure states so they read as a verdict", () => {
     expect(PPD_PLAIN_VERDICT.Adequate.label).toBe("Documented");
     expect(PPD_PLAIN_VERDICT["Not documented"].label).toBe("Not documented");
-    expect(RECORDS_PLAIN_VERDICT.none.label).toBe("No records found");
+    expect(RECORDS_PLAIN_VERDICT.none.label).toBe("Records do not show it");
   });
 });
 

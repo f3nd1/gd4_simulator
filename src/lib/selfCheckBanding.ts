@@ -476,8 +476,12 @@ export function tallyHeadline(slices: TallySlice[]): string {
   const order: TallySlice["tone"][] = ["critical", "medium", "neutral", "good"];
   const lead = order.map((t) => shown.find((s) => s.tone === t)).find(Boolean)!;
   // A single line keeps the tally's own third-person wording, which is already
-  // singular: "All 1 requirement line partly comply" was the alternative.
-  if (total === 1) return `The only requirement line ${lead.label}`;
+  // singular for the verdict tabs: "All 1 requirement line partly comply" was
+  // the alternative. The records tab's labels are clauses rather than verbs
+  // ("records do not show it"), so they need their own singular, and so does
+  // "could not check" — which read "The only requirement line could not check"
+  // on every tab before this.
+  if (total === 1) return `The only requirement line ${singularFor(lead.label)}`;
   const lines = `${total} requirement lines`;
   if (shown.length === 1) return `All ${lines} ${verbFor(lead.label)}`;
   return `${lead.n} of ${lines} ${verbFor(lead.label)}`;
@@ -494,8 +498,17 @@ function verbFor(label: string): string {
     .replace(/^documented$/, "are documented")
     .replace(/^partly documented$/, "are partly documented")
     .replace(/^not documented$/, "are not documented")
-    .replace(/^records found$/, "have records")
-    .replace(/^no records found$/, "have no records")
+    .replace(/^records show it$/, "are shown by your records")
+    .replace(/^records do not show it$/, "are not shown by your records")
+    .replace(/^could not check$/, "could not be checked");
+}
+
+// The same labels as verbFor, in the singular. Anything not listed is already
+// third-person singular ("complies", "partly documented") and passes through.
+function singularFor(label: string): string {
+  return label
+    .replace(/^records show it$/, "is shown by your records")
+    .replace(/^records do not show it$/, "is not shown by your records")
     .replace(/^could not check$/, "could not be checked");
 }
 

@@ -106,7 +106,7 @@ export function classifyFileBucket(path: string): "policy" | "evidence" {
 // people to ignore the warning, which costs more than the miss. It is advisory
 // in every case: nothing here re-buckets a file.
 const RECORD_WORDS = /\b(minutes|register|registers|attendance|receipt|receipts|invoice|invoices|logbook|roster|timetable|appraisal|appraisals|certificate|certificates|signed|completed)\b/i;
-const POLICY_WORDS = /\b(policy|policies|procedure|procedures|sop|manual|framework|guideline|guidelines|charter)\b/i;
+const POLICY_WORDS = /\b(policy|policies|procedure|procedures|sop|manual|framework|guideline|guidelines|charter|ppd)\b/i;
 
 export type MisfiledFile = { name: string; path: string; bucket: "policy" | "evidence"; looksLike: "policy" | "evidence" };
 
@@ -130,6 +130,57 @@ export function misfiledWarning(misfiled: MisfiledFile[]): string | undefined {
   if (misfiled.length === 0) return undefined;
   const shown = misfiled.slice(0, 5).map((m) => `"${m.name}" sits under ${m.bucket === "policy" ? "a policy" : "an evidence"}-named folder but reads like ${m.looksLike === "policy" ? "a policy" : "a record"}`);
   return `${misfiled.length} file(s) may be in the wrong subfolder: ${shown.join("; ")}${misfiled.length > 5 ? ", …" : ""}. A record filed under "1. Policy & Procedure" is read by the policy pass only and never counts as evidence. Move it, or ignore this if the naming is deliberate — nothing has been re-filed automatically.`;
+}
+
+// Two ways a folder can be wrong that the bucket rule cannot see.
+//
+// findMisfiledFiles above only applies where the bucket is INFERRED from a
+// subfolder name. With a dedicated evidence link every file in that folder is
+// evidence by definition, so a policy document sitting in it is never
+// questioned — which is exactly how a run can read a procedure as its own
+// record and report that no records were found, truthfully but confusingly.
+//
+// Same conservative rule as above: an explicit keyword list, whole words, and
+// a name matching BOTH lists is left alone. Advisory; nothing is re-filed.
+export type FolderMixup =
+  | { kind: "same-file-both"; name: string }
+  | { kind: "procedure-in-evidence"; name: string };
+
+export function findFolderMixups(
+  policyLedger: { name: string; driveFileId?: string; path: string }[] | undefined,
+  evidenceLedger: { name: string; driveFileId?: string; path: string }[] | undefined,
+): FolderMixup[] {
+  const out: FolderMixup[] = [];
+  const keyOf = (f: { driveFileId?: string; path: string }) => f.driveFileId || f.path;
+  const inPolicy = new Set((policyLedger ?? []).map(keyOf).filter(Boolean));
+  const seen = new Set<string>();
+  for (const f of evidenceLedger ?? []) {
+    const key = keyOf(f);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    // The same DOCUMENT read by both passes. Not the same-link case: two
+    // different folders can hold the same file, or one can be a shortcut.
+    if (inPolicy.has(key)) { out.push({ kind: "same-file-both", name: f.name }); continue; }
+    const looksPolicy = POLICY_WORDS.test(f.name);
+    const looksRecord = RECORD_WORDS.test(f.name);
+    if (looksPolicy && !looksRecord) out.push({ kind: "procedure-in-evidence", name: f.name });
+  }
+  return out;
+}
+
+export function folderMixupWarning(mixups: FolderMixup[]): string | undefined {
+  if (mixups.length === 0) return undefined;
+  const both = mixups.filter((m) => m.kind === "same-file-both").map((m) => m.name);
+  const proc = mixups.filter((m) => m.kind === "procedure-in-evidence").map((m) => m.name);
+  const parts: string[] = [];
+  if (both.length) {
+    parts.push(`${both.length} file(s) were read as BOTH your written procedure and your records: ${both.slice(0, 4).join("; ")}${both.length > 4 ? ", …" : ""}. A requirement can then look proved because your procedure says it happens rather than because a record shows it happening.`);
+  }
+  if (proc.length) {
+    parts.push(`${proc.length} file(s) in your records folder read like a written procedure rather than a record: ${proc.slice(0, 4).join("; ")}${proc.length > 4 ? ", …" : ""}. If your records folder holds only policy documents, the check will correctly report that no records show your requirements happening.`);
+  }
+  parts.push("Nothing has been moved. Put your policy documents in one folder and your records in another, then run the check again.");
+  return parts.join(" ");
 }
 
 export type ProbeFile = { name: string; path: string; bucket: "policy" | "evidence"; readable: boolean; readError?: string; driveFileId?: string; readVia?: "vision" };

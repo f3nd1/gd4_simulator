@@ -485,13 +485,13 @@ describe("a gap with nothing found still gets an honest first step", () => {
 describe("the records-only view reports what the records pass found, and nothing more", () => {
   it("says records were found when the row cited one", () => {
     const [r] = toRecordsRows([row({ verdict: "Met", evidenceChunkIds: ["C001"], evidenceSummary: "The log shows this." })]);
-    expect(r.label).toBe("Records found");
+    expect(r.label).toBe("Records show it");
     expect(r.why).toBe("The log shows this.");
   });
 
   it("says nothing was found when the row cited none", () => {
     const [r] = toRecordsRows([row({ verdict: "Not met", evidenceChunkIds: [] })]);
-    expect(r.label).toBe("No records found");
+    expect(r.label).toBe("Records do not show it");
     expect(r.why).toMatch(/none of them mentioned this requirement/);
   });
 
@@ -505,7 +505,7 @@ describe("the records-only view reports what the records pass found, and nothing
   // records half read everything and found nothing.
   it("still reports the records half of an unjudged pair", () => {
     const r = row({ verdict: "Partial", ppdVerdict: "Not assessed", evidenceChunkIds: [] });
-    expect(toRecordsRows([r])[0].label).toBe("No records found");
+    expect(toRecordsRows([r])[0].label).toBe("Records do not show it");
     expect(toSelfCheckRows([r])[0].label).toBe("Could not check");
   });
 
@@ -513,7 +513,7 @@ describe("the records-only view reports what the records pass found, and nothing
   // into a view that claims to describe the records alone.
   it("does not inherit the combined verdict's label", () => {
     const [r] = toRecordsRows([row({ verdict: "Partial", ppdVerdict: "Adequate", evidenceChunkIds: [] })]);
-    expect(r.label).toBe("No records found");
+    expect(r.label).toBe("Records do not show it");
     expect(r.label).not.toBe("Partly complies");
   });
 });
@@ -570,7 +570,7 @@ describe("the two passes are separable, and each is counted in its own words", (
   it("exports each view in that view's own words, with no band on half an answer", () => {
     const rows = toRecordsRows([row({ verdict: "Not met", evidenceChunkIds: [] })]);
     const csv = buildSelfCheckCsv("6.1 Internal Assessment", rows, { kind: "none" }, "records");
-    expect(csv).toContain("No records found");
+    expect(csv).toContain("Records do not show it");
     expect(csv).toContain(VIEW_NOTE.records);
     expect(csv).not.toContain("No band yet for this area.");
     const html = buildSelfCheckHtml({
@@ -578,7 +578,7 @@ describe("the two passes are separable, and each is counted in its own words", (
       band: { kind: "none" }, rows, ranAt: "x", view: "records",
     });
     expect(html).toContain(VIEW_LABEL.records);
-    expect(html).toContain("no records found");
+    expect(html).toContain("records do not show it");
     // The records view has no middle state, so the tally must not offer one.
     expect(html).not.toContain("partly complies");
   });

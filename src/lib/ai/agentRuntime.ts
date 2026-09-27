@@ -3159,6 +3159,17 @@ export type EvidenceAssessmentLineResult = {
   // Concerns raised beside the verdict, never inside it — every one carries a
   // quote verified against the real evidence text (see EvidenceRedFlag).
   redFlags?: EvidenceRedFlag[];
+  // How many of the VERIFIED passages pooled for this line were actual
+  // implementation records, and how many were policy text.
+  //
+  // The extract pass labels every candidate "record" or "policy" and the judge
+  // is told that only a record counts as implementation evidence, but the
+  // label was thrown away when the row was built. Self-check's Records tab
+  // then had nothing to go on and reported "Records found" whenever ANY
+  // passage was cited — so a line whose every passage was policy prose showed
+  // a green tick directly above its own explanation saying no records were
+  // provided. Stored so no display has to infer it again.
+  passageKinds?: { record: number; policy: number };
   // Pass 1 visibility: candidate passages the extraction pass RETURNED for
   // this line vs how many survived verbatim verification. "N raw → 0
   // verified" (extraction defect) and "0 raw" (genuinely nothing found)
@@ -3562,7 +3573,9 @@ Respond with JSON only:
   const rows: EvidenceAssessmentLineResult[] = inputs.map((inp) => {
     const best = judgedByRef.get(inp.ref);
     // Pass 1 visibility on every row — raw candidates returned vs verified.
-    const extractionStats = { raw: rawCandidateCount.get(inp.ref) ?? 0, verified: candByRef.get(inp.ref)?.length ?? 0 };
+    const pooled = candByRef.get(inp.ref) ?? [];
+    const extractionStats = { raw: rawCandidateCount.get(inp.ref) ?? 0, verified: pooled.length };
+    const passageKinds = { record: pooled.filter((c) => c.kind === "record").length, policy: pooled.filter((c) => c.kind === "policy").length };
     if (best) {
       const verifiedComment = flagUnverifiedQuotes(best.comment || "", evidenceDocText);
       // Code-level APSR Approach hard-gate: a line whose PPD verdict is not
@@ -3579,6 +3592,7 @@ Respond with JSON only:
           evidenceQuote: best.evidenceQuote,
           suggestedAction: best.suggestedAction || undefined,
           redFlags: best.redFlags,
+          passageKinds,
           extractionStats,
         };
       }
@@ -3594,6 +3608,7 @@ Respond with JSON only:
           promiseChecks: best.promiseChecks,
           suggestedAction: best.suggestedAction || undefined,
           redFlags: best.redFlags,
+          passageKinds,
           extractionStats,
         };
       }
@@ -3612,6 +3627,7 @@ Respond with JSON only:
           evidenceQuote: best.evidenceQuote,
           suggestedAction: best.suggestedAction || undefined,
           redFlags: best.redFlags,
+          passageKinds,
           extractionStats,
         };
       }
@@ -3631,10 +3647,11 @@ Respond with JSON only:
           evidenceQuote: best.evidenceQuote,
           suggestedAction: best.suggestedAction || undefined,
           redFlags: best.redFlags,
+          passageKinds,
           extractionStats,
         };
       }
-      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks, evidenceQuote: best.evidenceQuote, suggestedAction: best.suggestedAction || undefined, redFlags: best.redFlags, extractionStats };
+      return { ref: inp.ref, evidenceSummary: best.evidenceSummary || "No implementation evidence found for this requirement.", verdict: best.verdict, comment: verifiedComment, chunkIds: best.chunkIds, promiseChecks: best.promiseChecks, evidenceQuote: best.evidenceQuote, suggestedAction: best.suggestedAction || undefined, redFlags: best.redFlags, passageKinds, extractionStats };
     }
     if (failedRefs.has(inp.ref)) {
       // A failed/timed-out call is MISSING DATA, not a negative finding — the

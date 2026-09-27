@@ -37,6 +37,7 @@ import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMa
 // second vocabulary for the same thing.
 import { FileLedger } from "./EvidenceFolder";
 import { RunTimelinePanel } from "../components/ui/RunTimelinePanel";
+import { findFolderMixups, folderMixupWarning } from "../lib/driveGuard";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef, type RunDiff } from "../lib/selfCheckHistory";
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
@@ -527,9 +528,16 @@ export function SelfCheck() {
   // call it "part of this check did not complete" and drop the rest — so a
   // file read in part was reported as a failed run, and the coverage and
   // misfiled warnings behind it were never shown at all.
+  // Computed here rather than stored on a run: it needs BOTH ledgers at once,
+  // and neither pass can see the other's. Folded into the same split so it
+  // lands in the folder bucket rather than reading as a failed run.
+  const folderMixup = useMemo(
+    () => folderMixupWarning(findFolderMixups(ppdExisting?.fileLedger, existing?.fileLedger)),
+    [ppdExisting, existing],
+  );
   const runNotes = useMemo(
-    () => splitRunWarnings([...(ppdResults[scope]?.runWarnings ?? []), ...(existing?.runWarnings ?? [])]),
-    [ppdResults, existing, scope],
+    () => splitRunWarnings([...(ppdResults[scope]?.runWarnings ?? []), ...(existing?.runWarnings ?? []), folderMixup]),
+    [ppdResults, existing, scope, folderMixup],
   );
   const incompleteNote = useMemo(
     () => (runNotes.incomplete.length > 0 ? plainRunError(runNotes.incomplete[0]) : undefined),
