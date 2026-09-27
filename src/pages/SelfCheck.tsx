@@ -38,6 +38,7 @@ import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMa
 import { FileLedger } from "./EvidenceFolder";
 import { RunTimelinePanel } from "../components/ui/RunTimelinePanel";
 import { findFolderMixups, folderMixupWarning } from "../lib/driveGuard";
+import { buildAiRunLog, summariseAiRunLog } from "../lib/aiRunLogExport";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef, type RunDiff } from "../lib/selfCheckHistory";
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
@@ -305,6 +306,8 @@ export function SelfCheck() {
   // Which run is on screen: 0 is the latest, 1.. are the stored earlier runs.
   // The history is the workspace store's OWN, kept since before this page
   // existed and never read here; no new store and no new storage.
+  const captureFullPrompts = useWorkspaceStore((st) => st.captureFullPrompts);
+  const setCaptureFullPrompts = useWorkspaceStore((st) => st.setCaptureFullPrompts);
   const runs = useMemo(
     () => (scope ? selfCheckRuns(evidenceAssessments[scope], evHistory[scope], ppdResults[scope], ppdHistory[scope], evRunLog[scope], ppdRunLog[scope]) : []),
     [scope, evidenceAssessments, evHistory, ppdResults, ppdHistory, evRunLog, ppdRunLog],
@@ -584,6 +587,10 @@ export function SelfCheck() {
   // The same sentence the result's own tally prints, reused rather than a
   // second phrasing that could disagree with it.
   const headline = useMemo(() => tallyHeadline(tallySlices(counts, view)), [counts, view]);
+  const aiLogSummary = useMemo(
+    () => summariseAiRunLog(buildAiRunLog({ area: scope, ppd: ppdExisting, evidence: existing })),
+    [scope, ppdExisting, existing],
+  );
   // The filter chips, in the tab's own vocabulary, dropped when they would
   // read "0". "Needs action" is the two tones a person has to do something
   // about, which is the one grouping the counts do not already give.
@@ -1538,6 +1545,27 @@ export function SelfCheck() {
           )}
 
           {area && <p style={{ ...muted, marginTop: 10, marginBottom: 0 }}>{area.description}</p>}
+          {/* Armed BEFORE the run, because the prompts only exist while the
+              run is happening. Off by default, never persisted, and the label
+              says what it costs rather than only what it gives: these prompts
+              contain the evidence text, and everyone signed in to this app can
+              read everything it stores — which is exactly why the capture is
+              held in memory and only ever leaves by download. */}
+          {area && (
+            <label style={{ ...muted, display: "flex", alignItems: "flex-start", gap: 7, marginTop: 10, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={captureFullPrompts}
+                onChange={(e) => setCaptureFullPrompts(e.currentTarget.checked)}
+                style={{ marginTop: 2, flexShrink: 0 }}
+              />
+              <span>
+                <b style={{ color: INK }}>Keep the full prompts from the next check</b>, so the AI run log can be sent for
+                diagnosis. They stay in this browser tab only, are never saved to the database, and are lost when you
+                reload. The file you download will contain your document text, so treat it as you would the documents.
+              </span>
+            </label>
+          )}
           {/* Whether this area has been checked before, as soon as it is
               picked. It answers the returning user's first question without
               running anything and without scrolling past a full result. */}
@@ -1944,6 +1972,19 @@ export function SelfCheck() {
                   <div style={{ display: "grid", gap: 7 }}>
                     <button type="button" onClick={onPdf} style={{ ...bigBtn, fontSize: 12.5, padding: "8px 11px", textAlign: "left" }}>⬇ Download PDF</button>
                     <button type="button" onClick={onCsv} style={{ ...bigBtn, fontSize: 12.5, padding: "8px 11px", textAlign: "left", background: "#fff", color: INK, border: "1px solid #cbd5e1" }}>⬇ Download CSV</button>
+                    {/* What the AI actually did, for working out why a result
+                        came back the way it did. Metadata only unless full
+                        capture was armed BEFORE the run — see the toggle in
+                        the inputs panel and lib/aiRunLogExport.ts. */}
+                    <button
+                      type="button"
+                      onClick={() => useWorkspaceStore.getState().downloadAiRunLog(area.scope, area.title)}
+                      title="Every AI call this run made, in order: which pass, which window, how long, what it produced, and anything that failed. No document text unless full capture was switched on before the run."
+                      style={{ ...bigBtn, fontSize: 12.5, padding: "8px 11px", textAlign: "left", background: "#fff", color: INK, border: "1px solid #cbd5e1" }}
+                    >
+                      ⬇ AI run log (JSON)
+                    </button>
+                    <span style={{ ...muted, fontSize: 11 }}>{aiLogSummary}</span>
                   </div>
                 </div>
               </aside>

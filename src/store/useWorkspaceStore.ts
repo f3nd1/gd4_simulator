@@ -3,6 +3,9 @@ import { sliceWholeChars } from "../lib/text/wellFormed";
 import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { getCachedFileText, putCachedFileText, useFileTextCacheStore } from "./useFileTextCacheStore";
 import { windowCoverageNote } from "../lib/coverageNote";
+import { buildAiRunLog, type FullCallText } from "../lib/aiRunLogExport";
+import type { AiCallRecord } from "../types";
+import { downloadJson } from "../lib/auditCsvExport";
 import { partialReadWarning } from "../lib/partialRead";
 import { findMisfiledFiles, misfiledWarning } from "../lib/driveGuard";
 import { persist } from "zustand/middleware";
@@ -160,6 +163,16 @@ let _currentAiCallAbort: (() => void) | null = null;
 // paused waiting for "Proceed with all" / "Skip the rest", cleared once
 // answered. Same one-run-at-a-time reasoning as _currentFileAbort above.
 let _pendingVisionBudgetResolve: ((choice: "proceed" | "skip") => void) | null = null;
+
+// Full prompts and responses for the run that is armed, held ONLY here.
+//
+// In memory, never persisted, cleared when the next run starts. The metadata
+// log persists; this does not, because the prompts carry the evidence text
+// itself and every signed-in person on this app can read everything stored.
+// Putting student data in the shared database to make a debugging trace
+// convenient is not a trade this app makes — it reaches a file only by being
+// downloaded, by the person who armed it, in the session that produced it.
+let _fullPromptCapture: { scope: string; entries: FullCallText[] } | null = null;
 
 // Run-level AbortController for the active AI run (staged audit, PPD review,
 // evidence assessment). cancelBusy() aborts it, which propagates through the
@@ -1042,6 +1055,12 @@ export type WorkspaceState = {
   // way to abandon just that call. Never persisted: a rehydrated "true" would
   // offer a control with nothing behind it.
   canSkipAiCall: boolean;
+  // Armed by the person, for ONE run, and never persisted (partialize forces
+  // it false). While it is on, the run's prompts and responses are held in
+  // memory so they can be downloaded; they are written nowhere.
+  captureFullPrompts: boolean;
+  setCaptureFullPrompts: (on: boolean) => void;
+  downloadAiRunLog: (subCriterionId: string, areaTitle: string) => void;
   skipCurrentAiCall: () => void;
   // Dismisses the audit progress panel (does not cancel the audit itself).
   clearAuditProgress: () => void;
@@ -1547,6 +1566,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return { fileTextCache: rest };
         }),
       canSkipAiCall: false,
+      captureFullPrompts: false,
+      setCaptureFullPrompts: (on) => {
+        // Arming it discards whatever the last armed run captured: holding two
+        // runs' worth of evidence text in memory serves nothing.
+        if (on) _fullPromptCapture = null;
+        set({ captureFullPrompts: on });
+      },
+      downloadAiRunLog: (subCriterionId, areaTitle) => {
+        const st = get();
+        const log = buildAiRunLog({
+          area: `${subCriterionId} ${areaTitle}`.trim(),
+          ppd: st.ppdReviewResults[subCriterionId],
+          evidence: st.evidenceAssessments[subCriterionId],
+          fullText: _fullPromptCapture?.scope === subCriterionId ? _fullPromptCapture.entries : undefined,
+        });
+        downloadJson(log, `gd4-ai-run-log-${subCriterionId.replace(/[^a-zA-Z0-9.\-_]/g, "-")}-${new Date().toISOString().slice(0, 10)}.json`);
+      },
       skipCurrentFile: () => {
         // Abort only the current file — loop continues to the next one.
         _currentFileAbort?.("user-skip");
@@ -1610,6 +1646,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // compared with the last one. Taken here rather than from the progress
         // object because progress is transient and never persists.
         const startedAtMs = Date.now();
+        // This run's per-call metadata, in call order. No document text — see
+        // AiCallRecord in lib/ai/agentRuntime.ts for why not.
+        const AI_CALLS: AiCallRecord[] = [];
 
         const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[], contradictions?: PPDContradiction[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
@@ -1660,7 +1699,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.ppdReviewResults[subCriterionId] : undefined;
             return {
               ppdReviewResults: rows
-                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, runLog: st.ppdReviewProgress?.subCriterionId === subCriterionId ? st.ppdReviewProgress.log : undefined } }
+                ? { ...st.ppdReviewResults, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, overallVerdict, overallSummary, overallNarrative, runWarnings, contradictions, fileLedger, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, runLog: st.ppdReviewProgress?.subCriterionId === subCriterionId ? st.ppdReviewProgress.log : undefined, aiCallLog: AI_CALLS.length > 0 ? AI_CALLS : undefined } }
                 : st.ppdReviewResults,
               ppdReviewHistory: prev
                 ? { ...st.ppdReviewHistory, [subCriterionId]: [prev, ...(st.ppdReviewHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
@@ -1946,6 +1985,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // the self-check's stall panel used to show Stop as the only
             // control while a perfectly skippable call hung.
             onCallAbort: (fn) => { _currentAiCallAbort = fn; set({ canSkipAiCall: !!fn }); },
+            // Metadata always; the text only while the person has armed it,
+            // and then only in memory (see _fullPromptCapture).
+            onAiCall: (rec, full) => {
+              AI_CALLS.push(rec);
+              if (!get().captureFullPrompts) return;
+              if (_fullPromptCapture?.scope !== subCriterionId) _fullPromptCapture = { scope: subCriterionId, entries: [] };
+              _fullPromptCapture.entries.push({ seq: rec.seq, pass: rec.pass, prompt: full.prompt, response: full.response });
+            },
           });
           // Surface window errors / early stop instead of logging a clean
           // success — a revoked key mid-run used to yield all-"Not documented"
@@ -2119,6 +2166,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         _currentRunAbort = runAbort;
 
         const startedAtMs = Date.now();
+        // This run's per-call metadata, in call order. No document text — see
+        // AiCallRecord in lib/ai/agentRuntime.ts for why not.
+        const AI_CALLS: AiCallRecord[] = [];
         const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, coverageNotes?: string[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           const runAtIso = new Date().toISOString();
@@ -2151,7 +2201,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.evidenceAssessments[subCriterionId] : undefined;
             return {
               evidenceAssessments: rows
-                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNotes?.length ? coverageNotes : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, runLog: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? st.evidenceAssessmentProgress.log : undefined } }
+                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNotes?.length ? coverageNotes : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, runLog: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? st.evidenceAssessmentProgress.log : undefined, aiCallLog: AI_CALLS.length > 0 ? AI_CALLS : undefined } }
                 : st.evidenceAssessments,
               evidenceAssessmentHistory: prev
                 ? { ...st.evidenceAssessmentHistory, [subCriterionId]: [prev, ...(st.evidenceAssessmentHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
@@ -2561,6 +2611,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // the self-check's stall panel used to show Stop as the only
             // control while a perfectly skippable call hung.
             onCallAbort: (fn) => { _currentAiCallAbort = fn; set({ canSkipAiCall: !!fn }); },
+            // Metadata always; the text only while the person has armed it,
+            // and then only in memory (see _fullPromptCapture).
+            onAiCall: (rec, full) => {
+              AI_CALLS.push(rec);
+              if (!get().captureFullPrompts) return;
+              if (_fullPromptCapture?.scope !== subCriterionId) _fullPromptCapture = { scope: subCriterionId, entries: [] };
+              _fullPromptCapture.entries.push({ seq: rec.seq, pass: rec.pass, prompt: full.prompt, response: full.response });
+            },
           });
           patchEv({ stage: "verifying", detail: "Verifying citations…", pct: 99 });
           logEv("Verifying quoted excerpts against the source documents…");
@@ -8384,13 +8442,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // x 30 scopes x two passes is megabytes of persisted state, and the
         // timing question is always about the run you are looking at.
         const capPpdHistory = (r: Record<string, PPDReviewResult[]>) =>
-          Object.fromEntries(entries(r).map(([k, arr]) => [k, (arr ?? []).map((v) => ({ ...v, promptSent: capPersistedText(v?.promptSent), runLog: undefined }))]));
+          Object.fromEntries(entries(r).map(([k, arr]) => [k, (arr ?? []).map((v) => ({ ...v, promptSent: capPersistedText(v?.promptSent), runLog: undefined, aiCallLog: undefined }))]));
         const capEvHistory = (r: Record<string, EvidenceAssessmentResult[]>) =>
-          Object.fromEntries(entries(r).map(([k, arr]) => [k, (arr ?? []).map((v) => ({ ...v, promptSent: capPersistedText(v?.promptSent), runLog: undefined }))]));
+          Object.fromEntries(entries(r).map(([k, arr]) => [k, (arr ?? []).map((v) => ({ ...v, promptSent: capPersistedText(v?.promptSent), runLog: undefined, aiCallLog: undefined }))]));
         return {
           ...s,
           fileTextCache: {},
           canSkipAiCall: false,
+          // Armed for one run, by a person, in one session. It must never come
+          // back on after a reload.
+          captureFullPrompts: false,
           changeLog: [],
           // Transient run progress must never persist — a reload mid-round would
           // otherwise restore a stuck progress bar with no run behind it.

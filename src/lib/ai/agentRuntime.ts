@@ -5,7 +5,7 @@
 // for justification/explanation text, never for the score itself, so the
 // official GD4 scoring engine never depends on a live AI call.
 
-import type { AgentDefinition, ItemEvidence, AISettings, ApsrWorkingScores, Band, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, SpecificChecklistLine, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck, EvidenceRedFlag, EvidenceRedFlagKind } from "../../types";
+import type { AgentDefinition, ItemEvidence, AISettings, ApsrWorkingScores, Band, Confidence, GD4Requirement, ApsrBreakdown, GeneratedChecklistLine, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, SpecificChecklistLine, StagedCoverageStatus, PPDVerdict, PPDReviewRow, EvidenceVerdict, PPDSubClause, PPDPromise, PPDContradiction, PromiseCheck, EvidenceRedFlag, EvidenceRedFlagKind, AiCallRecord } from "../../types";
 import { sliceWholeChars } from "../text/wellFormed";
 import { chatComplete, AIClientError, addUsage, verdictTemp, type AIUsage, type ChatSchema } from "./aiClient";
 import { sObj, sArr, sStr, sBool, sEnum } from "./schemaHelpers";
@@ -99,6 +99,27 @@ const EVIDENCE_ASSESSMENT_SCHEMA: ChatSchema = { name: "evidence_assessment", sc
     })),
   })),
 }) };
+
+// ─── Per-call record of what the AI actually did ─────────────────────────────
+//
+// A run makes dozens of calls and, until now, kept one log entry per PASS plus
+// the FIRST prompt of each. When a result looked wrong there was nothing to
+// read: which call produced which verdict, how long each took, what failed and
+// was retried were all unrecorded.
+//
+// This carries NO DOCUMENT TEXT. Sizes and counts only. That is deliberate and
+// is what makes it safe to keep on every run: the prompts contain the evidence
+// itself — student names, NRIC/FIN, fees, grades — and this app is behind a
+// sign-in where every signed-in person can read everything. Putting that in
+// the shared database so a debugging trace is convenient would be a change in
+// what this app holds, not a technical detail.
+//
+// The prompt and response ARE handed to the callback alongside, so a caller
+// that has been explicitly armed for one run can hold them in memory and offer
+// them as a download. Nothing here writes them anywhere.
+export type { AiCallRecord } from "../../types";
+
+export type OnAiCall = (rec: AiCallRecord, full: { prompt: string; response: string }) => void;
 
 // ─── Two-pass extract-then-judge (Phase 2) ───────────────────────────────────
 // Option A's PPD review and evidence assessment each run as TWO calls instead
@@ -2547,7 +2568,7 @@ export async function runPPDRequirementsReview(
   requirements: PPDRequirementInput[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string) => void; onEvent?: (ev: PPDRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal; onCallAbort?: CallAbortReg } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string) => void; onEvent?: (ev: PPDRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal; onCallAbort?: CallAbortReg; onAiCall?: OnAiCall } = {}
 ): Promise<PPDRequirementsReviewResult> {
   if (requirements.length === 0 || !policyDocText.trim()) {
     return {
@@ -2645,6 +2666,19 @@ Rules:
 
 Respond with JSON only: {"contradictions": [{"description": string, "quoteA": string, "chunkA": string, "quoteB": string, "chunkB": string}]}${buildSystemPrompt("ppdReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
+  // Same per-call record as the records pass — see AiCallRecord.
+  let aiSeq = 0;
+  const recordCall = (
+    pass: string, label: string, startedAt: number, outcome: AiCallRecord["outcome"],
+    prompt: string, response: string,
+    extra?: Partial<Pick<AiCallRecord, "refs" | "chunkIds" | "error" | "tokens" | "verdicts">>,
+  ) => {
+    opts.onAiCall?.({
+      seq: ++aiSeq, pass, label, startedAt, durationMs: Date.now() - startedAt, outcome,
+      promptChars: prompt.length, responseChars: response.length, ...extra,
+    }, { prompt, response });
+  };
+
   const windows = buildDocWindows(policyDocText);
 
   // ── Pass 1 state: verified candidates + promises, pooled across windows. ──
@@ -2708,17 +2742,22 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nExtract the relevant PPD passages and promises for each GD4 requirement line:\n${pointsBlock}`;
       const system = extractSystem(windows.length > 1 ? `runPPDRequirementsReview (extract, window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview (extract)");
       if (!firstPromptSent) firstPromptSent = `SYSTEM (extract):\n${system}\n\nUSER:\n${user}`;
+      const callAt = Date.now();
+      let callTokens: AIUsage | undefined;
+      const log = (outcome: AiCallRecord["outcome"], response: string, error?: string) =>
+        recordCall("procedure/extract", `window ${win.index + 1} of ${win.total} · batch ${bi + 1} of ${batches.length}`, callAt, outcome, `${system}\n\n${user}`, response, { refs: batch.map((r) => r.ref), chunkIds: chunkIdsInWindow(win.text), error, tokens: callTokens && { prompt: callTokens.promptTokens, completion: callTokens.completionTokens, total: callTokens.totalTokens } });
       try {
         const raced = await raceSkip(group.skip, chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { schema: PPD_EXTRACT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: PPD_EXTRACT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { callTokens = u; usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         ));
         if (raced === CALL_SKIPPED) {
           const label = windows.length > 1 ? `PPD extraction window ${win.index + 1}/${win.total}, batch ${bi + 1}/${batches.length}` : `PPD extraction batch ${bi + 1}/${batches.length}`;
           windowErrors.push(`${label} skipped by user — its points fall through to other windows or are marked not assessed.`);
           for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
           opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "Skipped by user.", stage: "extract" });
+          log("skipped", "", "Skipped by user.");
           return;
         }
         const content = raced;
@@ -2733,6 +2772,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           console.error("[PPDRequirementsReview]", label, "no parseable results");
           for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
           opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it.", stage: "extract" });
+          log("empty", content, "The AI reply was empty or not valid JSON.");
           return;
         }
         const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
@@ -2791,6 +2831,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         console.error("[PPDRequirementsReview]", label, msg);
         for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
         opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg, stage: "extract" });
+        log("failed", "", msg);
       }
     }));
     } finally { group.release(); }
@@ -2801,15 +2842,21 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     if (!stopRequested()) {
       opts.onProgress?.(`PPD contradiction hunt — window ${win.index + 1}/${win.total}`);
       const huntLabel = windows.length > 1 ? `runPPDRequirementsReview (contradiction hunt, window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview (contradiction hunt)";
+      const huntAt = Date.now();
+      let huntTokens: AIUsage | undefined;
+      const huntUser = `Policy & Procedure documents (chunk IDs in headers)${windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}]` : ""}:\n"""\n${win.text}\n"""\n\nList every internal contradiction, or an empty array if there are none.`;
+      const huntLog = (outcome: AiCallRecord["outcome"], response: string, error?: string) =>
+        recordCall("procedure/contradiction-hunt", `window ${win.index + 1} of ${win.total}`, huntAt, outcome, `${contradictionSystem(huntLabel)}\n\n${huntUser}`, response, { chunkIds: chunkIdsInWindow(win.text), error, tokens: huntTokens && { prompt: huntTokens.promptTokens, completion: huntTokens.completionTokens, total: huntTokens.totalTokens } });
       try {
         const content = await chatComplete(
           [
             { role: "system", content: contradictionSystem(huntLabel) },
-            { role: "user", content: `Policy & Procedure documents (chunk IDs in headers)${windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}]` : ""}:\n"""\n${win.text}\n"""\n\nList every internal contradiction, or an empty array if there are none.` },
+            { role: "user", content: huntUser },
           ],
           settings,
-          { schema: PPD_CONTRADICTION_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: PPD_CONTRADICTION_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { huntTokens = u; usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
+        huntLog("ok", content);
         const parsed = parseJSONObject(content);
         const found = Array.isArray(parsed.contradictions) ? parsed.contradictions as Array<Record<string, unknown>> : [];
         for (const c of found) {
@@ -2829,7 +2876,9 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         }
       } catch (err) {
         if (stopRequested()) { stoppedEarly = true; break; }
-        windowErrors.push(`Contradiction hunt (window ${win.index + 1}/${win.total}) failed — ${err instanceof Error ? err.message : String(err)}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        windowErrors.push(`Contradiction hunt (window ${win.index + 1}/${win.total}) failed — ${msg}`);
+        huntLog("failed", "", msg);
       }
     }
     windowsCompleted++;
@@ -2858,11 +2907,15 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     const user = `Requirement lines with the verified PPD passages found for each:\n\n${pointsBlock}\n\nDecide each line's PPD documentation verdict strictly from its verified passages.`;
     const system = judgeSystem(judgeBatches.length > 1 ? `runPPDRequirementsReview (judge, batch ${bi + 1}/${judgeBatches.length})` : "runPPDRequirementsReview (judge)");
     if (firstPromptSent && !firstPromptSent.includes("SYSTEM (judge):")) firstPromptSent += `\n\n════════ SECOND PASS (judge) ════════\n\nSYSTEM (judge):\n${system}\n\nUSER:\n${user}`;
+    const jAt = Date.now();
+    let jTokens: AIUsage | undefined;
+    const jLog = (outcome: AiCallRecord["outcome"], response: string, error?: string, verdicts?: { ref: string; verdict: string }[]) =>
+      recordCall("procedure/judge", `batch ${bi + 1} of ${judgeBatches.length}`, jAt, outcome, `${system}\n\n${user}`, response, { refs: batch.map((r) => r.ref), error, verdicts, tokens: jTokens && { prompt: jTokens.promptTokens, completion: jTokens.completionTokens, total: jTokens.totalTokens } });
     try {
       const content = await chatComplete(
         [{ role: "system", content: system }, { role: "user", content: user }],
         settings,
-        { schema: PPD_JUDGE_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: judgeTimeoutMs(user.length), signal: opts.signal }
+        { schema: PPD_JUDGE_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { jTokens = u; usage = addUsage(usage, u); }, timeoutMs: judgeTimeoutMs(user.length), signal: opts.signal }
       );
       const parsed = parseJSONObject(content);
       const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
@@ -2871,6 +2924,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         console.error("[PPDRequirementsReview]", `judge batch ${bi + 1}`, "no parseable results");
         for (const r of batch) judgeFailedRefs.add(r.ref);
         opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no verdicts could be parsed from it.", stage: "judge" });
+        jLog("empty", content, "The AI reply was empty or not valid JSON.");
         continue;
       }
       const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
@@ -2927,6 +2981,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
         judgedByRef.set(r.ref, { verdict, shortComment, fullComment, suggestedRewrite, chunkIds, subClauses: subClauses.length > 0 ? subClauses : undefined, supportQuote });
         batchVerdicts.push({ ref: r.ref, verdict });
       }
+      jLog("ok", content, undefined, batchVerdicts.map((v) => ({ ref: v.ref, verdict: String(v.verdict) })));
       opts.onEvent?.({ type: "batch-done", verdicts: batchVerdicts });
     } catch (err) {
       if (stopRequested()) { stoppedEarly = true; break; }
@@ -2935,6 +2990,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       console.error("[PPDRequirementsReview]", "judge batch failed", msg);
       for (const r of batch) judgeFailedRefs.add(r.ref);
       opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: msg, stage: "judge" });
+      jLog("failed", "", msg);
     }
   }
 
@@ -3211,7 +3267,7 @@ export async function runEvidenceAssessment(
   inputs: EvidenceAssessmentInput[],
   evidenceDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string, pct?: number) => void; onEvent?: (ev: EvidenceRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal; onCallAbort?: CallAbortReg } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string, pct?: number) => void; onEvent?: (ev: EvidenceRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal; onCallAbort?: CallAbortReg; onAiCall?: OnAiCall } = {}
 ): Promise<EvidenceAssessmentRunResult> {
   if (inputs.length === 0) return { rows: [] };
 
@@ -3294,6 +3350,20 @@ Respond with JSON only:
 4. PPD "Adequate": with promises → "Met" (all evidenced) / "Partial" (some) / "Not met" (none); with no promises → "Met" (a record passage evidences it) / "Partial" (only policy passages).
 - Judge ONLY from the given verified passages. Ties resolve DOWN. The DETERMINISTIC EVIDENCE RULES override general judgement.`;
 
+  // One writer for the per-call record, so every call site reports the same
+  // fields in the same shape (see AiCallRecord for why it holds no text).
+  let aiSeq = 0;
+  const recordCall = (
+    pass: string, label: string, startedAt: number, outcome: AiCallRecord["outcome"],
+    prompt: string, response: string,
+    extra?: Partial<Pick<AiCallRecord, "refs" | "chunkIds" | "error" | "tokens" | "verdicts">>,
+  ) => {
+    opts.onAiCall?.({
+      seq: ++aiSeq, pass, label, startedAt, durationMs: Date.now() - startedAt, outcome,
+      promptChars: prompt.length, responseChars: response.length, ...extra,
+    }, { prompt, response });
+  };
+
   const windows = noEvidence ? [] : buildDocWindows(evidenceDocText);
 
   // ── Pass 1 state: verified candidates pooled across windows. ──
@@ -3372,17 +3442,23 @@ Respond with JSON only:
       const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nExtract every passage that bears on each requirement line or its PPD promises:\n${pointsBlock}`;
       const system = extractSystem(windows.length > 1 ? `runEvidenceAssessment (extract, window ${win.index + 1}/${win.total})` : "runEvidenceAssessment (extract)");
       if (!firstPromptSent) firstPromptSent = `SYSTEM (extract):\n${system}\n\nUSER:\n${user}`;
+      const callAt = Date.now();
+      const callInfo = { refs: batch.map((b) => b.ref), chunkIds: chunkIdsInWindow(win.text) };
+      let callTokens: AIUsage | undefined;
+      const log = (outcome: AiCallRecord["outcome"], response: string, error?: string) =>
+        recordCall("records/extract", `window ${win.index + 1} of ${win.total} · lines ${firstLine}-${lastLine}`, callAt, outcome, `${system}\n\n${user}`, response, { ...callInfo, error, tokens: callTokens && { prompt: callTokens.promptTokens, completion: callTokens.completionTokens, total: callTokens.totalTokens } });
       try {
         const raced = await raceSkip(group.skip, chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { schema: EVIDENCE_EXTRACT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: EVIDENCE_EXTRACT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { callTokens = u; usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         ));
         if (raced === CALL_SKIPPED) {
           const label = windows.length > 1 ? `evidence extraction window ${win.index + 1}/${win.total}` : "evidence extraction call";
           windowErrors.push(`Evidence ${label} skipped by user — its points fall through to other windows or are marked not assessed.`);
           for (const r of batch) if (!extractedOk.has(r.ref)) failedRefs.add(r.ref);
           opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "Skipped by user.", stage: "extract" });
+          log("skipped", "", "Skipped by user.");
           unitsDone++;
           return;
         }
@@ -3397,9 +3473,11 @@ Respond with JSON only:
           for (const r of batch) if (!extractedOk.has(r.ref)) failedRefs.add(r.ref);
           opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it.", stage: "extract" });
           console.error("[EvidenceAssessment]", label, "no parseable results");
+          log("empty", content, "The AI reply was empty or not valid JSON.");
           unitsDone++;
           return;
         }
+        log("ok", content);
         const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
         for (const [idx, r] of batch.entries()) {
           const res = byRef.get(normalizeAuditRef(r.ref)) ?? (results.length === batch.length ? results[idx] : undefined);
@@ -3435,6 +3513,7 @@ Respond with JSON only:
         for (const r of batch) if (!extractedOk.has(r.ref)) failedRefs.add(r.ref);
         opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: msg, stage: "extract" });
         console.error("[EvidenceAssessment]", label, msg);
+        log("failed", "", msg);
       }
       unitsDone++;
     }));
@@ -3474,6 +3553,10 @@ Respond with JSON only:
     const user = `Requirement lines with the verified evidence passages found for each:\n\n${pointsBlock}\n\nVerify each listed PPD promise against the given passages, then give the COMBINED PPD-plus-evidence verdict per the decision procedure.`;
     const system = judgeSystem(judgeBatches.length > 1 ? `runEvidenceAssessment (judge, batch ${bi + 1}/${judgeBatches.length})` : "runEvidenceAssessment (judge)");
     if (firstPromptSent && !firstPromptSent.includes("SYSTEM (judge):")) firstPromptSent += `\n\n════════ SECOND PASS (judge) ════════\n\nSYSTEM (judge):\n${system}\n\nUSER:\n${user}`;
+    const jAt = Date.now();
+    let jTokens: AIUsage | undefined;
+    const jLog = (outcome: AiCallRecord["outcome"], response: string, error?: string, verdicts?: { ref: string; verdict: string }[]) =>
+      recordCall("records/judge", `batch ${bi + 1} of ${judgeBatches.length}`, jAt, outcome, `${system}\n\n${user}`, response, { refs: batch.map((b) => b.ref), error, verdicts, tokens: jTokens && { prompt: jTokens.promptTokens, completion: jTokens.completionTokens, total: jTokens.totalTokens } });
     try {
       // The judge is the longest single call in a check, and it was the only
       // one not raced against a skip: a user watching it hang was offered Stop
@@ -3482,13 +3565,14 @@ Respond with JSON only:
       const raced = await raceCallSkip(opts.onCallAbort, chatComplete(
         [{ role: "system", content: system }, { role: "user", content: user }],
         settings,
-        { schema: EVIDENCE_ASSESSMENT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: judgeTimeoutMs(user.length), signal: opts.signal }
+        { schema: EVIDENCE_ASSESSMENT_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { jTokens = u; usage = addUsage(usage, u); }, timeoutMs: judgeTimeoutMs(user.length), signal: opts.signal }
       ));
       if (raced === CALL_SKIPPED) {
         const label = judgeBatches.length > 1 ? `judge batch ${bi + 1}/${judgeBatches.length}` : "judge call";
         windowErrors.push(`Evidence ${label} skipped by user — its requirement lines are reported as not assessed.`);
         for (const r of batch) failedRefs.add(r.ref);
         opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "Skipped by user.", stage: "judge" });
+        jLog("skipped", "", "Skipped by user.");
         unitsDone++;
         continue;
       }
@@ -3505,6 +3589,7 @@ Respond with JSON only:
         console.error("[EvidenceAssessment]", label, "no parseable results");
         for (const r of batch) failedRefs.add(r.ref);
         opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "The AI reply was empty or not valid JSON — no verdicts could be parsed from it.", stage: "judge" });
+        jLog("empty", content, "The AI reply was empty or not valid JSON.");
         unitsDone++;
         continue;
       }
@@ -3557,6 +3642,7 @@ Respond with JSON only:
         failedRefs.delete(inp.ref);
         batchVerdicts.push({ ref: inp.ref, verdict });
       }
+      jLog("ok", content, undefined, batchVerdicts.map((v) => ({ ref: v.ref, verdict: String(v.verdict) })));
       opts.onEvent?.({ type: "batch-done", verdicts: batchVerdicts, usage });
     } catch (err) {
       if (stopRequested()) { stoppedEarly = true; break; }
@@ -3566,6 +3652,7 @@ Respond with JSON only:
       for (const inp of batch) if (!judgedByRef.has(inp.ref)) failedRefs.add(inp.ref);
       opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: msg, stage: "judge" });
       console.error("[EvidenceAssessment]", label, msg);
+      jLog("failed", "", msg);
     }
     unitsDone++;
   }

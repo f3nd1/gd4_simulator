@@ -55,6 +55,12 @@ export function downloadCsv(content: string, filename: string): void {
   downloadBlob("﻿" + content, filename, "text/csv;charset=utf-8;");
 }
 
+// Same download mechanism, for the AI run log. No BOM: this is read by a
+// machine (or pasted back to me), not opened in Excel.
+export function downloadJson(value: unknown, filename: string): void {
+  downloadBlob(JSON.stringify(value, null, 2), filename, "application/json;charset=utf-8;");
+}
+
 // Returns a filesystem-safe filename for audit CSV exports.
 // Example: "gd4-audit-file-ledger-4.5-both-2026-06-29.csv"
 export function auditCsvFilename(

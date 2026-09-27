@@ -1046,6 +1046,17 @@ export type PPDReviewRow = {
 };
 
 export type PPDReviewResult = {
+  // Every AI call this pass made, in order, with no document text in it.
+  //
+  // See AiCallRecord in lib/ai/agentRuntime.ts for what it holds and, more
+  // importantly, what it deliberately does not: the prompts carry the evidence
+  // itself, and this app is behind a sign-in where everyone who is signed in
+  // reads everything. Sizes and counts persist; the text never does.
+  //
+  // Roughly 300 bytes a call, so ~15 KB on a typical pass. Stripped from
+  // ARCHIVED runs by partialize, like runLog.
+  aiCallLog?: AiCallRecord[];
+
   // The run's own timestamped activity log, kept after the run ends.
   //
   // It used to be discarded: the log lives on the transient progress object,
@@ -1199,6 +1210,17 @@ export type EvidenceAssessmentRow = {
 };
 
 export type EvidenceAssessmentResult = {
+  // Every AI call this pass made, in order, with no document text in it.
+  //
+  // See AiCallRecord in lib/ai/agentRuntime.ts for what it holds and, more
+  // importantly, what it deliberately does not: the prompts carry the evidence
+  // itself, and this app is behind a sign-in where everyone who is signed in
+  // reads everything. Sizes and counts persist; the text never does.
+  //
+  // Roughly 300 bytes a call, so ~15 KB on a typical pass. Stripped from
+  // ARCHIVED runs by partialize, like runLog.
+  aiCallLog?: AiCallRecord[];
+
   // The run's own timestamped activity log, kept after the run ends.
   //
   // It used to be discarded: the log lives on the transient progress object,
@@ -1392,6 +1414,25 @@ export type EvidenceDriftCheck = {
 export type EvidenceLineRunStatus = "waiting" | "assessing" | "done";
 
 // One entry in the live activity log surfaced in the detailed progress panel.
+// One AI call, as the run recorded it. Mirrors AiCallRecord in
+// lib/ai/agentRuntime.ts, which is where the doc comment lives; declared here
+// so the result types do not have to import from the AI layer.
+export type AiCallRecord = {
+  seq: number;
+  pass: string;
+  label: string;
+  refs?: string[];
+  chunkIds?: string[];
+  startedAt: number;
+  durationMs: number;
+  outcome: "ok" | "failed" | "skipped" | "empty";
+  error?: string;
+  promptChars: number;
+  responseChars: number;
+  tokens?: { prompt?: number; completion?: number; total?: number };
+  verdicts?: { ref: string; verdict: string }[];
+};
+
 export type EvidenceRunLogLine = { at: number; text: string; tone?: "info" | "good" | "warn" | "bad" };
 
 // The most recent thing that went wrong during a live PPD/Evidence run —
