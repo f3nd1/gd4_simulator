@@ -69,3 +69,29 @@ export async function revokeAdmin(supabase: SupabaseClient, email: string): Prom
 
 export const GRANT_CONSEQUENCE =
   "An extra admin can add and remove people from this list, and can change the configuration pages. They cannot make anybody else an admin, including themselves, and they cannot take your admin away.";
+
+// The last verdict useSession reached, for the non-React code that has to
+// REFUSE an action rather than hide a control.
+//
+// Hiding a control is not enforcement: a flag can be set from the console or
+// by a stale rehydrate, and the thing behind this one collects the text of
+// evidence documents. So the collector and the arming action both consult
+// this, the same way Layout refuses a route instead of trusting the sidebar to
+// have hidden the link. Same trust level as that guard too: it decides what
+// this browser DOES. The boundary that binds a request made outside the app is
+// still public.is_any_admin() in Postgres.
+//
+// Defaults to false and is set false for every signed-out, wrong-domain,
+// not-on-list and check-failed state, so "not known yet" and "could not check"
+// both refuse. Deliberately NOT cleared at the start of a session re-check:
+// the re-check awaits the network, and a false in that window would silently
+// drop part of a capture already in flight.
+let _lastAdminVerdict = false;
+
+export function noteAdminVerdict(isAdmin: boolean): void {
+  _lastAdminVerdict = isAdmin;
+}
+
+export function lastAdminVerdict(): boolean {
+  return _lastAdminVerdict;
+}

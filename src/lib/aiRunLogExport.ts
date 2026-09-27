@@ -19,6 +19,34 @@ import { buildStamp } from "./buildInfo";
 
 export type FullCallText = { seq: number; pass: string; prompt: string; response: string };
 
+// Said on the toggle, on the run banner while it is on, and beside the
+// download. One constant so the three cannot drift apart: the sentence is the
+// only thing standing between a person and emailing their students' records.
+export const DOC_TEXT_WARNING =
+  "The file you download will contain your document text, so treat it as you would the documents.";
+
+/**
+ * Adds one call's text to the capture, dropping that pass's EARLIER text when
+ * the pass starts again.
+ *
+ * The toggle stays on until it is switched off, so the same area can be
+ * re-checked several times while it is armed. Without this the second run
+ * appends to the first and the download hands over two runs interleaved under
+ * repeated call numbers, which is worse than useless for diagnosing one of
+ * them. A pass numbers its own calls from 1 (agentRuntime's aiSeq), so seq === 1
+ * is that pass starting, and only its own family ("procedure/…" or "records/…")
+ * is dropped: the records pass must not wipe the procedure pass it follows.
+ */
+export function appendFullCall(
+  entries: FullCallText[],
+  rec: { seq: number; pass: string },
+  text: { prompt: string; response: string },
+): FullCallText[] {
+  const family = rec.pass.split("/")[0];
+  const kept = rec.seq === 1 ? entries.filter((e) => e.pass.split("/")[0] !== family) : entries;
+  return [...kept, { seq: rec.seq, pass: rec.pass, prompt: text.prompt, response: text.response }];
+}
+
 export type AiRunLogPass = {
   pass: "procedure" | "records";
   runAt?: string;

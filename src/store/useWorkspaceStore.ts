@@ -3,7 +3,8 @@ import { sliceWholeChars } from "../lib/text/wellFormed";
 import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { getCachedFileText, putCachedFileText, useFileTextCacheStore } from "./useFileTextCacheStore";
 import { windowCoverageNote } from "../lib/coverageNote";
-import { buildAiRunLog, type FullCallText } from "../lib/aiRunLogExport";
+import { buildAiRunLog, appendFullCall, type FullCallText } from "../lib/aiRunLogExport";
+import { lastAdminVerdict } from "../lib/auth/adminGrants";
 import type { AiCallRecord } from "../types";
 import { downloadJson } from "../lib/auditCsvExport";
 import { partialReadWarning } from "../lib/partialRead";
@@ -173,6 +174,19 @@ let _pendingVisionBudgetResolve: ((choice: "proceed" | "skip") => void) | null =
 // convenient is not a trade this app makes — it reaches a file only by being
 // downloaded, by the person who armed it, in the session that produced it.
 let _fullPromptCapture: { scope: string; entries: FullCallText[] } | null = null;
+
+// ADMIN ONLY, and refused here rather than merely hidden on the page.
+//
+// The checkbox is admin-only too, but a hidden control is not a gate: this is
+// the code that actually copies evidence text into memory, so it is where the
+// refusal belongs — the same reason Layout refuses a route instead of trusting
+// the sidebar to have hidden the link. A process owner who reached the flag any
+// other way still captures nothing.
+function collectFullText(scope: string, rec: AiCallRecord, full: { prompt: string; response: string }): void {
+  if (!lastAdminVerdict()) return;
+  if (_fullPromptCapture?.scope !== scope) _fullPromptCapture = { scope, entries: [] };
+  _fullPromptCapture.entries = appendFullCall(_fullPromptCapture.entries, rec, full);
+}
 
 // Run-level AbortController for the active AI run (staged audit, PPD review,
 // evidence assessment). cancelBusy() aborts it, which propagates through the
@@ -1055,12 +1069,19 @@ export type WorkspaceState = {
   // way to abandon just that call. Never persisted: a rehydrated "true" would
   // offer a control with nothing behind it.
   canSkipAiCall: boolean;
-  // Armed by the person, for ONE run, and never persisted (partialize forces
-  // it false). While it is on, the run's prompts and responses are held in
-  // memory so they can be downloaded; they are written nowhere.
+  // Armed by an ADMIN and left on until they switch it off, so a diagnosis can
+  // span several runs without re-ticking a box. Never persisted (partialize
+  // forces it false), so a reload is the other off switch. While it is on, each
+  // run's prompts and responses are held in memory so they can be downloaded;
+  // they are written nowhere.
   captureFullPrompts: boolean;
   setCaptureFullPrompts: (on: boolean) => void;
   downloadAiRunLog: (subCriterionId: string, areaTitle: string) => void;
+  // Whether the capture actually holds text for this area RIGHT NOW, so the
+  // download can warn about what the file contains rather than about what the
+  // toggle is set to. Armed-but-empty is the normal case straight after
+  // arming: the prompts only exist once a check has run.
+  hasCapturedText: (subCriterionId: string) => boolean;
   skipCurrentAiCall: () => void;
   // Dismisses the audit progress panel (does not cancel the audit itself).
   clearAuditProgress: () => void;
@@ -1568,18 +1589,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       canSkipAiCall: false,
       captureFullPrompts: false,
       setCaptureFullPrompts: (on) => {
-        // Arming it discards whatever the last armed run captured: holding two
-        // runs' worth of evidence text in memory serves nothing.
-        if (on) _fullPromptCapture = null;
+        // Admin only, REFUSED here and not just hidden on the page: what the
+        // capture produces is a file full of document text, and a process owner
+        // has not read the sentence that says so. Silently staying off is the
+        // right failure — there is no control to explain it to.
+        if (on && !lastAdminVerdict()) { set({ captureFullPrompts: false }); return; }
+        // Either direction drops what is already held: arming starts a clean
+        // trace, and switching it off must not leave evidence text sitting in
+        // memory for a download nobody is going to make.
+        _fullPromptCapture = null;
         set({ captureFullPrompts: on });
       },
+      hasCapturedText: (subCriterionId) =>
+        lastAdminVerdict() && _fullPromptCapture?.scope === subCriterionId && _fullPromptCapture.entries.length > 0,
       downloadAiRunLog: (subCriterionId, areaTitle) => {
         const st = get();
         const log = buildAiRunLog({
           area: `${subCriterionId} ${areaTitle}`.trim(),
           ppd: st.ppdReviewResults[subCriterionId],
           evidence: st.evidenceAssessments[subCriterionId],
-          fullText: _fullPromptCapture?.scope === subCriterionId ? _fullPromptCapture.entries : undefined,
+          fullText: lastAdminVerdict() && _fullPromptCapture?.scope === subCriterionId ? _fullPromptCapture.entries : undefined,
         });
         downloadJson(log, `gd4-ai-run-log-${subCriterionId.replace(/[^a-zA-Z0-9.\-_]/g, "-")}-${new Date().toISOString().slice(0, 10)}.json`);
       },
@@ -1989,9 +2018,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // and then only in memory (see _fullPromptCapture).
             onAiCall: (rec, full) => {
               AI_CALLS.push(rec);
-              if (!get().captureFullPrompts) return;
-              if (_fullPromptCapture?.scope !== subCriterionId) _fullPromptCapture = { scope: subCriterionId, entries: [] };
-              _fullPromptCapture.entries.push({ seq: rec.seq, pass: rec.pass, prompt: full.prompt, response: full.response });
+              if (get().captureFullPrompts) collectFullText(subCriterionId, rec, full);
             },
           });
           // Surface window errors / early stop instead of logging a clean
@@ -2615,9 +2642,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // and then only in memory (see _fullPromptCapture).
             onAiCall: (rec, full) => {
               AI_CALLS.push(rec);
-              if (!get().captureFullPrompts) return;
-              if (_fullPromptCapture?.scope !== subCriterionId) _fullPromptCapture = { scope: subCriterionId, entries: [] };
-              _fullPromptCapture.entries.push({ seq: rec.seq, pass: rec.pass, prompt: full.prompt, response: full.response });
+              if (get().captureFullPrompts) collectFullText(subCriterionId, rec, full);
             },
           });
           patchEv({ stage: "verifying", detail: "Verifying citations…", pct: 99 });
@@ -8449,8 +8474,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           ...s,
           fileTextCache: {},
           canSkipAiCall: false,
-          // Armed for one run, by a person, in one session. It must never come
-          // back on after a reload.
+          // Armed by an admin, and it stays on until they switch it off — but
+          // only within this session. It must never come back on after a
+          // reload: nobody would know it was recording.
           captureFullPrompts: false,
           changeLog: [],
           // Transient run progress must never persist — a reload mid-round would

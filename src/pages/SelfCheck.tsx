@@ -38,7 +38,7 @@ import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMa
 import { FileLedger } from "./EvidenceFolder";
 import { RunTimelinePanel } from "../components/ui/RunTimelinePanel";
 import { findFolderMixups, folderMixupWarning } from "../lib/driveGuard";
-import { buildAiRunLog, summariseAiRunLog } from "../lib/aiRunLogExport";
+import { buildAiRunLog, summariseAiRunLog, DOC_TEXT_WARNING } from "../lib/aiRunLogExport";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef, type RunDiff } from "../lib/selfCheckHistory";
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
@@ -587,6 +587,10 @@ export function SelfCheck() {
   // The same sentence the result's own tally prints, reused rather than a
   // second phrasing that could disagree with it.
   const headline = useMemo(() => tallyHeadline(tallySlices(counts, view)), [counts, view]);
+  // NOT memoised, like liveProgress below: the answer changes when a run
+  // finishes rather than when any prop does, so a dependency list would have to
+  // name things it never reads just to stay current. It is a map lookup.
+  const logHasText = captureFullPrompts && useWorkspaceStore.getState().hasCapturedText(scope);
   const aiLogSummary = useMemo(
     () => summariseAiRunLog(buildAiRunLog({ area: scope, ppd: ppdExisting, evidence: existing })),
     [scope, ppdExisting, existing],
@@ -1546,12 +1550,18 @@ export function SelfCheck() {
 
           {area && <p style={{ ...muted, marginTop: 10, marginBottom: 0 }}>{area.description}</p>}
           {/* Armed BEFORE the run, because the prompts only exist while the
-              run is happening. Off by default, never persisted, and the label
-              says what it costs rather than only what it gives: these prompts
-              contain the evidence text, and everyone signed in to this app can
-              read everything it stores — which is exactly why the capture is
-              held in memory and only ever leaves by download. */}
-          {area && (
+              run is happening, and it stays armed until it is switched off so a
+              diagnosis can span several runs. Off by default, never persisted,
+              and the label says what it costs rather than only what it gives:
+              these prompts contain the evidence text, and everyone signed in to
+              this app can read everything it stores — which is exactly why the
+              capture is held in memory and only ever leaves by download.
+
+              ADMIN ONLY. A process owner has not read that sentence, and the
+              file they would download holds their students' records. The store
+              refuses to arm it as well (useWorkspaceStore's collectFullText),
+              so this is the explanation, not the gate. */}
+          {area && sessionIsAdmin && (
             <label style={{ ...muted, display: "flex", alignItems: "flex-start", gap: 7, marginTop: 10, cursor: "pointer" }}>
               <input
                 type="checkbox"
@@ -1560,9 +1570,9 @@ export function SelfCheck() {
                 style={{ marginTop: 2, flexShrink: 0 }}
               />
               <span>
-                <b style={{ color: INK }}>Keep the full prompts from the next check</b>, so the AI run log can be sent for
-                diagnosis. They stay in this browser tab only, are never saved to the database, and are lost when you
-                reload. The file you download will contain your document text, so treat it as you would the documents.
+                <b style={{ color: INK }}>Keep the full prompts from every check until I switch this off</b>, so the AI run
+                log can be sent for diagnosis. They stay in this browser tab only, are never saved to the database, and are
+                lost when you reload. {DOC_TEXT_WARNING}
               </span>
             </label>
           )}
@@ -1631,6 +1641,23 @@ export function SelfCheck() {
 
           {running && (
             <div className="sc-proc">
+              {/* Not only on the inputs panel: while a check runs, this panel is
+                  the whole page, and a person has to be able to see that THIS
+                  run is recording their document text without scrolling back up
+                  to a checkbox they ticked days ago. The toggle no longer
+                  disarms itself, so that is now a real possibility. */}
+              {captureFullPrompts && (
+                <div role="status" style={{
+                  display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12, padding: "9px 12px",
+                  borderRadius: 9, border: "1px solid #d6bc8a", background: "#fffbeb", color: "#92400e", fontSize: 12.5,
+                }}>
+                  <span aria-hidden style={{ flexShrink: 0 }}>●</span>
+                  <span>
+                    <b>Recording the full prompts for this check.</b> {DOC_TEXT_WARNING} It stays on until you switch it
+                    off above, or reload this page.
+                  </span>
+                </div>
+              )}
               {/* ONE panel while the check runs: the cat, the elapsed time, the
                   finish estimate, what the check is doing with your documents
                   and the rotating line. These were three separate blocks — a
@@ -1985,6 +2012,14 @@ export function SelfCheck() {
                       ⬇ AI run log (JSON)
                     </button>
                     <span style={{ ...muted, fontSize: 11 }}>{aiLogSummary}</span>
+                    {/* On the DOWNLOAD as well as the toggle: the person who
+                        clicks this may not be the one who armed it, and a
+                        tooltip is not a warning on a phone. */}
+                    {logHasText && (
+                      <span style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #d6bc8a", borderRadius: 7, padding: "6px 8px" }}>
+                        <b>This log includes the full prompts.</b> {DOC_TEXT_WARNING}
+                      </span>
+                    )}
                   </div>
                 </div>
               </aside>

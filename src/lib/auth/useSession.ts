@@ -10,7 +10,7 @@ import type { Session } from "@supabase/supabase-js";
 import { getSupabaseClient, getSupabaseConfig } from "../supabaseClient";
 import { emailIsAllowed } from "./domain";
 import { checkAllowList } from "./allowList";
-import { isAnyAdmin } from "./adminGrants";
+import { isAnyAdmin, noteAdminVerdict } from "./adminGrants";
 
 export type AuthState =
   // Supabase URL/key are missing, so there is nobody to ask. The app cannot
@@ -45,21 +45,24 @@ export function useSession(): AuthState {
     const apply = async (session: Session | null) => {
       if (!live) return;
       const email = session?.user?.email ?? "";
-      if (!session) { setState({ status: "signed-out" }); return; }
-      if (!emailIsAllowed(email)) { setState({ status: "wrong-domain", email }); return; }
+      if (!session) { noteAdminVerdict(false); setState({ status: "signed-out" }); return; }
+      if (!emailIsAllowed(email)) { noteAdminVerdict(false); setState({ status: "wrong-domain", email }); return; }
       const check = await checkAllowList(supabase, email);
       if (!live) return;
-      if (check.allowed === "unknown") setState({ status: "check-failed", email, reason: check.reason });
-      else if (!check.allowed) setState({ status: "not-on-list", email });
+      if (check.allowed === "unknown") { noteAdminVerdict(false); setState({ status: "check-failed", email, reason: check.reason }); }
+      else if (!check.allowed) { noteAdminVerdict(false); setState({ status: "not-on-list", email }); }
       else {
         // Never allowed to block entry: isAnyAdmin answers false on any
         // failure, including the grants table not existing yet.
         const admin = await isAnyAdmin(supabase, email);
         if (!live) return;
+        // Published for the non-React gate too: some actions have to refuse
+        // rather than be hidden (see lastAdminVerdict in adminGrants.ts).
+        noteAdminVerdict(admin);
         setState({ status: "signed-in", email, session, isAdmin: admin });
       }
     };
-    const refresh = () => { void supabase.auth.getSession().then(({ data }) => apply(data.session)).catch(() => live && setState({ status: "signed-out" })); };
+    const refresh = () => { void supabase.auth.getSession().then(({ data }) => apply(data.session)).catch(() => { if (live) { noteAdminVerdict(false); setState({ status: "signed-out" }); } }); };
     refresh();
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => { void apply(session); });
     // Removing somebody from the list stops their data access on their very
