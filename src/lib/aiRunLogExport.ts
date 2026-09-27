@@ -57,6 +57,10 @@ export type AiRunLogPass = {
   calls: AiCallRecord[];
   /** Call counts by stage and by outcome, so three runs can be compared without re-deriving them. */
   callCounts: { total: number; byStage: Record<string, number>; byOutcome: Record<string, number>; msInCalls: number };
+  /** Under full capture: how many of this pass's calls actually have their
+   *  text in the file. A shortfall used to be silent, and it cost the one
+   *  comparison the capture existed to make. */
+  textCaptured?: { of: number; captured: number; missing: number };
   /** The two clocks the pass measures itself, in ms. Absent on a run from before they existed. */
   stageTimings?: { listingMs: number; readMs: number };
   files: {
@@ -90,6 +94,10 @@ export type AiRunLog = {
    *  signed: see runStages.ts. */
   timeBreakdown: { wallMs: number; wallMeasured: boolean; note?: string; rows: { key: string; label: string; ms: number; pct: number }[] };
   fullText?: FullCallText[];
+  /** Set when full capture was armed but did not cover every call. Named
+   *  rather than left to be noticed: an incomplete capture looks exactly like
+   *  a complete one until somebody tries to use it. */
+  captureShortfall?: string;
 };
 
 // One pass is one reading. Verdicts in this file are not a fixed property of
@@ -155,6 +163,22 @@ export function buildAiRunLog(args: {
     });
   }
   const full = args.fullText && args.fullText.length > 0 ? args.fullText : undefined;
+  // Count what is actually here against what was called, per pass.
+  let shortfall: string | undefined;
+  if (full) {
+    const have = new Set(full.map((t) => `${t.pass}::${t.seq}`));
+    let missing = 0;
+    for (const p of passes) {
+      const cap = p.calls.filter((c) => have.has(`${c.pass}::${c.seq}`)).length;
+      p.textCaptured = { of: p.calls.length, captured: cap, missing: p.calls.length - cap };
+      missing += p.calls.length - cap;
+    }
+    if (missing > 0) {
+      shortfall = `Full capture was on, but ${missing} of ${passes.reduce((n, p) => n + p.calls.length, 0)} calls have no text in this file. `
+        + `Missing by pass: ${passes.filter((p) => (p.textCaptured?.missing ?? 0) > 0).map((p) => `${p.pass} ${p.textCaptured!.missing}`).join(", ")}. `
+        + "Do not read this log as a complete record of what was sent.";
+    }
+  }
   return {
     kind: "gd4-ai-run-log", version: 2,
     exportedAt: new Date().toISOString(),
@@ -170,6 +194,7 @@ export function buildAiRunLog(args: {
         rows: st.rows.map((r) => ({ key: r.key, label: r.label, ms: r.ms, pct: r.pct })) };
     })(),
     ...(full ? { fullText: full } : {}),
+    ...(shortfall ? { captureShortfall: shortfall } : {}),
   };
 }
 

@@ -2878,6 +2878,10 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           log("failed", content, "The AI reply was empty or not valid JSON.");
           return;
         }
+        // THE MISSING ROW. Every other stage logs its successes; this one
+        // logged only its failures, so a run that went perfectly recorded
+        // nothing here at all and its duration fell into "Unaccounted".
+        log("ok", content);
         const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
         for (const [idx, r] of batch.entries()) {
           // Positional recovery: some models keep the order but drop "ref" —

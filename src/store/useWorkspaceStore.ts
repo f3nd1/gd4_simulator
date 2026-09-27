@@ -186,7 +186,23 @@ let _fullPromptCapture: { scope: string; entries: FullCallText[] } | null = null
 // the sidebar to have hidden the link. A process owner who reached the flag any
 // other way still captures nothing.
 function collectFullText(scope: string, rec: AiCallRecord, full: { prompt: string; response: string }): void {
-  if (!lastAdminVerdict()) return;
+  // NO PER-CALL ADMIN RE-CHECK. It used to start with
+  // `if (!lastAdminVerdict()) return;` and that silently threw away text.
+  //
+  // lastAdminVerdict starts FALSE and only becomes true after useSession has
+  // awaited two network calls. A run begun before that resolves, or during a
+  // visibilitychange re-check that blipped, captured nothing and said nothing.
+  // Measured on three real 6.2 runs: the log carried 20 of 43 calls' text, and
+  // the 23 missing were the procedure and records passes, INCLUDING every
+  // judge call, which are the only ones worth having. The toggle said "keep
+  // the full prompts from every check" and kept none of the first two passes.
+  //
+  // The gate belongs where it is reliable, and it is already there:
+  // setCaptureFullPrompts REFUSES to arm unless lastAdminVerdict() is true, so
+  // a true flag means an admin armed it, and the flag is in memory only and
+  // forced false on reload. downloadAiRunLog checks the verdict again before
+  // handing any text over, so text still cannot leave without a confirmed
+  // admin. That is the check that matters; this one only created a hole.
   if (_fullPromptCapture?.scope !== scope) _fullPromptCapture = { scope, entries: [] };
   _fullPromptCapture.entries = appendFullCall(_fullPromptCapture.entries, rec, full);
 }
