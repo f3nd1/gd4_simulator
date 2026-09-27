@@ -7,6 +7,7 @@ import { useSession } from "../lib/auth/useSession";
 import { parseFolderId } from "../lib/drive/driveClient";
 import { aiOfflineReason } from "../lib/ai/aiClient";
 import { downloadCsv } from "../lib/auditCsvExport";
+import { flushPendingSaves } from "../store/supabaseStorage";
 import { buildWordingCapture, captureFilename } from "../lib/wordingCapture";
 import { printHtmlInNewTab, PRINTABLE_DOC_CSS, POPUP_BLOCKED_MESSAGE } from "../lib/printableDoc";
 import {
@@ -367,6 +368,31 @@ export function SelfCheck() {
     if (!running) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
+  }, [running]);
+
+  // Closing the tab mid-check throws the pass away, and the on-screen warning
+  // only helps somebody who is looking at the page. This is the browser's own
+  // "leave site?" prompt, and it is the only thing that catches a close, a
+  // reload or a back gesture.
+  //
+  // The flush runs on EVERY unload, not only during a run, because this page
+  // renders outside the Layout and so never had the Layout's flush. Writes are
+  // debounced ~600ms; the extracted text of each file is written as it is read
+  // and is the one part of a killed run that survives to make the retry
+  // cheaper, and it was the part most likely to still be sitting in that
+  // window.
+  useEffect(() => {
+    const onUnload = (e: BeforeUnloadEvent) => {
+      void flushPendingSaves();
+      if (!running) return;
+      // Both are required: preventDefault for the standard, returnValue for
+      // Chrome and Safari. Browsers show their own wording, not ours, which is
+      // why the panel says what is actually at stake.
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onUnload);
+    return () => window.removeEventListener("beforeunload", onUnload);
   }, [running]);
 
   const block = describeBlock({
@@ -1045,6 +1071,30 @@ export function SelfCheck() {
         // Air between the blocks in here: the run-history card, the folder
         // guidance and the running panel were butted up against each other.
         ".sc-inputs-more>*+*{margin-top:10px}",
+        // ── The privacy notice ──────────────────────────────────────────
+        // Deliberately NOT shaped like the progress panel below it. Both were
+        // full-width rounded boxes stacked one on the other, and at a glance
+        // read as two halves of one status block: one is a notice about what
+        // this run is recording, the other is how far it has got.
+        //
+        // What separates them is structure, not just colour: a heavy left
+        // rule, an uppercase eyebrow naming it as a notice, no bottom border
+        // meeting the panel, and real air underneath. The progress panel keeps
+        // its neutral grey head and gains nothing amber.
+        ".sc-privacy{border:1px solid #e4cf9f;border-left:5px solid #b45309;border-radius:9px;background:#fffbeb;color:#92400e;font-size:12.5px;line-height:1.5;padding:9px 13px;margin-bottom:16px}",
+        ".sc-privacy-eyebrow{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:850;letter-spacing:.07em;text-transform:uppercase;color:#b45309;margin-bottom:3px}",
+        // A recording dot, pulsing only where motion is welcome: it is the one
+        // thing on the page that is true right now rather than a label.
+        ".sc-privacy-dot{width:7px;height:7px;border-radius:50%;background:#b45309;flex-shrink:0}",
+        "@media (prefers-reduced-motion: no-preference){",
+        ".sc-privacy-dot{animation:sc-rec 1.8s ease-in-out infinite}",
+        "@keyframes sc-rec{0%,100%{opacity:1}50%{opacity:.25}}",
+        "}",
+        // ── Keep this tab open ──────────────────────────────────────────
+        // Inside the progress head, because it is a fact about THIS run, not a
+        // standing notice. A third stacked bar was the thing that made the
+        // first two hard to tell apart.
+        ".sc-keepopen{display:flex;align-items:flex-start;gap:7px;margin-top:8px;padding:6px 9px;border-radius:7px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:12px;line-height:1.45}",
         // ── The processing workspace ────────────────────────────────────
         // A bounded frame, not a section that grows with the folder: the two
         // panes scroll inside it, so 150 files and 1 file both end at the same
@@ -1647,15 +1697,12 @@ export function SelfCheck() {
                   to a checkbox they ticked days ago. The toggle no longer
                   disarms itself, so that is now a real possibility. */}
               {captureFullPrompts && (
-                <div role="status" style={{
-                  display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12, padding: "9px 12px",
-                  borderRadius: 9, border: "1px solid #d6bc8a", background: "#fffbeb", color: "#92400e", fontSize: 12.5,
-                }}>
-                  <span aria-hidden style={{ flexShrink: 0 }}>●</span>
-                  <span>
+                <div role="note" className="sc-privacy">
+                  <div className="sc-privacy-eyebrow"><span aria-hidden className="sc-privacy-dot" />Privacy notice</div>
+                  <div>
                     <b>Recording the full prompts for this check.</b> {DOC_TEXT_WARNING} It stays on until you switch it
                     off above, or reload this page.
-                  </span>
+                  </div>
                 </div>
               )}
               {/* ONE panel while the check runs: the cat, the elapsed time, the
@@ -1686,6 +1733,17 @@ export function SelfCheck() {
                     </div>
                   )}
                   <div style={{ ...muted, marginTop: 4 }}>{waitingMessage(now - (runStartedAt || now))}</div>
+                  {/* The check is this page\'s own JavaScript. There is no
+                      server carrying it on, and a pass that has not finished
+                      writes nothing, so a closed tab at minute four costs the
+                      whole pass. In the head rather than as a third stacked
+                      bar, and NOT in .sc-proc-hint, which is hidden below
+                      900px — this is the one line that must survive on a
+                      phone. */}
+                  <div className="sc-keepopen">
+                    <span aria-hidden>&#9888;</span>
+                    <span><b>Keep this tab open.</b> Closing it or reloading stops the check, and the pass it is on is lost.</span>
+                  </div>
                 </div>
                 {/* Quiet, and desktop only: it answers "is this normal?" without
                     competing with the elapsed time. */}
