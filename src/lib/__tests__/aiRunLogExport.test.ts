@@ -66,3 +66,50 @@ describe("summariseAiRunLog", () => {
     expect(s).toContain("1 not OK");
   });
 });
+
+// The breakdown was on the page and absent from the export, so three runs of
+// one area could not be compared and the figures could not be checked.
+describe("the export carries the timings and the counts, not only the calls", () => {
+  const T0 = 1_700_000_000_000;
+  const call = (pass: string, ms: number, outcome: AiCallRecord["outcome"] = "ok", seq = 1): AiCallRecord =>
+    ({ seq, pass, label: "", startedAt: T0, durationMs: ms, outcome, promptChars: 10, responseChars: 5 });
+  const ppdR = { subCriterionId: "5.5", rows: [], live: true, runAt: new Date(T0 + 100_000).toISOString(),
+    durationMs: 100_000, stageTimings: { listingMs: 2_000, readMs: 40_000 },
+    aiCallLog: [call("procedure/extract", 30_000), call("procedure/ocr", 8_000, "ok", 2), call("procedure/judge", 5_000, "failed", 3)] } as never;
+  const evR = { subCriterionId: "5.5", rows: [], live: true, runAt: new Date(T0 + 300_000).toISOString(),
+    durationMs: 150_000, stageTimings: { listingMs: 1_000, readMs: 20_000 }, aiCallLog: [call("records/judge", 60_000)] } as never;
+
+  it("reports per-pass call counts by stage and by outcome", () => {
+    const log = buildAiRunLog({ area: "5.5", ppd: ppdR, evidence: evR });
+    const proc = log.passes.find((p) => p.pass === "procedure")!;
+    expect(proc.callCounts.total).toBe(3);
+    expect(proc.callCounts.byStage["procedure/ocr"]).toBe(1);
+    expect(proc.callCounts.byOutcome.failed).toBe(1);
+    expect(proc.callCounts.msInCalls).toBe(43_000);
+  });
+
+  it("carries each pass's own two clocks", () => {
+    const log = buildAiRunLog({ area: "5.5", ppd: ppdR, evidence: evR });
+    expect(log.passes.find((p) => p.pass === "procedure")!.stageTimings).toEqual({ listingMs: 2_000, readMs: 40_000 });
+  });
+
+  it("carries the same breakdown the page shows, and its rows sum to the wall clock", () => {
+    const log = buildAiRunLog({ area: "5.5", ppd: ppdR, evidence: evR });
+    expect(log.timeBreakdown.rows.length).toBeGreaterThan(3);
+    expect(log.timeBreakdown.rows.reduce((n, r) => n + r.ms, 0)).toBe(log.timeBreakdown.wallMs);
+    expect(log.timeBreakdown.rows.some((r) => r.key === "unaccounted")).toBe(true);
+  });
+
+  it("includes the third pass when there is one", () => {
+    const or = { subCriterionId: "5.5", rows: [], runId: "OR-1", runAt: new Date(T0 + 500_000).toISOString(),
+      durationMs: 200_000, aiCallLog: [call("outcomes/assess", 90_000)] } as never;
+    const log = buildAiRunLog({ area: "5.5", ppd: ppdR, evidence: evR, outcome: or });
+    expect(log.passes.map((p) => p.pass)).toEqual(["procedure", "records", "outcomes"]);
+    expect(log.timeBreakdown.rows.find((r) => r.key === "outcomes")!.ms).toBe(90_000);
+  });
+
+  it("still holds no document text once the timings are in it", () => {
+    const log = buildAiRunLog({ area: "5.5", ppd: ppdR, evidence: evR });
+    expect(JSON.stringify(log)).not.toMatch(/"prompt"\s*:/);
+  });
+});

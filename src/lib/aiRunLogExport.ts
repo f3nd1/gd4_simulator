@@ -1,4 +1,5 @@
-import type { AiCallRecord, AuditFileRecord, PPDReviewResult, EvidenceAssessmentResult } from "../types";
+import type { AiCallRecord, AuditFileRecord, PPDReviewResult, EvidenceAssessmentResult, OutcomeReviewPassResult } from "../types";
+import { buildRunStages } from "./runStages";
 import { buildStamp } from "./buildInfo";
 
 // The downloadable record of one area's run.
@@ -48,12 +49,16 @@ export function appendFullCall(
 }
 
 export type AiRunLogPass = {
-  pass: "procedure" | "records";
+  pass: "procedure" | "records" | "outcomes";
   runAt?: string;
   durationMs?: number;
   model?: string;
   warnings?: string[];
   calls: AiCallRecord[];
+  /** Call counts by stage and by outcome, so three runs can be compared without re-deriving them. */
+  callCounts: { total: number; byStage: Record<string, number>; byOutcome: Record<string, number>; msInCalls: number };
+  /** The two clocks the pass measures itself, in ms. Absent on a run from before they existed. */
+  stageTimings?: { listingMs: number; readMs: number };
   files: {
     name: string; path: string; bucket: string; readStatus: string; readMethod?: string;
     charCount?: number; chunkIds?: string[]; skipReason?: string; failReason?: string;
@@ -76,6 +81,11 @@ export type AiRunLog = {
   /** Says in the file itself what the file does and does not contain. */
   privacyNote: string;
   passes: AiRunLogPass[];
+  /** THE SAME breakdown the page shows, in the file. It was on screen and
+   *  absent from the export, so a reader could not check the figures or
+   *  compare three runs of one area. Rows sum to wallMs, and the residual is
+   *  signed: see runStages.ts. */
+  timeBreakdown: { wallMs: number; wallMeasured: boolean; note?: string; rows: { key: string; label: string; ms: number; pct: number }[] };
   fullText?: FullCallText[];
 };
 
@@ -83,6 +93,20 @@ const NO_TEXT_NOTE =
   "This log contains NO document text: no prompts, no AI responses, no evidence. Only which calls ran, over which window, how long they took and what they produced. Nothing in it should identify a student.";
 const WITH_TEXT_NOTE =
   "THIS LOG CONTAINS THE FULL PROMPTS AND AI RESPONSES, which include the text of your evidence documents and may therefore contain personal data (names, NRIC/FIN, fees, grades). It was produced because full capture was switched on for this run. Treat it as you would the documents themselves: do not post it anywhere public, and delete it when it has served its purpose.";
+
+// Counts a reader would otherwise have to derive by hand from `calls`, which
+// is the whole reason the breakdown could not be checked against the page.
+function countsOf(calls: AiCallRecord[]): AiRunLogPass["callCounts"] {
+  const byStage: Record<string, number> = {};
+  const byOutcome: Record<string, number> = {};
+  let msInCalls = 0;
+  for (const c of calls) {
+    byStage[c.pass] = (byStage[c.pass] ?? 0) + 1;
+    byOutcome[c.outcome] = (byOutcome[c.outcome] ?? 0) + 1;
+    msInCalls += c.durationMs;
+  }
+  return { total: calls.length, byStage, byOutcome, msInCalls };
+}
 
 function filesOf(ledger: AuditFileRecord[] | undefined): AiRunLogPass["files"] {
   return (ledger ?? []).map((f) => ({
@@ -96,6 +120,8 @@ export function buildAiRunLog(args: {
   area: string;
   ppd?: PPDReviewResult;
   evidence?: EvidenceAssessmentResult;
+  // The third pass, so its calls and its clock reach the file too.
+  outcome?: OutcomeReviewPassResult;
   fullText?: FullCallText[];
 }): AiRunLog {
   const passes: AiRunLogPass[] = [];
@@ -103,12 +129,21 @@ export function buildAiRunLog(args: {
     passes.push({
       pass: "procedure", runAt: args.ppd.runAt, durationMs: args.ppd.durationMs, model: args.ppd.model,
       warnings: args.ppd.runWarnings, calls: args.ppd.aiCallLog ?? [], files: filesOf(args.ppd.fileLedger),
+      callCounts: countsOf(args.ppd.aiCallLog ?? []), ...(args.ppd.stageTimings ? { stageTimings: args.ppd.stageTimings } : {}),
     });
   }
   if (args.evidence) {
     passes.push({
       pass: "records", runAt: args.evidence.runAt, durationMs: args.evidence.durationMs, model: args.evidence.model,
       warnings: args.evidence.runWarnings, calls: args.evidence.aiCallLog ?? [], files: filesOf(args.evidence.fileLedger),
+      callCounts: countsOf(args.evidence.aiCallLog ?? []), ...(args.evidence.stageTimings ? { stageTimings: args.evidence.stageTimings } : {}),
+    });
+  }
+  if (args.outcome) {
+    passes.push({
+      pass: "outcomes", runAt: args.outcome.runAt, durationMs: args.outcome.durationMs, model: args.outcome.model,
+      warnings: args.outcome.runWarnings, calls: args.outcome.aiCallLog ?? [], files: [],
+      callCounts: countsOf(args.outcome.aiCallLog ?? []),
     });
   }
   const full = args.fullText && args.fullText.length > 0 ? args.fullText : undefined;
@@ -120,6 +155,11 @@ export function buildAiRunLog(args: {
     fullPromptsIncluded: !!full,
     privacyNote: full ? WITH_TEXT_NOTE : NO_TEXT_NOTE,
     passes,
+    timeBreakdown: (() => {
+      const st = buildRunStages({ ppd: args.ppd, evidence: args.evidence, outcome: args.outcome });
+      return { wallMs: st.wallMs, wallMeasured: st.wallMeasured, ...(st.note ? { note: st.note } : {}),
+        rows: st.rows.map((r) => ({ key: r.key, label: r.label, ms: r.ms, pct: r.pct })) };
+    })(),
     ...(full ? { fullText: full } : {}),
   };
 }

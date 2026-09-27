@@ -631,8 +631,8 @@ export function SelfCheck() {
     [ppdExisting, existing, procedureOnlyResult],
   );
   const aiLogSummary = useMemo(
-    () => summariseAiRunLog(buildAiRunLog({ area: scope, ppd: ppdExisting, evidence: existing })),
-    [scope, ppdExisting, existing],
+    () => summariseAiRunLog(buildAiRunLog({ area: scope, ppd: ppdExisting, evidence: existing, outcome: outcomeResults[scope] })),
+    [scope, ppdExisting, existing, outcomeResults],
   );
   // The filter chips, in the tab's own vocabulary, dropped when they would
   // read "0". "Needs action" is the two tones a person has to do something

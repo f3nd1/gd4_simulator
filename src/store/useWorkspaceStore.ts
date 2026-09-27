@@ -1635,6 +1635,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       clearFileTextCache: () => { useFileTextCacheStore.getState().clear(); set({ fileTextCache: {} }); },
       removeFileTextCacheEntry: (key) =>
         set((s) => {
+          // BOTH tiers. This used to drop the in-memory copy only, while
+          // cachedFileText falls through to the persisted store on a miss, so
+          // the next read served the very text the button claimed to have
+          // forgotten. A control that reports success and does nothing is
+          // worse than no control: it was the only way to force a cold read
+          // and it could not.
+          useFileTextCacheStore.getState().remove(key);
           const { [key]: _removed, ...rest } = s.fileTextCache;
           return { fileTextCache: rest };
         }),
@@ -1660,6 +1667,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           area: `${subCriterionId} ${areaTitle}`.trim(),
           ppd: st.ppdReviewResults[subCriterionId],
           evidence: st.evidenceAssessments[subCriterionId],
+          outcome: st.outcomeReviewResults[subCriterionId],
           fullText: lastAdminVerdict() && _fullPromptCapture?.scope === subCriterionId ? _fullPromptCapture.entries : undefined,
         });
         downloadJson(log, `gd4-ai-run-log-${subCriterionId.replace(/[^a-zA-Z0-9.\-_]/g, "-")}-${new Date().toISOString().slice(0, 10)}.json`);

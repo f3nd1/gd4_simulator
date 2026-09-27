@@ -54,6 +54,11 @@ type FileTextCacheState = {
   entries: Record<string, CachedFileText>;
   put: (key: string, entry: CachedFileText) => void;
   clear: () => void;
+  // Drops ONE file, so a single document can be re-read cold. Without it the
+  // Evidence Folder's per-file Forget button removed the in-memory copy only
+  // and the next read came straight back out of this store: the control
+  // looked like it worked and changed nothing.
+  remove: (key: string) => void;
 };
 
 // Evicts oldest-first until the total fits. Whole entries only.
@@ -81,6 +86,7 @@ export const useFileTextCacheStore = create<FileTextCacheState>()(
           return { entries: trimToBudget({ ...s.entries, [key]: entry }) };
         }),
       clear: () => set({ entries: {} }),
+      remove: (key) => set((s) => { const { [key]: _gone, ...rest } = s.entries; return { entries: rest }; }),
     }),
     {
       name: "ucc-gd4-file-text-cache:v1",
