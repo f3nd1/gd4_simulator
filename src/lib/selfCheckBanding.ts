@@ -80,8 +80,8 @@ export const DIMENSION_SOURCE: Record<BandDimensionRow["key"], string> = {
 // Said for the two dimensions once the results-and-review pass HAS produced
 // verdicts, which is also when they are scored.
 export const DIMENSION_SOURCE_CHECKED: Partial<Record<BandDimensionRow["key"], string>> = {
-  systemsOutcomes: "From the second look at your own documents for results and review records. What it found is reported below.",
-  review: "From the second look at your own documents for results and review records. What it found is reported below.",
+  systemsOutcomes: "From a second reading of your own documents, as text only, for results and review records. Scanned pages and images cannot be read at this stage. What it found is reported below.",
+  review: "From a second reading of your own documents, as text only, for results and review records. Scanned pages and images cannot be read at this stage. What it found is reported below.",
 };
 
 // Where each dimension's judgement comes from, in plain words, for the two
@@ -95,15 +95,23 @@ export const DIMENSION_SOURCE_CHECKED: Partial<Record<BandDimensionRow["key"], s
 // it meant. It now says what actually happened, and why there is no tab: the
 // tool opens the SAME documents a second time looking for different things,
 // so there is no second set of documents for a tab to show.
-const SECOND_LOOK = "a second look at those same documents, for results and review records";
+// "A second look at those same documents" was true and still misleading: a
+// reader took it to mean the whole read happens again, OCR included, and
+// reported a second vision pass that does not exist. It does not: this pass
+// runs TEXT ONLY, with vision disabled (canDescribeImages: false in
+// runOutcomeReviewPass), so a scanned page or an image cannot be read at this
+// stage at all and is reported as one it could not use. Say that, rather than
+// leaving a reader to infer it.
+const SECOND_LOOK = "a second reading of those same documents, as text only, for results and review records";
+const TEXT_ONLY_WHY = "Scanned pages and images cannot be read at this stage, so anything only in a scan is reported as not used here";
 const NO_TAB_WHY = "There is no tab for it because there are no extra documents to show.";
 
 // Row length, for the matrix.
 export const DIMENSION_TAB_SOURCE: Record<BandDimensionRow["key"], string> = {
   approach: "From your written procedure, which is the Procedure tab",
   processes: "From your procedure and your records together, which is the Overall tab",
-  systemsOutcomes: `From ${SECOND_LOOK}. ${NO_TAB_WHY}`,
-  review: `From ${SECOND_LOOK}. ${NO_TAB_WHY}`,
+  systemsOutcomes: `From ${SECOND_LOOK}. ${NO_TAB_WHY} ${TEXT_ONLY_WHY}`,
+  review: `From ${SECOND_LOOK}. ${NO_TAB_WHY} ${TEXT_ONLY_WHY}`,
 };
 
 // Said instead when the second read produced no verdicts, so the dimension was

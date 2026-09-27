@@ -87,7 +87,13 @@ describe("the rows carry the band, not a paragraph", () => {
   it("keeps the full sentences exported for the info control", () => {
     expect(DIMENSION_TAB_SOURCE.approach).toMatch(/Procedure tab/);
     expect(DIMENSION_TAB_SOURCE.processes).toMatch(/Overall tab/);
-    expect(DIMENSION_TAB_SOURCE.systemsOutcomes).toMatch(/second look/);
+    expect(DIMENSION_TAB_SOURCE.systemsOutcomes).toMatch(/second reading/);
+    // It must say the pass is TEXT ONLY. "A second look at those same
+    // documents" was read as the whole read happening again, OCR included,
+    // and led to a second vision pass being reported that does not exist.
+    expect(DIMENSION_TAB_SOURCE.systemsOutcomes).toMatch(/as text only/);
+    expect(DIMENSION_TAB_SOURCE.systemsOutcomes).toMatch(/Scanned pages and images cannot be read at this stage/);
+    expect(DIMENSION_TAB_SOURCE.review).toMatch(/as text only/);
   });
 
   it("sets every word in the rows at ONE size, and leans on weight instead", () => {
