@@ -15,7 +15,7 @@ import {
   type RunProgress, type StageKey, type LiveLine,
 } from "../lib/selfCheckProgress";
 import { useWorkspaceStore, OPTION_A_RUN_HISTORY_CAP } from "../store/useWorkspaceStore";
-import type { AuditFileRecord } from "../types";
+import type { AuditFileRecord, EvidenceRunLogLine } from "../types";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
 import { useAISettingsStore } from "../store/useAISettingsStore";
@@ -36,12 +36,13 @@ import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMa
 // read. Reused rather than rebuilt — a second, simpler live view would be a
 // second vocabulary for the same thing.
 import { FileLedger } from "./EvidenceFolder";
+import { RunTimelinePanel } from "../components/ui/RunTimelinePanel";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef, type RunDiff } from "../lib/selfCheckHistory";
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
 import { buildLabel } from "../lib/buildInfo";
 import { unassessedDimensions, dimensionStepLines, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, IMPROVE_HEADLINE_CHECKED, IMPROVE_WHY_CHECKED, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "../lib/selfCheckImprove";
-import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_NEXT_LABEL, CLIMB_BEYOND_LABEL, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, type DimensionStepLine, type BandStepOption, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, DIMENSION_TAB_SOURCE, DIMENSION_NOT_READ, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE } from "../lib/selfCheckBanding";
+import { buildBandWorking, bandCoverageNote, bandGraphic, bandGraphicSvg, tallyBarSvg, SCREEN_BAND_PALETTE, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_NEXT_LABEL, CLIMB_BEYOND_LABEL, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, type DimensionStepLine, type BandStepOption, type RubricMatrixRow, ROWS_DO_NOT_SUM_NOTE, dimensionsNote, DIMENSION_TAB_SOURCE, DIMENSION_NOT_READ, NO_BAND_WITHOUT_FOUR_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, tallyHeadline } from "../lib/selfCheckBanding";
 import { useGuidanceStore, disclaimerSnoozed, DISCLAIMER_SNOOZE_DAYS } from "../store/useGuidanceStore";
 
 // A one-page self-check for a process owner: pick your area, paste your Drive
@@ -559,6 +560,22 @@ export function SelfCheck() {
   // verdicts, same words as the table above; no judgement is added here.
   const reviewRows = useMemo(() => reviewShapedRows(rows), [rows]);
   const counts = useMemo(() => countSelfCheck(rows), [rows]);
+  // "Where did the time go?" was built into the Evidence Folder's tabs and
+  // this page is a different page, so a 3m 52s run showed no breakdown at all.
+  // Both passes' logs, merged into one timeline: they run one after the other,
+  // so the gaps across the join are real waiting too, and the question being
+  // asked is about the whole run rather than either half. Each entry says
+  // which pass it came from, since the two use the same wording for their own
+  // stages ("Listing…", "Read X").
+  const runTimelineLog = useMemo(() => {
+    const tag = (label: string, log: EvidenceRunLogLine[] | undefined) =>
+      (log ?? []).map((e) => ({ ...e, text: `${label} · ${e.text}` }));
+    return [...tag("Procedure", ppdExisting?.runLog), ...tag("Records", existing?.runLog)];
+  }, [ppdExisting, existing]);
+  const runTimelineMs = (ppdExisting?.durationMs ?? 0) + (procedureOnlyResult ? 0 : existing?.durationMs ?? 0);
+  // The same sentence the result's own tally prints, reused rather than a
+  // second phrasing that could disagree with it.
+  const headline = useMemo(() => tallyHeadline(tallySlices(counts, view)), [counts, view]);
   // The filter chips, in the tab's own vocabulary, dropped when they would
   // read "0". "Needs action" is the two tones a person has to do something
   // about, which is the one grouping the counts do not already give.
@@ -1288,9 +1305,31 @@ export function SelfCheck() {
             They wrap under the heading only when there is genuinely no room. */}
         <header style={{ marginBottom: 12, display: "flex", alignItems: "flex-start", justifyContent: "space-between", columnGap: 16, rowGap: 6, flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 320px", minWidth: 0 }}>
-          <h1 style={{ fontSize: "clamp(20px, 5vw, 25px)", margin: "0 0 6px", color: INK }}>Check your area before the audit</h1>
+          {/* Two states, because the page has two jobs.
+              BEFORE a result there is nothing to report, so it says what the
+              page does. AFTER one it names the area, when it ran, how long it
+              took and the headline, so the first line answers "what am I
+              looking at" without scrolling.
+              The area stays the heading and the verdict sits under it: a
+              verdict in an h1 makes the page read as a judgement rather than
+              as a tool, and it changes with every run while the area does not.
+              The old subtitle promised "a few minutes"; a real run of 6.1 took
+              3m 52s, so the claim is gone rather than re-estimated — the
+              actual duration is now on the line instead. */}
+          <h1 style={{ fontSize: "clamp(20px, 5vw, 25px)", margin: "0 0 6px", color: INK }}>
+            {showResult && area ? `${area.scope} ${area.title}` : "Check your area before the audit"}
+          </h1>
           <p style={{ ...muted, margin: 0, fontSize: 14 }}>
-            A practice run on your own documents, so you can fix things before the real audit. It takes a few minutes.
+            {showResult && area ? (
+              <>
+                Checked {shownRun?.label || ranAt}
+                {shownRun?.duration ? ` · took ${shownRun.duration}` : ""}
+                {" · "}{procedureOnlyResult ? "written procedure only" : "procedure and records"}
+                {headline ? <> · <b style={{ color: INK }}>{headline}</b></> : null}
+              </>
+            ) : (
+              "A practice run on your own documents, against the same requirements the real audit uses, so you can fix what it finds first."
+            )}
           </p>
           {/* Which build this is. Not a number anybody maintains: it comes from
               the commit the bundle was built from (lib/buildInfo.ts). Two of
@@ -1861,6 +1900,7 @@ export function SelfCheck() {
               {area.scope} {area.title} · {procedureOnlyResult ? "written procedure only" : "procedure and records"} · checked {shownRun?.label || ranAt}
               {shownRun?.duration && ` · took ${shownRun.duration}`}
             </p>
+            <RunTimelinePanel runLog={runTimelineLog} durationMs={runTimelineMs || undefined} />
 
             {/* The supplied design: a sticky sidebar of jump links and exports
                 beside a column of one card per requirement. The sidebar is the
