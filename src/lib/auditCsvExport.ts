@@ -1,4 +1,5 @@
 import type { AuditRunRecord, AuditFileRecord, AuditAISummaryLine, PPDReviewRow, EvidenceAssessmentRow, RunLogEntry, AIReviewLogEntry } from "../types";
+import { partialReadLabel } from "./partialRead";
 
 // Escapes a single CSV cell: wraps in double-quotes when the value contains
 // commas, quotes or line breaks; escapes inner double-quotes by doubling them.
@@ -89,6 +90,9 @@ export function exportFileLedgerCsvFor(
     "cited", "citedByLineIds",
     "usedForApproach", "usedForProcesses", "usedForSystemsOutcomes", "usedForReview",
     "charCount", "summaryCharCount",
+    // What the row/page caps left unread. Blank when the file was read whole,
+    // so a clean ledger stays clean.
+    "partlyRead", "unitsRead", "unitsTotal",
     "suspectedScannedPdf", "extractedTextQuality",
     "skipReason", "failReason", "chunkIds",
   ];
@@ -117,6 +121,9 @@ export function exportFileLedgerCsvFor(
     f.usedForDimensions?.review ? "yes" : "no",
     f.charCount ?? "",
     f.summaryCharCount ?? "",
+    f.partialRead && f.partialRead.read < f.partialRead.total ? partialReadLabel(f.partialRead) : "",
+    f.partialRead?.read ?? "",
+    f.partialRead?.total ?? "",
     f.suspectedScannedPdf ? "yes" : "no",
     f.extractedTextQuality ?? "",
     f.skipReason ?? "",

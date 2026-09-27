@@ -2,6 +2,9 @@ import { create } from "zustand";
 import { sliceWholeChars } from "../lib/text/wellFormed";
 import { blockWritesIfHydrationFailed } from "./hydrationGate";
 import { getCachedFileText, putCachedFileText, useFileTextCacheStore } from "./useFileTextCacheStore";
+import { windowCoverageNote } from "../lib/coverageNote";
+import { partialReadWarning } from "../lib/partialRead";
+import { findMisfiledFiles, misfiledWarning } from "../lib/driveGuard";
 import { persist } from "zustand/middleware";
 import { workspaceStorage, flushPendingSaves } from "./supabaseStorage";
 import type {
@@ -76,7 +79,7 @@ import { computeFlaggedPreCheckItems, type DetectFile } from "../lib/preAnalysis
 import { selectLineStatusMemories, selectLineStatusCalibration } from "../lib/labParity";
 import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
-import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook } from "../lib/drive/driveClient";
+import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook, type SheetRowCount } from "../lib/drive/driveClient";
 import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, OutcomeReviewPassResult, ReportAiSuggestion, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt, ClarificationRound, ClarificationProgress } from "../types";
 import { orderBySizeForVisionBudget, needsVisionFallback } from "../lib/drive/textUtils";
 
@@ -447,7 +450,27 @@ type VisionReadResult = {
   // the rest" prompt in runEvidenceAssessment, instead of silently dropping
   // the file the way this used to (a real bug: 0 chars extracted, no signal).
   budgetBlocked?: boolean;
+  // What was left unread, if anything — see AuditFileRecord.partialRead.
+  partialRead?: AuditFileRecord["partialRead"];
+  // Pages of a scanned PDF transcribed, out of the file's real page count.
+  // The shortfall used to be stated only inside the returned text, so the
+  // ledger recorded a clean "read" on a 40-page file of which 5 were seen.
+  pagesRead?: number;
+  pagesTotal?: number;
 };
+// The single derivation of "this file was read in part", from whichever cap
+// applied. Only set when something was genuinely left unread: read === total
+// is a complete read and must not carry a warning.
+function derivePartialRead(sheets: SheetRowCount[] | undefined, pagesRead?: number, pagesTotal?: number): AuditFileRecord["partialRead"] {
+  if (pagesTotal != null && pagesRead != null && pagesTotal > pagesRead) return { kind: "pages", read: pagesRead, total: pagesTotal };
+  if (sheets && sheets.length > 0) {
+    const read = sheets.reduce((n, x) => n + x.rowsRead, 0);
+    const total = sheets.reduce((n, x) => n + x.rowsTotal, 0);
+    if (total > read) return { kind: "rows", read, total };
+  }
+  return undefined;
+}
+
 async function readDriveFileWithVision(
   file: DriveFile & { mimeType: string },
   token: string,
@@ -485,10 +508,11 @@ async function readDriveFileWithVision(
     }
     if (parts.length === 0) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: rendered pages produced no readable text via the vision model." };
     const capNote = totalPages > images.length ? `\n\n[Vision transcription of the first ${images.length} of ${totalPages} pages — page/image budget reached; later pages were not read.]` : "";
-    return { text: parts.join("\n\n") + capNote, readMethod: "vision" };
+    return { text: parts.join("\n\n") + capNote, readMethod: "vision", pagesRead: images.length, pagesTotal: totalPages };
   };
 
-  const text = await exportFileText(file, token, signal, embeddedImageHook);
+  let sheetRows: SheetRowCount[] | undefined;
+  const text = await exportFileText(file, token, signal, embeddedImageHook, (sheets) => { sheetRows = sheets; });
   if (text !== null) {
     if (file.mimeType === "application/pdf") {
       const pdfQuality = classifyPdfTextQuality(text);
@@ -498,13 +522,16 @@ async function readDriveFileWithVision(
       // transcription rather than discarded.
       if (needsVisionFallback(pdfQuality.extractedTextQuality)) {
         const v = await readScannedPdfViaVision();
-        return v.text ? { ...v, text: mergeTypedTextWithVision(text, v.text), pdfQuality } : { ...v, pdfQuality };
+        // The spread keeps pagesRead/pagesTotal, which is what tells the ledger
+        // a 40-page scan contributed 5 pages.
+        const merged = v.text ? { ...v, text: mergeTypedTextWithVision(text, v.text), pdfQuality } : { ...v, pdfQuality };
+        return { ...merged, partialRead: derivePartialRead(sheetRows, merged.pagesRead, merged.pagesTotal) };
       }
       return { text, readMethod: "text", pdfQuality };
     }
     // Office file whose embedded pictures were transcribed via vision counts as
     // a vision read so the cache is stamped correctly.
-    return { text, readMethod: embeddedVisionUsed ? "vision" : "text" };
+    return { text, readMethod: embeddedVisionUsed ? "vision" : "text", partialRead: derivePartialRead(sheetRows) };
   }
   // No typed text at all: a standalone image → describe it via vision.
   if (isImage) {
@@ -767,7 +794,7 @@ export type WorkspaceState = {
   // extraction; "vision" = image/scanned-PDF transcription by the vision model).
   // visionModel records WHICH vision model produced a vision read, so a cached
   // vision read is invalidated and re-read when the user switches vision models.
-  fileTextCache: Record<string, { text: string | null; charCount: number; fileKind: string; fileName?: string; filePath?: string; cachedAt?: number; pdfQuality?: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" }; readMethod?: "text" | "vision"; visionModel?: string }>;
+  fileTextCache: Record<string, { text: string | null; charCount: number; fileKind: string; fileName?: string; filePath?: string; cachedAt?: number; pdfQuality?: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" }; readMethod?: "text" | "vision"; visionModel?: string; partialRead?: AuditFileRecord["partialRead"] }>;
   // Persisted "Recheck all evidence" report so it survives navigation and
   // page refreshes. null means the report hasn't been run yet this session.
   evidenceAuditReport: { flags: EvidenceAuditFlag[]; generatedAt: string } | null;
@@ -1695,6 +1722,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // as both), keep only files under the "Policy & Procedure" subfolder.
           // Smallest-first so large scans don't exhaust the vision budget before
           // smaller/more-relevant files are read (see orderBySizeForVisionBudget).
+          // Bucket re-check AT RUN TIME, not only in the pre-flight probe: a
+          // file moved (or added) after the last probe is exactly the case the
+          // probe cannot catch. Advisory, and only where the bucket is
+          // INFERRED from the subfolder name — with a dedicated link every
+          // file belongs to that bucket by definition.
+          const misfiledNote = (parseFolderId(folder.policyLink) && parseFolderId(folder.folderLink))
+            ? undefined
+            : misfiledWarning(findMisfiledFiles(allFiles.map((f) => ({ name: f.path.split("/").pop(), path: f.path, bucket: classifyFileBucket(f.path) }))));
           const policyFiles = orderBySizeForVisionBudget(parseFolderId(folder.policyLink)
             ? allFiles
             : allFiles.filter((f) => classifyFileBucket(f.path) === "policy"));
@@ -1783,6 +1818,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // runEvidenceAssessment's copy (pdfjs ignores the AbortSignal).
             let hardCapTimer: ReturnType<typeof setTimeout> | undefined;
             const hardCap = new Promise<typeof FILE_TIMED_OUT>((resolve) => { hardCapTimer = setTimeout(() => resolve(FILE_TIMED_OUT), DRIVE_FILE_HARD_CAP_MS); });
+            let ppdPartialRead: AuditFileRecord["partialRead"] = cached?.partialRead;
             if (cached) {
               body = cached.text;
             } else {
@@ -1804,6 +1840,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 } else {
                   body = raced.text;
                   readMethodUsed = raced.readMethod;
+                  ppdPartialRead = raced.partialRead;
                   skipNote = raced.note;
                   // Only cache genuine (non-empty) extractions — caching `text: null`
                   // made a transient read failure stick until the Drive file's
@@ -1812,7 +1849,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   // vision transcription cached under the same key.
                   if (body != null && body.trim().length > 0) {
                     const text = body;
-                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: readMethodUsed } } }));
+                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: file.path.split("/").pop() || file.path, filePath: file.path, cachedAt: Date.now(), readMethod: readMethodUsed, ...(raced.partialRead ? { partialRead: raced.partialRead } : {}) } } }));
                   }
                 }
               } catch (err) {
@@ -1843,9 +1880,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               chunkFileNames[chunkId] = fileName;
               fileChunkIds.push(chunkId);
             }
-            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", auditStatus: "audited", charCount: body.length, readMethod: readMethodUsed, processingMode, chunkIds: fileChunkIds };
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", auditStatus: "audited", charCount: body.length, readMethod: readMethodUsed, processingMode, ...(ppdPartialRead ? { partialRead: ppdPartialRead } : {}), chunkIds: fileChunkIds };
             patchPpd({ filesFound: [...fileRecords] });
-            logPpd(`Read ${fileName}${cached ? " (cached)" : ""}`, "good");
+            logPpd(ppdPartialRead
+              ? `Read ${fileName} IN PART — ${ppdPartialRead.read.toLocaleString()} of ${ppdPartialRead.total.toLocaleString()} ${ppdPartialRead.kind}`
+              : `Read ${fileName}${cached ? " (cached)" : ""}`, ppdPartialRead ? "warn" : "good");
           }
           // Reading done — clear the "current file"/skip state so the overlay's
           // per-file ledger stops showing a live "Reading…"/Skip once the AI
@@ -1911,7 +1950,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // Surface window errors / early stop instead of logging a clean
           // success — a revoked key mid-run used to yield all-"Not documented"
           // rows recorded as a successful review.
+          const ppdCoverage = windowCoverageNote({
+            label: "Policy", windowsProcessed: result.windowsProcessed ?? 0, windowsTotal: result.windowsTotal ?? 0,
+            docChars: result.docChars ?? 0, notAssessedLines: result.rows.filter((r) => r.verdict === "Not assessed").length,
+            totalLines: result.rows.length, stoppedEarly: result.stoppedEarly,
+          });
+          const ppdPartial = partialReadWarning(fileRecords);
           const runWarnings: string[] = [
+            ...(misfiledNote ? [misfiledNote] : []),
+            ...(ppdCoverage ? [ppdCoverage] : []),
+            ...(ppdPartial ? [ppdPartial] : []),
             ...(result.windowErrors ?? []),
             ...(result.stoppedEarly ? ["Run stopped before every requirement line was reviewed — unreviewed lines are marked Not assessed."] : []),
             ...(readFailedFiles.length ? [`${readFailedFiles.length} of ${policyFiles.length} Policy file(s) could not be read (Drive errors) and were NOT assessed: ${readFailedFiles.slice(0, 5).join(", ")}${readFailedFiles.length > 5 ? ", …" : ""}. Results may be incomplete — fix access and re-run.`] : []),
@@ -2212,6 +2260,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // single-folder convention -> keep only the "Actual Evidence" bucket.
           // Smallest-first so large scans don't exhaust the vision budget before
           // smaller/more-relevant files are read (see orderBySizeForVisionBudget).
+          // Bucket re-check AT RUN TIME, not only in the pre-flight probe: a
+          // file moved (or added) after the last probe is exactly the case the
+          // probe cannot catch. Advisory, and only where the bucket is
+          // INFERRED from the subfolder name — with a dedicated link every
+          // file belongs to that bucket by definition.
+          const misfiledNote = (parseFolderId(folder.policyLink) && parseFolderId(folder.folderLink))
+            ? undefined
+            : misfiledWarning(findMisfiledFiles(allFiles.map((f) => ({ name: f.path.split("/").pop(), path: f.path, bucket: classifyFileBucket(f.path) }))));
           const evidenceFiles = orderBySizeForVisionBudget(parseFolderId(folder.folderLink)
             ? allFiles
             : allFiles.filter((f) => classifyFileBucket(f.path) === "evidence"));
@@ -2295,10 +2351,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // see DRIVE_FILE_HARD_CAP_MS.
             let hardCapTimer: ReturnType<typeof setTimeout> | undefined;
             const hardCap = new Promise<typeof FILE_TIMED_OUT>((resolve) => { hardCapTimer = setTimeout(() => resolve(FILE_TIMED_OUT), DRIVE_FILE_HARD_CAP_MS); });
+            let partialRead: AuditFileRecord["partialRead"];
             if (cached) {
               body = cached.text;
               readMethod = cached.readMethod;
               if (cached.pdfQuality) pdfQuality = cached.pdfQuality;
+              // Carried on the cache entry so a reused read discloses the same
+              // cap the first read did.
+              partialRead = cached.partialRead;
             } else {
               // Refresh the Drive token per uncached read and HARD-STOP when it
               // can't be refreshed — see auditFolderContents.
@@ -2322,11 +2382,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   readMethod = raced.readMethod;
                   budgetBlocked = !!raced.budgetBlocked;
                   if (raced.pdfQuality) pdfQuality = raced.pdfQuality;
+                  partialRead = raced.partialRead;
                   if (raced.note) skipNote = raced.note;
                   // Only cache genuine (non-empty) extractions — see runPPDReview.
                   if (body != null && body.trim().length > 0) {
                     const text = body;
-                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: readFileName, filePath: file.path, cachedAt: Date.now(), readMethod: raced.readMethod, ...(raced.pdfQuality ? { pdfQuality: raced.pdfQuality } : {}) } } }));
+                    set((st) => ({ fileTextCache: { ...st.fileTextCache, [cacheKey]: { text, charCount: text.length, fileKind: file.mimeType, fileName: readFileName, filePath: file.path, cachedAt: Date.now(), readMethod: raced.readMethod, ...(raced.pdfQuality ? { pdfQuality: raced.pdfQuality } : {}), ...(raced.partialRead ? { partialRead: raced.partialRead } : {}) } } }));
                   }
                 }
               } catch (err) {
@@ -2366,7 +2427,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               chunkFileRefs[chunkId] = { name: fileName, url: fileUrl };
               chunkIds.push(chunkId);
             }
-            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode, ...(readMethod ? { readMethod } : {}), ...(pdfQuality ?? {}), chunkIds };
+            fileRecords[fi] = { ...fileRecords[fi], readStatus: "read", charCount: body.length, processingMode, ...(readMethod ? { readMethod } : {}), ...(pdfQuality ?? {}), ...(partialRead ? { partialRead } : {}), chunkIds };
+            if (partialRead) logEv(`Read ${readFileName} IN PART — ${partialRead.read.toLocaleString()} of ${partialRead.total.toLocaleString()} ${partialRead.kind}`, "warn");
             patchEv({ filesFound: [...fileRecords] });
             return false;
           };
@@ -2575,6 +2637,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // ever console.error'd and put in the review log, so a records-pass
           // timeout never reached the page at all.
           if (result.windowErrors?.length) coverageParts.push(...result.windowErrors);
+          // "Searched through N of M windows" — Option B has always said this;
+          // Option A returned the numbers and nobody read them.
+          const evCoverage = windowCoverageNote({
+            label: "Evidence", windowsProcessed: result.windowsProcessed ?? 0, windowsTotal: result.windowsTotal ?? 0,
+            docChars: result.docChars ?? 0, notAssessedLines: rows.filter((r) => r.verdict === "Not assessed").length,
+            totalLines: rows.length,
+          });
+          if (evCoverage) coverageParts.push(evCoverage);
+          // A file read in part is not a read failure, so it needs its own
+          // line: the run succeeded and still saw a fraction of the record.
+          const evPartial = partialReadWarning(fileLedger);
+          if (evPartial) coverageParts.push(evPartial);
+          if (misfiledNote) coverageParts.push(misfiledNote);
           const coverageNote = coverageParts.length ? coverageParts.join(" ") : undefined;
           // Audit Checklist Library pass — the evidence bucket, the sibling of
           // the policy bucket run by runPPDReview. Same isolation: this extra
@@ -8377,6 +8452,7 @@ useWorkspaceStore.subscribe((st, prev) => {
       text: entry.text, charCount: entry.charCount, fileKind: entry.fileKind,
       fileName: entry.fileName, filePath: entry.filePath, cachedAt: entry.cachedAt ?? Date.now(),
       pdfQuality: entry.pdfQuality, readMethod: entry.readMethod, visionModel: entry.visionModel,
+      partialRead: entry.partialRead,
     });
   }
 });

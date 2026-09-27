@@ -38,7 +38,7 @@ describe("extractSpreadsheetText basic", () => {
         ["Alice", "90"],
       ],
     });
-    const text = extractSpreadsheetText(wb, "test.xlsx");
+    const { text } = extractSpreadsheetText(wb, "test.xlsx");
     expect(text).toContain("File: test.xlsx");
     expect(text).toContain("Sheet: Sheet1");
     expect(text).toContain("Headers: Name | Score");
@@ -53,14 +53,14 @@ describe("extractSpreadsheetText basic", () => {
         ["Second"],
       ],
     });
-    const text = extractSpreadsheetText(wb, "items.xlsx");
+    const { text } = extractSpreadsheetText(wb, "items.xlsx");
     expect(text).toContain("1. First");
     expect(text).toContain("2. Second");
   });
 
   it("empty sheet produces empty-sheet note, not a headers line", () => {
     const wb = makeWorkbook({ Empty: [] });
-    const text = extractSpreadsheetText(wb, "empty.xlsx");
+    const { text } = extractSpreadsheetText(wb, "empty.xlsx");
     expect(text).toContain("(empty sheet)");
     expect(text).not.toContain("Headers:");
   });
@@ -74,7 +74,7 @@ describe("extractSpreadsheetText multi-sheet", () => {
       Alpha: [["X"], ["1"]],
       Beta: [["Y"], ["2"]],
     });
-    const text = extractSpreadsheetText(wb, "multi.xlsx");
+    const { text } = extractSpreadsheetText(wb, "multi.xlsx");
     expect(text).toContain("Sheet: Alpha");
     expect(text).toContain("Sheet: Beta");
   });
@@ -84,7 +84,7 @@ describe("extractSpreadsheetText multi-sheet", () => {
       First: [["A"], ["1"]],
       Second: [["B"], ["2"]],
     });
-    const text = extractSpreadsheetText(wb, "sep.xlsx");
+    const { text } = extractSpreadsheetText(wb, "sep.xlsx");
     expect(text).toContain("---");
     // Both file name occurrences exist (one per sheet)
     expect(text.split("File: sep.xlsx").length - 1).toBe(2);
@@ -97,7 +97,7 @@ describe("extractSpreadsheetText row cap", () => {
   it("exactly 200 data rows are shown without truncation notice", () => {
     const dataRows = Array.from({ length: 200 }, (_, i) => [`Row${i + 1}`, `${i + 1}`]);
     const wb = makeWorkbook({ Data: [["Label", "Num"], ...dataRows] });
-    const text = extractSpreadsheetText(wb, "capped.xlsx");
+    const { text } = extractSpreadsheetText(wb, "capped.xlsx");
     expect(text).not.toContain("more rows omitted");
     expect(text).toContain("Row200");
   });
@@ -105,7 +105,7 @@ describe("extractSpreadsheetText row cap", () => {
   it("201 data rows shows truncation notice for the extra row", () => {
     const dataRows = Array.from({ length: 201 }, (_, i) => [`Row${i + 1}`, `${i + 1}`]);
     const wb = makeWorkbook({ Data: [["Label", "Num"], ...dataRows] });
-    const text = extractSpreadsheetText(wb, "overflow.xlsx");
+    const { text } = extractSpreadsheetText(wb, "overflow.xlsx");
     expect(text).toContain("(+1 more rows omitted)");
     expect(text).not.toContain("Row201");
   });
@@ -113,7 +113,7 @@ describe("extractSpreadsheetText row cap", () => {
   it("300 data rows shows 100 omitted", () => {
     const dataRows = Array.from({ length: 300 }, (_, i) => [`Row${i + 1}`, `${i + 1}`]);
     const wb = makeWorkbook({ Data: [["Label", "Num"], ...dataRows] });
-    const text = extractSpreadsheetText(wb, "big.xlsx");
+    const { text } = extractSpreadsheetText(wb, "big.xlsx");
     expect(text).toContain("(+100 more rows omitted)");
   });
 });
@@ -130,7 +130,7 @@ describe("extractSpreadsheetText blank row filtering", () => {
         ["Bob", "75"],
       ],
     });
-    const text = extractSpreadsheetText(wb, "gaps.xlsx");
+    const { text } = extractSpreadsheetText(wb, "gaps.xlsx");
     // Should only have rows for Alice and Bob — blank row absent
     const rowLines = text
       .split("\n")
@@ -150,7 +150,7 @@ describe("extractSpreadsheetText file name labelling", () => {
       Sheet2: [["B"], ["2"]],
       Sheet3: [["C"], ["3"]],
     });
-    const text = extractSpreadsheetText(wb, "labelled.xlsx");
+    const { text } = extractSpreadsheetText(wb, "labelled.xlsx");
     const count = (text.match(/File: labelled\.xlsx/g) || []).length;
     expect(count).toBe(3);
   });

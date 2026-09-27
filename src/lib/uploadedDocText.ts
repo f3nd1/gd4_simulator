@@ -54,7 +54,7 @@ export async function extractTextFromFile(file: File): Promise<string> {
     case "xlsx": {
       const buffer = await file.arrayBuffer();
       const wb = XLSX.read(buffer, { type: "array" });
-      return extractSpreadsheetText(wb, file.name);
+      return extractSpreadsheetText(wb, file.name).text;
     }
     case "txt":
       return new TextDecoder().decode(await file.arrayBuffer());

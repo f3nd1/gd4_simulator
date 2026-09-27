@@ -2389,6 +2389,12 @@ export type PPDRequirementsReviewResult = {
   usage?: AIUsage;
   promptSent?: string;
   windowsProcessed?: number;
+  // Total windows the document was split into, and its size, so the caller can
+  // say "searched through N of M windows" the way the staged passes do. Both
+  // were computed and thrown away before; an Option A run that covered part of
+  // a folder looked identical to one that covered all of it.
+  windowsTotal?: number;
+  docChars?: number;
   fullCoverage?: boolean;
   // Failed window/batch AI calls — the caller must surface these; a run with
   // errors must never present as a clean success (a revoked key mid-run used
@@ -3073,6 +3079,8 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     usage,
     promptSent: firstPromptSent,
     windowsProcessed: windowsCompleted,
+    windowsTotal: windows.length,
+    docChars: policyDocText.length,
     fullCoverage: !stoppedEarly && windowsCompleted === windows.length,
     windowErrors: windowErrors.length > 0 ? windowErrors : undefined,
     stoppedEarly: stoppedEarly || undefined,
@@ -3163,6 +3171,10 @@ export type EvidenceAssessmentRunResult = {
   usage?: AIUsage;
   promptSent?: string;
   windowsProcessed?: number;
+  // See PPDRequirementsReviewResult: the total and the document size, so the
+  // caller can state coverage instead of implying it was complete.
+  windowsTotal?: number;
+  docChars?: number;
   fullCoverage?: boolean;
   // Real per-batch failure reasons (API error, malformed reply) — the same
   // honesty guard runPPDRequirementsReview already had. Previously these
@@ -3700,5 +3712,5 @@ Respond with JSON only:
     };
   });
 
-  return { rows, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, fullCoverage: !stoppedEarly && (windows.length === 0 || windowsCompleted === windows.length), windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
+  return { rows, usage, promptSent: firstPromptSent, windowsProcessed: windowsCompleted, windowsTotal: windows.length, docChars: evidenceDocText.length, fullCoverage: !stoppedEarly && (windows.length === 0 || windowsCompleted === windows.length), windowErrors: windowErrors.length > 0 ? windowErrors : undefined };
 }

@@ -27,6 +27,7 @@ import * as XLSX from "xlsx";
 // callers don't need to import from textUtils directly.
 import {
   extractSpreadsheetText as _extractSpreadsheetText,
+  type SheetRowCount,
   extractPptxText as _extractPptxText,
   extractPptxEmbeddedImages,
   extractDocxEmbeddedImages,
@@ -36,7 +37,8 @@ import {
   type DriveEntryLike,
   type EmbeddedImageRef,
 } from "./textUtils";
-export { classifyPdfTextQuality, extractSpreadsheetText, extractPptxText, LISTING_TRUNCATED_MIME, isListingTruncationMarker } from "./textUtils";
+export { classifyPdfTextQuality, extractSpreadsheetText, extractPptxText, LISTING_TRUNCATED_MIME, isListingTruncationMarker, MAX_ROWS_PER_SHEET } from "./textUtils";
+export type { SheetRowCount } from "./textUtils";
 const extractSpreadsheetText = _extractSpreadsheetText;
 const extractPptxText = _extractPptxText;
 
@@ -422,11 +424,18 @@ export const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordproc
 
 export const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/tiff"]);
 
+// Reports how many rows of each sheet were actually read, when a workbook was
+// capped. An out-of-band callback rather than a changed return type, matching
+// embeddedImageHook above: the six callers that do not care stay untouched,
+// and the ones building a File Ledger can record what was left unread.
+export type SheetRowReport = (sheets: SheetRowCount[]) => void;
+
 export async function exportFileText(
   file: DriveFile,
   accessToken: string,
   signal?: AbortSignal,
   embeddedImageHook?: EmbeddedImageHook,
+  onSheetRows?: SheetRowReport,
 ): Promise<string | null> {
   if (file.mimeType in GOOGLE_EXPORT_MIME) {
     const target = GOOGLE_EXPORT_MIME[file.mimeType];
@@ -436,7 +445,8 @@ export async function exportFileText(
     if (target === XLSX_MIME) {
       const buffer = await res.arrayBuffer();
       const wb = XLSX.read(buffer, { type: "array" });
-      const text = extractSpreadsheetText(wb, file.name);
+      const { text, sheets } = extractSpreadsheetText(wb, file.name);
+      onSheetRows?.(sheets);
       return mergeEmbeddedImages(await extractXlsxEmbeddedImages(buffer), text, embeddedImageHook);
     }
     return res.text();
@@ -464,7 +474,8 @@ export async function exportFileText(
     const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`, accessToken, signal);
     const buffer = await res.arrayBuffer();
     const wb = XLSX.read(buffer, { type: "array" });
-    const text = extractSpreadsheetText(wb, file.name);
+    const { text, sheets } = extractSpreadsheetText(wb, file.name);
+    onSheetRows?.(sheets);
     // Only the modern .xlsx is an OpenXML zip we can unpack for embedded images;
     // the legacy binary .xls is a non-zip OLE container, so skip it there.
     if (file.mimeType === XLSX_MIME) {

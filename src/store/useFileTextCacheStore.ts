@@ -38,6 +38,9 @@ export type CachedFileText = {
   pdfQuality?: { suspectedScannedPdf: boolean; extractedTextQuality: "none" | "low" | "medium" | "high" };
   readMethod?: "text" | "vision";
   visionModel?: string;
+  // What the caps left unread, carried with the text so a reused read
+  // discloses exactly what the first read did.
+  partialRead?: { kind: "rows" | "pages"; read: number; total: number };
 };
 
 // One file bigger than this is not persisted at all: it would crowd out every

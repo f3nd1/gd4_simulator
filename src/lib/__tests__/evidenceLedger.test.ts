@@ -147,32 +147,32 @@ describe("extractSpreadsheetText format", () => {
 
   it("includes file name in output", () => {
     const wb = makeWorkbook({ "Sheet1": [["Name", "Score"], ["Alice", "90"]] });
-    const text = extractSpreadsheetText(wb, "TestFile.xlsx");
+    const { text } = extractSpreadsheetText(wb, "TestFile.xlsx");
     expect(text).toContain("File: TestFile.xlsx");
   });
 
   it("includes sheet name in output", () => {
     const wb = makeWorkbook({ "Attendance": [["Date", "Student"], ["2024-01-01", "Alice"]] });
-    const text = extractSpreadsheetText(wb, "attendance.xlsx");
+    const { text } = extractSpreadsheetText(wb, "attendance.xlsx");
     expect(text).toContain("Sheet: Attendance");
   });
 
   it("includes headers in output", () => {
     const wb = makeWorkbook({ "Data": [["Name", "Score", "Pass"], ["Alice", "90", "Yes"]] });
-    const text = extractSpreadsheetText(wb, "data.xlsx");
+    const { text } = extractSpreadsheetText(wb, "data.xlsx");
     expect(text).toContain("Headers: Name | Score | Pass");
   });
 
   it("includes data rows in output", () => {
     const wb = makeWorkbook({ "Sheet1": [["Name", "Score"], ["Alice", "90"], ["Bob", "85"]] });
-    const text = extractSpreadsheetText(wb, "data.xlsx");
+    const { text } = extractSpreadsheetText(wb, "data.xlsx");
     expect(text).toContain("Alice | 90");
     expect(text).toContain("Bob | 85");
   });
 
   it("empty sheet produces (empty sheet) note", () => {
     const wb = makeWorkbook({ "Empty": [] });
-    const text = extractSpreadsheetText(wb, "empty.xlsx");
+    const { text } = extractSpreadsheetText(wb, "empty.xlsx");
     expect(text).toContain("(empty sheet)");
   });
 });

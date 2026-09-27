@@ -749,6 +749,17 @@ export type AuditFileRecord = {
   // spreadsheet/etc.); "vision" = image or scanned-PDF transcription by the
   // vision model. Surfaced in the File Ledger so a bad read can be diagnosed.
   readMethod?: "text" | "vision";
+  // This file was read IN PART, and by how much.
+  //
+  // Two caps silently reduced what a run saw: a spreadsheet contributes at
+  // most 200 rows per sheet, and a scanned PDF at most 5 page images. Both
+  // disclosed the omission only inside the text sent to the AI, so on screen
+  // the file looked fully read and the line it evidenced looked fully judged.
+  // A line can therefore be marked down on a fraction of a register with
+  // nothing anywhere saying so. Populated at read time by every path that
+  // applies a cap, and rendered by the File Ledger, the ledger CSV, the run
+  // warnings and any requirement line citing the file.
+  partialRead?: { kind: "rows" | "pages"; read: number; total: number };
 };
 
 // A discrete chunk of evidence extracted from one file, assigned a stable ID

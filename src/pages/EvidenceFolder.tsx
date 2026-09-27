@@ -1,4 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { partialReadLabel, partiallyReadFiles } from "../lib/partialRead";
+import { getCachedFileText } from "../store/useFileTextCacheStore";
 import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useScoringConfigStore } from "../store/useScoringConfigStore";
@@ -226,7 +228,7 @@ function DimIcons({ file }: { file: AuditFileRecord }) {
   );
 }
 
-type FileFilter = "all" | "read" | "cited" | "not_used" | "skipped" | "failed" | "new" | "changed" | "reused";
+type FileFilter = "all" | "read" | "cited" | "not_used" | "skipped" | "failed" | "new" | "changed" | "reused" | "partial";
 type FileSort = "name" | "status" | "type";
 
 function FileRow({ file, isReading, onSkipFile, resolveText, showParent }: { file: AuditFileRecord; isReading?: boolean; onSkipFile?: () => void; resolveText?: (f: AuditFileRecord) => string | null | undefined; showParent?: boolean }) {
@@ -254,6 +256,18 @@ function FileRow({ file, isReading, onSkipFile, resolveText, showParent }: { fil
         {isReading && <span style={{ fontSize: 9, color: "#92400e", fontWeight: 700, flexShrink: 0 }}>reading now<Dots /></span>}
         <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.fileKind}</span>
         {file.charCount != null && <span style={{ color: "#94a3b8", flexShrink: 0, fontSize: 9.5 }}>{file.charCount.toLocaleString()}c</span>}
+        {/* Read only in part. Beside "Scan?" because it belongs to the same
+            family of "what you are actually looking at" flags, and because a
+            row reading "read · 21,000c" is exactly how 200 of 5,000 rows used
+            to present itself. */}
+        {file.partialRead && file.partialRead.read < file.partialRead.total && (
+          <span
+            title={`Only part of this file was read: ${partialReadLabel(file.partialRead)}. Any requirement line relying on it was judged on that fraction.`}
+            style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#fef3c7", color: "#92400e", fontWeight: 700, flexShrink: 0 }}
+          >
+            ⚠ {partialReadLabel(file.partialRead)}
+          </span>
+        )}
         {file.suspectedScannedPdf && (
           <span style={{ fontSize: 9, padding: "0 3px", borderRadius: 3, background: "#fef3c7", color: "#92400e", fontWeight: 600, flexShrink: 0 }} title="Suspected scanned PDF">Scan?</span>
         )}
@@ -377,6 +391,17 @@ function AiFileRow({ file, resolveText, borderColor = "#eff6ff" }: { file: Audit
         {file.charCount != null && file.charCount > 0 && (
           <span style={{ flexShrink: 0, fontFamily: "ui-monospace,monospace", color: "#6b7280", fontSize: 9 }}>{file.charCount.toLocaleString()} ch</span>
         )}
+        {/* A file read only in part. Not a failure and not a skip, so it needs
+            its own chip: "read" with a normal char count is exactly how a
+            200-of-5,000-row register used to look on this row. */}
+        {file.partialRead && file.partialRead.read < file.partialRead.total && (
+          <span
+            title={`Only part of this file was read: ${partialReadLabel(file.partialRead)}. Any requirement line relying on it was judged on that fraction.`}
+            style={{ flexShrink: 0, fontSize: 9, fontWeight: 700, padding: "0 4px", borderRadius: 3, background: "#fef3c7", color: "#92400e" }}
+          >
+            ⚠ {partialReadLabel(file.partialRead)}
+          </span>
+        )}
         {/* Open the exact file in Google Drive — same pattern as the pre-flight
             list and the file ledger. stopPropagation so it never toggles expand. */}
         {file.driveFileId && (
@@ -438,7 +463,11 @@ export function FileLedger({
   const resolveText = useCallback(
     (f: AuditFileRecord): string | null | undefined => {
       if (!f.driveFileId) return undefined;
-      return fileTextCache[`${f.driveFileId}:${f.driveModifiedTime ?? ""}`]?.text;
+      const key = `${f.driveFileId}:${f.driveModifiedTime ?? ""}`;
+      // The in-memory cache is empty after a reload, but the persisted one is
+      // not — without this fallback an old run's extracted text was unviewable
+      // even though the app still held it.
+      return fileTextCache[key]?.text ?? getCachedFileText(key)?.text;
     },
     [fileTextCache]
   );
@@ -453,6 +482,7 @@ export function FileLedger({
   const totalNew     = files.filter((f) => f.processingMode === "new").length;
   const totalChanged = files.filter((f) => f.processingMode === "changed").length;
   const totalReused  = files.filter((f) => f.processingMode === "reused").length;
+  const totalPartial = partiallyReadFiles(files).length;
 
   const filterTabs: { key: FileFilter; label: string; count: number }[] = [
     { key: "all",      label: "All",      count: files.length },
@@ -464,6 +494,9 @@ export function FileLedger({
     ...(totalNew     > 0 ? [{ key: "new"     as FileFilter, label: "New",     count: totalNew }]     : []),
     ...(totalChanged > 0 ? [{ key: "changed" as FileFilter, label: "Changed", count: totalChanged }] : []),
     ...(totalReused  > 0 ? [{ key: "reused"  as FileFilter, label: "Cached",  count: totalReused }]  : []),
+    // Only offered when something actually was cut short — a tab reading "0"
+    // would be noise on every clean run.
+    ...(totalPartial > 0 ? [{ key: "partial" as FileFilter, label: "Read in part", count: totalPartial }] : []),
   ];
 
   // Names appearing more than once in this ledger (Drive permits same-name
@@ -485,6 +518,7 @@ export function FileLedger({
     else if (filter === "new")      out = out.filter((f) => f.processingMode === "new");
     else if (filter === "changed")  out = out.filter((f) => f.processingMode === "changed");
     else if (filter === "reused")   out = out.filter((f) => f.processingMode === "reused");
+    else if (filter === "partial")  out = partiallyReadFiles(out);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       out = out.filter((f) => f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q));

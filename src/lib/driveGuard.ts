@@ -91,6 +91,47 @@ export function classifyFileBucket(path: string): "policy" | "evidence" {
   return /polic|procedure/.test(topSegment) ? "policy" : "evidence";
 }
 
+// A file whose FOLDER says one bucket and whose NAME says the other.
+//
+// classifyFileBucket decides the bucket from the first path segment alone, so
+// a record filed under "1. Policy & Procedure" is read by the PPD pass and
+// never seen by the evidence pass. The probe used to warn only when a whole
+// bucket was empty, so three misfiled files among twenty produced nothing at
+// all, and the run itself never re-checked.
+//
+// DELIBERATELY CONSERVATIVE, per the app's matching rule: an explicit keyword
+// list, whole words only, and a file is flagged ONLY when its name matches the
+// other bucket's words and NOT its own. "Policy review minutes" matches both,
+// so it is left alone — a false alarm on a correctly filed document teaches
+// people to ignore the warning, which costs more than the miss. It is advisory
+// in every case: nothing here re-buckets a file.
+const RECORD_WORDS = /\b(minutes|register|registers|attendance|receipt|receipts|invoice|invoices|logbook|roster|timetable|appraisal|appraisals|certificate|certificates|signed|completed)\b/i;
+const POLICY_WORDS = /\b(policy|policies|procedure|procedures|sop|manual|framework|guideline|guidelines|charter)\b/i;
+
+export type MisfiledFile = { name: string; path: string; bucket: "policy" | "evidence"; looksLike: "policy" | "evidence" };
+
+export function findMisfiledFiles(files: { name?: string; path: string; bucket: "policy" | "evidence" }[]): MisfiledFile[] {
+  const out: MisfiledFile[] = [];
+  for (const f of files) {
+    const name = f.name ?? f.path.split("/").pop() ?? f.path;
+    const looksRecord = RECORD_WORDS.test(name);
+    const looksPolicy = POLICY_WORDS.test(name);
+    // Both or neither: no opinion.
+    if (looksRecord === looksPolicy) continue;
+    const looksLike: "policy" | "evidence" = looksPolicy ? "policy" : "evidence";
+    if (looksLike !== f.bucket) out.push({ name, path: f.path, bucket: f.bucket, looksLike });
+  }
+  return out;
+}
+
+// The warning sentence, shared by the pre-flight probe and the run itself so
+// they cannot word the same problem differently.
+export function misfiledWarning(misfiled: MisfiledFile[]): string | undefined {
+  if (misfiled.length === 0) return undefined;
+  const shown = misfiled.slice(0, 5).map((m) => `"${m.name}" sits under ${m.bucket === "policy" ? "a policy" : "an evidence"}-named folder but reads like ${m.looksLike === "policy" ? "a policy" : "a record"}`);
+  return `${misfiled.length} file(s) may be in the wrong subfolder: ${shown.join("; ")}${misfiled.length > 5 ? ", …" : ""}. A record filed under "1. Policy & Procedure" is read by the policy pass only and never counts as evidence. Move it, or ignore this if the naming is deliberate — nothing has been re-filed automatically.`;
+}
+
 export type ProbeFile = { name: string; path: string; bucket: "policy" | "evidence"; readable: boolean; readError?: string; driveFileId?: string; readVia?: "vision" };
 
 export type FolderProbeResult = {
@@ -125,6 +166,9 @@ export function analyzeFolderProbe(files: ProbeFile[], sharedFolder: boolean): F
   if (sharedFolder && files.length > 0 && evidence.length === 0) {
     warnings.push('Every file is under a policy-named subfolder, so NONE are being treated as actual evidence. Implementation records should sit in a subfolder named exactly "2. Actual Evidence".');
   }
+  // Any single misfiled file, not only an empty bucket.
+  const misfiled = sharedFolder ? misfiledWarning(findMisfiledFiles(files)) : undefined;
+  if (misfiled) warnings.push(misfiled);
   if (unreadable.length > 0) {
     warnings.push(`${unreadable.length} of ${files.length} file${files.length === 1 ? "" : "s"} could not be read and would be skipped by the audit: ${unreadable.slice(0, 3).map((f) => f.name).join(", ")}${unreadable.length > 3 ? ", …" : ""}. Fix access before running so the audit isn't judging incomplete evidence.`);
   }

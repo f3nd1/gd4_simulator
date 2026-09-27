@@ -47,14 +47,26 @@ export function needsVisionFallback(quality: "none" | "low" | "medium" | "high")
   return quality === "none" || quality === "low";
 }
 
+// How many rows of a sheet the audit actually reads. A 5,000-row attendance
+// register contributes 200 rows; the rest is never assessed.
+//
+// The omission used to be disclosed ONLY inside the extracted text, as
+// "(+4,800 more rows omitted)", which reaches the AI and nobody else: the File
+// Ledger showed a normal char count and the run reported a clean read. The
+// counts are now returned as DATA so the ledger, the CSV, the run warnings and
+// the affected requirement lines can all say what was left unread.
+export const MAX_ROWS_PER_SHEET = 200;
+
+export type SheetRowCount = { sheet: string; rowsRead: number; rowsTotal: number };
+
 // Extracts structured text from an Excel workbook, preserving sheet names,
-// column headers, and row data. Caps at 200 rows per sheet so very large
-// spreadsheets don't dominate the audit context budget.
+// column headers, and row data. Caps at MAX_ROWS_PER_SHEET rows per sheet so
+// very large spreadsheets don't dominate the audit context budget.
 // Keeps the file name and sheet structure so the AI can distinguish between
 // sheets and identify the data source precisely.
-export function extractSpreadsheetText(workbook: XLSX.WorkBook, fileName: string): string {
-  const MAX_ROWS_PER_SHEET = 200;
+export function extractSpreadsheetText(workbook: XLSX.WorkBook, fileName: string): { text: string; sheets: SheetRowCount[] } {
   const sheetTexts: string[] = [];
+  const sheets: SheetRowCount[] = [];
 
   for (const sheetName of workbook.SheetNames) {
     const ws = workbook.Sheets[sheetName];
@@ -62,6 +74,7 @@ export function extractSpreadsheetText(workbook: XLSX.WorkBook, fileName: string
 
     if (rows.length === 0) {
       sheetTexts.push(`File: ${fileName}\nSheet: ${sheetName}\n(empty sheet)`);
+      sheets.push({ sheet: sheetName, rowsRead: 0, rowsTotal: 0 });
       continue;
     }
 
@@ -71,6 +84,7 @@ export function extractSpreadsheetText(workbook: XLSX.WorkBook, fileName: string
 
     const cappedRows = dataRows.slice(0, MAX_ROWS_PER_SHEET);
     const omitted = dataRows.length - cappedRows.length;
+    sheets.push({ sheet: sheetName, rowsRead: cappedRows.length, rowsTotal: dataRows.length });
 
     const rowLines = cappedRows.map((row, i) => {
       const cells = headers.map((_, ci) => String(row[ci] ?? "").trim());
@@ -84,7 +98,7 @@ export function extractSpreadsheetText(workbook: XLSX.WorkBook, fileName: string
     sheetTexts.push(sheetText);
   }
 
-  return sheetTexts.join("\n\n---\n\n");
+  return { text: sheetTexts.join("\n\n---\n\n"), sheets };
 }
 
 // ── PowerPoint (.pptx) text extraction ──────────────────────────────────────

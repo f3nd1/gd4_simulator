@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { partialFilesForLine, linePartialReadNote } from "../lib/partialRead";
 import { Link, useNavigate } from "react-router-dom";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useGoogleDriveStore } from "../store/useGoogleDriveStore";
@@ -330,11 +331,27 @@ function PpdNextStep({ selectedId, bare }: { selectedId: string; bare?: boolean 
 // stays its own compact strip, because on real runs the clause table can
 // have FEWER rows than row.subClauses (not every sub-part resolves to a
 // clause+quote), so this is the only place some sub-parts are visible at all.
-function PpdRowExtra({ row, selectedId, setLineFeedback }: { row: PPDReviewRow; selectedId: string; setLineFeedback: (fb: { ref: string; text: string } | null) => void }) {
+// "This line was judged partly on a file we only read part of."
+//
+// The distinction it protects: a Not-met on a line whose only evidence is rows
+// 201-5,000 of a register is not the same finding as a Not-met where the
+// record is genuinely absent, and until now the two looked identical.
+function PartialReadOnLine({ chunkIds, ledger }: { chunkIds?: string[]; ledger?: AuditFileRecord[] }) {
+  const note = linePartialReadNote(partialFilesForLine(chunkIds, ledger));
+  if (!note) return null;
+  return (
+    <div style={{ marginBottom: 9, border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 7, padding: "7px 9px", fontSize: 12, color: "#78350f", lineHeight: 1.45 }}>
+      <b>⚠ Part of this line's evidence was not read.</b> {note}
+    </div>
+  );
+}
+
+function PpdRowExtra({ row, selectedId, setLineFeedback, ledger }: { row: PPDReviewRow; selectedId: string; setLineFeedback: (fb: { ref: string; text: string } | null) => void; ledger?: AuditFileRecord[] }) {
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const [showComment, setShowComment] = useState(false);
   return (
     <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
+      <PartialReadOnLine chunkIds={row.chunkIds} ledger={ledger} />
       {row.subClauses && row.subClauses.length > 0 && (
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4 }}>Sub-clause check</div>
@@ -679,7 +696,7 @@ function PpdTab({ selectedId, totalLines }: { selectedId: string; totalLines: nu
             runLabel={`${selectedId} ${scopeTitle(selectedId)}`.trim()}
             renderExtra={(ref) => {
               const row = viewedResult!.rows.find((r) => r.ref === ref);
-              return row ? <PpdRowExtra row={row} selectedId={selectedId} setLineFeedback={setLineFeedback} /> : null;
+              return row ? <PpdRowExtra row={row} selectedId={selectedId} setLineFeedback={setLineFeedback} ledger={viewedResult!.fileLedger} /> : null;
             }}
           />
         </>
@@ -1006,12 +1023,13 @@ const RED_FLAG_LABEL: Record<EvidenceRedFlagKind, string> = {
 // matrix's clause-by-clause rows straight from row.promiseChecks (same
 // array), so this only carries what the matrix doesn't: the comment toggle,
 // thumbs, and the saved-finding badge/link.
-function EvRowExtra({ row, selectedId, setLineFeedback }: { row: EvidenceAssessmentRow; selectedId: string; setLineFeedback: (fb: { ref: string; text: string } | null) => void }) {
+function EvRowExtra({ row, selectedId, setLineFeedback, ledger }: { row: EvidenceAssessmentRow; selectedId: string; setLineFeedback: (fb: { ref: string; text: string } | null) => void; ledger?: AuditFileRecord[] }) {
   const logHumanDecision = useWorkspaceStore((s) => s.logHumanDecision);
   const [showComment, setShowComment] = useState(false);
   if (!row.verdict || row.verdict === "Not assessed" || row.assessmentFailed) return null;
   return (
     <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 10, paddingTop: 10 }}>
+      <PartialReadOnLine chunkIds={row.evidenceChunkIds} ledger={ledger} />
       {/* Concerns the assessment raised, shown SEPARATELY from the verdict and
           saying so in the heading. The evidence prompts used to carry
           "auto-downgrade" instructions for several of these, which meant a
@@ -1258,6 +1276,14 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
             )}
           </div>
         )}
+        {/* The evidence assessment has always stored runWarnings and never
+            shown them anywhere: coverage shortfalls, files read in part and
+            misfiled buckets all landed in state that no screen read. */}
+        {viewedAssessment.runWarnings && viewedAssessment.runWarnings.length > 0 && (
+          <div style={{ fontSize: 11.5, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "7px 10px", marginBottom: 8 }}>
+            {viewedAssessment.runWarnings.map((w, i) => <div key={i} style={{ marginTop: i ? 4 : 0 }}>⚠ {w}</div>)}
+          </div>
+        )}
         <RunTimelinePanel runLog={viewedAssessment.runLog} durationMs={viewedAssessment.durationMs} />
         <button
           onClick={handleCompile}
@@ -1362,7 +1388,7 @@ function EvidenceTab({ selectedId, justArrived, onDismissJustArrived, onGoToPrec
         runLabel={`${selectedId} ${GD4_SUB_CRITERIA.find((s) => s.id === selectedId)?.title ?? ""}`.trim()}
         renderExtra={(ref) => {
           const row = viewedAssessment?.rows.find((r) => r.gdRef === ref);
-          return row ? <EvRowExtra row={row} selectedId={selectedId} setLineFeedback={setLineFeedback} /> : null;
+          return row ? <EvRowExtra row={row} selectedId={selectedId} setLineFeedback={setLineFeedback} ledger={viewedAssessment.fileLedger} /> : null;
         }}
       />
 
