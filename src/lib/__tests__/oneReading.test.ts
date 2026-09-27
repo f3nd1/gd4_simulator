@@ -24,6 +24,14 @@ describe("a verdict is presented as one reading, not as settled", () => {
     expect(ONE_READING_NOTE).not.toMatch(/\b\d+\s*%|\b\d+ of \d+\b/);
   });
 
+  it("does not contradict itself one line below", () => {
+    // The caveat says a verdict can move; the tab's own sentence sat directly
+    // under it saying this tab is "the one that counts". Both claims on one
+    // screen, one of them wrong.
+    expect(TABS_EXPLAINED.overview.text).toContain("the one to act on");
+    expect(TABS_EXPLAINED.overview.text).not.toMatch(/the one that counts|final/i);
+  });
+
   it("stops calling the Overall tab the FINAL result", () => {
     expect(TABS_EXPLAINED.overview.hint).toBe("The combined result for each requirement");
     expect(TABS_EXPLAINED.overview.hint).not.toMatch(/final/i);
@@ -32,6 +40,28 @@ describe("a verdict is presented as one reading, not as settled", () => {
   it("is said ONCE on the page, not turned into a wall of disclaimer", () => {
     const page = readFileSync("src/pages/SelfCheck.tsx", "utf8");
     expect([...page.matchAll(/ONE_READING_NOTE/g)].length).toBe(2); // the import and the one use
+  });
+});
+
+// partialize strips runLog and aiCallLog from ARCHIVED runs. The history
+// invited a reader to "come back to it and compare" things that are not kept.
+describe("the run history promises only what an archived run keeps", () => {
+  const PAGE = readFileSync("src/pages/SelfCheck.tsx", "utf8");
+
+  it("no longer invites a comparison of what is not there", () => {
+    expect(PAGE).not.toMatch(/come back to it and compare/);
+  });
+
+  it("says what an earlier check does and does not keep", () => {
+    expect(PAGE).toMatch(/keeps its documents\s*\n?\s*and its result, but not the record of what the check did/);
+    expect(PAGE).toMatch(/only the latest run keeps that/);
+  });
+
+  it("still matches what partialize actually strips", () => {
+    // If archived runs ever start keeping these, this copy becomes wrong in
+    // the other direction and should be revisited.
+    const STORE = readFileSync("src/store/useWorkspaceStore.ts", "utf8");
+    expect(STORE).toMatch(/runLog: undefined, aiCallLog: undefined/);
   });
 });
 

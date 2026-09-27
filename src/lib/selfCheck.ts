@@ -651,7 +651,11 @@ export const TABS_EXPLAINED: Record<"overview" | "procedure" | "records", { hint
   // whichever tab is open; `text` is the subheader for the tab actually open.
   overview: {
     hint: "The combined result for each requirement",
-    text: "The two together, and the one that counts. If your procedure does not cover a requirement it does not comply whatever your records show; if it covers it only partly the line can go no higher than partly complies; and where the procedure is adequate, your records decide.",
+    // NOT "the one that counts". It sat one line under the note saying a verdict
+    // can move, and read as a promise of finality directly contradicting it.
+    // The meaning wanted here is which tab to ACT on, versus the two half
+    // views, and that is what it now says.
+    text: "The two together, and the one to act on. If your procedure does not cover a requirement it does not comply whatever your records show; if it covers it only partly the line can go no higher than partly complies; and where the procedure is adequate, your records decide.",
   },
   procedure: {
     hint: "What your written procedure says",

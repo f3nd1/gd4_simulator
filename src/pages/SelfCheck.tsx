@@ -3657,7 +3657,13 @@ function RunHistory(props: {
   if (runs.length === 0) {
     return (
       <p style={{ ...muted, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px", margin: "10px 0 0" }}>
-        This area has not been checked yet. Once you run it, every check is kept here so you can come back to it and compare.
+        {/* No longer an invitation to compare. partialize strips runLog and
+            aiCallLog from ARCHIVED runs, so an earlier check keeps its
+            documents and its result but not the record of what the check did.
+            The transcript says so once it is open; this line used to promise
+            the opposite before anyone got there. */}
+        This area has not been checked yet. Once you run it, every check is kept here. An earlier check keeps its documents
+        and its result, but not the record of what the check did: only the latest run keeps that.
       </p>
     );
   }
