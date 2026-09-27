@@ -13,10 +13,11 @@ import { toCsv } from "./auditCsvExport";
 import { buildStamp } from "./buildInfo";
 import { escapeHtml } from "./printableDoc";
 import { unjudgedBothSides } from "./unjudgedRows";
+import { partialFilesForLine, linePartialReadNote } from "./partialRead";
 import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, OVERALL_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "./selfCheckImprove";
 import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
-import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band } from "../types";
+import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band, AuditFileRecord } from "../types";
 
 // The disclaimer the rest of the app carries, repeated verbatim in every
 // surface this page produces, including both downloads.
@@ -244,6 +245,9 @@ export type SelfCheckRow = {
   // What `summary` actually summarises, so the label above it can be honest
   // rather than one word covering two different things.
   summaryKind: "verdictReason" | "whatWasFound" | "none";
+  // Set when this line's cited evidence includes a file the run read only in
+  // part. Empty otherwise, so a clean line carries nothing.
+  partialNote?: string;
   // The reasoning prose, with any TRAILING verbatim excerpt lifted out into
   // `working.citations`. The judge prompts require that excerpt in the prose
   // AND as its own field, so it used to print twice.
@@ -279,6 +283,12 @@ export type SelfCheckContext = {
   // How many files the run could not read. A gap reported alongside an unread
   // file is not a clean gap, and the row has to say so.
   unreadableFiles?: number;
+  // The two passes' file ledgers. A row that cites a file the run read only
+  // in part carries a note saying so: the same reasoning as unreadableFiles,
+  // one step finer. A gap on a line whose evidence was rows 1-200 of 5,000 is
+  // not the same finding as a gap where the record is absent.
+  policyLedger?: AuditFileRecord[];
+  evidenceLedger?: AuditFileRecord[];
 };
 
 // The engine only writes suggestedAction from its AI judge. On a line where
@@ -392,6 +402,7 @@ export function toSelfCheckRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckCon
       ? PLAIN_VERDICT["Not assessed"]
       : (PLAIN_VERDICT[r.verdict] ?? PLAIN_VERDICT["Not assessed"]);
     return {
+      partialNote: linePartialReadNote(partialFilesForLine(r.evidenceChunkIds, ctx.evidenceLedger)),
       ref: r.gdRef,
       requirement: r.requirementText,
       // The tally counts off this field, so it has to agree with the label. A
@@ -435,6 +446,7 @@ export function toProcedureRows(rows: PPDReviewRow[], ctx: SelfCheckContext = {}
   return rows.map((r) => {
     const plain = PPD_PLAIN_VERDICT[r.verdict] ?? PPD_PLAIN_VERDICT["Not assessed"];
     return {
+      partialNote: linePartialReadNote(partialFilesForLine(r.chunkIds, ctx.policyLedger)),
       ref: r.ref,
       requirement: r.requirementText,
       // Kept on the EvidenceVerdict axis only so the counts and the existing
@@ -492,6 +504,7 @@ export function toRecordsRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckConte
       : cited ? "found" : "none";
     const plain = RECORDS_PLAIN_VERDICT[kind];
     return {
+      partialNote: linePartialReadNote(partialFilesForLine(r.evidenceChunkIds, ctx.evidenceLedger)),
       ref: r.gdRef,
       requirement: r.requirementText,
       // Mapped onto the shared axis so the one table and one tally can render
@@ -1161,6 +1174,42 @@ export function describeBlock(opts: {
     };
   }
   return { canRun: true };
+}
+
+// A run warning is not always a failure, and this page used to treat every one
+// as though it were: it took warnings[0], ran it through plainRunError, and
+// printed it under "Part of this check did not complete, so this result is
+// incomplete". Every warning after the first was dropped.
+//
+// Two of the three things a run now reports are not failures at all. A file
+// read in part means the check finished and read a fraction of a document; a
+// misfiled bucket means the check finished and looked in the wrong place.
+// Calling either "did not complete" is wrong in a way that matters, because
+// the reader's response is different: re-run for a failure, change the
+// document or the folder for these.
+//
+// Matched on the opening of the sentences OUR OWN helpers write
+// (partialReadWarning, windowCoverageNote, misfiledWarning). Anything
+// unrecognised falls to "incomplete", the louder bucket: a warning nobody
+// classified must never be softened into an advisory one.
+export type RunWarningKind = "incomplete" | "readLess" | "misfiled";
+
+export function classifyRunWarning(w: string): RunWarningKind {
+  if (/were read only in part|read only in part/i.test(w)) return "readLess";
+  if (/sliding window/i.test(w)) return "readLess";
+  if (/wrong subfolder/i.test(w)) return "misfiled";
+  return "incomplete";
+}
+
+export type SplitRunWarnings = { incomplete: string[]; readLess: string[]; misfiled: string[] };
+
+export function splitRunWarnings(warnings: (string | undefined)[] | undefined): SplitRunWarnings {
+  const out: SplitRunWarnings = { incomplete: [], readLess: [], misfiled: [] };
+  for (const w of warnings ?? []) {
+    if (!w || !w.trim()) continue;
+    out[classifyRunWarning(w)].push(w.trim());
+  }
+  return out;
 }
 
 // The engine's own failure strings are written for an auditor. These are the

@@ -2119,12 +2119,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         _currentRunAbort = runAbort;
 
         const startedAtMs = Date.now();
-        const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, coverageNote?: string, fileLedger?: AuditFileRecord[]) => {
+        const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, coverageNotes?: string[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           const runAtIso = new Date().toISOString();
           const notAssessedCount = rows ? rows.filter((r) => r.verdict === "Not assessed").length : 0;
           const summary = rows
-            ? `Evidence assessment${notAssessedCount > 0 ? " (PARTIAL)" : ""}: ${rows.filter((r) => r.verdict === "Met").length} Met, ${rows.filter((r) => r.verdict === "Partial").length} Partial, ${rows.filter((r) => r.verdict === "Not met").length} Not met${notAssessedCount > 0 ? `, ${notAssessedCount} Not assessed` : ""} (assessed ${rows.length - notAssessedCount} of ${rows.length} lines).${coverageNote ? `\n⚠ ${coverageNote}` : ""}`
+            ? `Evidence assessment${notAssessedCount > 0 ? " (PARTIAL)" : ""}: ${rows.filter((r) => r.verdict === "Met").length} Met, ${rows.filter((r) => r.verdict === "Partial").length} Partial, ${rows.filter((r) => r.verdict === "Not met").length} Not met${notAssessedCount > 0 ? `, ${notAssessedCount} Not assessed` : ""} (assessed ${rows.length - notAssessedCount} of ${rows.length} lines).${coverageNotes?.length ? `\n⚠ ${coverageNotes.join(" ")}` : ""}`
             : `Evidence assessment failed${liveError ? `: ${liveError}` : "."}`;
           const log: AIReviewLogEntry = {
             id: `LOG-${Date.now()}-${++logCounter}`,
@@ -2151,7 +2151,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const prev = rows ? st.evidenceAssessments[subCriterionId] : undefined;
             return {
               evidenceAssessments: rows
-                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNote ? [coverageNote] : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, runLog: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? st.evidenceAssessmentProgress.log : undefined } }
+                ? { ...st.evidenceAssessments, [subCriterionId]: { subCriterionId, rows, runAt: runAtIso, live, promptSent, chunkFileNames, derivedFromAudit: false, runId, fileLedger, runWarnings: coverageNotes?.length ? coverageNotes : undefined, effectiveTemperature: effectiveVerdictTemp(useAISettingsStore.getState()), model: usage?.model, durationMs: Date.now() - startedAtMs, runLog: st.evidenceAssessmentProgress?.subCriterionId === subCriterionId ? st.evidenceAssessmentProgress.log : undefined } }
                 : st.evidenceAssessments,
               evidenceAssessmentHistory: prev
                 ? { ...st.evidenceAssessmentHistory, [subCriterionId]: [prev, ...(st.evidenceAssessmentHistory[subCriterionId] ?? [])].slice(0, OPTION_A_RUN_HISTORY_CAP) }
@@ -2650,7 +2650,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const evPartial = partialReadWarning(fileLedger);
           if (evPartial) coverageParts.push(evPartial);
           if (misfiledNote) coverageParts.push(misfiledNote);
-          const coverageNote = coverageParts.length ? coverageParts.join(" ") : undefined;
+          const coverageNotes = coverageParts.length ? coverageParts : undefined;
           // Audit Checklist Library pass — the evidence bucket, the sibling of
           // the policy bucket run by runPPDReview. Same isolation: this extra
           // layer must never cost the user the evidence assessment itself.
@@ -2669,7 +2669,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           } catch (clErr) {
             logEv(`Audit checklist library pass failed — ${clErr instanceof Error ? clErr.message : String(clErr)}. The evidence assessment above is unaffected.`, "warn");
           }
-          finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames, coverageNote, fileLedger);
+          finish(rows, true, undefined, result.promptSent, result.usage, chunkFileNames, coverageNotes, fileLedger);
         } catch (err) {
           finish(null, false, err instanceof Error ? err.message : String(err));
         } finally {

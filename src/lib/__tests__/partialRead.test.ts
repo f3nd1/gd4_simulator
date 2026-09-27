@@ -78,3 +78,46 @@ describe("per-line disclosure", () => {
     expect(linePartialReadNote([])).toBeUndefined();
   });
 });
+
+// The Self-check file table is where a process owner looks. A capped file used
+// to appear there as "✓ Read · 21,000 characters of text · quoted: yes", with
+// nothing to do — a clean pass on a fortieth of the document.
+describe("the Self-check file row", () => {
+  it("reports a capped spreadsheet as Read in part, with the counts and an action", async () => {
+    const { toFileRow } = await import("../selfCheckEvidence");
+    const row = toFileRow({ ...f("Attendance register.xlsx", { kind: "rows", read: 200, total: 5000 }), charCount: 21_000 });
+    expect(row.label).toBe("Read in part");
+    expect(row.outcome).toBe("check");
+    expect(row.detail).toContain("200 of 5,000 rows read");
+    expect(row.action).toContain("raise the row limit");
+  });
+
+  it("reports a capped scan by pages, and says so ahead of the vision flag", async () => {
+    const { toFileRow } = await import("../selfCheckEvidence");
+    const row = toFileRow({ ...f("Scanned minutes.pdf", { kind: "pages", read: 5, total: 40 }), readMethod: "vision", suspectedScannedPdf: true, charCount: 9_000 });
+    expect(row.label).toBe("Read in part");
+    expect(row.detail).toContain("5 of 40 pages read");
+    // The vision route is still disclosed, just not instead of the cap.
+    expect(row.detail).toContain("transcribed from page images");
+  });
+
+  it("leaves a whole file exactly as it was", async () => {
+    const { toFileRow } = await import("../selfCheckEvidence");
+    const row = toFileRow({ ...f("Board paper.docx"), charCount: 4_000 });
+    expect(row.label).toBe("Read");
+    expect(row.outcome).toBe("read");
+    expect(row.action).toBe("");
+  });
+
+  it("counts partly-read files separately from other things worth checking", async () => {
+    const { toFileRows, countFileRows } = await import("../selfCheckEvidence");
+    const counts = countFileRows(toFileRows(undefined, [
+      { ...f("a.xlsx", { kind: "rows", read: 200, total: 5000 }), driveFileId: "A" },
+      { ...f("b.pdf"), driveFileId: "B", readMethod: "vision" },
+      { ...f("c.docx"), driveFileId: "C" },
+    ]));
+    expect(counts.partial).toBe(1);
+    expect(counts.check).toBe(2);
+    expect(counts.read).toBe(1);
+  });
+});

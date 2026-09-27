@@ -114,6 +114,26 @@ export function toFileRow(rec: AuditFileRecord): SelfCheckFileRow {
   if (rec.readStatus === "condensed") {
     return { ...base, outcome: "check", label: "Read, then shortened", detail: [charDetail(rec.charCount), rec.summaryCharCount ? `shortened to ${rec.summaryCharCount.toLocaleString("en-SG")} characters to fit` : ""].filter(Boolean).join(" · "), action: "Only the shortened version was assessed. Split the document if something in it is missing from the result." };
   }
+  // Read, but not all of it. Checked BEFORE the vision branch: a 40-page scan
+  // of which 5 pages were transcribed is both, and "5 of 40 pages read" is the
+  // fact the person preparing the evidence can act on.
+  //
+  // This is the whole reason the field exists. On this table a 5,000-row
+  // register capped at 200 rows used to read "✓ Read · 21,000 characters of
+  // text · quoted: yes", with nothing to do — a clean pass on a fortieth of
+  // the document.
+  if (rec.partialRead && rec.partialRead.read < rec.partialRead.total) {
+    const { read, total, kind } = rec.partialRead;
+    return {
+      ...base,
+      outcome: "check",
+      label: "Read in part",
+      detail: [`${read.toLocaleString("en-SG")} of ${total.toLocaleString("en-SG")} ${kind} read`, readDetail(rec)].filter(Boolean).join(" · "),
+      action: kind === "rows"
+        ? `Only the first ${read.toLocaleString("en-SG")} rows of each sheet were assessed. If what matters is further down, split the sheet or ask your audit lead to raise the row limit, then run the check again.`
+        : `Only the first ${read.toLocaleString("en-SG")} pages were read. If what matters is later in the document, split it or ask your audit lead to raise the page limit, then run the check again.`,
+    };
+  }
   const needsCheck = rec.readMethod === "vision" || rec.suspectedScannedPdf || rec.extractedTextQuality === "low" || rec.extractedTextQuality === "none";
   return {
     ...base,
@@ -151,13 +171,17 @@ export function toFileRows(policyLedger: AuditFileRecord[] | undefined, evidence
   return order.map((k) => byKey.get(k)!);
 }
 
-export type FileCounts = { total: number; read: number; check: number; unreadable: number; unreadableNames: string[] };
+export type FileCounts = { total: number; read: number; check: number; partial: number; unreadable: number; unreadableNames: string[] };
 
 export function countFileRows(rows: SelfCheckFileRow[]): FileCounts {
   return {
     total: rows.length,
     read: rows.filter((r) => r.outcome === "read").length,
     check: rows.filter((r) => r.outcome === "check").length,
+    // Counted separately from "worth checking" even though it is one of them:
+    // "read in part" is a specific, actionable fact about the person's own
+    // document, and it is the single thing this page most needs to tell them.
+    partial: rows.filter((r) => r.label === "Read in part").length,
     unreadable: rows.filter((r) => r.outcome === "unreadable").length,
     unreadableNames: rows.filter((r) => r.outcome === "unreadable").map((r) => r.name),
   };

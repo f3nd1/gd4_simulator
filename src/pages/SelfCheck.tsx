@@ -28,6 +28,7 @@ import {
   citedText, missingText, expectedEvidenceGroups, VERDICT_LEGEND, tallySlices, feedsFor, SUMMARY_LABEL,
   splitMismatchWarning,
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
+  splitRunWarnings,
 } from "../lib/selfCheck";
 import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 // The live file ledger the Evidence Folder page already has: every file this
@@ -415,6 +416,10 @@ export function SelfCheck() {
       policyChunkFileNames: ppdExisting?.chunkFileNames,
       evidenceChunkFileNames: existing?.chunkFileNames,
       unreadableFiles: countFileRows(toFileRows(ppdExisting?.fileLedger, existing?.fileLedger)).unreadable,
+      // Kept apart for the same reason as the chunk maps above: each pass has
+      // its own ledger, and a line is only ever affected by its own pass's.
+      policyLedger: ppdExisting?.fileLedger,
+      evidenceLedger: existing?.fileLedger,
     }),
     [ppdExisting, existing],
   );
@@ -517,10 +522,18 @@ export function SelfCheck() {
     () => (existing?.rows ?? []).filter((r) => r.ppdVerdict === "Not assessed").length,
     [existing],
   );
-  const incompleteNote = useMemo(() => {
-    const w = [...(ppdResults[scope]?.runWarnings ?? []), ...(existing?.runWarnings ?? [])];
-    return w.length > 0 ? plainRunError(w[0]) : undefined;
-  }, [ppdResults, existing, scope]);
+  // Both passes' warnings, split by what they MEAN. This used to take w[0],
+  // call it "part of this check did not complete" and drop the rest — so a
+  // file read in part was reported as a failed run, and the coverage and
+  // misfiled warnings behind it were never shown at all.
+  const runNotes = useMemo(
+    () => splitRunWarnings([...(ppdResults[scope]?.runWarnings ?? []), ...(existing?.runWarnings ?? [])]),
+    [ppdResults, existing, scope],
+  );
+  const incompleteNote = useMemo(
+    () => (runNotes.incomplete.length > 0 ? plainRunError(runNotes.incomplete[0]) : undefined),
+    [runNotes],
+  );
   const expectedGroups = useMemo(() => expectedEvidenceGroups(rows), [rows]);
   // The files THIS stored check read, each with the number of requirement lines
   // that quoted it, counted off the run's own chunk map. Records side only: the
@@ -1957,6 +1970,25 @@ export function SelfCheck() {
                 fabricated "Not documented" gap. So an incomplete run UNDER-
                 reports rather than invents, and the honest thing to say is
                 which lines are missing answers rather than gaps. */}
+            {/* Not a failure: the check finished and read a fraction of a
+                document, or looked in the wrong folder. Different heading,
+                different action, and every one of them shown — the single
+                most useful thing this page can tell a process owner is that
+                their 5,000-row register was read as 200 rows. */}
+            {(runNotes.readLess.length > 0 || runNotes.misfiled.length > 0) && (
+              <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 9, padding: "11px 13px", margin: "10px 0 0" }}>
+                <b style={{ fontSize: 13.5, color: "#92400e" }}>This check read less than the whole of what you gave it</b>
+                {runNotes.readLess.map((w, i) => (
+                  <p key={`r${i}`} style={{ ...muted, margin: "6px 0 0", color: "#92400e" }}>{w}</p>
+                ))}
+                {runNotes.misfiled.map((w, i) => (
+                  <p key={`m${i}`} style={{ ...muted, margin: "6px 0 0", color: "#92400e" }}>{w}</p>
+                ))}
+                <p style={{ ...muted, margin: "6px 0 0", color: "#92400e" }}>
+                  A requirement below may read as a gap because the part of the document that answers it was never opened. Check the affected files in <b>Evidence &amp; files</b> before treating any of these as a real gap.
+                </p>
+              </div>
+            )}
             {incompleteNote && (
               <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 9, padding: "11px 13px", margin: "10px 0 0" }}>
                 <b style={{ fontSize: 13.5, color: "#92400e" }}>Part of this check did not complete, so this result is incomplete</b>
@@ -2913,6 +2945,14 @@ function FindingCard({ row, view, id }: {
         </div>
       </div>
 
+      {/* Read in part is not a verdict problem, so it sits above the result
+          rather than inside the reasoning: it changes how much weight the
+          result below deserves. */}
+      {row.partialNote && (
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "9px 11px", margin: "0 0 10px", fontSize: 12.5, color: "#78350f", lineHeight: 1.45 }}>
+          <strong>Part of this requirement&rsquo;s evidence was not read.</strong> {row.partialNote}
+        </div>
+      )}
       {warning && (
         <div className="sc-consistency">
           <strong>Assessment consistency warning</strong>
@@ -3058,7 +3098,7 @@ function FileTable({ rows, perPass, sameLink, open, setOpen }: {
     <details
       open={open}
       onToggle={(e) => setOpen(e.currentTarget.open)}
-      style={{ border: "1px solid #e2e8f0", borderRadius: 10, margin: "12px 0", background: "#fff", borderColor: counts.unreadable > 0 ? "#fde68a" : "#e2e8f0" }}
+      style={{ border: "1px solid #e2e8f0", borderRadius: 10, margin: "12px 0", background: "#fff", borderColor: counts.unreadable > 0 || counts.partial > 0 ? "#fde68a" : "#e2e8f0" }}
     >
       <summary style={{ cursor: "pointer", listStyle: "revert", padding: "10px 13px" }}>
         <b style={{ fontSize: 13.5, color: INK }}>{perPass ? "Every file this tab read" : "Every file this check read"}</b>
@@ -3066,7 +3106,10 @@ function FileTable({ rows, perPass, sameLink, open, setOpen }: {
             BETWEEN them rather than through "1 could not be read". */}
         <span style={{ ...muted, fontWeight: 400, marginLeft: 8 }}>
           <span style={{ whiteSpace: "nowrap" }}>{counts.read} read</span>
-          {counts.check > 0 && <> · <span style={{ whiteSpace: "nowrap" }}>{counts.check} worth checking</span></>}
+          {/* Named in the collapsed summary, so it is visible without opening
+              the table: this is the fact a process owner most needs. */}
+          {counts.partial > 0 && <> · <span style={{ whiteSpace: "nowrap", color: "#92400e", fontWeight: 700 }}>{counts.partial} read in part</span></>}
+          {counts.check - counts.partial > 0 && <> · <span style={{ whiteSpace: "nowrap" }}>{counts.check - counts.partial} worth checking</span></>}
           {counts.unreadable > 0 && <> · <span style={{ whiteSpace: "nowrap" }}>{counts.unreadable} could not be read</span></>}
         </span>
         {warning && (
