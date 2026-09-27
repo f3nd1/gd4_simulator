@@ -48,7 +48,13 @@ describe("stallControl", () => {
 describe("the results-and-review pass can be skipped per file too", () => {
   const STORE = readFileSync("src/store/useWorkspaceStore.ts", "utf8");
   const PAGE = readFileSync("src/pages/SelfCheck.tsx", "utf8");
-  const pass = STORE.slice(STORE.indexOf("runOutcomeReviewPass: async"), STORE.indexOf("runOutcomeReviewPass: async") + 12_000);
+  // Bounded by the NEXT action rather than a character count: a fixed window
+  // silently stops covering the end of the pass as soon as anything is added
+  // to it, which is how this test first failed on a change that did not touch
+  // the behaviour it pins.
+  const passStart = STORE.indexOf("runOutcomeReviewPass: async");
+  const passEnd = STORE.indexOf("applyOutcomeReviewToChecklist", passStart);
+  const pass = STORE.slice(passStart, passEnd > passStart ? passEnd : passStart + 30_000);
 
   it("names the file it is re-reading and marks it skippable", () => {
     expect(pass).toMatch(/currentFile: rec\.name, canSkipCurrentFile: true/);

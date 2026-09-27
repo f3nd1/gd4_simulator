@@ -929,6 +929,11 @@ export type WorkspaceState = {
   // until applyOutcomeReviewResult (the human's explicit Apply click).
   outcomeReviewResults: Record<string, OutcomeReviewPassResult>;
   runOutcomeReviewPass: (subCriterionId: string) => Promise<void>;
+  // Appends a call to the results-and-review pass's log after it has finished.
+  // The band suggestion is made by a different store, immediately afterwards,
+  // and it is the last AI call in a check; without this it would be the one
+  // remaining hole in the record.
+  appendOutcomeAiCall: (subCriterionId: string, rec: AiCallRecord) => void;
   // Attaches the self-check's band call to the run it belongs to, so the
   // dimension panel and its detail table survive a reload. Patches the CURRENT
   // result only: history entries were archived before the band existed and must
@@ -2925,7 +2930,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // runs already read. Requires live AI (the pass is a live judgement;
       // Option A has no offline mode either). Stores an ADVISORY result only:
       // the checklist is untouched until applyOutcomeReviewResult below.
+      appendOutcomeAiCall: (subCriterionId, rec) =>
+        set((st) => {
+          const cur = st.outcomeReviewResults[subCriterionId];
+          if (!cur) return {};
+          const log = cur.aiCallLog ?? [];
+          return { outcomeReviewResults: { ...st.outcomeReviewResults, [subCriterionId]: { ...cur, aiCallLog: [...log, { ...rec, seq: log.length + 1 }] } } };
+        }),
       runOutcomeReviewPass: async (subCriterionId) => {
+        const orStartedAtMs = Date.now();
+        const OR_CALLS: AiCallRecord[] = [];
         const s = get();
         const aiSettings = useAISettingsStore.getState();
         const offline = aiOfflineReason(aiSettings);
@@ -2969,8 +2983,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             completionTokens: usage?.completionTokens,
             totalTokens: usage?.totalTokens,
           };
+          // The pass's own clock and its call log ride on the result, so the
+          // time breakdown can name this pass instead of leaving it inside
+          // "Unaccounted".
+          const withLog: OutcomeReviewPassResult | null = result
+            ? { ...result, durationMs: Date.now() - orStartedAtMs, ...(OR_CALLS.length > 0 ? { aiCallLog: OR_CALLS } : {}) }
+            : null;
           set((st) => ({
-            outcomeReviewResults: result ? { ...st.outcomeReviewResults, [subCriterionId]: result } : st.outcomeReviewResults,
+            outcomeReviewResults: withLog ? { ...st.outcomeReviewResults, [subCriterionId]: withLog } : st.outcomeReviewResults,
             aiReviewLog: [log, ...st.aiReviewLog].slice(0, 500),
             busy: st.busy === "outcomereview" + subCriterionId ? null : st.busy,
             outcomeReviewProgress: st.outcomeReviewProgress?.subCriterionId === subCriterionId ? null : st.outcomeReviewProgress,
@@ -3040,7 +3060,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 ?? Object.entries(useFileTextCacheStore.getState().entries ?? {}).find(([k]) => k.startsWith(`${rec.driveFileId}:`))?.[1];
               text = hit?.text ?? null;
             }
-            if ((text == null || !text.trim()) && rec.driveFileId) {
+            // A file the records pass already gave up on will not read any
+            // better here: this pass is text-tier only, with vision disabled,
+            // so a scanned PDF that needed OCR cannot succeed on a second
+            // attempt. Re-downloading it costs a Drive round trip and its own
+            // timeout to reach the same answer. It still lands in `missing`
+            // and is reported by name, exactly as before.
+            const alreadyUnreadable = rec.readStatus === "skipped" || rec.readStatus === "failed";
+            if ((text == null || !text.trim()) && rec.driveFileId && !alreadyUnreadable) {
               // The file being re-read is NAMED and marked skippable, exactly as
               // the other two passes do it. Without this the page could only
               // offer Stop while this pass hung on one file.
@@ -3131,6 +3158,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             ruleInjection: useRuleTuningStore.getState().championInjection(subCriterionId),
             resolveChunkFile: (cid) => chunkFileNames[cid],
             onProgress: (detail, windowFiles) => set({ outcomeReviewProgress: { subCriterionId, detail, currentWindowFiles: windowFiles, heartbeatAt: Date.now() } }),
+            // Metadata for every call this pass makes. Same collector, same
+            // PDPA rule: the text only travels under full capture.
+            passName: "outcomes/assess",
+            onAiCall: (rec, full) => {
+              OR_CALLS.push(rec);
+              if (get().captureFullPrompts) collectFullText(subCriterionId, rec, full);
+            },
             onCallAbort: (fn) => { _currentAiCallAbort = fn; set({ canSkipAiCall: !!fn }); },
             signal: runAbort.signal,
           });

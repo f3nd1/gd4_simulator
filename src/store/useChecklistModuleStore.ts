@@ -24,7 +24,7 @@ import { findOpenFindingForGap, classificationReviewNote, CLASSIFICATION_REVIEW_
 import { resolveFindingType } from "../lib/findingClassification";
 import { buildSeedEntry, SEED_SPECIFIC_LINES } from "../data/checklistSeed";
 import { simulateChecklistGeneration, applyAfiOverlay, simulateEvidenceFill, type EvidenceFillDraft } from "../lib/ai/simulateAI";
-import { runLiveChecklistGeneration, runLiveEvidenceFill, runHolisticBandSuggestion, type HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
+import { type OnAiCall, runLiveChecklistGeneration, runLiveEvidenceFill, runHolisticBandSuggestion, type HolisticBandSuggestionResult } from "../lib/ai/agentRuntime";
 import { effectiveSettings, type AIUsage } from "../lib/ai/aiClient";
 import { withOutcomeLegs, buildOutcomeReviewLegUpdates, type OutcomeReviewLegUpdate } from "../lib/outcomeReviewApply";
 import { useAISettingsStore } from "./useAISettingsStore";
@@ -103,7 +103,9 @@ export type ChecklistModuleState = {
   // results-and-review pass WITHOUT committing it to the checklist: the legs are
   // patched into a copy of the lines for this one call. Nothing is written, so
   // the audit lead's Apply gate and every finding's wording are untouched.
-  suggestBand: (itemId: string, outcomeRows?: OutcomeReviewRow[]) => Promise<HolisticBandSuggestionResult | null>;
+  // onAiCall carries the band call into the run log: it was the last AI
+  // call in a check that produced no row at all.
+  suggestBand: (itemId: string, outcomeRows?: OutcomeReviewRow[], onAiCall?: OnAiCall) => Promise<HolisticBandSuggestionResult | null>;
 
   generateSpecific: (itemId: string) => Promise<void>;
   updatePendingLine: (itemId: string, lineId: string, patch: Partial<SpecificChecklistLine>) => void;
@@ -287,7 +289,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
         set((s) => mapEntry(s, itemId, (e) => ({ ...e, apsrMatrix: { ...(e.apsrMatrix ?? {}), [dim]: value } })));
       },
 
-      suggestBand: async (itemId, outcomeRows) => {
+      suggestBand: async (itemId, outcomeRows, onAiCall) => {
         const req = GD4_REQUIREMENTS.find((r) => r.id === itemId);
         const aiSettings = useAISettingsStore.getState();
         if (!req || !(aiSettings.enabled && aiSettings.apiKey)) return null;
@@ -311,7 +313,7 @@ export const useChecklistModuleStore = create<ChecklistModuleState>()(
           const withLegs = outcomeRows?.length
             ? withOutcomeLegs(lines, buildOutcomeReviewLegUpdates(outcomeRows, { [itemId]: lines.map((l) => ({ id: l.id, sourceRef: l.sourceRef, clause: l.clause })) }))
             : lines;
-          const result = await runHolisticBandSuggestion(req, withLegs, settings, { memories, onUsage: (u) => { usage = u; } });
+          const result = await runHolisticBandSuggestion(req, withLegs, settings, { memories, onUsage: (u) => { usage = u; }, onAiCall });
           ws.pushAIReviewLog({
             agent: "Holistic Band Assessor",
             reviewType: "Checklist",

@@ -445,7 +445,7 @@ export async function runHolisticBandSuggestion(
   req: GD4Requirement,
   specific: SpecificChecklistLine[],
   settings: AISettings,
-  opts?: { memories?: SkillCalibrationMemory[]; onUsage?: (u: AIUsage) => void }
+  opts?: { memories?: SkillCalibrationMemory[]; onUsage?: (u: AIUsage) => void; onAiCall?: OnAiCall }
 ): Promise<HolisticBandSuggestionResult> {
   const domainSkill = domainExpertiseFor(req.id);
   const system = `You are a GD4 EduTrust assessor placing ONE sub-criterion item in a band using the OFFICIAL rubric from the EduTrust Guidance Document v4 (Jan 2025), paragraph 23, quoted verbatim below.
@@ -468,11 +468,33 @@ ${buildBandEvidenceDigest(specific) || "(no checklist lines exist yet — there 
 
 Diagnose each dimension, then place this item in ONE holistic official band.`;
 
-  const content = await chatComplete(
-    [{ role: "system", content: system }, { role: "user", content: user }],
-    settings,
-    { schema: HOLISTIC_BAND_SCHEMA, onUsage: opts?.onUsage }
-  );
+  // The last call in a check that produced no log row. One call, but it is
+  // the one that turns the pass results into a band, so a reader looking for
+  // "what decided my band" found nothing.
+  const bandAt = Date.now();
+  let bandTokens: AIUsage | undefined;
+  let content: string;
+  try {
+    content = await chatComplete(
+      [{ role: "system", content: system }, { role: "user", content: user }],
+      settings,
+    { schema: HOLISTIC_BAND_SCHEMA, onUsage: (u) => { bandTokens = u; opts?.onUsage?.(u); } }
+    );
+    opts?.onAiCall?.({
+      seq: 1, pass: "band/suggest", label: `band suggestion for ${req.id}`, startedAt: bandAt,
+      durationMs: Date.now() - bandAt, outcome: content.trim() ? "ok" : "empty",
+      promptChars: system.length + user.length, responseChars: content.length,
+      refs: [req.id],
+      ...(bandTokens ? { tokens: { prompt: bandTokens.promptTokens, completion: bandTokens.completionTokens, total: bandTokens.totalTokens } } : {}),
+    }, { prompt: `${system}\n\n${user}`, response: content });
+  } catch (err) {
+    opts?.onAiCall?.({
+      seq: 1, pass: "band/suggest", label: `band suggestion for ${req.id}`, startedAt: bandAt,
+      durationMs: Date.now() - bandAt, outcome: "failed", promptChars: system.length + user.length,
+      responseChars: 0, refs: [req.id], error: err instanceof Error ? err.message : String(err),
+    }, { prompt: `${system}\n\n${user}`, response: "" });
+    throw err;
+  }
   const parsed = parseJSONObject(content, ["approach", "processes", "systemsOutcomes", "review", "band"]);
   const toBand = (v: unknown, where: string): Band => {
     const n = Number(v);
@@ -1782,7 +1804,7 @@ function buildStagedPointsBlock(auditPoints: FlatAuditPoint[]): string {
 // covers, resolved from the chunk ids in that window. Without it a stalled
 // staged pass could only say "window 1 of 3 · batch 1 of 2", which tells the
 // person waiting nothing about which of their files it is stuck on.
-type StagedAuditOpts = { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string, windowFiles?: string[]) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined; onCallAbort?: CallAbortReg };
+type StagedAuditOpts = { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; fileType?: "spreadsheet" | "scanned" | null; onProgress?: (detail: string, windowFiles?: string[]) => void; shouldStop?: () => boolean; signal?: AbortSignal; resolveChunkFile?: (chunkId: string) => string | undefined; onCallAbort?: CallAbortReg; onAiCall?: OnAiCall; seqStart?: number; passName?: string };
 
 // Per-ref accumulator across sliding windows: the merged verdict so far, the
 // positive-coverage notes collected (one per contributing window), and the
@@ -1847,6 +1869,21 @@ async function runWindowedStagedAudit<V, Row, P extends { ref: string } = FlatAu
 
   const windows = buildDocWindows(docText);
   const totalCharsAvailable = docText.length;
+  // Per-call records, so this pass appears in the run log at all. It used to
+  // be invisible: a measured 5.5 run attributed 533.8s to "after the records
+  // pass" with no way to see what happened in it.
+  let stagedSeq = opts.seqStart ?? 0;
+  const stagedPass = opts.passName ?? "outcomes";
+  const recordStaged = (
+    label: string, startedAt: number, outcome: AiCallRecord["outcome"],
+    prompt: string, response: string,
+    extra?: Partial<Pick<AiCallRecord, "refs" | "chunkIds" | "error" | "tokens">>,
+  ) => {
+    opts.onAiCall?.({
+      seq: ++stagedSeq, pass: stagedPass, label, startedAt, durationMs: Date.now() - startedAt,
+      outcome, promptChars: prompt.length, responseChars: response.length, ...extra,
+    }, { prompt, response });
+  };
 
   const bestByRef = new Map<string, StagedBest<V>>();
 
@@ -1890,6 +1927,14 @@ async function runWindowedStagedAudit<V, Row, P extends { ref: string } = FlatAu
       const user = cfg.buildUser(batch, win, windowLabel);
       const system = cfg.buildSystem(windows.length > 1 ? `${cfg.funcName} (window ${win.index + 1}/${win.total})` : cfg.funcName);
       if (!firstPromptSent) firstPromptSent = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
+      const callAt = Date.now();
+      let callTokens: AIUsage | undefined;
+      const sLabel = `window ${win.index + 1} of ${win.total} · batch ${bi + 1} of ${batches.length}`;
+      const sLog = (outcome: AiCallRecord["outcome"], response: string, error?: string) =>
+        recordStaged(sLabel, callAt, outcome, `${system}\n\n${user}`, response, {
+          refs: batch.map((b) => b.ref), chunkIds: chunkIdsForRange(docText, win.start, win.end), error,
+          tokens: callTokens && { prompt: callTokens.promptTokens, completion: callTokens.completionTokens, total: callTokens.totalTokens },
+        });
       try {
         // Raced against a skip, like the Option A calls: a staged pass is the
         // longest part of a check, and a stuck call in it used to leave Stop
@@ -1898,9 +1943,10 @@ async function runWindowedStagedAudit<V, Row, P extends { ref: string } = FlatAu
         const raced = await raceCallSkip(opts.onCallAbort, chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
           settings,
-          { schema: cfg.schema, temperature: verdictTemp(settings), onUsage: (u) => { usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
+          { schema: cfg.schema, temperature: verdictTemp(settings), onUsage: (u) => { callTokens = u; usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         ));
         if (raced === CALL_SKIPPED) {
+          sLog("skipped", "", "Skipped by the user while it was in flight.");
           const label = windows.length > 1 ? `${cfg.label} window ${win.index + 1}/${win.total} batch ${bi + 1}/${batches.length}` : `${cfg.label} batch ${bi + 1}/${batches.length}`;
           windowErrors.push(`${label} skipped by user — its audit points fall through to other windows or are reported as not assessed.`);
           continue;
@@ -1908,6 +1954,10 @@ async function runWindowedStagedAudit<V, Row, P extends { ref: string } = FlatAu
         const content = raced;
         const parsed = parseJSONObject(content);
         const results = Array.isArray(parsed.results) ? parsed.results as Array<Record<string, unknown>> : [];
+        // ok / empty / failed, decided after the parse: a reply that could not
+        // be read and one that correctly had nothing are different facts.
+        sLog(!Array.isArray(parsed.results) ? "failed" : results.length > 0 ? "ok" : "empty", content,
+          Array.isArray(parsed.results) ? undefined : "The reply was not valid JSON, so no results could be read from it.");
         const byRef = new Map(results.map((r) => [normalizeAuditRef(String(r.ref ?? "")), r]));
         for (const p of batch) {
           const r = byRef.get(normalizeAuditRef(p.ref));
@@ -1937,6 +1987,7 @@ async function runWindowedStagedAudit<V, Row, P extends { ref: string } = FlatAu
         if (stopRequested()) { stoppedEarly = true; break; }
         const msg = err instanceof Error ? err.message : String(err);
         const errLabel = windows.length > 1 ? `${cfg.label} window ${win.index + 1}/${win.total}` : `${cfg.label} AI call`;
+        sLog("failed", "", msg);
         const errNote = `${errLabel} failed — ${msg}`;
         windowErrors.push(errNote);
         console.error(cfg.logTag, errNote);

@@ -625,7 +625,7 @@ export function SelfCheck() {
   // name things it never reads just to stay current. It is a map lookup.
   const logHasText = captureFullPrompts && useWorkspaceStore.getState().hasCapturedText(scope);
   const uncited = useMemo(() => uncitedFiles({ ppd: ppdExisting, evidence: procedureOnlyResult ? undefined : existing }), [ppdExisting, existing, procedureOnlyResult]);
-  const runStages = useMemo(() => buildRunStages({ ppd: ppdExisting, evidence: procedureOnlyResult ? undefined : existing }), [ppdExisting, existing, procedureOnlyResult]);
+  const runStages = useMemo(() => buildRunStages({ ppd: ppdExisting, evidence: procedureOnlyResult ? undefined : existing, outcome: procedureOnlyResult ? undefined : outcomeResults[scope] }), [ppdExisting, existing, outcomeResults, scope, procedureOnlyResult]);
   const transcript = useMemo(
     () => buildRunTranscript({ ppd: ppdExisting, evidence: procedureOnlyResult ? undefined : existing }),
     [ppdExisting, existing, procedureOnlyResult],
@@ -803,7 +803,13 @@ export function SelfCheck() {
         // band diagnosed from an absence. Nothing is written to the checklist.
         const orRows = useWorkspaceStore.getState().outcomeReviewResults[area.scope];
         const usableOutcomeRows = orRows && !orRows.skippedReason ? orRows.rows : undefined;
-        const s = await useChecklistModuleStore.getState().suggestBand(itemIds[0], usableOutcomeRows);
+        const s = await useChecklistModuleStore.getState().suggestBand(itemIds[0], usableOutcomeRows,
+          // The band call joins the results-and-review pass's log, which is
+          // where a reader looking for "what decided my band" will be.
+          (rec, full) => {
+            useWorkspaceStore.getState().appendOutcomeAiCall(area.scope, rec);
+            void full;
+          });
         if (stale()) return;
         if (s) {
           // Whether the results-and-review pass reached verdicts on THIS run,

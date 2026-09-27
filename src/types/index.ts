@@ -1358,6 +1358,14 @@ export type OutcomeReviewPassResult = {
   rows: OutcomeReviewRow[];
   runAt: string;
   runId: string;
+  // THE PASS NOBODY COULD SEE. It re-reads the whole combined document and is,
+  // by call count, the largest caller in a check, yet it produced no log rows
+  // at all: a measured 5.5 run could attribute 533.8s only to "after the
+  // records pass". Same shape and same rules as the other two passes: metadata
+  // always, no document text ever.
+  aiCallLog?: AiCallRecord[];
+  durationMs?: number;
+  stageTimings?: { listingMs: number; readMs: number };
   promptSent?: string;
   chunkFileNames?: Record<string, string>;
   // Coverage/read problems from the run (files missing from the session text
