@@ -63,7 +63,11 @@ export type AiRunLogPass = {
 
 export type AiRunLog = {
   kind: "gd4-ai-run-log";
-  version: 1;
+  // 2: every OCR read now appears in `calls` (pass "<pass>/ocr", input
+  // "image", promptChars 0), the stage timings are carried on each pass, and
+  // an empty answer is no longer logged as a success. A v1 reader would
+  // under-report the call count and mis-read those outcomes.
+  version: 2;
   exportedAt: string;
   build: string;
   area: string;
@@ -109,7 +113,7 @@ export function buildAiRunLog(args: {
   }
   const full = args.fullText && args.fullText.length > 0 ? args.fullText : undefined;
   return {
-    kind: "gd4-ai-run-log", version: 1,
+    kind: "gd4-ai-run-log", version: 2,
     exportedAt: new Date().toISOString(),
     build: buildStamp(),
     area: args.area,

@@ -466,6 +466,17 @@ type VisionReadCtx = {
   budget: { count: number; max: number }; // mutable run-level image/page budget
   maxPerFile: number;                      // per-file cap (mirrors MAX_PDF_VISION_PAGES)
   onUsage?: (u: AIUsage) => void;
+  // EVERY OCR read is an AI call and must reach the run log. They used to be
+  // invisible: a real 5.5 run made 18 of them and logged 21 calls, none of
+  // which were these, so the log said nothing about the slowest part of the
+  // run.
+  //
+  // PDPA, enforced HERE at the collector rather than by hiding a field in the
+  // UI: the image is never passed on, not even under full capture. It is raw
+  // student data and it would dwarf the file. What the OCR RETURNED is text
+  // and follows the same rule as every other prompt, so it travels only under
+  // full capture.
+  onVisionCall?: (rec: Omit<AiCallRecord, "seq">, text: string) => void;
 };
 type VisionReadResult = {
   text: string | null;                     // null = nothing readable was produced
@@ -507,6 +518,30 @@ async function readDriveFileWithVision(
 ): Promise<VisionReadResult> {
   const isImage = IMAGE_MIME_TYPES.has(file.mimeType);
   let embeddedVisionUsed = false;
+  // One wrapper for all three OCR call sites, so a site added later cannot
+  // silently skip the log. promptChars is 0 because a vision prompt is an
+  // image, not text; `input: "image"` says so rather than leaving a reader to
+  // read 0 as "nothing was sent".
+  const describeAndLog = async (dataUrl: string, what: string): Promise<string> => {
+    const startedAt = Date.now();
+    let tk: AIUsage | undefined;
+    try {
+      const text = await describeImage(dataUrl, ctx.visionSettings, { signal, onUsage: (u) => { tk = u; ctx.onUsage?.(u); } });
+      ctx.onVisionCall?.({
+        pass: "ocr", label: `${file.name} · ${what}`, startedAt, durationMs: Date.now() - startedAt,
+        outcome: text.trim() ? "ok" : "empty", input: "image", promptChars: 0, responseChars: text.length,
+        ...(tk ? { tokens: { prompt: tk.promptTokens, completion: tk.completionTokens, total: tk.totalTokens } } : {}),
+      }, text);
+      return text;
+    } catch (err) {
+      ctx.onVisionCall?.({
+        pass: "ocr", label: `${file.name} · ${what}`, startedAt, durationMs: Date.now() - startedAt,
+        outcome: "failed", input: "image", promptChars: 0, responseChars: 0,
+        error: err instanceof Error ? err.message : String(err),
+      }, "");
+      throw err;
+    }
+  };
   const embeddedImageHook: EmbeddedImageHook | undefined = ctx.canDescribeImages
     ? async (images) => {
         const transcripts: { location: string; text: string }[] = [];
@@ -515,7 +550,7 @@ async function readDriveFileWithVision(
         for (const img of images) {
           if (usedThisFile >= ctx.maxPerFile || ctx.budget.count >= ctx.budget.max) { skippedForCapCount++; continue; }
           ctx.budget.count++; usedThisFile++;
-          const d = await describeImage(img.dataUrl, ctx.visionSettings, { signal, onUsage: ctx.onUsage });
+          const d = await describeAndLog(img.dataUrl, `embedded image ${usedThisFile} (${img.location})`);
           if (d.trim()) { transcripts.push({ location: img.location, text: d.trim() }); embeddedVisionUsed = true; }
         }
         return { transcripts, skippedForCapCount };
@@ -531,7 +566,7 @@ async function readDriveFileWithVision(
     const parts: string[] = [];
     for (let p = 0; p < images.length; p++) {
       ctx.budget.count++;
-      const d = await describeImage(images[p], ctx.visionSettings, { signal, onUsage: ctx.onUsage });
+      const d = await describeAndLog(images[p], `scanned page ${p + 1} of ${images.length}`);
       if (d.trim()) parts.push(images.length > 1 ? `--- Page ${p + 1} ---\n${d.trim()}` : d.trim());
     }
     if (parts.length === 0) return { text: null, readMethod: "text", note: "Scanned/image-only PDF: rendered pages produced no readable text via the vision model." };
@@ -567,7 +602,7 @@ async function readDriveFileWithVision(
     if (ctx.budget.count >= ctx.budget.max) return { text: null, readMethod: "text", note: visionBudgetSkipNote("image", ctx.budget.max, true), budgetBlocked: true };
     ctx.budget.count++;
     const dataUrl = await exportFileImageDataUrl(file, token, signal);
-    const description = await describeImage(dataUrl, ctx.visionSettings, { signal, onUsage: ctx.onUsage });
+    const description = await describeAndLog(dataUrl, "image file");
     return { text: description.trim() || null, readMethod: "vision", note: description.trim() ? undefined : "Image produced no readable description via the vision model." };
   }
   return { text: null, readMethod: "text" };
@@ -1691,6 +1726,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // This run's per-call metadata, in call order. No document text — see
         // AiCallRecord in lib/ai/agentRuntime.ts for why not.
         const AI_CALLS: AiCallRecord[] = [];
+        // Shared by the OCR reads and by the engine, so the log is one series.
+        let AI_SEQ = 0;
 
         const finish = (rows: PPDReviewRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, overallNarrative?: string, runWarnings?: string[], contradictions?: PPDContradiction[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
@@ -1858,6 +1895,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // the staged/full-audit paths already have (readDriveFileWithVision).
           const ppdReadAi = useAISettingsStore.getState();
           const ppdVisionCtx: VisionReadCtx = {
+            // OCR reads land in the SAME calls array as everything else, and
+            // ahead of it: they happen while the files are being read, before
+            // the engine makes its first request. AI_SEQ is shared so the two
+            // form one ordered series rather than two both starting at 1.
+            onVisionCall: (rec, text) => {
+              const full: AiCallRecord = { ...rec, seq: ++AI_SEQ, pass: "procedure/ocr" };
+              AI_CALLS.push(full);
+              // The IMAGE is never handed on, under any setting. What the OCR
+              // returned is text, so it follows the same rule as every prompt.
+              if (get().captureFullPrompts) collectFullText(subCriterionId, full, { prompt: "[image sent to the vision model; never recorded]", response: text });
+            },
             canDescribeImages: ppdReadAi.enabled && !!ppdReadAi.apiKey,
             visionSettings: effectiveSettings(ppdReadAi, { purpose: "vision", context: composeSchoolContext(get().schoolContext) }),
             visionModelId: effectiveSettings(ppdReadAi, { purpose: "vision" }).model,
@@ -2029,7 +2077,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             onCallAbort: (fn) => { _currentAiCallAbort = fn; set({ canSkipAiCall: !!fn }); },
             // Metadata always; the text only while the person has armed it,
             // and then only in memory (see _fullPromptCapture).
+            seqStart: AI_SEQ,
             onAiCall: (rec, full) => {
+              AI_SEQ = Math.max(AI_SEQ, rec.seq);
               AI_CALLS.push(rec);
               if (get().captureFullPrompts) collectFullText(subCriterionId, rec, full);
             },
@@ -2209,6 +2259,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // This run's per-call metadata, in call order. No document text — see
         // AiCallRecord in lib/ai/agentRuntime.ts for why not.
         const AI_CALLS: AiCallRecord[] = [];
+        // Shared by the OCR reads and by the engine, so the log is one series.
+        let AI_SEQ = 0;
         const finish = (rows: EvidenceAssessmentRow[] | null, live: boolean, liveError: string | undefined, promptSent?: string, usage?: AIUsage, chunkFileNames?: Record<string, string>, coverageNotes?: string[], fileLedger?: AuditFileRecord[]) => {
           if (_currentRunAbort === runAbort) _currentRunAbort = null;
           const runAtIso = new Date().toISOString();
@@ -2396,6 +2448,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           // the staged/full-audit paths already have (readDriveFileWithVision).
           const evReadAi = useAISettingsStore.getState();
           const evVisionCtx: VisionReadCtx = {
+            // OCR reads land in the SAME calls array as everything else, and
+            // ahead of it: they happen while the files are being read, before
+            // the engine makes its first request. AI_SEQ is shared so the two
+            // form one ordered series rather than two both starting at 1.
+            onVisionCall: (rec, text) => {
+              const full: AiCallRecord = { ...rec, seq: ++AI_SEQ, pass: "records/ocr" };
+              AI_CALLS.push(full);
+              // The IMAGE is never handed on, under any setting. What the OCR
+              // returned is text, so it follows the same rule as every prompt.
+              if (get().captureFullPrompts) collectFullText(subCriterionId, full, { prompt: "[image sent to the vision model; never recorded]", response: text });
+            },
             canDescribeImages: evReadAi.enabled && !!evReadAi.apiKey,
             visionSettings: effectiveSettings(evReadAi, { purpose: "vision", context: composeSchoolContext(get().schoolContext) }),
             visionModelId: effectiveSettings(evReadAi, { purpose: "vision" }).model,
@@ -2653,7 +2716,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             onCallAbort: (fn) => { _currentAiCallAbort = fn; set({ canSkipAiCall: !!fn }); },
             // Metadata always; the text only while the person has armed it,
             // and then only in memory (see _fullPromptCapture).
+            seqStart: AI_SEQ,
             onAiCall: (rec, full) => {
+              AI_SEQ = Math.max(AI_SEQ, rec.seq);
               AI_CALLS.push(rec);
               if (get().captureFullPrompts) collectFullText(subCriterionId, rec, full);
             },

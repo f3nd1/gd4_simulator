@@ -40,7 +40,7 @@ import { FileLedger } from "./EvidenceFolder";
 import { RunTimelinePanel } from "../components/ui/RunTimelinePanel";
 import { findFolderMixups, folderMixupWarning } from "../lib/driveGuard";
 import { buildAiRunLog, summariseAiRunLog, DOC_TEXT_WARNING } from "../lib/aiRunLogExport";
-import { buildRunTranscript, type TranscriptRow } from "../lib/runTranscript";
+import { buildRunTranscript, uncitedFiles, UNCITED_NOTE, type TranscriptRow, type UncitedFile } from "../lib/runTranscript";
 import { selfCheckRuns, diffRuns, diffSummary, runTimingNote, type SelfCheckRunRef, type RunDiff } from "../lib/selfCheckHistory";
 import { SELF_CHECK_RUN_LOG_CAP } from "../lib/selfCheckRunLog";
 import { outcomeDimensionState, outcomePassTally } from "../lib/selfCheckOutcome";
@@ -623,6 +623,7 @@ export function SelfCheck() {
   // finishes rather than when any prop does, so a dependency list would have to
   // name things it never reads just to stay current. It is a map lookup.
   const logHasText = captureFullPrompts && useWorkspaceStore.getState().hasCapturedText(scope);
+  const uncited = useMemo(() => uncitedFiles({ ppd: ppdExisting, evidence: procedureOnlyResult ? undefined : existing }), [ppdExisting, existing, procedureOnlyResult]);
   const transcript = useMemo(
     () => buildRunTranscript({ ppd: ppdExisting, evidence: procedureOnlyResult ? undefined : existing }),
     [ppdExisting, existing, procedureOnlyResult],
@@ -1188,6 +1189,22 @@ export function SelfCheck() {
         ".sc-filter[data-on]{background:#172033;color:#fff;border-color:#172033}",
         ".sc-search{flex:1;min-width:220px;height:36px;border:1px solid #cfd8e6;border-radius:9px;padding:0 11px;font:inherit;font-size:13px;background:#fff}",
         ".sc-view-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:16px}",
+        // ── "What the check did", collapsed under the support tabs ───────
+        // A row, not a tab. The three tabs above it are about the content of
+        // the judgement; this is about the machine, and a peer position would
+        // imply it is evidence.
+        ".sc-record-drop{border-top:1px solid #eef2f6;margin-top:2px}",
+        ".sc-record-sum{cursor:pointer;list-style:revert;padding:11px 15px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;font-size:13px;color:#334155}",
+        ".sc-record-sum-note{color:#8490a3;font-size:11.5px;min-width:0}",
+        ".sc-record-drop-body{padding:0 15px 15px}",
+        // ── Read but never quoted ───────────────────────────────────────
+        // Amber, not red: an uncited document is not a fault on its own, and
+        // the note says so. It is the one place a missed passage would show.
+        ".sc-uncited{margin-top:12px;border:1px solid #e4cf9f;border-left:5px solid #b45309;border-radius:9px;background:#fffbeb;padding:10px 13px}",
+        ".sc-uncited-head{font-weight:800;color:#92400e;font-size:12.5px}",
+        ".sc-uncited-note{margin:3px 0 7px;color:#a16207;font-size:11.5px;line-height:1.5}",
+        ".sc-uncited-list{margin:0;padding-left:18px;font-size:12px;color:#92400e;line-height:1.6;max-height:240px;overflow-y:auto}",
+        ".sc-uncited-meta{display:block;color:#a16207;font-size:11px;overflow-wrap:anywhere}",
         // ── The record tab, set apart from the three verdicts ─────────────
         // The three above answer "what is my result?" in three vocabularies.
         // This one answers "what did the check do?", which is not a fourth
@@ -2162,25 +2179,11 @@ export function SelfCheck() {
                     </div>
                   )}
 
-                  {/* BELOW the three, behind a rule, on its own row and half
-                      their weight. The three above are three vocabularies for
-                      one result; this is not a fourth opinion on the evidence,
-                      and a reader must not be able to mistake it for one.
-                      Rendered for a procedure-only run too, where the verdict
-                      strip above is hidden entirely. */}
-                  <div className="sc-record-tab-row">
-                    <button
-                      type="button" aria-pressed={transcriptOpen}
-                      onClick={() => setTranscriptOpen((v) => !v)}
-                      className="sc-record-tab" data-on={transcriptOpen || undefined}
-                    >
-                      <strong>What the check did</strong>
-                      <span style={{ fontSize: 11.5, opacity: 0.8 }}>{transcriptOpen ? "Hide the record" : "A record, not a verdict"}</span>
-                    </button>
-                    <span className="sc-record-tab-note">{transcript.summary}</span>
-                  </div>
-
-                  {!procedureOnlyResult && !transcriptOpen && (
+                  {/* The record of what the check DID has moved out of this
+                      strip and into Audit support, as a collapsed row under
+                      its three tabs. This strip answers "what is my result";
+                      that question is "how was it reached". */}
+                  {!procedureOnlyResult && (
                     <div className="sc-view-subheader">
                       <b>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
                       {/* What this tab does NOT settle. It was a yellow box of
@@ -2262,13 +2265,6 @@ export function SelfCheck() {
               </div>
             )}
 
-                {/* THE RECORD, in place of the result. Everything from the
-                    counts down is this run's verdicts; the record is what the
-                    check DID to reach them, so the two are never both on
-                    screen claiming the same space. */}
-                {transcriptOpen && <RunTranscriptPanel rows={transcript.rows} />}
-
-                {!transcriptOpen && (<>
                 {/* A procedure-only result answers "is it written down?", so it is
                     counted in those words. "Complies" on a run that never opened a
                     record would be a claim nobody made. */}
@@ -2329,10 +2325,8 @@ export function SelfCheck() {
                     </div>
                   )}
                 </div>
-                </>)}
                 </div>
 
-                {!transcriptOpen && (<>
 
             {mostlyUnchecked(counts) && (
               <p style={{ ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af", borderRadius: 8, padding: "9px 11px" }}>
@@ -2378,7 +2372,6 @@ export function SelfCheck() {
                     </p>
                   )}
                 </div>
-                </>)}
 
             {/* ── AUDIT SUPPORT ────────────────────────────────────────────
                 Everything below the requirement above is supporting material,
@@ -2899,6 +2892,30 @@ export function SelfCheck() {
                   )}
                 </div>
               )}
+
+              {/* ── WHAT THE CHECK DID ──────────────────────────────────────
+                  A collapsed row UNDER the three tabs, not a fourth one beside
+                  them. Those three are about the content of the judgement;
+                  this is about the machine that reached it, and making it a
+                  peer would imply it is evidence.
+
+                  Closed by default, carrying the summary it already computes,
+                  so the record is one click away without ever being in the way
+                  of the result. */}
+              <details
+                className="sc-record-drop"
+                open={transcriptOpen}
+                onToggle={(e) => { if (e.target === e.currentTarget) setTranscriptOpen(e.currentTarget.open); }}
+              >
+                <summary className="sc-record-sum">
+                  <strong>What the check did</strong>
+                  <span className="sc-record-sum-note">{transcript.summary}</span>
+                </summary>
+                <div className="sc-record-drop-body">
+                  <RunTranscriptPanel rows={transcript.rows} uncited={uncited} />
+                </div>
+              </details>
+
             </div>
 
             {/* The same two handlers as the sidebar's pair, and hidden at every
@@ -3130,7 +3147,7 @@ function ClimbList({ options }: { options: BandStepOption[] }) {
 // this whole panel exists to avoid.
 //
 // No document text anywhere: names, counts, durations, refs and verdicts only.
-function RunTranscriptPanel({ rows }: { rows: TranscriptRow[] }) {
+function RunTranscriptPanel({ rows, uncited }: { rows: TranscriptRow[]; uncited: UncitedFile[] }) {
   const [narrative, setNarrative] = useState(true);
   const shown = narrative ? rows : rows.filter((r) => r.kind !== "narrative");
   const narrativeCount = rows.filter((r) => r.kind === "narrative").length;
@@ -3143,8 +3160,7 @@ function RunTranscriptPanel({ rows }: { rows: TranscriptRow[] }) {
   }
   return (
     <div style={{ marginTop: 16 }}>
-      <b style={{ fontSize: 14, color: INK }}>What the check did</b>
-      <p style={{ ...muted, margin: "4px 0 0", fontSize: 12.5 }}>
+      <p style={{ ...muted, margin: "10px 0 0", fontSize: 12.5 }}>
         Every document this check opened and every request it made, in order. It holds no document text: names, counts,
         timings and verdicts only.
       </p>
@@ -3153,6 +3169,25 @@ function RunTranscriptPanel({ rows }: { rows: TranscriptRow[] }) {
           <input type="checkbox" checked={narrative} onChange={(e) => setNarrative(e.currentTarget.checked)} />
           Show the running commentary ({narrativeCount} {narrativeCount === 1 ? "line" : "lines"})
         </label>
+      )}
+      {uncited.length > 0 && (
+        <div className="sc-uncited">
+          <div className="sc-uncited-head">{uncited.length} document{uncited.length === 1 ? " was" : "s were"} read but never quoted</div>
+          <p className="sc-uncited-note">{UNCITED_NOTE}</p>
+          <ul className="sc-uncited-list">
+            {uncited.map((f) => (
+              <li key={`${f.bucket}:${f.path}`}>
+                <b>{f.name}</b>
+                <span className="sc-uncited-meta">
+                  {f.path}
+                  {typeof f.charCount === "number" ? ` \u00b7 ${f.charCount.toLocaleString("en-SG")} characters` : ""}
+                  {f.readMethod === "vision" ? " \u00b7 read as images (scanned)" : f.readMethod === "text" ? " \u00b7 read as text" : ""}
+                  {` \u00b7 ${f.bucket === "policy" ? "written procedure" : "records"}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       <div className="sc-tx">
         <div className="sc-tx-rows">

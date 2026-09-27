@@ -206,6 +206,56 @@ function passRows(
   return rows;
 }
 
+// Documents whose text reached the model but which no verdict ever quoted.
+//
+// Not a fault on its own, and it must not be presented as one: an area that
+// simply does not need a document will leave it uncited. What it IS is the one
+// place a missed passage would show up, because a requirement judged "not met"
+// against a file nobody quoted is either a real gap or a read the check failed
+// to use. Measured on a real 5.5 run: 4 of 42 chunks were never cited, one of
+// them a duplicate copy of a file already read twice over.
+//
+// "Cited" is taken from the rows' own chunk ids, the same ones the verdicts
+// carry, so this cannot drift from what the result actually quotes.
+export type UncitedFile = {
+  name: string;
+  path: string;
+  charCount?: number;
+  readMethod?: AuditFileRecord["readMethod"];
+  chunkIds: string[];
+  bucket: AuditFileRecord["bucket"];
+};
+
+export function uncitedFiles(args: {
+  ppd?: PPDReviewResult;
+  evidence?: EvidenceAssessmentResult;
+}): UncitedFile[] {
+  const cited = new Set<string>();
+  for (const r of args.ppd?.rows ?? []) for (const c of r.chunkIds ?? []) cited.add(c);
+  for (const r of args.evidence?.rows ?? []) {
+    for (const c of r.evidenceChunkIds ?? []) cited.add(c);
+    for (const pc of r.promiseChecks ?? []) for (const c of pc.chunkIds ?? []) cited.add(c);
+  }
+  const out: UncitedFile[] = [];
+  const seen = new Set<string>();
+  for (const f of [...(args.ppd?.fileLedger ?? []), ...(args.evidence?.fileLedger ?? [])]) {
+    // Only a file whose text actually reached the model can be "never quoted".
+    // A skipped or failed file is already reported as skipped or failed, and
+    // listing it here again would read as a second, different fault.
+    const ids = f.chunkIds ?? [];
+    if (ids.length === 0 || f.readStatus !== "read") continue;
+    if (ids.some((c) => cited.has(c))) continue;
+    const key = `${f.bucket}::${f.driveFileId || f.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: f.name, path: f.path, charCount: f.charCount, readMethod: f.readMethod, chunkIds: ids, bucket: f.bucket });
+  }
+  return out;
+}
+
+export const UNCITED_NOTE =
+  "These documents were read but no requirement quoted them. Either this area does not need them, or the check missed something in them.";
+
 export function buildRunTranscript(args: {
   ppd?: PPDReviewResult;
   evidence?: EvidenceAssessmentResult;

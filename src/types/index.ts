@@ -1427,6 +1427,9 @@ export type AiCallRecord = {
   durationMs: number;
   outcome: "ok" | "failed" | "skipped" | "empty";
   error?: string;
+  // A vision call sends an IMAGE, so its promptChars is 0. Said explicitly,
+  // because a reader would otherwise read that 0 as "nothing was sent".
+  input?: "image";
   promptChars: number;
   responseChars: number;
   tokens?: { prompt?: number; completion?: number; total?: number };

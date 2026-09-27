@@ -1673,6 +1673,36 @@ function chunkIdsInWindow(text: string): string[] {
   return [...seen];
 }
 
+// Which chunks a window of the assembled document actually covers, BY
+// POSITION rather than by what markers happen to fall inside the slice.
+//
+// The marker scan above is wrong for any window that lies wholly inside one
+// chunk's body: a tail window starting after the last "[CHUNK:" header
+// contains no header at all, so it reported an empty chunk list while sending
+// tens of thousands of characters it had plainly read. Measured on a real
+// 5.5 run: contradiction-hunt window 3 of 3 logged chunkIds: [] against a
+// 52,283-character prompt.
+//
+// Headers are located once in the WHOLE document, giving each chunk a span;
+// a window then reports every chunk whose span it overlaps. Exact, not a
+// heuristic, and it can no longer return empty for a non-empty window.
+export function chunkIdsForRange(fullText: string, start: number, end: number): string[] {
+  const re = /\[CHUNK:([^\]]+)\]/g;
+  const marks: { id: string; at: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(fullText)) !== null) marks.push({ id: m[1], at: m.index });
+  if (marks.length === 0) return [];
+  const out: string[] = [];
+  for (let i = 0; i < marks.length; i++) {
+    const from = marks[i].at;
+    const to = i + 1 < marks.length ? marks[i + 1].at : fullText.length;
+    // Half-open overlap: a window ending exactly where the next chunk starts
+    // has not read any of it.
+    if (from < end && to > start && !out.includes(marks[i].id)) out.push(marks[i].id);
+  }
+  return out;
+}
+
 // Coverage priority: Yes > Partial > No. Returns the better of the two.
 function mergeCoverage(a: StagedCoverageStatus, b: StagedCoverageStatus): StagedCoverageStatus {
   if (a === "Yes" || b === "Yes") return "Yes";
@@ -2568,7 +2598,7 @@ export async function runPPDRequirementsReview(
   requirements: PPDRequirementInput[],
   policyDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string) => void; onEvent?: (ev: PPDRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal; onCallAbort?: CallAbortReg; onAiCall?: OnAiCall } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string) => void; onEvent?: (ev: PPDRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal; onCallAbort?: CallAbortReg; onAiCall?: OnAiCall; seqStart?: number } = {}
 ): Promise<PPDRequirementsReviewResult> {
   if (requirements.length === 0 || !policyDocText.trim()) {
     return {
@@ -2667,7 +2697,7 @@ Rules:
 Respond with JSON only: {"contradictions": [{"description": string, "quoteA": string, "chunkA": string, "quoteB": string, "chunkB": string}]}${buildSystemPrompt("ppdReview", null, label, opts.criterionId, domainSkill, opts.calibration, opts.memories, opts.ruleInjection)}${domainBlock}`;
 
   // Same per-call record as the records pass — see AiCallRecord.
-  let aiSeq = 0;
+  let aiSeq = opts.seqStart ?? 0;
   const recordCall = (
     pass: string, label: string, startedAt: number, outcome: AiCallRecord["outcome"],
     prompt: string, response: string,
@@ -2737,7 +2767,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
     await Promise.all(batches.map(async (batch, bi) => {
       if (stopRequested()) { stoppedEarly = true; return; }
       opts.onProgress?.(`PPD extraction — window ${win.index + 1}/${win.total} · batch ${bi + 1}/${batches.length}`);
-      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((r) => r.ref), chunkIds: chunkIdsInWindow(win.text), stage: "extract" });
+      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((r) => r.ref), chunkIds: chunkIdsForRange(policyDocText, win.start, win.end), stage: "extract" });
       const pointsBlock = batch.map((r, i) => `[${r.ref}] (${i + 1}) ${r.requirementText}`).join("\n");
       const user = `Policy & Procedure documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nExtract the relevant PPD passages and promises for each GD4 requirement line:\n${pointsBlock}`;
       const system = extractSystem(windows.length > 1 ? `runPPDRequirementsReview (extract, window ${win.index + 1}/${win.total})` : "runPPDRequirementsReview (extract)");
@@ -2745,7 +2775,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       const callAt = Date.now();
       let callTokens: AIUsage | undefined;
       const log = (outcome: AiCallRecord["outcome"], response: string, error?: string) =>
-        recordCall("procedure/extract", `window ${win.index + 1} of ${win.total} · batch ${bi + 1} of ${batches.length}`, callAt, outcome, `${system}\n\n${user}`, response, { refs: batch.map((r) => r.ref), chunkIds: chunkIdsInWindow(win.text), error, tokens: callTokens && { prompt: callTokens.promptTokens, completion: callTokens.completionTokens, total: callTokens.totalTokens } });
+        recordCall("procedure/extract", `window ${win.index + 1} of ${win.total} · batch ${bi + 1} of ${batches.length}`, callAt, outcome, `${system}\n\n${user}`, response, { refs: batch.map((r) => r.ref), chunkIds: chunkIdsForRange(policyDocText, win.start, win.end), error, tokens: callTokens && { prompt: callTokens.promptTokens, completion: callTokens.completionTokens, total: callTokens.totalTokens } });
       try {
         const raced = await raceSkip(group.skip, chatComplete(
           [{ role: "system", content: system }, { role: "user", content: user }],
@@ -2772,7 +2802,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           console.error("[PPDRequirementsReview]", label, "no parseable results");
           for (const r of batch) if (!extractedOk.has(r.ref)) extractFailedRefs.add(r.ref);
           opts.onEvent?.({ type: "batch-failed", refs: batch.map((r) => r.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it.", stage: "extract" });
-          log("empty", content, "The AI reply was empty or not valid JSON.");
+          log("failed", content, "The AI reply was empty or not valid JSON.");
           return;
         }
         const byRef = new Map(results.map((x) => [normalizeAuditRef(String(x.ref ?? "")), x]));
@@ -2846,7 +2876,7 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
       let huntTokens: AIUsage | undefined;
       const huntUser = `Policy & Procedure documents (chunk IDs in headers)${windows.length > 1 ? ` [Window ${win.index + 1} of ${win.total}]` : ""}:\n"""\n${win.text}\n"""\n\nList every internal contradiction, or an empty array if there are none.`;
       const huntLog = (outcome: AiCallRecord["outcome"], response: string, error?: string) =>
-        recordCall("procedure/contradiction-hunt", `window ${win.index + 1} of ${win.total}`, huntAt, outcome, `${contradictionSystem(huntLabel)}\n\n${huntUser}`, response, { chunkIds: chunkIdsInWindow(win.text), error, tokens: huntTokens && { prompt: huntTokens.promptTokens, completion: huntTokens.completionTokens, total: huntTokens.totalTokens } });
+        recordCall("procedure/contradiction-hunt", `window ${win.index + 1} of ${win.total}`, huntAt, outcome, `${contradictionSystem(huntLabel)}\n\n${huntUser}`, response, { chunkIds: chunkIdsForRange(policyDocText, win.start, win.end), error, tokens: huntTokens && { prompt: huntTokens.promptTokens, completion: huntTokens.completionTokens, total: huntTokens.totalTokens } });
       try {
         const content = await chatComplete(
           [
@@ -2856,9 +2886,18 @@ Respond with JSON only: {"contradictions": [{"description": string, "quoteA": st
           settings,
           { schema: PPD_CONTRADICTION_SCHEMA, temperature: verdictTemp(settings), onUsage: (u) => { huntTokens = u; usage = addUsage(usage, u); }, timeoutMs: AUDIT_BATCH_TIMEOUT_MS, signal: opts.signal }
         );
-        huntLog("ok", content);
         const parsed = parseJSONObject(content);
-        const found = Array.isArray(parsed.contradictions) ? parsed.contradictions as Array<Record<string, unknown>> : [];
+        // THREE OUTCOMES, not two. A hunt that correctly found nothing and a
+        // hunt whose reply could not be read are different facts about the
+        // run, and both used to log as "ok". Logged after the parse for that
+        // reason: before it, the outcome is not yet known.
+        const parsedArray = Array.isArray(parsed.contradictions);
+        const found = parsedArray ? parsed.contradictions as Array<Record<string, unknown>> : [];
+        huntLog(
+          !parsedArray ? "failed" : found.length > 0 ? "ok" : "empty",
+          content,
+          parsedArray ? undefined : "The reply was not valid JSON, so no contradiction list could be read from it.",
+        );
         for (const c of found) {
           if (typeof c?.description !== "string" || !c.description.trim()) continue;
           const quoteA = typeof c.quoteA === "string" ? c.quoteA : "";
@@ -3267,7 +3306,7 @@ export async function runEvidenceAssessment(
   inputs: EvidenceAssessmentInput[],
   evidenceDocText: string,
   settings: AISettings,
-  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string, pct?: number) => void; onEvent?: (ev: EvidenceRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal; onCallAbort?: CallAbortReg; onAiCall?: OnAiCall } = {}
+  opts: { criterionId?: string; calibration?: SkillCalibrationExample[]; memories?: SkillCalibrationMemory[]; ruleInjection?: string; onProgress?: (detail: string, pct?: number) => void; onEvent?: (ev: EvidenceRunEvent) => void; shouldStop?: () => boolean; signal?: AbortSignal; onCallAbort?: CallAbortReg; onAiCall?: OnAiCall; seqStart?: number } = {}
 ): Promise<EvidenceAssessmentRunResult> {
   if (inputs.length === 0) return { rows: [] };
 
@@ -3352,7 +3391,7 @@ Respond with JSON only:
 
   // One writer for the per-call record, so every call site reports the same
   // fields in the same shape (see AiCallRecord for why it holds no text).
-  let aiSeq = 0;
+  let aiSeq = opts.seqStart ?? 0;
   const recordCall = (
     pass: string, label: string, startedAt: number, outcome: AiCallRecord["outcome"],
     prompt: string, response: string,
@@ -3437,13 +3476,13 @@ Respond with JSON only:
       const lineLabel = inputs.length === 1 ? "line 1 of 1" : `lines ${firstLine}–${lastLine} of ${inputs.length}`;
       const winLabel = windows.length > 1 ? ` · window ${win.index + 1}/${win.total}` : "";
       opts.onProgress?.(`Extracting evidence for ${lineLabel}${winLabel}…`, Math.round((unitsDone / totalUnits) * 100));
-      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((b) => b.ref), firstLine, lastLine, chunkIds: chunkIdsInWindow(win.text), stage: "extract" });
+      opts.onEvent?.({ type: "window-start", window: { current: win.index + 1, total: win.total }, refs: batch.map((b) => b.ref), firstLine, lastLine, chunkIds: chunkIdsForRange(evidenceDocText, win.start, win.end), stage: "extract" });
       const pointsBlock = batch.map((r, i) => lineBlock(r, i)).join("\n");
       const user = `Actual evidence documents (chunk IDs in headers)${windowLabel}:\n"""\n${win.text}\n"""\n\nExtract every passage that bears on each requirement line or its PPD promises:\n${pointsBlock}`;
       const system = extractSystem(windows.length > 1 ? `runEvidenceAssessment (extract, window ${win.index + 1}/${win.total})` : "runEvidenceAssessment (extract)");
       if (!firstPromptSent) firstPromptSent = `SYSTEM (extract):\n${system}\n\nUSER:\n${user}`;
       const callAt = Date.now();
-      const callInfo = { refs: batch.map((b) => b.ref), chunkIds: chunkIdsInWindow(win.text) };
+      const callInfo = { refs: batch.map((b) => b.ref), chunkIds: chunkIdsForRange(evidenceDocText, win.start, win.end) };
       let callTokens: AIUsage | undefined;
       const log = (outcome: AiCallRecord["outcome"], response: string, error?: string) =>
         recordCall("records/extract", `window ${win.index + 1} of ${win.total} · lines ${firstLine}-${lastLine}`, callAt, outcome, `${system}\n\n${user}`, response, { ...callInfo, error, tokens: callTokens && { prompt: callTokens.promptTokens, completion: callTokens.completionTokens, total: callTokens.totalTokens } });
@@ -3473,7 +3512,7 @@ Respond with JSON only:
           for (const r of batch) if (!extractedOk.has(r.ref)) failedRefs.add(r.ref);
           opts.onEvent?.({ type: "batch-failed", refs: batch.map((b) => b.ref), error: "The AI reply was empty or not valid JSON — no passages could be parsed from it.", stage: "extract" });
           console.error("[EvidenceAssessment]", label, "no parseable results");
-          log("empty", content, "The AI reply was empty or not valid JSON.");
+          log("failed", content, "The AI reply was empty or not valid JSON.");
           unitsDone++;
           return;
         }
