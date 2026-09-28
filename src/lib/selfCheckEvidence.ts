@@ -458,18 +458,39 @@ export function withRereads(rows: SelfCheckFileRow[], rereads?: RereadRecord[]):
 }
 
 /** The sentence for ONE requirement line, or "" when no re-read touched it.
- *  It names the file, the date and the verdict the line carried before, which
- *  is the comparison somebody checking for a re-rolled verdict needs. */
-export function rereadNoteForRef(ref: string, rereads?: RereadRecord[]): string {
+ *
+ *  THE ORIGINAL, not the last hop. It used to quote the verdict from before the
+ *  MOST RECENT re-read, so after three re-reads a reader saw step three of a
+ *  journey and nothing of steps one and two: "Not met, Partial, Partial, Met"
+ *  read as "was Partial, now Met", which hides the shape it exists to expose.
+ *  The records accumulate and each one snapshots what the line said at the
+ *  time, so the FIRST record mentioning this line carries the value before any
+ *  re-read of it.
+ *
+ *  "before the first re-read" rather than "at the whole-area check", and the
+ *  difference is not pedantry: "Re-check this finding" and a clarification
+ *  round also re-run scoped assessments and move verdicts, and neither writes a
+ *  re-read record, so a line they touched has an older value this cannot see.
+ *  The wording claims only what the records actually prove.
+ */
+export function rereadNoteForRef(ref: string, rereads?: RereadRecord[], now?: string): string {
   const mine = (rereads ?? []).filter((x) => x.refs.includes(ref));
   if (mine.length === 0) return "";
+  const first = mine[0];
   const last = mine[mine.length - 1];
-  const was = last.previousVerdicts[ref];
+  const was = first.previousVerdicts[ref];
   const when = fmtDate(last.at);
-  const head = mine.length === 1
-    ? `This verdict came from a re-read of ${last.fileName} on ${when}.`
-    : `This verdict came from ${mine.length} re-reads, the last of ${last.fileName} on ${when}.`;
-  return was ? `${head} Before that re-read this line was: ${was}.` : head;
+  const n = mine.length;
+  const tail = n === 1
+    ? `Re-read of ${last.fileName} on ${when}.`
+    : `${n} re-reads, the last of ${last.fileName} on ${when}.`;
+  // Without the before-verdict there is no comparison to draw, so the line says
+  // only what happened rather than inventing a starting point.
+  if (!was) return tail;
+  const head = now
+    ? `Was ${was} before the first re-read, now ${now}.`
+    : `Was ${was} before the first re-read.`;
+  return `${head} ${tail}`;
 }
 
 /** The one line for the whole area. Said above the result so nobody has to

@@ -410,7 +410,7 @@ export function toSelfCheckRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckCon
       : (PLAIN_VERDICT[r.verdict] ?? PLAIN_VERDICT["Not assessed"]);
     return {
       partialNote: linePartialReadNote(partialFilesForLine(r.evidenceChunkIds, ctx.evidenceLedger)),
-      rereadNote: rereadNoteForRef(r.gdRef, ctx.rereads),
+      rereadNote: rereadNoteForRef(r.gdRef, ctx.rereads, unjudgedBothSides(r) ? "Not assessed" : r.verdict),
       ref: r.gdRef,
       requirement: r.requirementText,
       // The tally counts off this field, so it has to agree with the label. A
@@ -564,7 +564,7 @@ export function toRecordsRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckConte
     const plain = RECORDS_PLAIN_VERDICT[kind];
     return {
       partialNote: linePartialReadNote(partialFilesForLine(r.evidenceChunkIds, ctx.evidenceLedger)),
-      rereadNote: rereadNoteForRef(r.gdRef, ctx.rereads),
+      rereadNote: rereadNoteForRef(r.gdRef, ctx.rereads, kind === "found" ? "Met" : kind === "none" ? "Not met" : "Not assessed"),
       ref: r.gdRef,
       requirement: r.requirementText,
       // Mapped onto the shared axis so the one table and one tally can render

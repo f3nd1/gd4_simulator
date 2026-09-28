@@ -74,17 +74,41 @@ describe("the file row says how often it was read again", () => {
 
 describe("the requirement line says the verdict came from a re-read", () => {
   it("names the file, the date and what the line said BEFORE", () => {
-    const note = rereadNoteForRef(REF, [reread()]);
+    const note = rereadNoteForRef(REF, [reread()], "Met");
     expect(note).toContain("Agent Log.pdf");
     // en-SG renders the short month as "Sept", not "Sep".
     expect(note).toMatch(/27 Sept 2026/);
-    expect(note).toContain("Before that re-read this line was: Not met.");
+    expect(note).toContain("Was Not met before the first re-read, now Met.");
   });
 
-  it("counts repeats, which is the shape a re-rolled verdict makes", () => {
-    const note = rereadNoteForRef(REF, [reread(), reread({ at: "2026-09-28T02:00:00.000Z", previousVerdicts: { [REF]: "Partial" } })]);
-    expect(note).toMatch(/came from 2 re-reads/);
-    expect(note).toContain("Before that re-read this line was: Partial.");
+  // THE POINT OF THE WHOLE FEATURE. Quoting the verdict from before the LAST
+  // re-read shows step three of a journey and hides steps one and two: a line
+  // that went Not met, Partial, Partial, Met would read "was Partial, now Met".
+  it("quotes the ORIGINAL verdict, not the last hop", () => {
+    const chain = [
+      reread({ at: "2026-09-27T06:00:00.000Z", previousVerdicts: { [REF]: "Not met" } }),
+      reread({ at: "2026-09-27T07:00:00.000Z", previousVerdicts: { [REF]: "Partial" } }),
+      reread({ at: "2026-09-28T02:00:00.000Z", previousVerdicts: { [REF]: "Partial" } }),
+    ];
+    const note = rereadNoteForRef(REF, chain, "Met");
+    expect(note).toContain("Was Not met before the first re-read, now Met.");
+    expect(note).toMatch(/3 re-reads/);
+    // The intermediate values must not be the ones quoted.
+    expect(note).not.toMatch(/Was Partial before/);
+  });
+
+  it("ignores re-reads of other lines when finding the original", () => {
+    const chain = [
+      reread({ at: "2026-09-27T05:00:00.000Z", refs: ["6.3.1.DS9"], previousVerdicts: { "6.3.1.DS9": "Partial" } }),
+      reread({ at: "2026-09-27T06:00:00.000Z", previousVerdicts: { [REF]: "Not met" } }),
+    ];
+    expect(rereadNoteForRef(REF, chain, "Met")).toContain("Was Not met before the first re-read");
+  });
+
+  it("says only what happened when no before-verdict was recorded", () => {
+    const note = rereadNoteForRef(REF, [reread({ previousVerdicts: {} })], "Met");
+    expect(note).toMatch(/^Re-read of Agent Log\.pdf/);
+    expect(note).not.toMatch(/before the first re-read/);
   });
 
   it("says nothing on a line the re-read did not touch", () => {
@@ -129,7 +153,7 @@ describe("it travels into all three exports", () => {
     expect(lines[2]).toContain(SELF_CHECK_HEADERS[0]);
     expect(SELF_CHECK_HEADERS).toContain("Re-read");
     expect(SELF_CHECK_FILE_HEADERS).toContain("Re-read");
-    expect(csv).toContain("Before that re-read this line was: Not met.");
+    expect(csv).toContain("Was Not met before the first re-read, now Met.");
     expect(csv).toMatch(/read again 1 time/);
   });
 
@@ -145,7 +169,7 @@ describe("it travels into all three exports", () => {
     });
     expect(html).toContain("This result includes 1 re-read of 1 file");
     expect(html).toContain("sc-reread");
-    expect(html).toMatch(/Before that re-read this line was: Not met\./);
+    expect(html).toMatch(/Was Not met before the first re-read, now Met\./);
   });
 
   it("the run log carries the records themselves, on the records pass", () => {
