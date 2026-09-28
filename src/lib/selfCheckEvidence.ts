@@ -458,6 +458,24 @@ export function fileCheckMark(row: SelfCheckFileRow): FileCheckMark {
 export const SAME_LINK_WARNING =
   "Both boxes above hold the SAME folder link, so every document in it was treated as your written procedure AND as your records. A requirement can then look evidenced because your procedure says it happens, not because a record shows it happening. Put your policy documents in one folder and your records in another, paste the two different links, and run the check again before relying on this result.";
 
+// ── 7. What reading ONE file again costs ────────────────────────────────
+//
+// A scoped re-read (recheckFileLines) writes a NEW evidence result, and the
+// new result carries no bandSuggestion: the field is only ever written by the
+// full run on the Self-check page (SelfCheck.tsx, attachBandSuggestion). The
+// results-and-review pass is stored once per area and is deliberately hidden
+// when it is older than the run on screen, so a re-read's new runAt hides it
+// too. Both effects are CORRECT: the band and those verdicts were worked out
+// from the verdicts as they were before the re-read, and carrying them forward
+// would print a band that contradicts the lines above it.
+//
+// What was wrong was the telling. The message after a re-read said the band
+// working and the pass "are from the earlier run", which reads as "still
+// there". They are not there. Said BEFORE the click as well as after, because
+// a cost disclosed only afterwards is not a choice.
+export const REREAD_CLEARS_NOTICE =
+  "Reading one file again clears this area's band and its four-dimension panel, and the results-and-review pass stops being shown against this check. They were worked out from the verdicts as they stood before the re-read, so they would no longer match the lines on screen. Run the whole area again to get them back.";
+
 // The SAME regex driveClient.parseFolderId uses, inlined rather than imported:
 // driveClient instantiates a pdfjs Worker at module load and cannot be pulled
 // into a Vitest file, and every consumer of this module is tested. Comparing

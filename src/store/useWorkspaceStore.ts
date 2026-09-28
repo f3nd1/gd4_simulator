@@ -101,6 +101,7 @@ function mergeTypedTextWithVision(typed: string, transcribed: string): string {
 }
 import { buildOutcomeReviewLegUpdates } from "../lib/outcomeReviewApply";
 import { outcomePassGate } from "../lib/selfCheckOutcome";
+import { REREAD_CLEARS_NOTICE } from "../lib/selfCheckEvidence";
 import { aiRateFor } from "../lib/aiCost";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
@@ -8074,7 +8075,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
         return {
           ok: true,
-          message: `${rec.name} was read again and the ${refs.length} requirement ${refs.length === 1 ? "line that quoted" : "lines that quoted"} it ${refs.length === 1 ? "was" : "were"} re-checked. Every other line is unchanged, and the dimension working and the results-and-review pass are from the earlier run: run the whole check again if you want those redone too.`,
+          // The second sentence used to say the dimension working and the pass
+          // "are from the earlier run". They are not: see REREAD_CLEARS_NOTICE.
+          message: `${rec.name} was read again and the ${refs.length} requirement ${refs.length === 1 ? "line that quoted" : "lines that quoted"} it ${refs.length === 1 ? "was" : "were"} re-checked. Every other line is unchanged. ${REREAD_CLEARS_NOTICE}`,
         };
       },
 

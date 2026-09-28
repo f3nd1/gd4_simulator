@@ -31,7 +31,7 @@ import {
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
   splitRunWarnings,
 } from "../lib/selfCheck";
-import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
+import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, REREAD_CLEARS_NOTICE, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 // The live file ledger the Evidence Folder page already has: every file this
 // run has listed, its status as it changes, and a Skip button on the one being
 // read. Reused rather than rebuilt — a second, simpler live view would be a
@@ -1169,6 +1169,8 @@ export function SelfCheck() {
         // reads as a qualification rather than more explanation, and it must
         // not look like the privacy notice, which is a different thing again.
         ".sc-one-reading{border-left:3px solid #b45309;background:#fffbeb;color:#92400e;padding:7px 10px;border-radius:0 7px 7px 0;font-size:12px;line-height:1.5;margin:0 0 9px}",
+        // Same amber treatment as the one-reading note: this is a cost, not a hint.
+        ".sc-reread-cost{border-left:3px solid #b45309;background:#fffbeb;color:#92400e;padding:7px 10px;border-radius:0 7px 7px 0;font-size:12px;line-height:1.5;margin:0 0 9px}",
         ".sc-view-subheader{margin-top:10px;border:1px solid #dfe5ee;background:#f8fafc;border-radius:9px;padding:9px 11px;font-size:12.5px;color:#4b5870}",
         ".sc-view-subheader b{color:#172033}",
         ".sc-main{min-width:0}",
@@ -2485,6 +2487,9 @@ export function SelfCheck() {
                   For a file that could not be read, or one you have since replaced in Drive. It reads that file again and re-checks only the
                   requirement lines that quoted it. Every other line, and the whole written-procedure side, stays exactly as it is.
                 </p>
+                {/* The cost, BEFORE the click. It used to appear only in the
+                    message afterwards, and it said the opposite of what happens. */}
+                <p className="sc-reread-cost">{REREAD_CLEARS_NOTICE}</p>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <select
                     value={rereadKey} onChange={(e) => { setRereadKey(e.target.value); setRereadNote(""); }}
