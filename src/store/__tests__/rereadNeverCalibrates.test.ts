@@ -249,3 +249,35 @@ describe("re-check and clarification round record themselves too", () => {
     expect(useWorkspaceStore.getState().calibrationMemories).toEqual([]);
   });
 });
+
+// POINT 4. Somebody will delete the file and upload a new one despite the
+// warning. The re-run re-lists the folder, so the old id is simply absent and
+// the run completes: it used to say "<name> was read again" about a file that
+// no longer exists, which is the one sentence that person would rely on.
+describe("Read again on a file that is no longer in Drive", () => {
+  const goneLedger = () => [{ ...ledger(), driveFileId: "some-other-id", name: "Replacement.pdf", path: "2. Actual Evidence/Replacement.pdf" }];
+
+  it("says the file is gone, and does not claim it was read", async () => {
+    useWorkspaceStore.setState({
+      runEvidenceAssessment: async (scope: string) => {
+        const cur = useWorkspaceStore.getState().evidenceAssessments[scope]!;
+        // The re-listing found a DIFFERENT file: the old id is not there.
+        useWorkspaceStore.setState({ evidenceAssessments: { ...useWorkspaceStore.getState().evidenceAssessments,
+          [scope]: { ...cur, fileLedger: goneLedger(), runAt: new Date(Date.now() + 5000).toISOString() } } });
+      },
+    });
+    const r = await useWorkspaceStore.getState().recheckFileLines(SCOPE, FILE_ID);
+    expect(r.ok).toBe(true);
+    expect(r.message).toMatch(/NOT in your evidence folder any more/i);
+    expect(r.message).not.toMatch(/was read again/i);
+    // And it says what to do about the file they uploaded instead.
+    expect(r.message).toMatch(/run the whole area again/i);
+  });
+
+  it("still says it was read when the file is genuinely still there", async () => {
+    useWorkspaceStore.setState({ runEvidenceAssessment: fakeRunWritingVerdict("Met") });
+    const r = await useWorkspaceStore.getState().recheckFileLines(SCOPE, FILE_ID);
+    expect(r.message).toMatch(/was read again/i);
+    expect(r.message).not.toMatch(/NOT in your evidence folder/i);
+  });
+});

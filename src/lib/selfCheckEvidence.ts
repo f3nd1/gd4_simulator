@@ -30,6 +30,12 @@ export type SelfCheckFileRow = {
    *  check, and when the last one was. Undefined when it never has been. */
   rereadCount?: number;
   lastRereadAt?: string;
+  /** The Drive folder this file was found in, for the folder link. Absent on a
+   *  run recorded before it was stored. */
+  driveParentId?: string;
+  /** The file's path within the linked folder, which is what says whether the
+   *  linked folder can stand in as its parent. */
+  path?: string;
   /** How many requirement lines quoted this file on this run. Undefined when
    *  the caller had no run rows to count against. */
   quotedLines?: number;
@@ -108,7 +114,12 @@ function readDetail(rec: AuditFileRecord): string {
 export function toFileRow(rec: AuditFileRecord): SelfCheckFileRow {
   const bucket: FileBucketLabel = rec.bucket === "policy" ? "Written procedure" : "Records";
   const cited = rec.auditStatus === "cited";
-  const base = { key: rec.driveFileId || rec.path || rec.name, ...(rec.driveFileId ? { driveFileId: rec.driveFileId } : {}), name: rec.name, bucket, cited };
+  const base = {
+    key: rec.driveFileId || rec.path || rec.name,
+    ...(rec.driveFileId ? { driveFileId: rec.driveFileId } : {}),
+    ...(rec.driveParentId ? { driveParentId: rec.driveParentId } : {}),
+    path: rec.path, name: rec.name, bucket, cited,
+  };
   if (rec.readStatus === "failed") {
     return { ...base, outcome: "unreadable", label: "Could not be opened", detail: rec.failReason || "The file could not be opened.", action: REOPEN };
   }
@@ -487,6 +498,29 @@ export function driveFileUrl(driveFileId?: string): string {
   return driveFileId ? `https://drive.google.com/open?id=${encodeURIComponent(driveFileId)}` : "";
 }
 
+/** The folder the file was found in. Built ONLY from a parent id the run
+ *  actually recorded, or from the linked folder when the file sits directly in
+ *  it (a path with no "/" means no subfolder, so the linked folder IS the
+ *  parent). Never guessed from the linked folder for a file in a subfolder:
+ *  that sends somebody to an ancestor and they upload into the wrong place. */
+export function driveFolderUrl(row: { driveParentId?: string; path?: string }, linkedFolderId?: string): string {
+  const id = row.driveParentId
+    ?? ((row.path ?? "").includes("/") ? undefined : linkedFolderId || undefined);
+  return id ? `https://drive.google.com/drive/folders/${encodeURIComponent(id)}` : "";
+}
+
+/** WHAT READ AGAIN ACTUALLY DOES, said where somebody is about to press it.
+ *
+ *  Established from the code, not assumed: a scoped re-read calls
+ *  runEvidenceAssessment with a subset of refs, and that re-LISTS the evidence
+ *  folder and re-reads every file in it (the run's own log line says "the
+ *  complete evidence file set is re-read/re-sent, not a subset"). So a file
+ *  added since the last whole-area check IS read. What is NOT redone is the
+ *  judging: only the requirement lines that quoted THIS file are re-judged, so
+ *  a new document evidencing a different requirement is read and then ignored. */
+export const REREAD_SCOPE_HELP =
+  "Read again re-reads your whole evidence folder, including anything you have added since, but it only re-judges the requirement lines that quoted this file. Replace this file's contents and those lines will see the new version. Add a document that evidences a DIFFERENT requirement and it will be read and then ignored: run the whole area again for that.";
+
 /** The caveat, which matters as much as the link.
  *
  *  The run stored the file's Drive ID. Deleting the file and uploading a new
@@ -495,7 +529,7 @@ export function driveFileUrl(driveFileId?: string): string {
  *  CONTENTS through Drive's own "Manage versions" keeps the id, which is the
  *  one thing that has to stay the same. */
 export const REPLACE_IN_DRIVE_HELP =
-  "To fix a file, open it in Drive and use Manage versions to upload the better copy over it. Do not delete the file and upload a new one: the replacement gets a new Drive ID, this check is still looking for the old one, and Read again will fail on it.";
+  "To fix a file, open it in Drive and use Manage versions to upload the better copy over it. Do not delete the file and upload a new one: the replacement gets a new Drive ID, so this file's row still points at a file that no longer exists and Read again cannot read it.";
 
 /** The short form for the row. The full REREAD_CLEARS_NOTICE is what the
  *  confirmation carries: a 39-row table cannot repeat four sentences per row

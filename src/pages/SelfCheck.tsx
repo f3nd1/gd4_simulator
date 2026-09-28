@@ -31,7 +31,7 @@ import {
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
   splitRunWarnings,
 } from "../lib/selfCheck";
-import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, REREAD_CLEARS_NOTICE, REREAD_ROW_SHORT, REPLACE_IN_DRIVE_HELP, driveFileUrl, rereadSummary, canRereadFile, withQuotedLineCounts, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
+import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, REREAD_CLEARS_NOTICE, REREAD_ROW_SHORT, REPLACE_IN_DRIVE_HELP, REREAD_SCOPE_HELP, driveFileUrl, driveFolderUrl, rereadSummary, canRereadFile, withQuotedLineCounts, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 // The live file ledger the Evidence Folder page already has: every file this
 // run has listed, its status as it changes, and a Skip button on the one being
 // read. Reused rather than rebuilt — a second, simpler live view would be a
@@ -2467,6 +2467,10 @@ export function SelfCheck() {
             <FileTable
               rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} open={filesOpen} setOpen={setFilesOpen}
               rereading={rereading}
+              linkedFolderIds={{
+                policy: parseFolderId(procLink) || parseFolderId(folder?.policyLink) || undefined,
+                evidence: parseFolderId(evLink) || parseFolderId(folder?.folderLink) || undefined,
+              }}
               onReread={(f) => {
                 if (!area) return;
                 // The FULL notice, in the confirmation, because this is the
@@ -3529,7 +3533,7 @@ function WhyCell({ row, showProse = true }: { row: SelfCheckRow; showProse?: boo
 // when the panel happens to be open is not a warning. Shut and clean the header
 // is one line; shut with failures it names the files. Unreadable rows still
 // carry a tint AND a word AND a cross inside.
-function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading }: {
+function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading, linkedFolderIds }: {
   rows: SelfCheckFileRow[]; perPass: boolean; sameLink: boolean;
   open: boolean; setOpen: (v: boolean) => void;
   // Absent on a table with no re-readable rows (the procedure tab, and any
@@ -3537,7 +3541,14 @@ function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading
   // appears at all.
   onReread?: (row: SelfCheckFileRow) => void;
   rereading?: string | null;
+  // The two pasted folder ids, so a file sitting DIRECTLY in one of them can
+  // still offer a folder link on a run recorded before parent ids were kept.
+  linkedFolderIds?: { policy?: string; evidence?: string };
 }) {
+  // A file's own bucket decides which pasted link could be its parent. Never
+  // the other bucket's: that would send somebody to the wrong folder.
+  const linkedFolderIdFor = (f: SelfCheckFileRow) =>
+    f.bucket === "Written procedure" ? linkedFolderIds?.policy : linkedFolderIds?.evidence;
   if (rows.length === 0) return null;
   const counts = countFileRows(rows);
   const warning = unreadableWarning(counts);
@@ -3577,6 +3588,14 @@ function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading
             {REPLACE_IN_DRIVE_HELP}
           </p>
         )}
+        {/* What Read again covers, said where the buttons are rather than only
+            in the caveat above: the difference between replacing a file and
+            adding one is the part that is easiest to get wrong. */}
+        {onReread && rows.some(canRereadFile) && (
+          <p style={{ ...muted, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a5f", borderRadius: 8, padding: "9px 11px", marginTop: 0 }}>
+            {REREAD_SCOPE_HELP}
+          </p>
+        )}
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
@@ -3610,15 +3629,31 @@ function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading
                           into this app, so fixing a bad scan means going
                           there. The link removes the two middle steps of
                           "find the folder, find the file". */}
-                      {driveFileUrl(f.driveFileId) && (
-                        <div style={{ marginTop: 3 }}>
-                          <a
-                            href={driveFileUrl(f.driveFileId)} target="_blank" rel="noopener noreferrer"
-                            title={REPLACE_IN_DRIVE_HELP}
-                            style={{ fontSize: 11, color: "#0369a1", textDecoration: "none", fontWeight: 600, whiteSpace: "nowrap" }}
-                          >
-                            Open in Drive &#8599;
-                          </a>
+                      {/* TWO links, each named for the job it does. "Open in
+                          Drive" on its own invited the assumption that you
+                          could open the folder, upload a better file, and
+                          press Read again: the upload is read, but only the
+                          lines that quoted THIS file are re-judged. */}
+                      {(driveFileUrl(f.driveFileId) || driveFolderUrl(f, linkedFolderIdFor(f))) && (
+                        <div style={{ marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          {driveFileUrl(f.driveFileId) && (
+                            <a
+                              href={driveFileUrl(f.driveFileId)} target="_blank" rel="noopener noreferrer"
+                              title={REPLACE_IN_DRIVE_HELP}
+                              style={{ fontSize: 11, color: "#0369a1", textDecoration: "none", fontWeight: 600, whiteSpace: "nowrap" }}
+                            >
+                              Replace this file &#8599;
+                            </a>
+                          )}
+                          {driveFolderUrl(f, linkedFolderIdFor(f)) && (
+                            <a
+                              href={driveFolderUrl(f, linkedFolderIdFor(f))} target="_blank" rel="noopener noreferrer"
+                              title={REREAD_SCOPE_HELP}
+                              style={{ fontSize: 11, color: "#0369a1", textDecoration: "none", fontWeight: 600, whiteSpace: "nowrap" }}
+                            >
+                              Open the folder &#8599;
+                            </a>
+                          )}
                         </div>
                       )}
                     </td>

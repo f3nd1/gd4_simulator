@@ -217,7 +217,15 @@ export class DriveApiError extends Error {
 // `size` is a string of bytes (Google's API type), and is ABSENT for native
 // Google Docs/Sheets/Slides (they have no binary size). Used only to order the
 // read so smaller files read first and don't starve the vision budget.
-export type DriveFile = { id: string; name: string; mimeType: string; modifiedTime?: string; size?: string };
+export type DriveFile = {
+  id: string; name: string; mimeType: string; modifiedTime?: string; size?: string;
+  // The folder the file is actually in, which the ledger stores so a row can
+  // link to it. Derived from nothing else: a file's PATH says which subfolder
+  // it was found under, but not that subfolder's Drive id, and guessing the
+  // linked top folder would send someone to the wrong place for any file in a
+  // subfolder. Drive returns an array; a file has one parent in practice.
+  parents?: string[];
+};
 
 // WHERE THE TIME IN A READ ACTUALLY GOES, split at the one seam that matters:
 // waiting for Google, against parsing what came back. readMs measured the two
@@ -286,7 +294,7 @@ export async function listFolderFiles(folderId: string, accessToken: string, sig
   // shortcutDetails: a Drive shortcut is not a folder MIME, so a shortcut to
   // the real evidence folder used to be treated as an unreadable leaf file and
   // contributed nothing. Requesting the target lets it be followed.
-  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size,shortcutDetails(targetId,targetMimeType))&pageSize=${PAGE_SIZE}&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+  const baseUrl = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size,parents,shortcutDetails(targetId,targetMimeType))&pageSize=${PAGE_SIZE}&supportsAllDrives=true&includeItemsFromAllDrives=true`;
   const all: DriveFile[] = [];
   let pageToken: string | undefined;
   let pages = 0;

@@ -7,7 +7,7 @@
 // requirement line, the area) and the three exports, all counting off the SAME
 // stored records so none of them can show a re-read the others do not.
 import { describe, it, expect } from "vitest";
-import { withRereads, rereadNoteForRef, rereadSummary, describeReread, toFileRows, canRereadFile, withQuotedLineCounts, driveFileUrl, REPLACE_IN_DRIVE_HELP, type SelfCheckFileRow } from "../selfCheckEvidence";
+import { withRereads, rereadNoteForRef, rereadSummary, describeReread, toFileRows, canRereadFile, withQuotedLineCounts, driveFileUrl, driveFolderUrl, REPLACE_IN_DRIVE_HELP, REREAD_SCOPE_HELP, type SelfCheckFileRow } from "../selfCheckEvidence";
 import { toSelfCheckRows, toRecordsRows, toProcedureRows, buildSelfCheckCsv, buildSelfCheckHtml, countSelfCheck, SELF_CHECK_HEADERS, SELF_CHECK_FILE_HEADERS } from "../selfCheck";
 import { buildAiRunLog } from "../aiRunLogExport";
 import type { AuditFileRecord, EvidenceAssessmentResult, EvidenceAssessmentRow, PPDReviewRow, RereadRecord } from "../../types";
@@ -318,10 +318,56 @@ describe("the Drive link and the caveat that has to travel with it", () => {
     // The reason, not just the instruction: a rule without its reason is one
     // somebody talks themselves out of.
     expect(REPLACE_IN_DRIVE_HELP).toMatch(/new Drive ID/i);
-    expect(REPLACE_IN_DRIVE_HELP).toMatch(/Read again will fail/i);
+    expect(REPLACE_IN_DRIVE_HELP).toMatch(/Read again cannot read it/i);
   });
 
   it("carries the id onto the row, which is what the link is built from", () => {
     expect(toFileRows(undefined, [led()])[0].driveFileId).toBe(FILE_ID);
+  });
+});
+
+// TWO LINKS, TWO JOBS. One link labelled "Open in Drive" invited the
+// assumption that you could open the folder, upload a better file and press
+// Read again. The upload IS read (a scoped re-read re-lists the folder and
+// re-reads every file in it), but only the lines that quoted THIS file are
+// re-judged, so a document evidencing a different requirement is read and then
+// ignored.
+describe("the folder link, and what Read again actually covers", () => {
+  it("uses the parent id the run recorded", () => {
+    expect(driveFolderUrl({ driveParentId: "fold1", path: "sub/A.pdf" }))
+      .toBe("https://drive.google.com/drive/folders/fold1");
+  });
+
+  it("falls back to the linked folder ONLY for a file sitting directly in it", () => {
+    // No slash in the path means no subfolder, so the linked folder is the parent.
+    expect(driveFolderUrl({ path: "A.pdf" }, "linked1")).toBe("https://drive.google.com/drive/folders/linked1");
+  });
+
+  it("refuses to guess for a file in a subfolder", () => {
+    // Linking to the ancestor would send somebody to upload in the wrong place.
+    expect(driveFolderUrl({ path: "2. Actual Evidence/A.pdf" }, "linked1")).toBe("");
+  });
+
+  it("gives nothing when neither a parent nor a linked folder is known", () => {
+    expect(driveFolderUrl({ path: "A.pdf" })).toBe("");
+    expect(driveFolderUrl({})).toBe("");
+  });
+
+  it("prefers the recorded parent over the linked folder", () => {
+    expect(driveFolderUrl({ driveParentId: "real", path: "A.pdf" }, "linked1"))
+      .toBe("https://drive.google.com/drive/folders/real");
+  });
+
+  it("carries the parent id onto the row when the run recorded one", () => {
+    expect(toFileRows(undefined, [led({ driveParentId: "fold1" })])[0].driveParentId).toBe("fold1");
+    expect(toFileRows(undefined, [led()])[0].driveParentId).toBeUndefined();
+  });
+
+  it("says what Read again re-reads AND what it re-judges, which are different", () => {
+    expect(REREAD_SCOPE_HELP).toMatch(/re-reads your whole evidence folder/i);
+    expect(REREAD_SCOPE_HELP).toMatch(/only re-judges/i);
+    // The case the user got wrong: adding a file for a different requirement.
+    expect(REREAD_SCOPE_HELP).toMatch(/different requirement/i);
+    expect(REREAD_SCOPE_HELP).toMatch(/run the whole area again/i);
   });
 });

@@ -742,6 +742,10 @@ export type AuditFileRecord = {
   // Drive file ID and last-modified timestamp — used to detect unchanged files
   // and reuse previously extracted text on repeat audits.
   driveFileId?: string;
+  // The Drive folder this file was actually found in, so a row can offer a
+  // link to that folder. Absent on runs recorded before it was stored, and
+  // then no folder link is shown rather than one pointing at an ancestor.
+  driveParentId?: string;
   driveModifiedTime?: string;
   // Whether this file was newly read, re-read after a change, or reused from cache.
   processingMode?: "new" | "changed" | "reused";

@@ -1956,7 +1956,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const fileRecords: AuditFileRecord[] = policyFiles.map((file) => ({
             path: file.path, name: file.path.split("/").pop() || file.path, mimeType: file.mimeType, fileKind: ppdFileKind(file.mimeType),
             bucket: "policy", readStatus: "found", auditStatus: "pending",
-            driveFileId: file.id, driveModifiedTime: file.modifiedTime,
+            driveFileId: file.id, driveParentId: file.parents?.[0], driveModifiedTime: file.modifiedTime,
           }));
           patchPpd({ filesTotal: policyFiles.length, filesFound: [...fileRecords], stage: "reading" });
           // POLICY BUCKET ONLY. The evidence pass keeps its own map, and the
@@ -2542,7 +2542,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const fileRecords: AuditFileRecord[] = evidenceFiles.map((file) => ({
             path: file.path, name: file.path.split("/").pop() || file.path, mimeType: file.mimeType, fileKind: fileKindOf(file.mimeType),
             bucket: "evidence", readStatus: "found", auditStatus: "pending",
-            driveFileId: file.id, driveModifiedTime: file.modifiedTime,
+            driveFileId: file.id, driveParentId: file.parents?.[0], driveModifiedTime: file.modifiedTime,
             chunkIds: [],
           }));
           patchEv({ filesTotal: evidenceFiles.length, filesFound: [...fileRecords] });
@@ -5612,7 +5612,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           bucket: file.bucket,
           readStatus: "found" as const,
           auditStatus: "pending" as const,
-          driveFileId: file.id,
+          driveFileId: file.id, driveParentId: file.parents?.[0],
           driveModifiedTime: file.modifiedTime,
         }));
         const connectedFolderNames = [policyId ? "Policy & Procedure" : null, evidenceId ? "Actual Evidence" : null].filter(Boolean) as string[];
@@ -6901,7 +6901,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const fileRecords: AuditFileRecord[] = taggedFiles.map((file) => ({
           path: file.path, name: file.path.split("/").pop() || file.path, mimeType: file.mimeType,
           fileKind: fileKind(file.mimeType), bucket: file.bucket, readStatus: "found" as const, auditStatus: "pending" as const,
-          driveFileId: file.id, driveModifiedTime: file.modifiedTime,
+          driveFileId: file.id, driveParentId: file.parents?.[0], driveModifiedTime: file.modifiedTime,
         }));
         const filesTotal = taggedFiles.length;
 
@@ -8129,11 +8129,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             previousVerdicts,
           }) } };
         });
+        // DID THE FILE ACTUALLY GET READ? The re-run re-lists the folder from
+        // Drive, so the new ledger is what is there NOW. A file deleted and
+        // re-uploaded has a new Drive id and is a different file, and the old
+        // id is simply absent. Without this check the message said "<name> was
+        // read again" about a file that no longer exists, which is the one
+        // thing somebody following the delete-and-upload route would rely on.
+        const stillThere = (after.fileLedger ?? []).some((f) => (rec.driveFileId ? f.driveFileId === rec.driveFileId : f.path === rec.path));
+        const lines = `${refs.length} requirement ${refs.length === 1 ? "line" : "lines"}`;
         return {
           ok: true,
           // The second sentence used to say the dimension working and the pass
           // "are from the earlier run". They are not: see REREAD_CLEARS_NOTICE.
-          message: `${rec.name} was read again and the ${refs.length} requirement ${refs.length === 1 ? "line that quoted" : "lines that quoted"} it ${refs.length === 1 ? "was" : "were"} re-checked. Every other line is unchanged. ${REREAD_CLEARS_NOTICE}`,
+          message: stillThere
+            ? `${rec.name} was read again and the ${lines} that quoted it ${refs.length === 1 ? "was" : "were"} re-checked. Every other line is unchanged. ${REREAD_CLEARS_NOTICE}`
+            : `${rec.name} is NOT in your evidence folder any more, so it could not be read again. The ${lines} that quoted it ${refs.length === 1 ? "was" : "were"} re-checked against the documents that are there now. If you replaced it by uploading a new file, that new file WAS read, but only these lines were re-judged: run the whole area again so every line sees it. ${REREAD_CLEARS_NOTICE}`,
         };
       },
 
