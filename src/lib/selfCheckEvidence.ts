@@ -473,8 +473,20 @@ export const SAME_LINK_WARNING =
 // working and the pass "are from the earlier run", which reads as "still
 // there". They are not there. Said BEFORE the click as well as after, because
 // a cost disclosed only afterwards is not a choice.
+//
+// Two openers, one reason, because THREE actions clear the band and they are
+// not all "reading one file again": the file re-read here, "Re-check this
+// finding", and a clarification round. All three call runEvidenceAssessment
+// with a subset of refs, so all three land in the same finish() and lose the
+// band identically. The other two used to say nothing at all, which is worse
+// than the wrong sentence this replaced: a false statement at least tells you
+// something happened.
+const CLEARS_WHY =
+  "They were worked out from the verdicts as they stood before the re-read, so they would no longer match the lines on screen. Run the whole area again to get them back.";
 export const REREAD_CLEARS_NOTICE =
-  "Reading one file again clears this area's band and its four-dimension panel, and the results-and-review pass stops being shown against this check. They were worked out from the verdicts as they stood before the re-read, so they would no longer match the lines on screen. Run the whole area again to get them back.";
+  `Reading one file again clears this area's band and its four-dimension panel, and the results-and-review pass stops being shown against this check. ${CLEARS_WHY}`;
+export const RECHECK_CLEARS_NOTICE =
+  `Re-checking clears the band and the four-dimension panel of every area it re-ran, and the results-and-review pass stops being shown against those checks. ${CLEARS_WHY}`;
 
 // The SAME regex driveClient.parseFolderId uses, inlined rather than imported:
 // driveClient instantiates a pdfjs Worker at module load and cannot be pulled

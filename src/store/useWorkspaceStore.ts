@@ -101,7 +101,7 @@ function mergeTypedTextWithVision(typed: string, transcribed: string): string {
 }
 import { buildOutcomeReviewLegUpdates } from "../lib/outcomeReviewApply";
 import { outcomePassGate } from "../lib/selfCheckOutcome";
-import { REREAD_CLEARS_NOTICE } from "../lib/selfCheckEvidence";
+import { REREAD_CLEARS_NOTICE, RECHECK_CLEARS_NOTICE } from "../lib/selfCheckEvidence";
 import { aiRateFor } from "../lib/aiCost";
 import { findingTypeForStatus, resolveFindingType, resolveNcSeverity } from "../lib/findingClassification";
 import { assemblePanel, isValidPanel, shouldAutoRunPanel, findingReviewHash, MIN_PANEL, MAX_PANEL } from "../lib/reviewPanel";
@@ -8120,7 +8120,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           : anyChanged
             ? " The assessment changed but the line is still a gap, so the finding stands — review the updated verdict and close it manually only if you judge it resolved."
             : " The new evidence did not change the assessment. The finding stands.";
-        return { ok: true, message: `Re-checked ${parts.join("; ")}.${tail}` };
+        // Said here too: this path clears the band exactly as the file re-read
+        // does, and used to say nothing at all about it.
+        return { ok: true, message: `Re-checked ${parts.join("; ")}.${tail} ${RECHECK_CLEARS_NOTICE}` };
       },
 
       clarificationRounds: [],
@@ -8203,7 +8205,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           : resolvedCount > 0
             ? " Resolved findings are NOT auto-closed — close them in Quality Action / AFI if you judge them met."
             : " No findings were resolved this round.";
-        return { ok: true, message: `Round ${round.roundNumber}: ${resolvedCount} of ${roundFindings.length} now resolved, ${round.stillOpenCount} still open.${tail}`, round };
+        // Same disclosure as the single re-check: a round re-runs one scoped
+        // assessment per area and each one clears that area's band.
+        return { ok: true, message: `Round ${round.roundNumber}: ${resolvedCount} of ${roundFindings.length} now resolved, ${round.stillOpenCount} still open.${tail} ${RECHECK_CLEARS_NOTICE}`, round };
       },
       clearClarificationRounds: () => set({ clarificationRounds: [] }),
 

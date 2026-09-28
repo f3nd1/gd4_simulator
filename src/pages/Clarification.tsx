@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { RECHECK_CLEARS_NOTICE } from "../lib/selfCheckEvidence";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
 import { scopeIdForItem, scopeTitle, folderScopeId } from "../lib/evidenceScope";
@@ -152,6 +153,12 @@ export function Clarification() {
           Each item's evidence folder is re-read fresh and only the tied requirement line(s) are re-assessed. A resolved finding
           is <b>never closed automatically</b> — you decide closure in Quality Action / AFI. Runs one item at a time, so a round
           across several sub-criteria can take a while.
+        </p>
+        {/* The cost, BEFORE the click. A round runs one scoped assessment per
+            area, and each one clears that area's band exactly as the
+            Self-check page's file re-read does. It used to say nothing. */}
+        <p style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", borderLeft: "3px solid #b45309", borderRadius: "0 7px 7px 0", padding: "7px 10px", lineHeight: 1.5, maxWidth: 760, margin: "8px 0 0" }}>
+          {RECHECK_CLEARS_NOTICE}
         </p>
 
         {/* Ordered Step 1 → Step 3 left to right. The old labels ("Re-check

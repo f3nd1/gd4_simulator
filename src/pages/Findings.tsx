@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useChecklistModuleStore } from "../store/useChecklistModuleStore";
+import { RECHECK_CLEARS_NOTICE } from "../lib/selfCheckEvidence";
 import { useWorkspaceStore } from "../store/useWorkspaceStore";
 import { useFindingDraftStore } from "../store/useFindingDraftStore";
 import { PanelReviewSection } from "../components/ui/PanelReviewSection";
@@ -1221,6 +1222,10 @@ function FindingDetail({ finding: f }: { finding: Finding }) {
             </button>
             <span style={{ fontSize: 11, color: "#475569" }}>Added more evidence? Re-assess just this line against the updated folder.</span>
           </div>
+          {/* The cost, BEFORE the click. This button re-runs the same scoped
+              assessment the Self-check page's file re-read does, so it clears
+              the area's band the same way, and it used to say nothing. */}
+          <div style={{ marginTop: 6, fontSize: 11.5, color: "#92400e", lineHeight: 1.5 }}>{RECHECK_CLEARS_NOTICE}</div>
           {recheckMsg && (
             <div style={{ marginTop: 6, fontSize: 11.5, color: recheckMsg.ok ? "#166534" : "#b45309", lineHeight: 1.5 }}>
               {recheckMsg.ok ? "✓ " : "⚠ "}{recheckMsg.text}

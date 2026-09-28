@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { REREAD_CLEARS_NOTICE } from "../selfCheckEvidence";
+import { REREAD_CLEARS_NOTICE, RECHECK_CLEARS_NOTICE } from "../selfCheckEvidence";
 
 const STORE = readFileSync("src/store/useWorkspaceStore.ts", "utf8");
 const PAGE = readFileSync("src/pages/SelfCheck.tsx", "utf8");
+const FINDINGS = readFileSync("src/pages/Findings.tsx", "utf8");
+const CLARIFY = readFileSync("src/pages/Clarification.tsx", "utf8");
 
 // A re-read of one file writes a new evidence result, and the new result has no
 // band suggestion and hides the results-and-review pass. That is the CORRECT
@@ -63,5 +65,52 @@ describe("the two facts the notice states", () => {
   it("the results-and-review pass is hidden when it predates the run on screen", () => {
     const shown = PAGE.slice(PAGE.indexOf("const outcomeShown = useMemo"));
     expect(shown.slice(0, 500)).toMatch(/res\.runAt\).getTime\(\) < new Date\(runAt\).getTime\(\)\) return undefined/);
+  });
+});
+
+// THREE actions clear the band, not one. "Re-check this finding" and a
+// clarification round call the same runEvidenceAssessment with a subset of
+// refs, land in the same finish() and lose the band identically. Both used to
+// say nothing at all about it, which is worse than the wrong sentence the
+// file re-read used to carry: silence tells you nothing happened.
+describe("every path that clears the band says so", () => {
+  it("uses one reason for all three, so they cannot drift apart", () => {
+    const why = "Run the whole area again to get them back.";
+    expect(REREAD_CLEARS_NOTICE).toContain(why);
+    expect(RECHECK_CLEARS_NOTICE).toContain(why);
+    for (const n of [REREAD_CLEARS_NOTICE, RECHECK_CLEARS_NOTICE]) {
+      expect(n, n).toMatch(/band/i);
+      expect(n, n).toMatch(/four-dimension panel/i);
+      expect(n, n).toMatch(/results-and-review pass/i);
+    }
+  });
+
+  it("re-checking one finding says it, before and after", () => {
+    expect(FINDINGS).toContain("{RECHECK_CLEARS_NOTICE}");
+    const fn = STORE.slice(STORE.indexOf("recheckFinding: async"));
+    expect(fn.slice(0, 4000)).toContain("${RECHECK_CLEARS_NOTICE}");
+  });
+
+  it("a clarification round says it, before and after", () => {
+    expect(CLARIFY).toContain("{RECHECK_CLEARS_NOTICE}");
+    const fn = STORE.slice(STORE.indexOf("runClarificationRound: async"));
+    expect(fn.slice(0, 9000)).toContain("${RECHECK_CLEARS_NOTICE}");
+  });
+
+  // The list of callers is the thing that goes stale. Every call of
+  // runEvidenceAssessment with a second argument is a scoped re-run, and every
+  // scoped re-run clears the band, so a new one must disclose it too.
+  it("has no scoped re-run that discloses nothing", () => {
+    // The store action, called with a second argument: that argument IS the
+    // ref subset that makes it a scoped re-run. (The engine function of the
+    // same name in agentRuntime is a different thing and is not matched.)
+    const scoped = [...STORE.matchAll(/get\(\)\.runEvidenceAssessment\([^)]*,/g)].map((m) => m[0]);
+    expect(scoped.length).toBe(3);
+    // Each one lives inside an action whose message carries a notice. Checked
+    // by action name rather than by position, so a reorder does not break it.
+    for (const action of ["recheckFileLines: async", "recheckFinding: async", "runClarificationRound: async"]) {
+      const body = STORE.slice(STORE.indexOf(action), STORE.indexOf(action) + 9000);
+      expect(body, action).toMatch(/\$\{(REREAD|RECHECK)_CLEARS_NOTICE\}/);
+    }
   });
 });
