@@ -453,8 +453,13 @@ export function passFileRows(ledger: AuditFileRecord[] | undefined, rereads?: Re
  *  record written before ids were stored must still find its row. */
 export function withRereads(rows: SelfCheckFileRow[], rereads?: RereadRecord[]): SelfCheckFileRow[] {
   if (!rereads || rereads.length === 0) return rows;
+  // File re-reads only. A finding re-check and a clarification round re-read
+  // the WHOLE evidence folder, so counting them here would put "read again 3
+  // times" on every row of a 39-row table and the per-row signal would be
+  // gone. They are counted on the area line and named on the lines they moved.
+  const fileOnes = rereads.filter((x) => (x.kind ?? "file") === "file" && !!x.fileName);
   return rows.map((r) => {
-    const mine = rereads.filter((x) => (x.driveFileId && r.driveFileId ? x.driveFileId === r.driveFileId : x.fileName === r.name));
+    const mine = fileOnes.filter((x) => (x.driveFileId && r.driveFileId ? x.driveFileId === r.driveFileId : x.fileName === r.name));
     if (mine.length === 0) return r;
     return { ...r, rereadCount: mine.length, lastRereadAt: mine[mine.length - 1].at };
   });
@@ -516,11 +521,14 @@ export function withQuotedLineCounts(
  *  time, so the FIRST record mentioning this line carries the value before any
  *  re-read of it.
  *
- *  "before the first re-read" rather than "at the whole-area check", and the
- *  difference is not pedantry: "Re-check this finding" and a clarification
- *  round also re-run scoped assessments and move verdicts, and neither writes a
- *  re-read record, so a line they touched has an older value this cannot see.
- *  The wording claims only what the records actually prove.
+ *  "at the whole-area check" is now true rather than merely likely. It used to
+ *  say "before the first re-read", because "Re-check this finding" and a
+ *  clarification round also moved verdicts and left no record, so a line they
+ *  touched had an older value this could not see. All three now record, so the
+ *  first record for a line really is the value the whole-area run produced.
+ *  (A result whose chain began before those two started recording could still
+ *  hide one of them. Nothing in the app can tell, which is why this is said
+ *  here rather than claimed on screen.)
  */
 export function rereadNoteForRef(ref: string, rereads?: RereadRecord[], now?: string): string {
   const mine = (rereads ?? []).filter((x) => x.refs.includes(ref));
@@ -531,15 +539,22 @@ export function rereadNoteForRef(ref: string, rereads?: RereadRecord[], now?: st
   const when = fmtDate(last.at);
   const n = mine.length;
   const tail = n === 1
-    ? `Re-read of ${last.fileName} on ${when}.`
-    : `${n} re-reads, the last of ${last.fileName} on ${when}.`;
+    ? `Changed by ${describeReread(last)} on ${when}.`
+    : `Changed by ${n} targeted re-runs, the last ${describeReread(last)} on ${when}.`;
   // Without the before-verdict there is no comparison to draw, so the line says
   // only what happened rather than inventing a starting point.
   if (!was) return tail;
   const head = now
-    ? `Was ${was} before the first re-read, now ${now}.`
-    : `Was ${was} before the first re-read.`;
+    ? `Was ${was} at the whole-area check, now ${now}.`
+    : `Was ${was} at the whole-area check.`;
   return `${head} ${tail}`;
+}
+
+/** What the person did, in the words of the control they used. */
+export function describeReread(r: RereadRecord): string {
+  if ((r.kind ?? "file") === "file") return `a re-read of ${r.fileName ?? "one file"}`;
+  if (r.kind === "finding") return `a re-check of finding ${r.findingRef ?? "(unnamed)"}`;
+  return "a clarification round";
 }
 
 /** The one line for the whole area. Said above the result so nobody has to
@@ -547,8 +562,18 @@ export function rereadNoteForRef(ref: string, rereads?: RereadRecord[], now?: st
 export function rereadSummary(rereads?: RereadRecord[]): string {
   const n = rereads?.length ?? 0;
   if (n === 0) return "";
-  const files = new Set(rereads!.map((x) => x.driveFileId || x.fileName)).size;
-  return `This result includes ${n} re-read${n === 1 ? "" : "s"} of ${files} file${files === 1 ? "" : "s"}, so some verdicts below come from a second reading rather than the whole-area check. Re-reading is recorded on the file and on every line it changed, and cannot be removed.`;
+  const fileOnes = rereads!.filter((x) => (x.kind ?? "file") === "file");
+  const files = new Set(fileOnes.map((x) => x.driveFileId || x.fileName)).size;
+  const others = n - fileOnes.length;
+  // Named by kind when more than one kind is involved: "3 re-reads" would be
+  // wrong for a clarification round, and a reader checking whether a verdict
+  // was re-rolled needs to know which control did it.
+  const what = others === 0
+    ? `${n} re-read${n === 1 ? "" : "s"} of ${files} file${files === 1 ? "" : "s"}`
+    : fileOnes.length === 0
+      ? `${n} targeted re-run${n === 1 ? "" : "s"}`
+      : `${n} targeted re-runs (${fileOnes.length} file re-read${fileOnes.length === 1 ? "" : "s"}, ${others} other)`;
+  return `This result includes ${what}, so some verdicts below come from a second reading rather than the whole-area check. Re-reading is recorded on the file and on every line it changed, and cannot be removed.`;
 }
 
 function fmtDate(iso: string): string {

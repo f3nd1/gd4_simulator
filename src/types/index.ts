@@ -1242,8 +1242,22 @@ export type EvidenceAssessmentRow = {
 // until the answer changed". What it does is make the second one legible.
 export type RereadRecord = {
   at: string;
-  fileName: string;
+  // What the person did. THREE actions re-run a subset of an area's lines and
+  // move verdicts: a file re-read from the Evidence & files table, "Re-check
+  // this finding", and a clarification round. Only the first used to leave a
+  // record, which is why the line note could only claim "before the first
+  // re-read" rather than "at the whole-area check". Absent on records written
+  // before this field existed, and those were all file re-reads.
+  kind?: "file" | "finding" | "round";
+  // The file, for kind "file" only. The other two re-read the whole evidence
+  // folder rather than one file, so there is no single file to name, and the
+  // per-file count on the Evidence & files table counts only kind "file":
+  // "read again 2 times" on a row has to mean that row.
+  fileName?: string;
   driveFileId?: string;
+  // The finding that drove a "finding" re-check, so the row can be traced back
+  // to the thing somebody was trying to clear.
+  findingRef?: string;
   /** The requirement lines re-checked, which is every line that quoted the file. */
   refs: string[];
   /** The run this re-read replaced, so the earlier check can be found in the history. */

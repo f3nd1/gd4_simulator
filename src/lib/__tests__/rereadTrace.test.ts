@@ -7,7 +7,7 @@
 // requirement line, the area) and the three exports, all counting off the SAME
 // stored records so none of them can show a re-read the others do not.
 import { describe, it, expect } from "vitest";
-import { withRereads, rereadNoteForRef, rereadSummary, toFileRows, canRereadFile, withQuotedLineCounts, type SelfCheckFileRow } from "../selfCheckEvidence";
+import { withRereads, rereadNoteForRef, rereadSummary, describeReread, toFileRows, canRereadFile, withQuotedLineCounts, type SelfCheckFileRow } from "../selfCheckEvidence";
 import { toSelfCheckRows, toRecordsRows, toProcedureRows, buildSelfCheckCsv, buildSelfCheckHtml, countSelfCheck, SELF_CHECK_HEADERS, SELF_CHECK_FILE_HEADERS } from "../selfCheck";
 import { buildAiRunLog } from "../aiRunLogExport";
 import type { AuditFileRecord, EvidenceAssessmentResult, EvidenceAssessmentRow, PPDReviewRow, RereadRecord } from "../../types";
@@ -78,7 +78,7 @@ describe("the requirement line says the verdict came from a re-read", () => {
     expect(note).toContain("Agent Log.pdf");
     // en-SG renders the short month as "Sept", not "Sep".
     expect(note).toMatch(/27 Sept 2026/);
-    expect(note).toContain("Was Not met before the first re-read, now Met.");
+    expect(note).toContain("Was Not met at the whole-area check, now Met.");
   });
 
   // THE POINT OF THE WHOLE FEATURE. Quoting the verdict from before the LAST
@@ -91,10 +91,10 @@ describe("the requirement line says the verdict came from a re-read", () => {
       reread({ at: "2026-09-28T02:00:00.000Z", previousVerdicts: { [REF]: "Partial" } }),
     ];
     const note = rereadNoteForRef(REF, chain, "Met");
-    expect(note).toContain("Was Not met before the first re-read, now Met.");
-    expect(note).toMatch(/3 re-reads/);
+    expect(note).toContain("Was Not met at the whole-area check, now Met.");
+    expect(note).toMatch(/3 targeted re-runs/);
     // The intermediate values must not be the ones quoted.
-    expect(note).not.toMatch(/Was Partial before/);
+    expect(note).not.toMatch(/Was Partial at/);
   });
 
   it("ignores re-reads of other lines when finding the original", () => {
@@ -102,13 +102,13 @@ describe("the requirement line says the verdict came from a re-read", () => {
       reread({ at: "2026-09-27T05:00:00.000Z", refs: ["6.3.1.DS9"], previousVerdicts: { "6.3.1.DS9": "Partial" } }),
       reread({ at: "2026-09-27T06:00:00.000Z", previousVerdicts: { [REF]: "Not met" } }),
     ];
-    expect(rereadNoteForRef(REF, chain, "Met")).toContain("Was Not met before the first re-read");
+    expect(rereadNoteForRef(REF, chain, "Met")).toContain("Was Not met at the whole-area check");
   });
 
   it("says only what happened when no before-verdict was recorded", () => {
     const note = rereadNoteForRef(REF, [reread({ previousVerdicts: {} })], "Met");
-    expect(note).toMatch(/^Re-read of Agent Log\.pdf/);
-    expect(note).not.toMatch(/before the first re-read/);
+    expect(note).toMatch(/^Changed by a re-read of Agent Log\.pdf/);
+    expect(note).not.toMatch(/at the whole-area check/);
   });
 
   it("says nothing on a line the re-read did not touch", () => {
@@ -153,7 +153,7 @@ describe("it travels into all three exports", () => {
     expect(lines[2]).toContain(SELF_CHECK_HEADERS[0]);
     expect(SELF_CHECK_HEADERS).toContain("Re-read");
     expect(SELF_CHECK_FILE_HEADERS).toContain("Re-read");
-    expect(csv).toContain("Was Not met before the first re-read, now Met.");
+    expect(csv).toContain("Was Not met at the whole-area check, now Met.");
     expect(csv).toMatch(/read again 1 time/);
   });
 
@@ -169,7 +169,7 @@ describe("it travels into all three exports", () => {
     });
     expect(html).toContain("This result includes 1 re-read of 1 file");
     expect(html).toContain("sc-reread");
-    expect(html).toMatch(/Was Not met before the first re-read, now Met\./);
+    expect(html).toMatch(/Was Not met at the whole-area check, now Met\./);
   });
 
   it("the run log carries the records themselves, on the records pass", () => {
@@ -241,5 +241,54 @@ describe("the re-read button appears only where it can do something", () => {
       { C001: "Agent Log.pdf", C002: "Other.pdf" },
     );
     expect(rows.map((r) => r.quotedLines)).toEqual([2, 1]);
+  });
+});
+
+// THREE controls move verdicts on part of an area: a file re-read, "Re-check
+// this finding" and a clarification round. All three now record, which is what
+// earns the line note the right to say "at the whole-area check" rather than
+// the weaker "before the first re-read".
+describe("the trace covers all three ways of re-running part of an area", () => {
+  const fileR = reread();
+  const findingR = (): RereadRecord => ({
+    at: "2026-09-27T08:00:00.000Z", kind: "finding", findingRef: "6.3.1.DS1",
+    refs: [REF], previousVerdicts: { [REF]: "Not met" },
+  });
+  const roundR = (): RereadRecord => ({
+    at: "2026-09-27T09:00:00.000Z", kind: "round",
+    refs: [REF], previousVerdicts: { [REF]: "Partial" },
+  });
+
+  it("names each one by the control the person actually used", () => {
+    expect(describeReread(fileR)).toBe("a re-read of Agent Log.pdf");
+    expect(describeReread(findingR())).toBe("a re-check of finding 6.3.1.DS1");
+    expect(describeReread(roundR())).toBe("a clarification round");
+    // A record written before `kind` existed was a file re-read.
+    expect(describeReread({ ...fileR, kind: undefined })).toBe("a re-read of Agent Log.pdf");
+  });
+
+  it("takes the original from whichever control moved the line first", () => {
+    const note = rereadNoteForRef(REF, [findingR(), roundR(), reread({ at: "2026-09-28T02:00:00.000Z", previousVerdicts: { [REF]: "Partial" } })], "Met");
+    expect(note).toContain("Was Not met at the whole-area check, now Met.");
+    expect(note).toMatch(/3 targeted re-runs, the last a re-read of Agent Log\.pdf/);
+  });
+
+  it("a finding re-check alone still names the finding on the line", () => {
+    expect(rereadNoteForRef(REF, [findingR()], "Met")).toContain("Changed by a re-check of finding 6.3.1.DS1");
+  });
+
+  // The per-FILE count is the one place they must not be merged: a finding
+  // re-check and a round re-read the whole folder, so counting them per row
+  // would put a number on all 39 rows and destroy the signal.
+  it("counts only file re-reads on the file row", () => {
+    const rows = toFileRows(undefined, [led()]);
+    expect(withRereads(rows, [findingR(), roundR()])[0].rereadCount).toBeUndefined();
+    expect(withRereads(rows, [fileR, findingR()])[0].rereadCount).toBe(1);
+  });
+
+  it("the area line says which kinds it is counting", () => {
+    expect(rereadSummary([fileR, fileR])).toMatch(/2 re-reads of 1 file/);
+    expect(rereadSummary([findingR(), roundR()])).toMatch(/2 targeted re-runs/);
+    expect(rereadSummary([fileR, findingR()])).toMatch(/2 targeted re-runs \(1 file re-read, 1 other\)/);
   });
 });

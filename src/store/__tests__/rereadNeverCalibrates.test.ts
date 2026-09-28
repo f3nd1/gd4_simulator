@@ -23,7 +23,7 @@ vi.mock("../../lib/drive/pdfWorker?worker", () => ({ default: class MockWorker {
 
 const { useWorkspaceStore } = await import("../useWorkspaceStore");
 
-import type { AuditFileRecord, EvidenceAssessmentResult, EvidenceAssessmentRow } from "../../types";
+import type { AuditFileRecord, EvidenceAssessmentResult, EvidenceAssessmentRow, Finding } from "../../types";
 
 const SCOPE = "6.3";
 const FILE_ID = "drive-abc";
@@ -192,3 +192,60 @@ describe("the re-read records itself on the result", () => {
 });
 
 const SRC_FOR_FULL_RUN = readFileSync("src/store/useWorkspaceStore.ts", "utf8");
+
+// The other two paths that move verdicts. They used to leave no record at all,
+// which is the only reason the line note could not say "at the whole-area
+// check". Driven through the real actions, same as the file re-read.
+describe("re-check and clarification round record themselves too", () => {
+  const finding: Finding = {
+    id: "F-rr", auditCycleId: "cycle-1", gd4ItemId: "6.3.1", clause: "6.3.1.DS1",
+    issue: "Monitoring gap", type: "AFI", severity: "Medium", owner: "", dueDate: "",
+    repeatFinding: false, overdue: false, managementDecisionNeeded: false,
+    status: "Open", source: "Audit",
+  };
+
+  beforeEach(() => {
+    useWorkspaceStore.setState({
+      customFindings: [finding],
+      ppdReviewResults: { [SCOPE]: { subCriterionId: SCOPE, rows: [{ ref: "6.3.1.DS1", gd4ItemId: "6.3.1", requirementText: "r", verdict: "Adequate", shortComment: "s", fullComment: "f", promises: [], chunkIds: [] }], runAt: "2026-09-27T00:00:00.000Z", live: true } },
+      auditors: [], activeAuditorId: undefined,
+    });
+  });
+
+  it("a finding re-check records what the line said before, and names the finding", async () => {
+    useWorkspaceStore.setState({ runEvidenceAssessment: fakeRunWritingVerdict("Met") });
+    const r = await useWorkspaceStore.getState().recheckFinding("F-rr");
+    expect(r.ok, r.message).toBe(true);
+    const rr = useWorkspaceStore.getState().evidenceAssessments[SCOPE]!.rereads!;
+    expect(rr).toHaveLength(1);
+    expect(rr[0].kind).toBe("finding");
+    expect(rr[0].findingRef).toBe("6.3.1.DS1");
+    expect(rr[0].previousVerdicts).toEqual({ "6.3.1.DS1": "Not met" });
+    // No file was re-read on its own, so nothing may claim one was.
+    expect(rr[0].fileName).toBeUndefined();
+  });
+
+  it("a clarification round records one entry per area it re-ran", async () => {
+    useWorkspaceStore.setState({ runEvidenceAssessment: fakeRunWritingVerdict("Partial") });
+    const r = await useWorkspaceStore.getState().runClarificationRound(["F-rr"]);
+    expect(r.ok, r.message).toBe(true);
+    const rr = useWorkspaceStore.getState().evidenceAssessments[SCOPE]!.rereads!;
+    expect(rr).toHaveLength(1);
+    expect(rr[0].kind).toBe("round");
+    expect(rr[0].previousVerdicts).toEqual({ "6.3.1.DS1": "Not met" });
+  });
+
+  it("records nothing for an area whose re-run did not complete", async () => {
+    useWorkspaceStore.setState({ runEvidenceAssessment: async () => {} });
+    await useWorkspaceStore.getState().runClarificationRound(["F-rr"]);
+    expect(useWorkspaceStore.getState().evidenceAssessments[SCOPE]!.rereads).toBeUndefined();
+  });
+
+  it("neither path reaches the calibration library either", async () => {
+    useWorkspaceStore.setState({ runEvidenceAssessment: fakeRunWritingVerdict("Met") });
+    await useWorkspaceStore.getState().recheckFinding("F-rr");
+    await useWorkspaceStore.getState().runClarificationRound(["F-rr"]);
+    expect(useWorkspaceStore.getState().calibrationExamples).toEqual([]);
+    expect(useWorkspaceStore.getState().calibrationMemories).toEqual([]);
+  });
+});

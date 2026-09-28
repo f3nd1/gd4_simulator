@@ -243,6 +243,32 @@ const PROMPT_PERSIST_CAP = 4_000;
 // Task 2: how many PAST (non-current) Option A runs to keep per
 // sub-criterion, same cap convention as useCalibrationStore's RUN_HISTORY_CAP.
 export const OPTION_A_RUN_HISTORY_CAP = 20;
+
+// ── The re-read trace ───────────────────────────────────────────────────
+//
+// THREE actions re-run a subset of an area's lines and move verdicts: a file
+// re-read from the Evidence & files table, "Re-check this finding", and a
+// clarification round. All three must leave the same record, or the line note
+// cannot say what a verdict was at the whole-area check. Only the file re-read
+// used to.
+
+/** What the named lines say RIGHT NOW, keyed by the row's own gdRef so the
+ *  note rendered against that row finds its own key. Matched on the normalised
+ *  ref, because a caller's ref list and the row's gdRef can differ in shape. */
+function verdictSnapshot(rows: EvidenceAssessmentRow[], refs: string[]): Record<string, EvidenceVerdict> {
+  const want = new Set(refs.map((r) => normalizeAuditRef(r)));
+  const out: Record<string, EvidenceVerdict> = {};
+  for (const r of rows) if (want.has(normalizeAuditRef(r.gdRef))) out[r.gdRef] = r.verdict;
+  return out;
+}
+
+/** The record, built from a snapshot taken BEFORE the re-run. Appended to
+ *  whatever the replaced result carried, so the count accumulates and only a
+ *  full whole-area run clears it. */
+function withRereadRecord(cur: EvidenceAssessmentResult, record: RereadRecord): EvidenceAssessmentResult {
+  return { ...cur, rereads: [...(cur.rereads ?? []), record] };
+}
+
 // Clarification-round history cap — small records (no prompts/blobs), so a
 // generous ceiling; same length-cap-in-the-action convention as the run history.
 const CLARIFICATION_ROUND_CAP = 50;
@@ -8072,9 +8098,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // Kept on the record itself rather than read back from the run history
         // later: the history is capped at 20 and can be deleted from the UI, and
         // a before-verdict that can disappear is not a trace.
-        const previousVerdicts: Record<string, EvidenceVerdict> = {};
-        for (const r of ev.rows) if (refs.includes(r.gdRef)) previousVerdicts[r.gdRef] = r.verdict;
-        const priorRereads = ev.rereads ?? [];
+        const previousVerdicts = verdictSnapshot(ev.rows, refs);
         const previousRunId = ev.runId;
         await get().runEvidenceAssessment(subCriterionId, refs);
         const after = get().evidenceAssessments[subCriterionId];
@@ -8095,15 +8119,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         set((st) => {
           const cur = st.evidenceAssessments[subCriterionId];
           if (!cur) return {};
-          const record: RereadRecord = {
+          return { evidenceAssessments: { ...st.evidenceAssessments, [subCriterionId]: withRereadRecord(cur, {
             at: new Date().toISOString(),
+            kind: "file",
             fileName: rec.name,
             ...(rec.driveFileId ? { driveFileId: rec.driveFileId } : {}),
-            refs,
+            refs: Object.keys(previousVerdicts),
             ...(previousRunId ? { previousRunId } : {}),
             previousVerdicts,
-          };
-          return { evidenceAssessments: { ...st.evidenceAssessments, [subCriterionId]: { ...cur, rereads: [...priorRereads, record] } } };
+          }) } };
         });
         return {
           ok: true,
@@ -8125,6 +8149,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const ev = get().evidenceAssessments[scope]!;
         const beforeVerdict = new Map(ev.rows.map((r) => [normalizeAuditRef(r.gdRef), r.verdict]));
         const beforeRunAt = ev.runAt;
+        // Snapshotted BEFORE the re-run, same as the file re-read: this path
+        // moves verdicts too, and used to leave no trace of having done so.
+        const rereadBefore = verdictSnapshot(ev.rows, retryRefs);
+        const rereadPrevRunId = ev.runId;
         // Re-read the evidence folder fresh and re-assess ONLY these lines.
         await get().runEvidenceAssessment(scope, retryRefs);
         const after = get().evidenceAssessments[scope];
@@ -8134,6 +8162,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!after || after.runAt === beforeRunAt) {
           return { ok: false, message: get().auditBlockedReason ?? "The re-check could not run — check Google Drive is connected and an auditor is selected on the Evidence Folder, then try again." };
         }
+        set((st) => {
+          const cur = st.evidenceAssessments[scope];
+          if (!cur) return {};
+          return { evidenceAssessments: { ...st.evidenceAssessments, [scope]: withRereadRecord(cur, {
+            at: new Date().toISOString(),
+            kind: "finding",
+            findingRef: finding.clause || finding.gd4ItemId || finding.id,
+            refs: Object.keys(rereadBefore),
+            ...(rereadPrevRunId ? { previousRunId: rereadPrevRunId } : {}),
+            previousVerdicts: rereadBefore,
+          }) } };
+        });
         const parts = retryRefs.map((rr) => {
           const key = normalizeAuditRef(rr);
           const before = beforeVerdict.get(key);
@@ -8197,12 +8237,29 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         for (let i = 0; i < scopes.length; i++) {
           const scope = scopes[i];
           set({ clarificationProgress: { current: i + 1, total: scopes.length, scope } });
-          const beforeRunAt = get().evidenceAssessments[scope]?.runAt;
+          const beforeRun = get().evidenceAssessments[scope];
+          const beforeRunAt = beforeRun?.runAt;
+          // One snapshot per scope, before that scope's re-run. A round is
+          // several scoped re-runs, and each one moves its own area's verdicts.
+          const roundBefore = beforeRun ? verdictSnapshot(beforeRun.rows, [...byScope.get(scope)!]) : {};
+          const roundPrevRunId = beforeRun?.runId;
           await get().runEvidenceAssessment(scope, [...byScope.get(scope)!]);
           const after = get().evidenceAssessments[scope];
           if (!after || after.runAt === beforeRunAt) {
             blockers.push(`${scope}: ${get().auditBlockedReason ?? "the re-run did not complete (check Drive is connected and an auditor is selected)."}`);
+            continue;
           }
+          set((st) => {
+            const cur = st.evidenceAssessments[scope];
+            if (!cur) return {};
+            return { evidenceAssessments: { ...st.evidenceAssessments, [scope]: withRereadRecord(cur, {
+              at: new Date().toISOString(),
+              kind: "round",
+              refs: Object.keys(roundBefore),
+              ...(roundPrevRunId ? { previousRunId: roundPrevRunId } : {}),
+              previousVerdicts: roundBefore,
+            }) } };
+          });
         }
         set({ clarificationProgress: null });
         // Compute after-verdicts and build the round record.
