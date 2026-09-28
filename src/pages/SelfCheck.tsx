@@ -31,7 +31,7 @@ import {
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
   splitRunWarnings,
 } from "../lib/selfCheck";
-import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, REREAD_CLEARS_NOTICE, REREAD_ROW_SHORT, rereadSummary, canRereadFile, withQuotedLineCounts, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
+import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, REREAD_CLEARS_NOTICE, REREAD_ROW_SHORT, REPLACE_IN_DRIVE_HELP, driveFileUrl, rereadSummary, canRereadFile, withQuotedLineCounts, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 // The live file ledger the Evidence Folder page already has: every file this
 // run has listed, its status as it changes, and a Skip button on the one being
 // read. Reused rather than rebuilt — a second, simpler live view would be a
@@ -3569,6 +3569,14 @@ function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading
             {SAME_LINK_WARNING}
           </p>
         )}
+        {/* Said ONCE, above the rows, rather than on each of 39 of them: the
+            same reasoning as the re-read cost notice. It is also on every
+            link as its title. Shown only when there is a link to follow. */}
+        {rows.some((r) => !!r.driveFileId) && (
+          <p style={{ ...muted, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "9px 11px", marginTop: 0 }}>
+            {REPLACE_IN_DRIVE_HELP}
+          </p>
+        )}
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
@@ -3596,7 +3604,24 @@ function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading
                     <td style={{ padding: "8px 9px", textAlign: "center" }}>
                       <span title={m.label} style={{ ...TONE_BG[FILE_TONE[m.tone]], display: "inline-block", width: 21, height: 21, lineHeight: "21px", borderRadius: 5, fontWeight: 800, fontSize: 13 }}>{m.mark}</span>
                     </td>
-                    <td style={{ padding: "8px 9px" }}>{f.name}</td>
+                    <td style={{ padding: "8px 9px" }}>
+                      {f.name}
+                      {/* The evidence lives in Drive and nothing is uploaded
+                          into this app, so fixing a bad scan means going
+                          there. The link removes the two middle steps of
+                          "find the folder, find the file". */}
+                      {driveFileUrl(f.driveFileId) && (
+                        <div style={{ marginTop: 3 }}>
+                          <a
+                            href={driveFileUrl(f.driveFileId)} target="_blank" rel="noopener noreferrer"
+                            title={REPLACE_IN_DRIVE_HELP}
+                            style={{ fontSize: 11, color: "#0369a1", textDecoration: "none", fontWeight: 600, whiteSpace: "nowrap" }}
+                          >
+                            Open in Drive &#8599;
+                          </a>
+                        </div>
+                      )}
+                    </td>
                     {/* The count is blank on every file that has not been
                         read again, which on a clean check is all of them; the
                         button appears only where re-reading can do something

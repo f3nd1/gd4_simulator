@@ -473,6 +473,30 @@ export function withRereads(rows: SelfCheckFileRow[], rereads?: RereadRecord[]):
 // the row a person is looking at when they decide a file needs re-reading, and
 // only where it can actually do something.
 
+// ── Opening the file in Drive ───────────────────────────────────────────
+//
+// The evidence lives in Drive and nothing is ever uploaded into this app, so
+// fixing a badly scanned document is: open it there, replace it, come back,
+// Read again. Four steps that should be two, and the link is what removes the
+// two in the middle.
+
+/** The universal Drive form. NOT /file/d/<id>/view, which breaks on native
+ *  Google Docs and Sheets: /open?id= resolves for every type by redirecting to
+ *  the right editor. Empty when the run recorded no Drive id for the file. */
+export function driveFileUrl(driveFileId?: string): string {
+  return driveFileId ? `https://drive.google.com/open?id=${encodeURIComponent(driveFileId)}` : "";
+}
+
+/** The caveat, which matters as much as the link.
+ *
+ *  The run stored the file's Drive ID. Deleting the file and uploading a new
+ *  one gives the replacement a DIFFERENT id, so the ledger still points at a
+ *  file that no longer exists and "Read again" fails on it. Replacing the
+ *  CONTENTS through Drive's own "Manage versions" keeps the id, which is the
+ *  one thing that has to stay the same. */
+export const REPLACE_IN_DRIVE_HELP =
+  "To fix a file, open it in Drive and use Manage versions to upload the better copy over it. Do not delete the file and upload a new one: the replacement gets a new Drive ID, this check is still looking for the old one, and Read again will fail on it.";
+
 /** The short form for the row. The full REREAD_CLEARS_NOTICE is what the
  *  confirmation carries: a 39-row table cannot repeat four sentences per row
  *  and stay readable, and a cost nobody can read is not disclosed. */

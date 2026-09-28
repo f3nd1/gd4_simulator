@@ -7,7 +7,7 @@
 // requirement line, the area) and the three exports, all counting off the SAME
 // stored records so none of them can show a re-read the others do not.
 import { describe, it, expect } from "vitest";
-import { withRereads, rereadNoteForRef, rereadSummary, describeReread, toFileRows, canRereadFile, withQuotedLineCounts, type SelfCheckFileRow } from "../selfCheckEvidence";
+import { withRereads, rereadNoteForRef, rereadSummary, describeReread, toFileRows, canRereadFile, withQuotedLineCounts, driveFileUrl, REPLACE_IN_DRIVE_HELP, type SelfCheckFileRow } from "../selfCheckEvidence";
 import { toSelfCheckRows, toRecordsRows, toProcedureRows, buildSelfCheckCsv, buildSelfCheckHtml, countSelfCheck, SELF_CHECK_HEADERS, SELF_CHECK_FILE_HEADERS } from "../selfCheck";
 import { buildAiRunLog } from "../aiRunLogExport";
 import type { AuditFileRecord, EvidenceAssessmentResult, EvidenceAssessmentRow, PPDReviewRow, RereadRecord } from "../../types";
@@ -290,5 +290,38 @@ describe("the trace covers all three ways of re-running part of an area", () => 
     expect(rereadSummary([fileR, fileR])).toMatch(/2 re-reads of 1 file/);
     expect(rereadSummary([findingR(), roundR()])).toMatch(/2 targeted re-runs/);
     expect(rereadSummary([fileR, findingR()])).toMatch(/2 targeted re-runs \(1 file re-read, 1 other\)/);
+  });
+});
+
+// OPEN IN DRIVE. The evidence never enters this app, so fixing a bad scan
+// means going to Drive and coming back. The caveat matters as much as the
+// link: the run stored the file's Drive ID, so a delete-and-re-upload leaves
+// the ledger pointing at a file that no longer exists.
+describe("the Drive link and the caveat that has to travel with it", () => {
+  it("uses the form that works for every file type", () => {
+    // NOT /file/d/<id>/view, which breaks on native Google Docs and Sheets.
+    expect(driveFileUrl("abc123")).toBe("https://drive.google.com/open?id=abc123");
+  });
+
+  it("escapes the id rather than pasting it into a URL", () => {
+    expect(driveFileUrl("a b&c")).toBe("https://drive.google.com/open?id=a%20b%26c");
+  });
+
+  it("gives no link at all when the run recorded no Drive id", () => {
+    expect(driveFileUrl(undefined)).toBe("");
+    expect(driveFileUrl("")).toBe("");
+  });
+
+  it("names Manage versions and warns against delete-and-upload", () => {
+    expect(REPLACE_IN_DRIVE_HELP).toMatch(/manage versions/i);
+    expect(REPLACE_IN_DRIVE_HELP).toMatch(/do not delete/i);
+    // The reason, not just the instruction: a rule without its reason is one
+    // somebody talks themselves out of.
+    expect(REPLACE_IN_DRIVE_HELP).toMatch(/new Drive ID/i);
+    expect(REPLACE_IN_DRIVE_HELP).toMatch(/Read again will fail/i);
+  });
+
+  it("carries the id onto the row, which is what the link is built from", () => {
+    expect(toFileRows(undefined, [led()])[0].driveFileId).toBe(FILE_ID);
   });
 });
