@@ -8,7 +8,7 @@
 // list. Nothing is inferred, and nothing is written when the source is absent.
 
 import { GD4_REQUIREMENTS } from "../data/gd4Requirements";
-import type { AuditFileRecord, EvidenceAssessmentRow, PPDReviewRow } from "../types";
+import type { AuditFileRecord, EvidenceAssessmentRow, PPDReviewRow, RereadRecord } from "../types";
 
 // ── 1. What was actually read ────────────────────────────────────────────
 //
@@ -21,6 +21,15 @@ export type FileOutcome = "read" | "check" | "unreadable";
 export type FileBucketLabel = "Written procedure" | "Records" | "Both folders";
 
 export type SelfCheckFileRow = {
+  /** Stable identity for this file: the Drive id where there is one, otherwise
+   *  the path. The row carried only a display name, which is not unique (the
+   *  same filename lives in two subfolders) and cannot address an action. */
+  key: string;
+  driveFileId?: string;
+  /** How many times this file has been read again since the last whole-area
+   *  check, and when the last one was. Undefined when it never has been. */
+  rereadCount?: number;
+  lastRereadAt?: string;
   name: string;
   bucket: FileBucketLabel;
   outcome: FileOutcome;
@@ -96,7 +105,7 @@ function readDetail(rec: AuditFileRecord): string {
 export function toFileRow(rec: AuditFileRecord): SelfCheckFileRow {
   const bucket: FileBucketLabel = rec.bucket === "policy" ? "Written procedure" : "Records";
   const cited = rec.auditStatus === "cited";
-  const base = { name: rec.name, bucket, cited };
+  const base = { key: rec.driveFileId || rec.path || rec.name, ...(rec.driveFileId ? { driveFileId: rec.driveFileId } : {}), name: rec.name, bucket, cited };
   if (rec.readStatus === "failed") {
     return { ...base, outcome: "unreadable", label: "Could not be opened", detail: rec.failReason || "The file could not be opened.", action: REOPEN };
   }
@@ -159,7 +168,7 @@ export function toFileRow(rec: AuditFileRecord): SelfCheckFileRow {
 // other) the worse outcome wins, because that is the one with an action.
 const WORSE: Record<FileOutcome, number> = { read: 0, check: 1, unreadable: 2 };
 
-export function toFileRows(policyLedger: AuditFileRecord[] | undefined, evidenceLedger: AuditFileRecord[] | undefined): SelfCheckFileRow[] {
+export function toFileRows(policyLedger: AuditFileRecord[] | undefined, evidenceLedger: AuditFileRecord[] | undefined, rereads?: RereadRecord[]): SelfCheckFileRow[] {
   const byKey = new Map<string, SelfCheckFileRow>();
   const order: string[] = [];
   for (const rec of [...(policyLedger ?? []), ...(evidenceLedger ?? [])]) {
@@ -173,7 +182,7 @@ export function toFileRows(policyLedger: AuditFileRecord[] | undefined, evidence
       cited: prev.cited || row.cited,
     });
   }
-  return order.map((k) => byKey.get(k)!);
+  return withRereads(order.map((k) => byKey.get(k)!), rereads);
 }
 
 export type FileCounts = { total: number; read: number; check: number; partial: number; unreadable: number; unreadableNames: string[] };
@@ -425,8 +434,56 @@ export function mergeQuotes(citations: Citation[], fromProse: { quote: string; c
 // `cited` here means quoted in a result ON THIS TAB, taken from the run's own
 // auditStatus, which each pass sets to "cited" for the chunks its verdicts
 // relied on.
-export function passFileRows(ledger: AuditFileRecord[] | undefined): SelfCheckFileRow[] {
-  return (ledger ?? []).map(toFileRow);
+export function passFileRows(ledger: AuditFileRecord[] | undefined, rereads?: RereadRecord[]): SelfCheckFileRow[] {
+  return withRereads((ledger ?? []).map(toFileRow), rereads);
+}
+
+// ── The re-read trace, as the page and both exports read it ─────────────
+//
+// One re-read rewrites verdicts on every line that quoted the file, and the
+// control for it is one click. These three functions are the only way that
+// fact reaches a reader, so all of them count off the SAME stored records
+// (EvidenceAssessmentResult.rereads) rather than deriving anything.
+
+/** Stamps each row with how often that file has been read again. Matched on
+ *  the Drive id where both sides have one, falling back to the file name: a
+ *  record written before ids were stored must still find its row. */
+export function withRereads(rows: SelfCheckFileRow[], rereads?: RereadRecord[]): SelfCheckFileRow[] {
+  if (!rereads || rereads.length === 0) return rows;
+  return rows.map((r) => {
+    const mine = rereads.filter((x) => (x.driveFileId && r.driveFileId ? x.driveFileId === r.driveFileId : x.fileName === r.name));
+    if (mine.length === 0) return r;
+    return { ...r, rereadCount: mine.length, lastRereadAt: mine[mine.length - 1].at };
+  });
+}
+
+/** The sentence for ONE requirement line, or "" when no re-read touched it.
+ *  It names the file, the date and the verdict the line carried before, which
+ *  is the comparison somebody checking for a re-rolled verdict needs. */
+export function rereadNoteForRef(ref: string, rereads?: RereadRecord[]): string {
+  const mine = (rereads ?? []).filter((x) => x.refs.includes(ref));
+  if (mine.length === 0) return "";
+  const last = mine[mine.length - 1];
+  const was = last.previousVerdicts[ref];
+  const when = fmtDate(last.at);
+  const head = mine.length === 1
+    ? `This verdict came from a re-read of ${last.fileName} on ${when}.`
+    : `This verdict came from ${mine.length} re-reads, the last of ${last.fileName} on ${when}.`;
+  return was ? `${head} Before that re-read this line was: ${was}.` : head;
+}
+
+/** The one line for the whole area. Said above the result so nobody has to
+ *  open the file table to learn that a re-read happened at all. */
+export function rereadSummary(rereads?: RereadRecord[]): string {
+  const n = rereads?.length ?? 0;
+  if (n === 0) return "";
+  const files = new Set(rereads!.map((x) => x.driveFileId || x.fileName)).size;
+  return `This result includes ${n} re-read${n === 1 ? "" : "s"} of ${files} file${files === 1 ? "" : "s"}, so some verdicts below come from a second reading rather than the whole-area check. Re-reading is recorded on the file and on every line it changed, and cannot be removed.`;
+}
+
+function fmtDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-SG", { day: "numeric", month: "short", year: "numeric" });
 }
 
 // The tick column. Three states rather than two, because "read but nothing in

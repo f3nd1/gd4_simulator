@@ -31,7 +31,7 @@ import {
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
   splitRunWarnings,
 } from "../lib/selfCheck";
-import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, REREAD_CLEARS_NOTICE, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
+import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, REREAD_CLEARS_NOTICE, rereadSummary, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 // The live file ledger the Evidence Folder page already has: every file this
 // run has listed, its status as it changes, and a Skip button on the one being
 // read. Reused rather than rebuilt — a second, simpler live view would be a
@@ -458,6 +458,9 @@ export function SelfCheck() {
       // its own ledger, and a line is only ever affected by its own pass's.
       policyLedger: ppdExisting?.fileLedger,
       evidenceLedger: existing?.fileLedger,
+      // The re-read trace, from the run being viewed. An archived check keeps
+      // its own, so an earlier result shows the re-reads it actually had.
+      rereads: existing?.rereads,
     }),
     [ppdExisting, existing],
   );
@@ -473,7 +476,7 @@ export function SelfCheck() {
   // procedure-only run never read the records folder, so only its ledger is
   // listed: showing an empty records section would imply a folder was read.
   const fileRows = useMemo(
-    () => toFileRows(ppdExisting?.fileLedger, procedureOnlyResult ? undefined : existing?.fileLedger),
+    () => toFileRows(ppdExisting?.fileLedger, procedureOnlyResult ? undefined : existing?.fileLedger, existing?.rereads),
     [ppdExisting, existing, procedureOnlyResult],
   );
   // Established live, not inferred: one link in both boxes makes BOTH passes
@@ -485,7 +488,7 @@ export function SelfCheck() {
   // pass read is not evidence the procedure pass read it.
   const tabFileRows = useMemo(
     () => (view === "procedure" || view === "procedure-only" ? passFileRows(ppdExisting?.fileLedger)
-      : view === "records" ? passFileRows(existing?.fileLedger)
+      : view === "records" ? passFileRows(existing?.fileLedger, existing?.rereads)
       : fileRows),
     [view, ppdExisting, existing, fileRows],
   );
@@ -903,7 +906,7 @@ export function SelfCheck() {
     // bandWorking rides on EVERY view now: the two half-tabs use it to draw
     // which dimension their own verdicts feed. Only the overall view prints the
     // full dimension panel and the coverage note.
-    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, exportFiles, bandWorking ?? undefined, view === "overview" ? bandCoverage : undefined, itemIdsForScope(area.scope), exportTiming, sameLink, stepRefs), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
+    downloadCsv(buildSelfCheckCsv(`${area.scope} ${area.title}`, rows, band, view, exportFiles, bandWorking ?? undefined, view === "overview" ? bandCoverage : undefined, itemIdsForScope(area.scope), exportTiming, sameLink, stepRefs, existing?.rereads ?? []), selfCheckFilename(view === "overview" ? area.title : `${area.title} ${VIEW_LABEL[view]}`, "csv"));
   }
   function onPdf() {
     if (!area) return;
@@ -916,6 +919,7 @@ export function SelfCheck() {
         bandCoverage: view === "overview" ? bandCoverage : undefined,
         itemIds: itemIdsForScope(area.scope),
         stepRefs,
+        rereads: existing?.rereads ?? [],
       })}`,
       view === "overview" ? `Self-check ${area.title}` : `Self-check ${area.title} — ${VIEW_LABEL[view]}`,
     );
@@ -2231,6 +2235,9 @@ export function SelfCheck() {
                           reader can accept while still believing it is what
                           their documents say. */}
                       <div className="sc-one-reading">{ONE_READING_NOTE}</div>
+                      {/* Said at the top of the result, so nobody has to open
+                          the file table to learn a re-read happened at all. */}
+                      {rereadSummary(existing?.rereads) && <div className="sc-one-reading">{rereadSummary(existing?.rereads)}</div>}
                       <b>{tab === "overview" ? "Overall" : VIEW_LABEL[tab]}:</b> {TABS_EXPLAINED[tab as "overview" | "procedure" | "records"].text}
                       {/* What this tab does NOT settle. It was a yellow box of
                           its own under the counts. A title attribute was tried
@@ -3408,6 +3415,15 @@ function FindingCard({ row, view, id }: {
           <strong>Part of this requirement&rsquo;s evidence was not read.</strong> {row.partialNote}
         </div>
       )}
+      {/* Which verdicts came from a second reading of one file, and what the
+          line said before it. Beside the partial-read note rather than inside
+          the reasoning: like that one, it changes how much weight the result
+          below deserves. It cannot be dismissed or hidden. */}
+      {row.rereadNote && (
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "9px 11px", margin: "0 0 10px", fontSize: 12.5, color: "#78350f", lineHeight: 1.45 }}>
+          <strong>This line was re-read.</strong> {row.rereadNote}
+        </div>
+      )}
       {warning && (
         <div className="sc-consistency">
           <strong>Assessment consistency warning</strong>
@@ -3587,6 +3603,7 @@ function FileTable({ rows, perPass, sameLink, open, setOpen }: {
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "15%" }}>Was it read?</th>
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "18%" }}>What came out</th>
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "10%" }}>Quoted</th>
+                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "9%" }}>Re-read</th>
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "26%" }}>What to do about it</th>
               </tr>
             </thead>
@@ -3607,6 +3624,11 @@ function FileTable({ rows, perPass, sameLink, open, setOpen }: {
                     {/* "no" is not a fault: plenty of files in a folder have
                         nothing to say about the lines being checked. */}
                     <td style={{ padding: "8px 9px", color: f.cited ? "#166534" : "#94a3b8", fontWeight: f.cited ? 700 : 400 }}>{f.cited ? "yes" : "no"}</td>
+                    {/* Blank on every file that has not been read again, which
+                        on a clean check is all of them. */}
+                    <td style={{ padding: "8px 9px", color: "#92400e", fontWeight: 700 }} title={f.lastRereadAt ? `Last re-read ${new Date(f.lastRereadAt).toLocaleString("en-SG")}` : undefined}>
+                      {f.rereadCount ? `${f.rereadCount}\u00d7` : ""}
+                    </td>
                     <td style={{ padding: "8px 9px", color: "#334155" }}>{f.action || "—"}</td>
                   </tr>
                 );

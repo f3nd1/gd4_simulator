@@ -57,6 +57,9 @@ export const PRINTABLE_DOC_CSS = `
   .sc-quotes { margin-top: 5px; }
   .sc-quotes blockquote { margin: 3px 0 3px 8px; padding-left: 7px; border-left: 2px solid #cbd5e1; font-style: italic; color: #475569; }
   .sc-capped { margin-top: 5px; color: #475569; font-size: 10.5px; }
+  /* The re-read trace. Printed in ink rather than grey: on a filed working
+     paper it is the line that says this verdict came from a second reading. */
+  .sc-reread { margin-top: 5px; color: #78350f; font-size: 10.5px; }
   ul.sc-missing { margin: 3px 0 0; padding-left: 16px; }
   ul.sc-missing li { margin-bottom: 2px; }
   @media print { body { margin: 12px; } }

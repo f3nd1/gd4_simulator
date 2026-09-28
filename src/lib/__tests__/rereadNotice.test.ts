@@ -34,8 +34,10 @@ describe("a re-read says what it costs", () => {
   });
 
   it("says it again in the message the re-read returns", () => {
-    const fn = STORE.slice(STORE.indexOf("recheckFileLines: async"));
-    expect(fn.slice(0, 3000)).toContain("${REREAD_CLEARS_NOTICE}");
+    // Sliced to the next action, not to a character count: the action grew
+    // when the re-read trace was added and a fixed window stopped covering it.
+    const fn = STORE.slice(STORE.indexOf("recheckFileLines: async"), STORE.indexOf("recheckFinding: async"));
+    expect(fn).toContain("${REREAD_CLEARS_NOTICE}");
   });
 });
 
@@ -58,8 +60,8 @@ describe("the two facts the notice states", () => {
     // repopulate it, and the notice would be overclaiming.
     expect([...STORE.matchAll(/attachBandSuggestion/g)].length).toBe(2); // the type and the action
     expect([...PAGE.matchAll(/attachBandSuggestion/g)].length).toBe(1);
-    const fn = STORE.slice(STORE.indexOf("recheckFileLines: async"));
-    expect(fn.slice(0, 3000)).not.toContain("attachBandSuggestion");
+    const fn = STORE.slice(STORE.indexOf("recheckFileLines: async"), STORE.indexOf("recheckFinding: async"));
+    expect(fn).not.toContain("attachBandSuggestion");
   });
 
   it("the results-and-review pass is hidden when it predates the run on screen", () => {

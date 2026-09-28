@@ -87,7 +87,7 @@ import { selectLineStatusMemories, selectLineStatusCalibration } from "../lib/la
 import { criteriaQuotesRequirement } from "../lib/findingCriteriaCheck";
 import { diffEvidenceFiles } from "../lib/evidenceDrift";
 import { parseFolderId, listFolderFilesRecursive, exportFileText, exportFileImageDataUrl, exportPdfPageImages, IMAGE_MIME_TYPES, DriveApiError, XLSX_MIME, XLS_MIME, classifyPdfTextQuality, type DriveFile, type EmbeddedImageHook, type SheetRowCount } from "../lib/drive/driveClient";
-import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, OutcomeReviewPassResult, ReportAiSuggestion, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt, ClarificationRound, ClarificationProgress } from "../types";
+import type { EvidenceChunk, FlatAuditPoint, PolicyCoverageRow, EvidenceCoverageRow, OutcomeReviewRow, OutcomeReviewPassResult, ReportAiSuggestion, PPDReviewResult, PPDReviewRow, PPDOverallVerdict, PPDContradiction, AuditMode, PanelReviewMode, PendingRun, PendingCommitItem, ChecklistLineWrite, EvidenceAssessmentResult, EvidenceAssessmentRow, EvidenceFileRef, EvidenceAssessmentProgress, PPDReviewProgress, EvidenceVerdict, SpecificLineStatus, EvidenceDriftCheck, VisionBudgetPrompt, ClarificationRound, ClarificationProgress, RereadRecord } from "../types";
 import { orderBySizeForVisionBudget, needsVisionFallback } from "../lib/drive/textUtils";
 
 // A suspected-scanned PDF can still carry a little real typed text (a header,
@@ -8068,11 +8068,43 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           });
         }
         const beforeRunAt = ev.runAt;
+        // Snapshotted BEFORE the re-run, because the re-run overwrites the rows.
+        // Kept on the record itself rather than read back from the run history
+        // later: the history is capped at 20 and can be deleted from the UI, and
+        // a before-verdict that can disappear is not a trace.
+        const previousVerdicts: Record<string, EvidenceVerdict> = {};
+        for (const r of ev.rows) if (refs.includes(r.gdRef)) previousVerdicts[r.gdRef] = r.verdict;
+        const priorRereads = ev.rereads ?? [];
+        const previousRunId = ev.runId;
         await get().runEvidenceAssessment(subCriterionId, refs);
         const after = get().evidenceAssessments[subCriterionId];
         if (!after || after.runAt === beforeRunAt) {
           return { ok: false, message: get().auditBlockedReason ?? "The re-check could not run. Check Google Drive is connected and an auditor is selected, then try again." };
         }
+        // THE TRACE. Appended to what the replaced result carried, so the count
+        // accumulates across re-reads and is only cleared by a full run (which
+        // writes a result with no rereads field at all — correct, because a
+        // fresh whole-area check has no re-reads behind it).
+        //
+        // Deliberately NOT logged through logHumanDecision: that action promotes
+        // any entry with changed: true and a reason into the calibration
+        // library, which the AI learns from. A re-read that could teach the tool
+        // to prefer the answer it produced would be the compounding version of
+        // the problem this trace exists to prevent. See
+        // store/__tests__/rereadNeverCalibrates.test.ts.
+        set((st) => {
+          const cur = st.evidenceAssessments[subCriterionId];
+          if (!cur) return {};
+          const record: RereadRecord = {
+            at: new Date().toISOString(),
+            fileName: rec.name,
+            ...(rec.driveFileId ? { driveFileId: rec.driveFileId } : {}),
+            refs,
+            ...(previousRunId ? { previousRunId } : {}),
+            previousVerdicts,
+          };
+          return { evidenceAssessments: { ...st.evidenceAssessments, [subCriterionId]: { ...cur, rereads: [...priorRereads, record] } } };
+        });
         return {
           ok: true,
           // The second sentence used to say the dimension working and the pass

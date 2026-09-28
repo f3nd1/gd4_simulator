@@ -1,4 +1,4 @@
-import type { AiCallRecord, AuditFileRecord, PPDReviewResult, EvidenceAssessmentResult, OutcomeReviewPassResult } from "../types";
+import type { AiCallRecord, AuditFileRecord, PPDReviewResult, EvidenceAssessmentResult, OutcomeReviewPassResult, RereadRecord } from "../types";
 import { buildRunStages } from "./runStages";
 import { buildStamp } from "./buildInfo";
 import { ONE_READING_SHORT } from "./selfCheck";
@@ -64,6 +64,12 @@ export type AiRunLogPass = {
   textCaptured?: { of: number; captured: number; missing: number };
   /** The two clocks the pass measures itself, in ms. Absent on a run from before they existed. */
   stageTimings?: { listingMs: number; readMs: number };
+  /** Every re-read of one file behind this pass's result: which file, which
+   *  requirement lines, and what each of them said before. The log is the
+   *  artefact most likely to be quoted back later, so a verdict that came from
+   *  a second reading must be identifiable in it. Records side only, because a
+   *  file re-read cannot reach the procedure pass. */
+  rereads?: RereadRecord[];
   files: {
     name: string; path: string; bucket: string; readStatus: string; readMethod?: string;
     charCount?: number; chunkIds?: string[]; skipReason?: string; failReason?: string;
@@ -162,6 +168,7 @@ export function buildAiRunLog(args: {
       pass: "records", runAt: args.evidence.runAt, durationMs: args.evidence.durationMs, model: args.evidence.model,
       warnings: args.evidence.runWarnings, calls: args.evidence.aiCallLog ?? [], files: filesOf(args.evidence.fileLedger),
       callCounts: countsOf(args.evidence.aiCallLog ?? []), ...(args.evidence.stageTimings ? { stageTimings: args.evidence.stageTimings } : {}),
+      ...(args.evidence.rereads?.length ? { rereads: args.evidence.rereads } : {}),
     });
   }
   if (args.outcome) {

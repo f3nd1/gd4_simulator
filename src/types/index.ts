@@ -1224,6 +1224,35 @@ export type EvidenceAssessmentRow = {
   passageKinds?: { record: number; policy: number };
 };
 
+// One re-read of ONE file, recorded on the result it produced.
+//
+// Re-reading a file is one click and it rewrites verdicts. Without a record,
+// somebody could re-read until a line turned from "does not comply" to
+// "complies" and nothing on the page would show it. We measured that verdicts
+// DO move between runs on unchanged documents (three runs of 6.2 moved five of
+// its ten records lines), so this is not hypothetical.
+//
+// It lives on the RESULT, not in the human-decision log and not in the run
+// history, because both of those can be cleared from the UI. There is no delete
+// path for a field on the current result: the only way to lose it is to
+// overwrite the whole check, which is a full re-run and the honest way to clear
+// a re-read history.
+//
+// What it cannot do: tell "re-read because the scan was bad" from "re-read
+// until the answer changed". What it does is make the second one legible.
+export type RereadRecord = {
+  at: string;
+  fileName: string;
+  driveFileId?: string;
+  /** The requirement lines re-checked, which is every line that quoted the file. */
+  refs: string[];
+  /** The run this re-read replaced, so the earlier check can be found in the history. */
+  previousRunId?: string;
+  /** Each re-checked line's verdict BEFORE the re-read, snapshotted here so the
+   *  comparison does not depend on the run history surviving. */
+  previousVerdicts: Record<string, EvidenceVerdict>;
+};
+
 export type EvidenceAssessmentResult = {
   // Every AI call this pass made, in order, with no document text in it.
   //
@@ -1303,6 +1332,12 @@ export type EvidenceAssessmentResult = {
   // records-pass timeout was invisible on the self-check page. Stored so an
   // incomplete run can say so where it is read, not only in a diagnostic.
   runWarnings?: string[];
+  // Every re-read of one file that contributed to THIS result, oldest first.
+  // A full run writes a result without the field, which is correct: a fresh
+  // whole-area check has no re-reads behind it. A scoped re-read appends its
+  // own record to whatever the result it replaced was carrying, so the count
+  // accumulates until the next full run.
+  rereads?: RereadRecord[];
   // Per-file ledger for this Option A evidence run, in the same AuditFileRecord
   // shape the staged path uses, so the two paths' file-ledger CSVs line up.
   // Undefined when the rows were derived from a prior staged audit (no fresh

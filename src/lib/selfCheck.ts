@@ -16,8 +16,8 @@ import { unjudgedBothSides } from "./unjudgedRows";
 import { partialFilesForLine, linePartialReadNote } from "./partialRead";
 import { ROWS_DO_NOT_SUM_NOTE, dimensionsNote, rubricMatrix, RUBRIC_ACHIEVED_MARK, RUBRIC_NEXT_MARK, NO_ACTION_RECORDED, CLIMB_HEADING, CLIMB_BEYOND_NOTE, CLIMB_AT_TOP, CLIMB_HEADING_AT_TOP, TOP_BAND_WITH_ROOM_NOTE, nextBandRoute, nextBandWorking, NEXT_BAND_CAVEAT, NEXT_BAND_TOP_NOTE, selfCheckTotal, selfCheckTotalWorking, bandName, INFERRED_THRESHOLDS_NOTE, bandGraphic, bandGraphicSvg, tallyBarSvg, tallyHeadline, PROCEDURE_FEEDS, RECORDS_FEEDS, OVERALL_FEEDS, PRINT_BAND_PALETTE, type BandWorking, type TabFeeds, type TallySlice } from "./selfCheckBanding";
 import { unassessedDimensions, runNamedGaps, reviewShapedGapNote, reviewShapedRows, IMPROVE_HEADLINE, IMPROVE_WHY, REVIEW_FINDINGS_HEADING, REVIEW_FINDINGS_INTRO, REVIEW_FINDINGS_NONE } from "./selfCheckImprove";
-import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
-import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band, AuditFileRecord } from "../types";
+import { buildWorking, expectedEvidenceFor, unreadableWarning, countFileRows, qualifyForUnreadable, splitTrailingQuotes, mergeQuotes, fileCheckMark, rereadNoteForRef, rereadSummary, SAME_LINK_WARNING, type SelfCheckWorking, type SelfCheckFileRow } from "./selfCheckEvidence";
+import type { EvidenceAssessmentRow, EvidenceVerdict, PPDReviewRow, PPDVerdict, Band, AuditFileRecord, RereadRecord } from "../types";
 
 // The disclaimer the rest of the app carries, repeated verbatim in every
 // surface this page produces, including both downloads.
@@ -248,6 +248,10 @@ export type SelfCheckRow = {
   // Set when this line's cited evidence includes a file the run read only in
   // part. Empty otherwise, so a clean line carries nothing.
   partialNote?: string;
+  // Set when a re-read of one file produced this verdict: which file, when, and
+  // what the line said before. Empty on every line a re-read did not touch, and
+  // on the whole procedure tab, which a file re-read cannot reach.
+  rereadNote?: string;
   // The reasoning prose, with any TRAILING verbatim excerpt lifted out into
   // `working.citations`. The judge prompts require that excerpt in the prose
   // AND as its own field, so it used to print twice.
@@ -289,6 +293,9 @@ export type SelfCheckContext = {
   // not the same finding as a gap where the record is absent.
   policyLedger?: AuditFileRecord[];
   evidenceLedger?: AuditFileRecord[];
+  // This result's re-read records. Every surface that shows a verdict reads the
+  // trace from here, so none of them can show a re-read the others do not.
+  rereads?: RereadRecord[];
 };
 
 // The engine only writes suggestedAction from its AI judge. On a line where
@@ -403,6 +410,7 @@ export function toSelfCheckRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckCon
       : (PLAIN_VERDICT[r.verdict] ?? PLAIN_VERDICT["Not assessed"]);
     return {
       partialNote: linePartialReadNote(partialFilesForLine(r.evidenceChunkIds, ctx.evidenceLedger)),
+      rereadNote: rereadNoteForRef(r.gdRef, ctx.rereads),
       ref: r.gdRef,
       requirement: r.requirementText,
       // The tally counts off this field, so it has to agree with the label. A
@@ -556,6 +564,7 @@ export function toRecordsRows(rows: EvidenceAssessmentRow[], ctx: SelfCheckConte
     const plain = RECORDS_PLAIN_VERDICT[kind];
     return {
       partialNote: linePartialReadNote(partialFilesForLine(r.evidenceChunkIds, ctx.evidenceLedger)),
+      rereadNote: rereadNoteForRef(r.gdRef, ctx.rereads),
       ref: r.gdRef,
       requirement: r.requirementText,
       // Mapped onto the shared axis so the one table and one tally can render
@@ -765,11 +774,15 @@ export const SELF_CHECK_HEADERS = [
   // rather than a prose blob, so a spreadsheet can be sorted and filtered on
   // them the way working paper actually gets used.
   "Evidence quoted", "What is missing", "Official expected evidence",
+  // Blank on every line no re-read touched, which is every line of a clean
+  // whole-area check. A verdict that came from a second reading of one file
+  // must say so in the filed spreadsheet, not only on screen.
+  "Re-read",
 ];
 
 // The leading tick is what makes the list checkable at a glance in a
 // spreadsheet as well as on screen.
-export const SELF_CHECK_FILE_HEADERS = ["Read?", "File", "Folder", "Was it read?", "What came out", "What to do about it", "Quoted in a result"];
+export const SELF_CHECK_FILE_HEADERS = ["Read?", "File", "Folder", "Was it read?", "What came out", "What to do about it", "Quoted in a result", "Re-read"];
 
 // One place both exports turn a row's working into flat text, so the CSV and
 // the printable page can never describe the same row differently.
@@ -868,6 +881,9 @@ export function buildSelfCheckCsv(
   // Optional: an older caller, and the "earlier check" export, has none, and
   // the route then prints without named lines rather than inventing them.
   stepRefs: DimensionStepRefs = {},
+  // This result's re-read records. Absent on an older result and on every
+  // result that has never had one, and then nothing below is printed.
+  rereads: RereadRecord[] = [],
 ): string {
   const pad = (cells: string[]) => [...cells, ...Array(Math.max(0, SELF_CHECK_HEADERS.length - cells.length)).fill("")];
   const blank = pad([]);
@@ -903,7 +919,7 @@ export function buildSelfCheckCsv(
     ...(sameLink ? [pad([SAME_LINK_WARNING])] : []),
     ...(warning ? [pad([warning])] : []),
     pad(SELF_CHECK_FILE_HEADERS),
-    ...files.map((f) => pad([fileCheckMark(f).mark, f.name, f.bucket, f.label, f.detail, f.action, f.cited ? "yes" : "no"])),
+    ...files.map((f) => pad([fileCheckMark(f).mark, f.name, f.bucket, f.label, f.detail, f.action, f.cited ? "yes" : "no", f.rereadCount ? `read again ${f.rereadCount} time${f.rereadCount === 1 ? "" : "s"}` : ""])),
   ];
   // The legend travels with the file: a spreadsheet forwarded to an external
   // assessor has to explain its own state names.
@@ -966,8 +982,12 @@ export function buildSelfCheckCsv(
       ...gaps.map((g) => pad([g.ref, g.text])),
     ]),
   ];
-  return `# ${ONE_READING_SHORT} ${SELF_CHECK_DISCLAIMER}\r\n` + toCsv(SELF_CHECK_HEADERS, [
-    ...rows.map((r) => pad([areaLabel, r.ref, r.requirement, r.label, r.summary, [r.why, r.cappedNote].filter(Boolean).join("\n\n"), r.fix, citedText(r.working), missingText(r.working), (r.expected ?? []).join("; ")])),
+  // Second comment line, above the headers where sorting cannot move it, and
+  // only when there is something to say. The file keeps its shape for an
+  // importer: it already carried one comment line.
+  const rereadLine = rereadSummary(rereads);
+  return `# ${ONE_READING_SHORT} ${SELF_CHECK_DISCLAIMER}\r\n` + (rereadLine ? `# ${rereadLine}\r\n` : "") + toCsv(SELF_CHECK_HEADERS, [
+    ...rows.map((r) => pad([areaLabel, r.ref, r.requirement, r.label, r.summary, [r.why, r.cappedNote].filter(Boolean).join("\n\n"), r.fix, citedText(r.working), missingText(r.working), (r.expected ?? []).join("; "), r.rereadNote ?? ""])),
     blank,
     ...trailer.map((t) => pad([t])),
     pad([SELF_CHECK_DISCLAIMER]),
@@ -1052,8 +1072,9 @@ export function buildSelfCheckHtml(opts: {
   timing?: string;
   sameLink?: boolean;
   itemIds?: string[];
+  rereads?: RereadRecord[];
 }): string {
-  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [], bandWorking, bandCoverage, itemIds = [], timing = "", sameLink = false, stepRefs = {} } = opts;
+  const { areaLabel, areaDescription, counts, band, rows, ranAt, view = "overview", files = [], bandWorking, bandCoverage, itemIds = [], timing = "", sameLink = false, stepRefs = {}, rereads = [] } = opts;
   const gaps = runNamedGaps(rows);
   const reviewRows = reviewShapedRows(rows);
   const legendHtml = `
@@ -1112,7 +1133,7 @@ export function buildSelfCheckHtml(opts: {
     ${fileWarning ? `<p><b>${escapeHtml(fileWarning)}</b></p>` : ""}
     <p class="muted">${fileCounts.read} read · ${fileCounts.check} read but worth checking · ${fileCounts.unreadable} could not be read</p>
     <table>
-      <thead><tr><th>Read?</th><th>File</th><th>Folder</th><th>Was it read?</th><th>What came out</th><th>What to do about it</th><th>Quoted</th></tr></thead>
+      <thead><tr><th>Read?</th><th>File</th><th>Folder</th><th>Was it read?</th><th>What came out</th><th>What to do about it</th><th>Quoted</th><th>Re-read</th></tr></thead>
       <tbody>
         ${files.map((f) => `<tr>
           <td><b>${escapeHtml(fileCheckMark(f).mark)}</b></td>
@@ -1122,6 +1143,7 @@ export function buildSelfCheckHtml(opts: {
           <td>${escapeHtml(f.detail)}</td>
           <td>${escapeHtml(f.action)}</td>
           <td>${f.cited ? "yes" : "no"}</td>
+          <td>${f.rereadCount ? escapeHtml(`${f.rereadCount}\u00d7`) : ""}</td>
         </tr>`).join("")}
       </tbody>
     </table>`;
@@ -1176,6 +1198,7 @@ export function buildSelfCheckHtml(opts: {
     <p class="muted">${escapeHtml(areaDescription)}</p>
     <p class="muted">Checked on ${escapeHtml(ranAt)}${timing ? ` · took ${escapeHtml(timing)}` : ""} · ${escapeHtml(buildStamp())}</p>
     <p class="one-reading">${escapeHtml(ONE_READING_NOTE)}</p>
+    ${rereadSummary(rereads) ? `<p class="one-reading">${escapeHtml(rereadSummary(rereads))}</p>` : ""}
     <p><b>${counts.complies} ${words.complies}${words.partly ? ` · ${counts.partly} ${words.partly}` : ""} · ${counts.doesNot} ${words.doesNot} · ${counts.couldNotCheck} could not check</b></p>
     <p>${escapeHtml(bandLine)}</p>
     ${unjudgedNote ? `<p class="muted">${escapeHtml(unjudgedNote)}</p>` : ""}
@@ -1191,7 +1214,7 @@ export function buildSelfCheckHtml(opts: {
         ${rows.map((r) => `<tr>
           <td class="sc-verdict"><b>${escapeHtml(`${r.icon} ${r.label}`)}</b></td>
           <td>${escapeHtml(r.requirement)}<br><span class="muted">${escapeHtml(r.ref)}</span></td>
-          <td>${r.summary ? `<div class="sc-summary"><b>${escapeHtml(SUMMARY_LABEL[r.summaryKind])}:</b> ${escapeHtml(r.summary)}</div>` : ""}<div>${escapeHtml(r.why)}</div>${r.cappedNote ? `<div class="sc-capped">${escapeHtml(r.cappedNote)}</div>` : ""}${workingHtml(r)}</td>
+          <td>${r.summary ? `<div class="sc-summary"><b>${escapeHtml(SUMMARY_LABEL[r.summaryKind])}:</b> ${escapeHtml(r.summary)}</div>` : ""}<div>${escapeHtml(r.why)}</div>${r.cappedNote ? `<div class="sc-capped">${escapeHtml(r.cappedNote)}</div>` : ""}${r.rereadNote ? `<div class="sc-reread"><b>Re-read:</b> ${escapeHtml(r.rereadNote)}</div>` : ""}${workingHtml(r)}</td>
           <td>${escapeHtml(r.fix)}</td>
         </tr>`).join("")}
       </tbody>
