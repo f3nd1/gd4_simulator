@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { REREAD_CLEARS_NOTICE, RECHECK_CLEARS_NOTICE } from "../selfCheckEvidence";
+import { REREAD_CLEARS_NOTICE, RECHECK_CLEARS_NOTICE, REREAD_ROW_SHORT } from "../selfCheckEvidence";
 
 const STORE = readFileSync("src/store/useWorkspaceStore.ts", "utf8");
 const PAGE = readFileSync("src/pages/SelfCheck.tsx", "utf8");
@@ -28,9 +28,16 @@ describe("a re-read says what it costs", () => {
   });
 
   it("says it BEFORE the click, not only in the message afterwards", () => {
-    // Once in the import, once rendered beside the button.
+    // Once in the import, once in the confirmation the row button opens. It
+    // used to be a paragraph beside a dropdown under the table; the dropdown
+    // is gone and the action is on the row, so the full notice moved into the
+    // confirmation and the row carries the short form.
     expect([...PAGE.matchAll(/REREAD_CLEARS_NOTICE/g)].length).toBe(2);
-    expect(PAGE).toContain("<p className=\"sc-reread-cost\">{REREAD_CLEARS_NOTICE}</p>");
+    expect(PAGE).toMatch(/confirm\(`Read \$\{f\.name\} again[\s\S]*\$\{REREAD_CLEARS_NOTICE\}`\)/);
+    // And the short form is on the row itself, so nothing is disclosed only
+    // behind a dialog somebody has already decided to open.
+    expect(PAGE).toContain("{REREAD_ROW_SHORT}");
+    expect(REREAD_ROW_SHORT).toMatch(/band/i);
   });
 
   it("says it again in the message the re-read returns", () => {

@@ -7,7 +7,7 @@
 // requirement line, the area) and the three exports, all counting off the SAME
 // stored records so none of them can show a re-read the others do not.
 import { describe, it, expect } from "vitest";
-import { withRereads, rereadNoteForRef, rereadSummary, toFileRows, type SelfCheckFileRow } from "../selfCheckEvidence";
+import { withRereads, rereadNoteForRef, rereadSummary, toFileRows, canRereadFile, withQuotedLineCounts, type SelfCheckFileRow } from "../selfCheckEvidence";
 import { toSelfCheckRows, toRecordsRows, toProcedureRows, buildSelfCheckCsv, buildSelfCheckHtml, countSelfCheck, SELF_CHECK_HEADERS, SELF_CHECK_FILE_HEADERS } from "../selfCheck";
 import { buildAiRunLog } from "../aiRunLogExport";
 import type { AuditFileRecord, EvidenceAssessmentResult, EvidenceAssessmentRow, PPDReviewRow, RereadRecord } from "../../types";
@@ -184,5 +184,62 @@ describe("it travels into all three exports", () => {
   it("the run log of a clean check has no rereads field at all", () => {
     const ev = { subCriterionId: "6.3", rows: [evRow()], runAt: "x", live: true } as EvidenceAssessmentResult;
     expect(buildAiRunLog({ area: "6.3", evidence: ev }).passes[0].rereads).toBeUndefined();
+  });
+});
+
+// WHICH ROWS OFFER THE BUTTON. It replaced a dropdown listing every file the
+// records pass read (39 on a real 5.5 run, about half of them labelled "no
+// line quoted it"), so the whole point is that most rows do not offer it.
+describe("the re-read button appears only where it can do something", () => {
+  const rowOf = (over: Partial<AuditFileRecord>, quoted: number): SelfCheckFileRow =>
+    withQuotedLineCounts(
+      toFileRows(undefined, [led(over)]),
+      quoted > 0 ? Array.from({ length: quoted }, (_, i) => evRow({ gdRef: `6.3.1.DS${i + 1}` })) : [],
+      { C001: (over.name as string) ?? "Agent Log.pdf" },
+    )[0];
+
+  it("offers it on a file read from images that a line quoted", () => {
+    expect(canRereadFile(rowOf({ readMethod: "vision" }, 1))).toBe(true);
+  });
+
+  it("offers it on a file that could not be read at all", () => {
+    expect(canRereadFile(rowOf({ readStatus: "failed", failReason: "Drive read error" }, 2))).toBe(true);
+  });
+
+  it("refuses it on a cleanly read file, however many lines quoted it", () => {
+    expect(canRereadFile(rowOf({}, 5))).toBe(false);
+  });
+
+  it("refuses it when no requirement line quoted the file", () => {
+    // The store would answer "re-reading it would change nothing", so offering
+    // the button is an invitation to a dead end.
+    expect(canRereadFile(rowOf({ readMethod: "vision" }, 0))).toBe(false);
+  });
+
+  it("refuses it on the written-procedure side, which has no re-read at all", () => {
+    const row = withQuotedLineCounts(
+      toFileRows([led({ bucket: "policy", readMethod: "vision" })], undefined),
+      [evRow()], { C001: "Agent Log.pdf" },
+    )[0];
+    expect(row.bucket).toBe("Written procedure");
+    expect(canRereadFile(row)).toBe(false);
+  });
+
+  it("allows a file that is in BOTH folders, because it is in the evidence ledger", () => {
+    const rows = withQuotedLineCounts(
+      toFileRows([led({ bucket: "policy" })], [led({ readMethod: "vision" })]),
+      [evRow()], { C001: "Agent Log.pdf" },
+    );
+    expect(rows[0].bucket).toBe("Both folders");
+    expect(canRereadFile(rows[0])).toBe(true);
+  });
+
+  it("counts quoted lines by the run's own chunk map, the rule the action uses", () => {
+    const rows = withQuotedLineCounts(
+      toFileRows(undefined, [led(), led({ path: "e/Other.pdf", name: "Other.pdf", driveFileId: "d-other", chunkIds: ["C002"] })]),
+      [evRow({ evidenceChunkIds: ["C001"] }), evRow({ gdRef: "6.3.1.DS2", evidenceChunkIds: ["C002"] }), evRow({ gdRef: "6.3.1.DS3", evidenceChunkIds: ["C001"] })],
+      { C001: "Agent Log.pdf", C002: "Other.pdf" },
+    );
+    expect(rows.map((r) => r.quotedLines)).toEqual([2, 1]);
   });
 });

@@ -30,6 +30,9 @@ export type SelfCheckFileRow = {
    *  check, and when the last one was. Undefined when it never has been. */
   rereadCount?: number;
   lastRereadAt?: string;
+  /** How many requirement lines quoted this file on this run. Undefined when
+   *  the caller had no run rows to count against. */
+  quotedLines?: number;
   name: string;
   bucket: FileBucketLabel;
   outcome: FileOutcome;
@@ -455,6 +458,52 @@ export function withRereads(rows: SelfCheckFileRow[], rereads?: RereadRecord[]):
     if (mine.length === 0) return r;
     return { ...r, rereadCount: mine.length, lastRereadAt: mine[mine.length - 1].at };
   });
+}
+
+// ── Which rows can be read again, and what that costs ───────────────────
+//
+// The control used to be one dropdown under the table listing EVERY file the
+// records pass read: 39 options on a real 5.5 run, about half of them labelled
+// "(no line quoted it)", which is a list of dead ends. The action belongs on
+// the row a person is looking at when they decide a file needs re-reading, and
+// only where it can actually do something.
+
+/** The short form for the row. The full REREAD_CLEARS_NOTICE is what the
+ *  confirmation carries: a 39-row table cannot repeat four sentences per row
+ *  and stay readable, and a cost nobody can read is not disclosed. */
+export const REREAD_ROW_SHORT = "Clears this area's band.";
+
+/** Three conditions, all read off what the run itself recorded:
+ *   1. the row needs attention, because re-reading a cleanly read file
+ *      changes nothing,
+ *   2. the file is on the records side, because recheckFileLines looks in the
+ *      evidence ledger only and a written-procedure file has no re-read at
+ *      all (a file in BOTH folders is in that ledger, so it qualifies),
+ *   3. at least one requirement line quoted it, because otherwise the store
+ *      refuses with "re-reading it would change nothing" and offering the
+ *      button is an invitation to a dead end. */
+export function canRereadFile(row: SelfCheckFileRow): boolean {
+  return row.outcome !== "read" && row.bucket !== "Written procedure" && (row.quotedLines ?? 0) > 0;
+}
+
+/** How many requirement lines quoted each file, counted off the run's OWN
+ *  chunk map, which is the same rule recheckFileLines uses to decide which
+ *  lines to re-check. Counted here rather than in the page so the condition
+ *  the button shows on and the lines the action re-checks cannot drift. */
+export function withQuotedLineCounts(
+  rows: SelfCheckFileRow[],
+  evidenceRows: EvidenceAssessmentRow[] | undefined,
+  chunkFileNames: Record<string, string> | undefined,
+): SelfCheckFileRow[] {
+  if (!evidenceRows || evidenceRows.length === 0) return rows;
+  const chunkFiles = chunkFileNames ?? {};
+  return rows.map((r) => ({
+    ...r,
+    quotedLines: evidenceRows.filter((er) =>
+      (er.evidenceChunkIds ?? []).some((c) => chunkFiles[c] === r.name)
+      || (er.evidenceFiles ?? []).some((f) => f.name === r.name)
+    ).length,
+  }));
 }
 
 /** The sentence for ONE requirement line, or "" when no re-read touched it.

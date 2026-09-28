@@ -31,7 +31,7 @@ import {
   type SelfCheckBand, type SelfCheckView, type Combination, type SelfCheckRow,
   splitRunWarnings,
 } from "../lib/selfCheck";
-import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, REREAD_CLEARS_NOTICE, rereadSummary, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
+import { toFileRows, countFileRows, unreadableWarning, passFileRows, fileCheckMark, sameFolderLink, SAME_LINK_WARNING, REREAD_CLEARS_NOTICE, REREAD_ROW_SHORT, rereadSummary, canRereadFile, withQuotedLineCounts, type SelfCheckFileRow } from "../lib/selfCheckEvidence";
 // The live file ledger the Evidence Folder page already has: every file this
 // run has listed, its status as it changes, and a Skip button on the one being
 // read. Reused rather than rebuilt — a second, simpler live view would be a
@@ -255,11 +255,11 @@ export function SelfCheck() {
   // above it answers most questions, and the log is what you open when it does
   // not.
   const [logOpen, setLogOpen] = useState(false);
-  // Re-read one file: which file is chosen, what the last attempt said, and
-  // whether one is in flight. Page state only — nothing about it is stored.
-  const [rereadKey, setRereadKey] = useState("");
+  // Re-read one file: what the last attempt said, and which row is in flight
+  // (by its key, so only that row's button shows the running state). Page
+  // state only — what is STORED is the trace on the result, see RereadRecord.
   const [rereadNote, setRereadNote] = useState("");
-  const [rereading, setRereading] = useState(false);
+  const [rereading, setRereading] = useState<string | null>(null);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   // Which requirement the stage is showing. Held by REF, not by index: the
@@ -476,7 +476,9 @@ export function SelfCheck() {
   // procedure-only run never read the records folder, so only its ledger is
   // listed: showing an empty records section would imply a folder was read.
   const fileRows = useMemo(
-    () => toFileRows(ppdExisting?.fileLedger, procedureOnlyResult ? undefined : existing?.fileLedger, existing?.rereads),
+    () => withQuotedLineCounts(
+      toFileRows(ppdExisting?.fileLedger, procedureOnlyResult ? undefined : existing?.fileLedger, existing?.rereads),
+      existing?.rows, existing?.chunkFileNames),
     [ppdExisting, existing, procedureOnlyResult],
   );
   // Established live, not inferred: one link in both boxes makes BOTH passes
@@ -488,7 +490,7 @@ export function SelfCheck() {
   // pass read is not evidence the procedure pass read it.
   const tabFileRows = useMemo(
     () => (view === "procedure" || view === "procedure-only" ? passFileRows(ppdExisting?.fileLedger)
-      : view === "records" ? passFileRows(existing?.fileLedger, existing?.rereads)
+      : view === "records" ? withQuotedLineCounts(passFileRows(existing?.fileLedger, existing?.rereads), existing?.rows, existing?.chunkFileNames)
       : fileRows),
     [view, ppdExisting, existing, fileRows],
   );
@@ -583,23 +585,6 @@ export function SelfCheck() {
     [runNotes],
   );
   const expectedGroups = useMemo(() => expectedEvidenceGroups(rows), [rows]);
-  // The files THIS stored check read, each with the number of requirement lines
-  // that quoted it, counted off the run's own chunk map. Records side only: the
-  // written-procedure pass is not what this control re-runs.
-  const rereadFiles = useMemo(() => {
-    if (!existing) return [] as { key: string; name: string; lines: number }[];
-    const chunkFiles = existing.chunkFileNames ?? {};
-    return (existing.fileLedger ?? [])
-      .filter((f) => f.bucket === "evidence" && (f.driveFileId || f.path))
-      .map((f) => ({
-        key: f.driveFileId || f.path,
-        name: f.name,
-        lines: existing.rows.filter((r) =>
-          (r.evidenceChunkIds ?? []).some((c) => chunkFiles[c] === f.name)
-          || (r.evidenceFiles ?? []).some((e) => e.name === f.name)
-        ).length,
-      }));
-  }, [existing]);
   // The run's own reported gaps, gathered for the improvement section. Nothing
   // new is written: these are the strings already on the rows.
   const runGaps = useMemo(() => runNamedGaps(rows), [rows]);
@@ -2479,7 +2464,22 @@ export function SelfCheck() {
                 be the same class of error as merging their chunk maps. The
                 overall tab keeps the merged view, which answers the different
                 question of what the whole check opened. */}
-            <FileTable rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} open={filesOpen} setOpen={setFilesOpen} />
+            <FileTable
+              rows={tabFileRows} perPass={view !== "overview"} sameLink={sameLink} open={filesOpen} setOpen={setFilesOpen}
+              rereading={rereading}
+              onReread={(f) => {
+                if (!area) return;
+                // The FULL notice, in the confirmation, because this is the
+                // moment the cost is paid. The row carries only the short form:
+                // four sentences on every row of a 39-row table is a cost
+                // nobody reads, which is not disclosure.
+                if (!confirm(`Read ${f.name} again and re-check the ${f.quotedLines} requirement ${f.quotedLines === 1 ? "line" : "lines"} that quoted it?\n\n${REREAD_CLEARS_NOTICE}`)) return;
+                setRereading(f.key); setRereadNote("");
+                void useWorkspaceStore.getState().recheckFileLines(area.scope, f.key)
+                  .then((r) => setRereadNote(r.message))
+                  .finally(() => { setRereading(null); setRunIndex(0); });
+              }}
+            />
 
             {/* RE-READ ONE FILE. A document that was unreadable, or that has
                 since been replaced with a better scan, used to mean running the
@@ -2487,43 +2487,14 @@ export function SelfCheck() {
                 one file again (the rest come from this session's text cache)
                 and re-checks ONLY the requirement lines that quoted it. It says
                 so before it runs, and it says what it did not redo after. */}
-            {rereadFiles.length > 0 && (
-              <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px", margin: "12px 0", background: "#fff" }}>
-                <b style={{ fontSize: 13 }}>Read one file again</b>
-                <p style={{ ...muted, margin: "4px 0 8px" }}>
-                  For a file that could not be read, or one you have since replaced in Drive. It reads that file again and re-checks only the
-                  requirement lines that quoted it. Every other line, and the whole written-procedure side, stays exactly as it is.
-                </p>
-                {/* The cost, BEFORE the click. It used to appear only in the
-                    message afterwards, and it said the opposite of what happens. */}
-                <p className="sc-reread-cost">{REREAD_CLEARS_NOTICE}</p>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                  <select
-                    value={rereadKey} onChange={(e) => { setRereadKey(e.target.value); setRereadNote(""); }}
-                    disabled={rereading}
-                    style={{ ...input, width: "auto", minWidth: 260, maxWidth: "100%", flex: "1 1 260px", padding: "8px 10px", fontSize: 13, cursor: "pointer" }}
-                  >
-                    <option value="">Choose a file this check read…</option>
-                    {rereadFiles.map((f) => (
-                      <option key={f.key} value={f.key}>{f.name}{f.lines === 0 ? " (no line quoted it)" : ` (${f.lines} ${f.lines === 1 ? "line" : "lines"} quoted it)`}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button" disabled={!rereadKey || rereading}
-                    onClick={() => {
-                      if (!area || !rereadKey) return;
-                      setRereading(true); setRereadNote("");
-                      void useWorkspaceStore.getState().recheckFileLines(area.scope, rereadKey)
-                        .then((r) => setRereadNote(r.message))
-                        .finally(() => { setRereading(false); setRunIndex(0); });
-                    }}
-                    style={{ ...bigBtn, fontSize: 13, padding: "8px 14px", opacity: !rereadKey || rereading ? 0.45 : 1, cursor: !rereadKey || rereading ? "not-allowed" : "pointer" }}
-                  >
-                    {rereading ? "Reading it again…" : "Read again and re-check its lines"}
-                  </button>
-                </div>
-                {rereadNote && <p style={{ ...muted, margin: "8px 0 0", color: INK }}>{rereadNote}</p>}
-              </div>
+            {/* THE DROPDOWN IS GONE. It listed every file the records pass
+                read, 39 on a real 5.5 run with about half labelled "(no line
+                quoted it)", and it sat under the table rather than on the row
+                a person is looking at when they decide a file needs
+                re-reading. The action is now on the row, and only on the rows
+                it can do something for: see canRereadFile. */}
+            {rereadNote && (
+              <p style={{ ...muted, margin: "8px 0 0", color: INK, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "9px 11px" }}>{rereadNote}</p>
             )}
 
             {/* What good looks like, from the official published list and
@@ -3558,9 +3529,14 @@ function WhyCell({ row, showProse = true }: { row: SelfCheckRow; showProse?: boo
 // when the panel happens to be open is not a warning. Shut and clean the header
 // is one line; shut with failures it names the files. Unreadable rows still
 // carry a tint AND a word AND a cross inside.
-function FileTable({ rows, perPass, sameLink, open, setOpen }: {
+function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading }: {
   rows: SelfCheckFileRow[]; perPass: boolean; sameLink: boolean;
   open: boolean; setOpen: (v: boolean) => void;
+  // Absent on a table with no re-readable rows (the procedure tab, and any
+  // check whose files were all read cleanly), and then no column of buttons
+  // appears at all.
+  onReread?: (row: SelfCheckFileRow) => void;
+  rereading?: string | null;
 }) {
   if (rows.length === 0) return null;
   const counts = countFileRows(rows);
@@ -3603,7 +3579,7 @@ function FileTable({ rows, perPass, sameLink, open, setOpen }: {
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "15%" }}>Was it read?</th>
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "18%" }}>What came out</th>
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "10%" }}>Quoted</th>
-                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "9%" }}>Re-read</th>
+                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: onReread ? "16%" : "9%" }}>Re-read</th>
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "26%" }}>What to do about it</th>
               </tr>
             </thead>
@@ -3624,10 +3600,28 @@ function FileTable({ rows, perPass, sameLink, open, setOpen }: {
                     {/* "no" is not a fault: plenty of files in a folder have
                         nothing to say about the lines being checked. */}
                     <td style={{ padding: "8px 9px", color: f.cited ? "#166534" : "#94a3b8", fontWeight: f.cited ? 700 : 400 }}>{f.cited ? "yes" : "no"}</td>
-                    {/* Blank on every file that has not been read again, which
-                        on a clean check is all of them. */}
-                    <td style={{ padding: "8px 9px", color: "#92400e", fontWeight: 700 }} title={f.lastRereadAt ? `Last re-read ${new Date(f.lastRereadAt).toLocaleString("en-SG")}` : undefined}>
-                      {f.rereadCount ? `${f.rereadCount}\u00d7` : ""}
+                    {/* The count is blank on every file that has not been
+                        read again, which on a clean check is all of them; the
+                        button appears only where re-reading can do something
+                        (canRereadFile). Most rows therefore hold nothing. */}
+                    <td style={{ padding: "8px 9px" }} title={f.lastRereadAt ? `Last re-read ${new Date(f.lastRereadAt).toLocaleString("en-SG")}` : undefined}>
+                      {f.rereadCount ? <span style={{ color: "#92400e", fontWeight: 700 }}>{`${f.rereadCount}\u00d7`}</span> : null}
+                      {onReread && canRereadFile(f) && (
+                        <div style={{ marginTop: f.rereadCount ? 5 : 0 }}>
+                          <button
+                            type="button"
+                            disabled={!!rereading}
+                            onClick={() => onReread(f)}
+                            title={`Re-check the ${f.quotedLines} requirement ${f.quotedLines === 1 ? "line" : "lines"} that quoted this file`}
+                            style={{ fontSize: 11.5, fontWeight: 700, padding: "4px 9px", borderRadius: 6, border: "1px solid #0284c7", background: rereading ? "#e0f2fe" : "#0284c7", color: rereading ? "#0369a1" : "#fff", cursor: rereading ? "default" : "pointer", whiteSpace: "nowrap" }}
+                          >
+                            {rereading === f.key ? "Reading…" : "Read again"}
+                          </button>
+                          {/* The short form. The full notice is in the
+                              confirmation this button opens. */}
+                          <div style={{ fontSize: 10.5, color: "#92400e", marginTop: 3, lineHeight: 1.35 }}>{REREAD_ROW_SHORT}</div>
+                        </div>
+                      )}
                     </td>
                     <td style={{ padding: "8px 9px", color: "#334155" }}>{f.action || "—"}</td>
                   </tr>
