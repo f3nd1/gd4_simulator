@@ -3575,11 +3575,16 @@ function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading
               <tr style={{ textAlign: "left", background: "#f8fafc" }}>
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: 34 }} aria-label="Read" />
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0" }}>File</th>
+                {/* SECOND, not seventh. At 420px this table scrolls sideways,
+                    and the button used to sit past the fold: a count you
+                    cannot see is a small problem, an action you cannot see is
+                    not. The exports keep their own order, which has no
+                    viewport and no button. */}
+                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: onReread ? "16%" : "9%" }}>Re-read</th>
                 {!perPass && <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "14%" }}>Folder</th>}
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "15%" }}>Was it read?</th>
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "18%" }}>What came out</th>
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "10%" }}>Quoted</th>
-                <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: onReread ? "16%" : "9%" }}>Re-read</th>
                 <th style={{ padding: "7px 9px", borderBottom: "1px solid #e2e8f0", width: "26%" }}>What to do about it</th>
               </tr>
             </thead>
@@ -3592,14 +3597,6 @@ function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading
                       <span title={m.label} style={{ ...TONE_BG[FILE_TONE[m.tone]], display: "inline-block", width: 21, height: 21, lineHeight: "21px", borderRadius: 5, fontWeight: 800, fontSize: 13 }}>{m.mark}</span>
                     </td>
                     <td style={{ padding: "8px 9px" }}>{f.name}</td>
-                    {!perPass && <td style={{ padding: "8px 9px", color: "#475569" }}>{f.bucket}</td>}
-                    <td style={{ padding: "8px 9px" }}>
-                      <span style={{ ...TONE_BG[FILE_TONE[f.outcome]], padding: "2px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, display: "inline-block" }}>{f.label}</span>
-                    </td>
-                    <td style={{ padding: "8px 9px", color: "#475569" }}>{f.detail || "—"}</td>
-                    {/* "no" is not a fault: plenty of files in a folder have
-                        nothing to say about the lines being checked. */}
-                    <td style={{ padding: "8px 9px", color: f.cited ? "#166534" : "#94a3b8", fontWeight: f.cited ? 700 : 400 }}>{f.cited ? "yes" : "no"}</td>
                     {/* The count is blank on every file that has not been
                         read again, which on a clean check is all of them; the
                         button appears only where re-reading can do something
@@ -3623,6 +3620,14 @@ function FileTable({ rows, perPass, sameLink, open, setOpen, onReread, rereading
                         </div>
                       )}
                     </td>
+                    {!perPass && <td style={{ padding: "8px 9px", color: "#475569" }}>{f.bucket}</td>}
+                    <td style={{ padding: "8px 9px" }}>
+                      <span style={{ ...TONE_BG[FILE_TONE[f.outcome]], padding: "2px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, display: "inline-block" }}>{f.label}</span>
+                    </td>
+                    <td style={{ padding: "8px 9px", color: "#475569" }}>{f.detail || "—"}</td>
+                    {/* "no" is not a fault: plenty of files in a folder have
+                        nothing to say about the lines being checked. */}
+                    <td style={{ padding: "8px 9px", color: f.cited ? "#166534" : "#94a3b8", fontWeight: f.cited ? 700 : 400 }}>{f.cited ? "yes" : "no"}</td>
                     <td style={{ padding: "8px 9px", color: "#334155" }}>{f.action || "—"}</td>
                   </tr>
                 );
